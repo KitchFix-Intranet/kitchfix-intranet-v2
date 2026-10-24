@@ -1,0 +1,186 @@
+.kf-ing { display: flex; flex-direction: column; gap: 20px; }
+
+.kf-ing__header h2 { color: var(--sp-navy); font-size: var(--sp-t-title); margin-top: 6px; }
+.kf-ing__kicker { color: var(--sp-body); font-size: var(--sp-t-body); max-width: 78ch; margin-top: 10px; }
+
+/* ---------- Tabs ---------- */
+.kf-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 2px solid var(--sp-line);
+  overflow-x: auto;
+}
+.kf-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--sp-floor-chef);
+  padding: 0 16px;
+  color: var(--sp-body);
+  font-family: var(--sp-ui);
+  font-weight: 700;
+  font-size: var(--sp-t-body);
+  text-decoration: none;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+  position: relative;
+  white-space: nowrap;
+}
+.kf-tab:hover { color: var(--sp-navy); text-decoration: none; }
+.kf-tab--active { color: var(--sp-navy); border-bottom-color: var(--sp-red); }
+.kf-tab--disabled { color: var(--sp-muted); cursor: not-allowed; }
+.kf-tab small {
+  font-size: var(--sp-t-micro);
+  font-weight: 700;
+  background: var(--sp-info-bg);
+  color: var(--sp-link);
+  padding: 2px 6px;
+  border-radius: var(--sp-r-pill);
+}
+
+/* ---------- Intake status strip ---------- */
+.kf-ing__status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  padding: 14px 18px;
+  box-shadow: var(--sp-shadow);
+}
+.kf-ing__status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.kf-ing__status-label {
+  display: block;
+  font-family: var(--sp-disp);
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--sp-muted);
+}
+.kf-ing__status-value {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  font-weight: 700;
+  color: var(--sp-ink);
+}
+.kf-ing__status-sub { color: var(--sp-muted); font-size: var(--sp-t-micro); margin: 0; }
+.kf-ing__status-err { color: var(--sp-block); font-size: var(--sp-t-micro); }
+.kf-ing__status-ok { color: var(--sp-good); font-size: var(--sp-t-micro); }
+
+/* ---------- Tiles ---------- */
+.kf-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.kf-tile {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  box-shadow: var(--sp-shadow);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.kf-tile--lead {
+  background: var(--sp-navy);
+  color: var(--sp-on-navy);
+  border-color: var(--sp-navy);
+}
+.kf-tile__label {
+  font-family: var(--sp-disp);
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--sp-muted);
+}
+.kf-tile--lead .kf-tile__label { color: var(--sp-on-navy-text); }
+.kf-tile__value {
+  font-family: var(--sp-disp);
+  font-weight: 800;
+  font-size: var(--sp-t-value);
+  color: var(--sp-ink);
+  line-height: 1;
+  margin-top: 4px;
+}
+.kf-tile--lead .kf-tile__value { color: var(--sp-on-navy); }
+.kf-tile__sub { color: var(--sp-muted); font-size: var(--sp-t-micro); }
+.kf-tile--lead .kf-tile__sub { color: var(--sp-on-navy-dim); }
+
+/* ---------- Coverage ---------- */
+.kf-coverage h3 { color: var(--sp-navy); font-size: var(--sp-t-h3); margin-bottom: 10px; }
+.kf-meters {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  box-shadow: var(--sp-shadow);
+  padding: 16px;
+}
+.kf-meter__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.kf-meter__name {
+  font-family: var(--sp-ui);
+  font-weight: 700;
+  color: var(--sp-ink);
+  font-size: var(--sp-t-table);
+}
+.kf-meter__nums { color: var(--sp-muted); font-size: var(--sp-t-micro); }
+.kf-meter__bar {
+  height: 8px;
+  background: var(--sp-line-soft);
+  border-radius: var(--sp-r-pill);
+  overflow: hidden;
+}
+.kf-meter__fill {
+  height: 100%;
+  background: var(--sp-navy);
+  min-width: 2px;
+}
+
+/* ---------- Health kv ---------- */
+.kf-kv {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px 16px;
+  margin: 10px 0 0;
+}
+.kf-kv > div { display: contents; }
+.kf-kv dt {
+  font-family: var(--sp-ui);
+  color: var(--sp-body);
+  font-size: var(--sp-t-table);
+}
+.kf-kv dd {
+  margin: 0;
+  text-align: right;
+  font-family: var(--sp-ui);
+  font-weight: 700;
+  color: var(--sp-ink);
+  font-size: var(--sp-t-table);
+}
+.kf-link {
+  color: var(--sp-link);
+  font-family: var(--sp-ui);
+  font-weight: 700;
+  font-size: var(--sp-t-micro);
+}

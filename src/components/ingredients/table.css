@@ -1,0 +1,167 @@
+/* ---------- Filters ---------- */
+.kf-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.kf-filters__row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.kf-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+}
+.kf-field > select,
+.kf-field input[type="search"] {
+  min-height: var(--sp-floor-chef);
+  padding: 0 12px;
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-ctl);
+  background: var(--sp-card);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  color: var(--sp-ink);
+}
+.kf-field > select:focus-visible,
+.kf-field input:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
+.kf-field--search { position: relative; flex: 1; min-width: 240px; }
+.kf-field--search input { padding-left: 36px; width: 100%; }
+.kf-field__icon { position: absolute; left: 10px; top: 50%; transform: translateY(10px); color: var(--sp-muted); pointer-events: none; }
+
+.kf-segs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.kf-seg {
+  min-height: var(--sp-floor-corp);
+  padding: 0 14px;
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-pill);
+  background: var(--sp-card);
+  font-family: var(--sp-ui);
+  font-weight: 700;
+  font-size: var(--sp-t-micro);
+  color: var(--sp-body);
+}
+.kf-seg--active {
+  background: var(--sp-navy);
+  color: var(--sp-on-navy);
+  border-color: var(--sp-navy);
+}
+.kf-filters__pending { color: var(--sp-muted); font-size: var(--sp-t-micro); }
+
+/* ---------- Table ---------- */
+.kf-table-wrap {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  box-shadow: var(--sp-shadow);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.kf-table-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  color: var(--sp-muted);
+  font-size: var(--sp-t-micro);
+  border-bottom: 1px solid var(--sp-line);
+  flex-wrap: wrap;
+}
+.kf-table-meta__dot {
+  width: 4px; height: 4px;
+  background: var(--sp-line);
+  border-radius: var(--sp-r-pill);
+  display: inline-block;
+}
+
+.kf-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+}
+.kf-table thead th {
+  text-align: left;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--sp-muted);
+  background: var(--sp-sky-soft);
+  border-bottom: 1px solid var(--sp-line);
+}
+.kf-table tbody td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--sp-line-soft);
+  vertical-align: top;
+}
+.kf-table tbody tr:hover td { background: var(--sp-raise); }
+.kf-table__num { text-align: right; font-variant-numeric: tabular-nums; }
+.kf-cell-strong { font-weight: 700; color: var(--sp-ink); }
+.kf-cell-sub { color: var(--sp-muted); font-size: var(--sp-t-micro); }
+.kf-cell-link { color: var(--sp-ink); font-weight: 600; text-decoration: none; }
+.kf-cell-link:hover { color: var(--sp-link); text-decoration: underline; }
+.kf-muted { color: var(--sp-muted); }
+
+/* ---------- Badges ---------- */
+.kf-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--sp-r-pill);
+  font-family: var(--sp-ui);
+  font-weight: 700;
+  font-size: var(--sp-t-micro);
+  white-space: nowrap;
+  margin-left: 6px;
+}
+.kf-badge--warn { background: var(--sp-warn-bg); color: var(--sp-warn); }
+.kf-badge--info { background: var(--sp-info-bg); color: var(--sp-link); }
+.kf-badge--good { background: var(--sp-good-bg); color: var(--sp-good); }
+.kf-badge--muted { background: var(--sp-line-soft); color: var(--sp-body); }
+.kf-badge--twin { background: var(--sp-sky-tint); color: var(--sp-navy); }
+
+/* ---------- Pagination ---------- */
+.kf-pagination {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--sp-line);
+}
+.kf-pagination__loc { color: var(--sp-muted); font-size: var(--sp-t-micro); font-family: var(--sp-ui); }
+.kf-btn--disabled { opacity: 0.4; pointer-events: none; }
+
+/* ---------- Phone card list ---------- */
+.kf-cards { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; padding: 12px; }
+.kf-cards__item {
+  display: block;
+  padding: 12px;
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+  text-decoration: none;
+  color: inherit;
+  background: var(--sp-card);
+}
+.kf-cards__item:hover { background: var(--sp-raise); text-decoration: none; }
+.kf-cards__head { display: flex; justify-content: space-between; margin-bottom: 4px; font-size: var(--sp-t-micro); }
+.kf-cards__vendor { font-weight: 700; color: var(--sp-ink); }
+.kf-cards__num { color: var(--sp-muted); }
+.kf-cards__name { font-size: var(--sp-t-item); font-weight: 700; color: var(--sp-navy); margin-bottom: 6px; }
+.kf-cards__meta { display: flex; gap: 10px; color: var(--sp-body); font-size: var(--sp-t-micro); margin-bottom: 6px; flex-wrap: wrap; }
+.kf-cards__chips { display: flex; flex-wrap: wrap; gap: 4px; }
+
+.kf-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
