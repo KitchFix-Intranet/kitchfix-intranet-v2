@@ -129,8 +129,8 @@ async function pagedLines(
     if (error) throw error;
     const chunk = (data ?? []) as Line[];
     all.push(...chunk);
-    if (chunk.length < pageSize) break;
-    from += pageSize;
+    if (chunk.length === 0) break;
+    from += chunk.length;
     logger(`  read ${all.length} lines...`);
   }
   return all;
@@ -209,7 +209,7 @@ export async function runIntake(
     const vendorIdByName = new Map<string, string>();
 
     logger("Reading pr_v_invoice_lines...");
-    const lines = await pagedLines(client, 5000, logger);
+    const lines = await pagedLines(client, 1000, logger);
     counts.lines_read = lines.length;
     logger(`Read ${lines.length} lines total.`);
 
