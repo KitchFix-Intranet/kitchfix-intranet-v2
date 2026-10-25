@@ -99,9 +99,9 @@ button:disabled { cursor: not-allowed; }
 }
 
 /* Utility: hide on phone / desktop */
-.kf-only-desktop { display: initial; }
+.kf-only-desktop { display: block; }
 .kf-only-phone { display: none; }
 @media (max-width: 860px) {
   .kf-only-desktop { display: none !important; }
-  .kf-only-phone { display: initial; }
+  .kf-only-phone { display: block; }
 }
