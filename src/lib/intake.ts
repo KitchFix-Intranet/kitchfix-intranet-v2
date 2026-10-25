@@ -376,14 +376,8 @@ export async function runIntake(
       };
     });
 
-    const withNum = vItemRows.filter((r) => r.item_number_norm != null);
-    const noNum = vItemRows.filter((r) => r.item_number_norm == null);
-
-    await batchUpsert(client, "pr_vendor_items", withNum, {
-      onConflict: "vendor_id,item_number_norm",
-    });
-    await batchUpsert(client, "pr_vendor_items", noNum, {
-      onConflict: "vendor_id,description_key",
+    await batchUpsert(client, "pr_vendor_items", vItemRows, {
+      onConflict: "vendor_id,dedup_key",
     });
 
     logger("Reading back vendor_item ids...");
