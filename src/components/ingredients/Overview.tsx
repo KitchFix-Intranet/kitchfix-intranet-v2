@@ -1,29 +1,17 @@
 // Overview tab for the Ingredients tool.
 //
-// Reads live rows from pr_vendor_items + pr_ingredients + pr_intake_runs +
-// pr_vendors + pr_price_observations. On day one every item has
-// link_status='none' and no ingredients are named, so dollars_linked is zero and
-// Ingredients named is 0 - that is the expected starting state.
+// All vendor-item aggregation happens server-side via pr_v_overview_totals /
+// pr_v_overview_by_account / pr_v_overview_by_vendor. The previous version did
+// one unpaginated .select() on pr_vendor_items, which PostgREST capped at 1,000
+// rows and silently truncated the tiles (630/$389K/291 against 8,039/$1.82M/1,575
+// in the DB). The views aggregate every row in Postgres; the page reads scalars
+// and sorted lists only.
 
 import Link from "next/link";
 import { serviceClient } from "@/lib/supabase/service";
 import { Tabs } from "./Tabs";
 import { RunIntakeButton } from "./RunIntakeButton";
 import "./ingredients.css";
-
-type VendorItemRow = {
-  id: string;
-  vendor_id: string;
-  item_number_norm: string | null;
-  is_food: boolean | null;
-  status: string;
-  link_status: string;
-  pack_state: string;
-  catch_weight: boolean;
-  usd_12m: number | null;
-  usd: number | null;
-  accounts: string[] | null;
-};
 
 type IntakeRun = {
   id: string;
@@ -33,8 +21,6 @@ type IntakeRun = {
   counts: Record<string, unknown> | null;
   mode: string;
 };
-
-type VendorRow = { id: string; name: string };
 
 type Totals = {
   food_items_active: number;
@@ -50,8 +36,6 @@ type Totals = {
   no_number_dollars: number;
   needs_review_lines: number;
   twins_count: number;
-  by_account: Map<string, { food: number; linked: number }>;
-  by_vendor: Map<string, { food: number; linked: number }>;
 };
 
 function usd(n: number): string {
@@ -70,108 +54,77 @@ function pct(num: number, den: number): string {
 async function loadTotals(): Promise<{
   totals: Totals;
   lastRun: IntakeRun | null;
-  vendors: VendorRow[];
   ingredientsNamed: number;
   intakeRunsTotal: number;
+  bySite: Array<[string, { food: number; linked: number }]>;
+  topVendors: Array<[string, { food: number; linked: number }]>;
 }> {
   const client = serviceClient();
 
-  const [itemsRes, runsRes, vendorsRes, ingredientsRes, runCountRes, needsReviewLinesRes] = await Promise.all([
-    client
-      .from("pr_vendor_items")
-      .select("id,vendor_id,item_number_norm,is_food,status,link_status,pack_state,catch_weight,usd_12m,usd,accounts"),
-    client
-      .from("pr_intake_runs")
-      .select("id,started_at,finished_at,status,counts,mode")
-      .order("started_at", { ascending: false })
-      .limit(1),
-    client.from("pr_vendors").select("id,name"),
-    client.from("pr_ingredients").select("id", { count: "exact", head: true }).eq("status", "active"),
-    client.from("pr_intake_runs").select("id", { count: "exact", head: true }),
-    client.from("pr_price_observations").select("id", { count: "exact", head: true }).eq("needs_review", true),
-  ]);
+  const [totalsRes, byAcctRes, byVendorRes, runsRes, ingredientsRes, runCountRes, needsReviewLinesRes] =
+    await Promise.all([
+      client.from("pr_v_overview_totals").select("*").single(),
+      client
+        .from("pr_v_overview_by_account")
+        .select("account_key,food,linked")
+        .order("food", { ascending: false }),
+      client
+        .from("pr_v_overview_by_vendor")
+        .select("vendor_id,vendor_name,food,linked")
+        .order("food", { ascending: false })
+        .limit(10),
+      client
+        .from("pr_intake_runs")
+        .select("id,started_at,finished_at,status,counts,mode")
+        .order("started_at", { ascending: false })
+        .limit(1),
+      client.from("pr_ingredients").select("id", { count: "exact", head: true }).eq("status", "active"),
+      client.from("pr_intake_runs").select("id", { count: "exact", head: true }),
+      client.from("pr_price_observations").select("id", { count: "exact", head: true }).eq("needs_review", true),
+    ]);
+  if (totalsRes.error) throw totalsRes.error;
+  if (byAcctRes.error) throw byAcctRes.error;
+  if (byVendorRes.error) throw byVendorRes.error;
 
-  if (itemsRes.error) throw itemsRes.error;
-  if (vendorsRes.error) throw vendorsRes.error;
-
-  const items = (itemsRes.data ?? []) as VendorItemRow[];
-  const vendors = (vendorsRes.data ?? []) as VendorRow[];
-  const lastRun = ((runsRes.data ?? [])[0] ?? null) as IntakeRun | null;
-
+  // PostgREST returns numeric columns as strings; Number() handles both.
+  const t = (totalsRes.data ?? {}) as Record<string, unknown>;
+  const n = (k: string) => Number(t[k] ?? 0);
   const totals: Totals = {
-    food_items_active: 0,
-    food_items_total: 0,
-    food_items_with_number: 0,
-    food_items_waiting: 0,
-    food_items_waiting_usd: 0,
-    food_dollars_total: 0,
-    food_dollars_linked: 0,
-    packs_clean: 0,
-    catch_weight_items: 0,
-    no_number_items: 0,
-    no_number_dollars: 0,
+    food_items_active: n("food_items_active"),
+    food_items_total: n("food_items_active"),
+    food_items_with_number: n("food_items_with_number"),
+    food_items_waiting: n("food_items_waiting"),
+    food_items_waiting_usd: n("food_items_waiting_usd"),
+    food_dollars_total: n("food_dollars_total"),
+    food_dollars_linked: n("food_dollars_linked"),
+    packs_clean: n("packs_clean"),
+    catch_weight_items: n("catch_weight_items"),
+    no_number_items: n("no_number_items"),
+    no_number_dollars: n("no_number_dollars"),
     needs_review_lines: needsReviewLinesRes.count ?? 0,
-    twins_count: 0,
-    by_account: new Map(),
-    by_vendor: new Map(),
+    twins_count: n("twins_count"),
   };
 
-  for (const it of items) {
-    if (it.status === "duplicate") totals.twins_count += 1;
-    if (it.pack_state === "ok") totals.packs_clean += 1;
+  const bySite: Array<[string, { food: number; linked: number }]> = (
+    (byAcctRes.data ?? []) as Array<{ account_key: string; food: unknown; linked: unknown }>
+  ).map((r) => [r.account_key, { food: Number(r.food ?? 0), linked: Number(r.linked ?? 0) }]);
 
-    const isFood = !!it.is_food && (it.status === "active" || it.status === "resale");
-    if (!isFood) continue;
-
-    totals.food_items_total += 1;
-    totals.food_items_active += 1;
-    if (it.item_number_norm != null) totals.food_items_with_number += 1;
-    if (it.catch_weight) totals.catch_weight_items += 1;
-    if (it.item_number_norm == null) {
-      totals.no_number_items += 1;
-      totals.no_number_dollars += Number(it.usd_12m ?? 0);
-    }
-
-    if (it.link_status === "none" || it.link_status === "proposed") {
-      totals.food_items_waiting += 1;
-      totals.food_items_waiting_usd += Number(it.usd_12m ?? 0);
-    }
-
-    const u12 = Number(it.usd_12m ?? 0);
-    totals.food_dollars_total += u12;
-    if (it.link_status === "confirmed") totals.food_dollars_linked += u12;
-
-    for (const acct of it.accounts ?? []) {
-      const row = totals.by_account.get(acct) ?? { food: 0, linked: 0 };
-      row.food += u12 / Math.max(1, (it.accounts ?? []).length);
-      if (it.link_status === "confirmed") row.linked += u12 / Math.max(1, (it.accounts ?? []).length);
-      totals.by_account.set(acct, row);
-    }
-
-    const vrow = totals.by_vendor.get(it.vendor_id) ?? { food: 0, linked: 0 };
-    vrow.food += u12;
-    if (it.link_status === "confirmed") vrow.linked += u12;
-    totals.by_vendor.set(it.vendor_id, vrow);
-  }
+  const topVendors: Array<[string, { food: number; linked: number }]> = (
+    (byVendorRes.data ?? []) as Array<{ vendor_name: string; food: unknown; linked: unknown }>
+  ).map((r) => [r.vendor_name, { food: Number(r.food ?? 0), linked: Number(r.linked ?? 0) }]);
 
   return {
     totals,
-    lastRun,
-    vendors,
+    lastRun: ((runsRes.data ?? [])[0] ?? null) as IntakeRun | null,
     ingredientsNamed: ingredientsRes.count ?? 0,
     intakeRunsTotal: runCountRes.count ?? 0,
+    bySite,
+    topVendors,
   };
 }
 
 export async function Overview() {
-  const { totals, lastRun, vendors, ingredientsNamed, intakeRunsTotal } = await loadTotals();
-  const vendorNameById = new Map(vendors.map((v) => [v.id, v.name]));
-
-  const topVendors = Array.from(totals.by_vendor.entries())
-    .sort((a, b) => b[1].food - a[1].food)
-    .slice(0, 10);
-
-  const bySite = Array.from(totals.by_account.entries()).sort((a, b) => b[1].food - a[1].food);
+  const { totals, lastRun, ingredientsNamed, intakeRunsTotal, bySite, topVendors } = await loadTotals();
 
   const lastRunLabel = lastRun
     ? `${new Date(lastRun.started_at).toLocaleString()} - ${lastRun.status}`
@@ -270,10 +223,10 @@ export async function Overview() {
           </div>
         ) : (
           <ul className="kf-meters">
-            {topVendors.map(([vendorId, { food, linked }]) => (
-              <li key={vendorId}>
+            {topVendors.map(([name, { food, linked }]) => (
+              <li key={name}>
                 <div className="kf-meter__row">
-                  <span className="kf-meter__name">{vendorNameById.get(vendorId) ?? vendorId}</span>
+                  <span className="kf-meter__name">{name}</span>
                   <span className="kf-meter__nums">
                     ${usd(linked)} / ${usd(food)}
                   </span>
