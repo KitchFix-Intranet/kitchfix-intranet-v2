@@ -23,7 +23,7 @@
 // stop and open a ruling. Silently adding one voids spec 3.2's whole
 // point (a coherent role model composed only from clean tables).
 //
-// v2 fence: in v1 this file carried `ACADEMY_PREVIEW_ONLY` + an
+// v2 fence: in v1 this file carried a pilot preview constant + an
 // allowlist. In v2 the fence is `OWNER_EMAILS` via `requireOwnerApi()`
 // at the route edge; the resolver here is unchanged in behaviour but
 // no longer carries a preview gate.

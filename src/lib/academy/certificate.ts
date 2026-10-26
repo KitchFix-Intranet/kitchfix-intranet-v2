@@ -13,9 +13,9 @@
 // says three. No rounding, no hiding.
 //
 // Date formatting uses `Intl.DateTimeFormat("en-US", ...)` so the
-// locale is pinned at the call site; the prompt's "no toLocaleString"
-// rule is about handler return shapes, which here are PDF bytes, but
-// the Intl form is explicit anyway.
+// locale is pinned at the call site. Handler returns elsewhere stay
+// ISO; the PDF is the one presentation surface that must render a
+// human date.
 //
 // Dependency: pdf-lib.
 
