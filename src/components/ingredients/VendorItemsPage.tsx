@@ -158,7 +158,6 @@ export async function VendorItemsPage({
           Showing {items.length} of {total.toLocaleString()}
           <span className="kf-table-meta__dot" />
           Sort: 12-month $ desc
-          <Link href={`/api/export/vendor-items.csv?${toQS(p, seg, q)}`} className="kf-link">Export CSV</Link>
         </div>
         <StatusLegend />
         {items.length === 0 ? (
@@ -222,8 +221,8 @@ function TableRow({
         <Link href={href} className="kf-cell-link">
           {r.name}
         </Link>
-        {r.item_number_norm == null ? <span className="kf-badge kf-badge--warn">no item number</span> : null}
-        {twinParent ? <span className="kf-badge kf-badge--twin">same as #{twinParent.item_number ?? "?"}</span> : null}
+        {r.item_number_norm == null ? <span className="kf-pill kf-pill--warn">no item number</span> : null}
+        {twinParent ? <span className="kf-pill kf-pill--twin">same as #{twinParent.item_number ?? "?"}</span> : null}
         <CatchWeightFlag row={r} />
       </td>
       <td>{r.pack_text ?? "-"}</td>
@@ -264,8 +263,8 @@ function PhoneCard({
         <div className="kf-cards__chips">
           <StatusChip row={r} />
           <CatchWeightFlag row={r} />
-          {r.item_number_norm == null ? <span className="kf-badge kf-badge--warn">no item number</span> : null}
-          {twinParent ? <span className="kf-badge kf-badge--twin">same as #{twinParent.item_number ?? "?"}</span> : null}
+          {r.item_number_norm == null ? <span className="kf-pill kf-pill--warn">no item number</span> : null}
+          {twinParent ? <span className="kf-pill kf-pill--twin">same as #{twinParent.item_number ?? "?"}</span> : null}
         </div>
       </Link>
     </li>
@@ -277,32 +276,32 @@ function PhoneCard({
 // `active` case. Catch weight is a row attribute, not a status - it renders as
 // a separate flag badge in the description cell.
 function StatusChip({ row }: { row: Row }) {
-  if (row.status === "duplicate") return <span className="kf-badge kf-badge--twin">Duplicate</span>;
-  if (row.status === "archived") return <span className="kf-badge kf-badge--muted">Archived</span>;
-  if (row.status === "one_off") return <span className="kf-badge kf-badge--muted">One off</span>;
-  if (row.status === "not_food" || row.is_food === false) return <span className="kf-badge kf-badge--muted">Not food</span>;
-  if (row.status === "resale") return <span className="kf-badge kf-badge--muted">Resale</span>;
-  if (row.link_status === "proposed") return <span className="kf-badge kf-badge--info">Proposed</span>;
-  if (row.link_status === "confirmed") return <span className="kf-badge kf-badge--good">Linked</span>;
-  if (row.link_status === "rejected") return <span className="kf-badge kf-badge--muted">Rejected</span>;
-  return <span className="kf-badge kf-badge--info">Unlinked</span>;
+  if (row.status === "duplicate") return <span className="kf-pill kf-pill--twin">Duplicate</span>;
+  if (row.status === "archived") return <span className="kf-pill kf-pill--muted">Archived</span>;
+  if (row.status === "one_off") return <span className="kf-pill kf-pill--muted">One off</span>;
+  if (row.status === "not_food" || row.is_food === false) return <span className="kf-pill kf-pill--muted">Not food</span>;
+  if (row.status === "resale") return <span className="kf-pill kf-pill--muted">Resale</span>;
+  if (row.link_status === "proposed") return <span className="kf-pill kf-pill--info">Proposed</span>;
+  if (row.link_status === "confirmed") return <span className="kf-pill kf-pill--good">Linked</span>;
+  if (row.link_status === "rejected") return <span className="kf-pill kf-pill--muted">Rejected</span>;
+  return <span className="kf-pill kf-pill--info">Unlinked</span>;
 }
 
 function CatchWeightFlag({ row }: { row: Row }) {
   if (!row.catch_weight) return null;
-  return <span className="kf-badge kf-badge--warn" title="Catch weight">CW</span>;
+  return <span className="kf-pill kf-pill--warn" title="Catch weight">CW</span>;
 }
 
 function StatusLegend() {
   return (
     <div className="kf-table-legend" aria-label="Status legend">
       <span className="kf-table-legend__label">Link status:</span>
-      <span className="kf-badge kf-badge--info">Unlinked</span>
-      <span className="kf-badge kf-badge--info">Proposed</span>
-      <span className="kf-badge kf-badge--good">Linked</span>
-      <span className="kf-badge kf-badge--muted">Rejected</span>
+      <span className="kf-pill kf-pill--info">Unlinked</span>
+      <span className="kf-pill kf-pill--info">Proposed</span>
+      <span className="kf-pill kf-pill--good">Linked</span>
+      <span className="kf-pill kf-pill--muted">Rejected</span>
       <span className="kf-table-legend__sep" />
-      <span className="kf-badge kf-badge--warn" title="Catch weight">CW</span>
+      <span className="kf-pill kf-pill--warn" title="Catch weight">CW</span>
       <span className="kf-table-legend__hint">on rows priced by actual weight</span>
     </div>
   );
@@ -320,9 +319,9 @@ function Pagination({ page, total, params, seg, q }: { page: number; total: numb
   const nextQS = toQS({ ...params, page: String(Math.min(last, page + 1)) }, seg, q);
   return (
     <nav className="kf-pagination" aria-label="Pages">
-      <Link href={`?${prevQS}`} className={`kf-btn kf-btn--line kf-btn--sm${page === 0 ? " kf-btn--disabled" : ""}`}>Prev</Link>
+      <Link href={`?${prevQS}`} className={`kf-btn kf-btn--line kf-btn--sm${page === 0 ? " is-disabled" : ""}`}>Prev</Link>
       <span className="kf-pagination__loc">Page {page + 1} of {Math.max(1, last + 1)}</span>
-      <Link href={`?${nextQS}`} className={`kf-btn kf-btn--line kf-btn--sm${page >= last ? " kf-btn--disabled" : ""}`}>Next</Link>
+      <Link href={`?${nextQS}`} className={`kf-btn kf-btn--line kf-btn--sm${page >= last ? " is-disabled" : ""}`}>Next</Link>
     </nav>
   );
 }

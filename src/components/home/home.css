@@ -103,82 +103,11 @@
 .kf-door__title { font-size: var(--sp-t-h3); color: var(--sp-navy); margin: 0; }
 .kf-door__tagline { color: var(--sp-body); font-size: var(--sp-t-micro); margin: 0; }
 
-.kf-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
-  border-radius: var(--sp-r-pill);
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-micro);
-  font-weight: 700;
-  white-space: normal;
-  align-self: flex-start;
-  margin-top: 4px;
-}
-.kf-pill--live {
-  background: var(--sp-good-bg);
-  color: var(--sp-good);
-}
-.kf-pill--live::before {
-  content: "";
-  width: 6px; height: 6px;
-  border-radius: var(--sp-r-pill);
-  background: var(--sp-good);
-}
-.kf-pill--reserved {
-  background: var(--sp-info-bg);
-  color: var(--sp-link);
-}
-
-/* ---------- Button variants ---------- */
-.kf-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: var(--sp-floor-chef);
-  padding: 0 18px;
-  border-radius: var(--sp-r-ctl);
-  font-family: var(--sp-ui);
-  font-weight: 700;
-  font-size: var(--sp-t-body);
-  text-decoration: none;
-  border: 1px solid transparent;
-  cursor: pointer;
-  transition: background var(--sp-fast), color var(--sp-fast), border-color var(--sp-fast), transform var(--sp-fast);
-}
-.kf-btn:active:not(:disabled) { transform: translateY(1px); }
-.kf-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-.kf-btn--filled {
-  background: var(--sp-on-navy);
-  color: var(--sp-navy-deep);
-}
-.kf-btn--filled:hover:not(:disabled) { background: var(--sp-sky); text-decoration: none; }
-.kf-btn--line {
-  background: transparent;
-  color: var(--sp-navy);
-  border-color: var(--sp-navy);
-}
-.kf-btn--line:hover:not(:disabled) { background: var(--sp-sky-tint); text-decoration: none; }
-.kf-btn--soft {
-  background: var(--sp-sky-tint);
-  color: var(--sp-navy);
-}
-.kf-btn--soft:hover:not(:disabled) { background: var(--sp-sky); }
-.kf-btn--sm { min-height: var(--sp-floor-corp); padding: 0 14px; border-radius: var(--sp-r-sm); font-size: var(--sp-t-label); }
-
-/* ---------- Card ---------- */
-.kf-card {
-  background: var(--sp-card);
-  border: 1px solid var(--sp-line);
-  border-radius: var(--sp-r-card);
-  box-shadow: var(--sp-shadow);
-  padding: 20px;
-}
-.kf-card > header { margin-bottom: 10px; }
-.kf-card h3 { color: var(--sp-navy); font-size: var(--sp-t-h3); margin-top: 6px; }
-.kf-card__muted { color: var(--sp-muted); font-size: var(--sp-t-body); }
-.kf-card__foot { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--sp-line-soft); font-size: var(--sp-t-micro); color: var(--sp-muted); }
+/*
+ * Buttons / pills / cards moved to components.css. Door-specific pill tweaks
+ * only; the base pill family (live, info, muted, etc.) lives there now.
+ */
+.kf-door .kf-pill { white-space: normal; align-self: flex-start; margin-top: var(--sp-sp-1); }
 
 .kf-home-row {
   display: grid;

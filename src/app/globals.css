@@ -43,60 +43,11 @@ button {
 }
 button:disabled { cursor: not-allowed; }
 
-.kf-eyebrow {
-  display: inline-block;
-  font-family: var(--sp-disp);
-  font-weight: 700;
-  font-size: var(--sp-t-label);
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  color: var(--sp-red);
-  position: relative;
-}
-.kf-eyebrow::after {
-  content: "";
-  display: block;
-  width: 56px;
-  height: 5px;
-  background: var(--sp-red);
-  transform: skewX(-30deg);
-  margin-top: 6px;
-}
-
-.kf-skew-tag {
-  display: inline-block;
-  padding: 4px 10px;
-  background: var(--sp-sky-tint);
-  color: var(--sp-navy-deep);
-  font-family: var(--sp-ui);
-  font-weight: 700;
-  font-size: var(--sp-t-micro);
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  transform: skewX(-12deg);
-  border-radius: 2px;
-}
-.kf-skew-tag > span { display: inline-block; transform: skewX(12deg); }
-
-/* Loading / empty / error state defaults. Every data surface imports these. */
-.kf-state {
-  padding: 24px;
-  border-radius: var(--sp-r-card);
-  background: var(--sp-card);
-  border: 1px solid var(--sp-line);
-}
-.kf-state__title {
-  font-family: var(--sp-ui);
-  font-size: 17px;
-  font-weight: 800;
-  color: var(--sp-ink);
-  margin-bottom: 6px;
-}
-.kf-state__body {
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-body);
-  color: var(--sp-muted);
-}
+/*
+ * .kf-eyebrow, .kf-skew-tag, .kf-state, .kf-btn, .kf-pill, .kf-card and the
+ * other shared primitives live in components.css now. This file is base type +
+ * breakpoint utilities only.
+ */
 
 /* Utility: hide on phone / desktop */
 /*

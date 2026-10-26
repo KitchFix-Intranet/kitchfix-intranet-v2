@@ -32,7 +32,11 @@ export async function proxy(req: NextRequest) {
 
   if (isPublic(pathname)) return NextResponse.next();
 
-  const res = NextResponse.next({ request: req });
+  // Mirror the pathname onto a request header so server components can read
+  // it (Next does not expose `pathname` through `headers()` by default).
+  const requestHeaders = new Headers(req.headers);
+  requestHeaders.set("x-pathname", pathname);
+  const res = NextResponse.next({ request: { headers: requestHeaders } });
 
   const supa = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
