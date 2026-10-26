@@ -2,7 +2,7 @@
   position: fixed;
   inset: 0;
   background: color-mix(in srgb, var(--sp-navy-deep) 35%, transparent);
-  z-index: 60;
+  z-index: var(--sp-z-drawer);
 }
 .kf-drawer {
   position: fixed;
@@ -13,7 +13,7 @@
   background: var(--sp-card);
   border-left: 1px solid var(--sp-line);
   box-shadow: var(--sp-shadow-lift);
-  z-index: 61;
+  z-index: calc(var(--sp-z-drawer) + 1);
   display: flex;
   flex-direction: column;
   overflow-y: auto;
@@ -28,7 +28,6 @@
   position: sticky;
   top: 0;
   background: var(--sp-card);
-  z-index: 1;
 }
 .kf-drawer__head h3 { color: var(--sp-navy); font-size: var(--sp-t-h3); margin-top: 4px; }
 .kf-drawer__close {

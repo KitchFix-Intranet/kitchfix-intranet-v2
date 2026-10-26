@@ -137,7 +137,7 @@
   color: var(--sp-muted);
   font-size: var(--sp-t-micro);
 }
-.kf-table-legend .kf-badge { margin-left: 0; }
+.kf-table-legend .kf-pill { margin-left: 0; }
 
 .kf-table {
   width: 100%;
@@ -170,35 +170,23 @@
 .kf-cell-link:hover { color: var(--sp-link); text-decoration: underline; }
 .kf-muted { color: var(--sp-muted); }
 
-/* ---------- Badges ---------- */
-.kf-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: var(--sp-r-pill);
-  font-family: var(--sp-ui);
-  font-weight: 700;
-  font-size: var(--sp-t-micro);
-  white-space: nowrap;
-  margin-left: 6px;
-}
-.kf-badge--warn { background: var(--sp-warn-bg); color: var(--sp-warn); }
-.kf-badge--info { background: var(--sp-info-bg); color: var(--sp-link); }
-.kf-badge--good { background: var(--sp-good-bg); color: var(--sp-good); }
-.kf-badge--muted { background: var(--sp-line-soft); color: var(--sp-body); }
-.kf-badge--twin { background: var(--sp-sky-tint); color: var(--sp-navy); }
+/*
+ * Pill family (warn / info / good / muted / twin) lives in components.css as
+ * .kf-pill--*. Row-level pills carry a small left margin to breathe past the
+ * cell contents - a tiny table-specific tweak only.
+ */
+.kf-table td .kf-pill { margin-left: var(--sp-sp-1); }
+.kf-cards__chips .kf-pill { margin-left: 0; }
 
 /* ---------- Pagination ---------- */
 .kf-pagination {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
+  gap: var(--sp-sp-3);
+  padding: var(--sp-sp-3) var(--sp-sp-4);
   border-top: 1px solid var(--sp-line);
 }
 .kf-pagination__loc { color: var(--sp-muted); font-size: var(--sp-t-micro); font-family: var(--sp-ui); }
-.kf-btn--disabled { opacity: 0.4; pointer-events: none; }
 
 /* ---------- Phone card list ---------- */
 .kf-cards { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; padding: 12px; }

@@ -71,7 +71,48 @@ Every PR proves each item - with numbers, not adjectives.
 11. Loading, empty, and error states present on every data surface.
 12. The gate: a signed-in `kitchfix.com` session not in `OWNER_EMAILS` gets a plain 404 on every page and every route handler, including the CSV exports.
 
-## 7. Scope carve-outs for step 1
+## 7. Craft-bar amendment, 2026-10-26 (summary)
+
+The full amendment lives in `V2_CRAFT_BAR_SPEC_2026-10-25.md` (sections 11,
+13 and 14 for text; render V4 for the pictures). Pending that spec being
+checked in, these are the near-term rules changes that have already shipped
+on the `step-1-shell-and-ingredients` branch at commit `craft(v2) 1/3`:
+
+- Chrome: the sidebar collapse control is a floating 28-px notch pinned to
+  the rail's right edge (28-px visual, 44-px hit area), with a chevron that
+  rotates on collapse. The rail animates `width` over `--sp-base`.
+- Rail level 2: a 44-px `ArrowLeft` back row ("All tools"), then an
+  uppercase section label ("Stockpot"), then the tool's pages.
+- Account row: a 56-px avatar button at the rail foot that opens a menu
+  containing Sign out. Email + name both show in the expanded state.
+- Topbar carries a title + a crumb slot + an actions slot. Actions come
+  from a parallel route (`src/app/(shell)/@topbar/.../page.tsx`), server-
+  rendered.
+- The topbar progress bar is 2-px `--sp-red` on the topbar's bottom edge;
+  `.is-busy` scales it to 0.85 over 600 ms.
+- Motion tokens: `--sp-fast` 120 ms, `--sp-base` 200 ms, `--sp-slow`
+  320 ms, `--sp-rise` 480 ms, `--sp-stagger` 40 ms; eases
+  `--sp-ease` and `--sp-ease-io`. Reduced motion zeroes every one.
+- Spacing scale `--sp-sp-1` 4 px through `--sp-sp-8` 48 px; z-ladder
+  `--sp-z-topbar` 10, `--sp-z-notch` 30, `--sp-z-rail-phone` 50,
+  `--sp-z-drawer` 60, `--sp-z-toast` 90.
+- Reveal: a one-shot `.kf-reveal` + `<RevealGate>` client component gates
+  the animation to the first visit per route per session.
+- Toasts: a `<Toaster>` client at the app root; `toast(message, { undo })`
+  from any client component.
+- Formatting: Chicago timezone constant, every date through `fmtDate` /
+  `timeAgo`, every status through `fmtStatus`, no `toLocaleString()` in
+  components, no `JSON.stringify` in JSX, no enum values in the UI.
+
+The twelve-item roster in spec section 10 (gotchas) is tracked in
+`docs/GOTCHAS.md`; items we have already lived through are already in that
+file, and the remaining ones land when the spec is checked in.
+
+Battery items 13 through 16 (phone-tab-bar hit area; notch visual and hit
+area; reveal plays once per session; toast present and reachable in a focus
+cycle) land in Phases 2 and 3 as the surfaces they measure arrive.
+
+## 8. Scope carve-outs for step 1
 
 - Pack parser arrives in step 3; `pack_state` reads `none` until then.
 - Review queue and ingredient editing arrive in step 5; the tabs render but disabled with the step number on the hover.

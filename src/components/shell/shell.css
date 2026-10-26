@@ -1,111 +1,152 @@
+/*
+ * Shell chrome. Grid is `auto | minmax(0, 1fr)` so content never pushes the
+ * canvas off its gutter. Rail width is a CSS variable so collapse animates.
+ */
 .kf-shell {
   --rail-width: var(--sp-rail);
   min-height: 100dvh;
   display: grid;
-  grid-template-columns: var(--rail-width) 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
   background: var(--sp-ground);
 }
 .kf-shell--slim { --rail-width: var(--sp-rail-slim); }
 
-/* --------------------- Rail (desktop) --------------------- */
+/* --------------------- Rail --------------------- */
 .kf-rail {
   position: sticky;
   top: 0;
   height: 100dvh;
+  width: var(--rail-width);
   background: var(--sp-navy-deep);
   color: var(--sp-on-navy-text);
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--sp-navy-line);
   overflow: hidden;
-  transition: width var(--sp-fast);
+  transition: width var(--sp-base) var(--sp-ease);
 }
 
 .kf-rail__brand {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 16px 16px 12px;
+  gap: var(--sp-sp-2);
+  padding: 0 var(--sp-sp-4);
   min-height: var(--sp-topbar);
 }
-/*
- * At 76px the full logo + chevron can't sit side by side; stack them so the
- * circle mark stays visible AND the toggle stays reachable.
- */
-.kf-shell--slim .kf-rail__brand {
-  flex-direction: column;
-  gap: 6px;
-  padding: 12px 6px 10px;
-  min-height: calc(var(--sp-topbar) + 32px);
-}
-.kf-shell--slim .kf-rail__logo--circle { height: 36px; width: 36px; }
-
 .kf-rail__brand-mark {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
   color: var(--sp-on-navy);
   line-height: 1;
 }
-.kf-rail__logo {
-  display: block;
-  height: auto;
-  width: auto;
-}
-.kf-rail__logo--stacked { height: 32px; max-width: 160px; }
-.kf-rail__logo--circle  { height: 44px; width: 44px; }
+.kf-rail__logo { display: block; height: auto; width: auto; }
+.kf-rail__logo--horizontal { height: 40px; max-width: 148px; }
+.kf-rail__logo--circle     { height: 44px; width: 44px; }
 
-/*
- * The collapse toggle is desktop-only (kf-only-desktop); the close "X" is
- * phone-only (kf-only-phone). Keep the shared visuals here but only set a
- * flex-centering display on the one that is always visible at the breakpoint
- * (collapse at desktop); the close `inline-flex` lives in the phone media
- * query at the bottom of the file, same reason as .kf-topbar__burger.
+.kf-shell--slim .kf-rail__brand {
+  justify-content: center;
+  padding: 0;
+}
+.kf-shell--slim .kf-rail__logo--circle { height: 40px; width: 40px; }
+
+/* -------- Notch toggle (replaces .kf-rail__collapse) --------
+ * Positioned off the rail's right edge so its mid-point sits on the rail
+ * border. 28px visual circle, 44px hit via an ::before mask. Pinned by
+ * co-ordinates deliberately (DO NOT re-nest inside the rail - its
+ * overflow:hidden clips the circle in half).
  */
-.kf-rail__collapse,
-.kf-rail__close {
-  background: transparent;
-  color: var(--sp-on-navy-text);
-  border: 1px solid transparent;
-  border-radius: var(--sp-r-sm);
-  width: 32px;
-  height: 32px;
+.kf-rail__notch {
+  position: fixed;
+  z-index: var(--sp-z-notch);
+  left: calc(var(--rail-width) - 14px);
+  top: calc(var(--sp-topbar) / 2 - 14px);
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  box-shadow: var(--sp-shadow-float);
+  color: var(--sp-navy);
+  padding: 0;
+  cursor: pointer;
+  transition: left var(--sp-base) var(--sp-ease),
+              transform var(--sp-fast) var(--sp-ease),
+              border-color var(--sp-fast) var(--sp-ease);
+}
+.kf-rail__notch::before {
+  content: "";
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+}
+.kf-rail__notch-inner {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 100%; height: 100%;
+  transition: transform var(--sp-base) var(--sp-ease);
 }
-.kf-rail__collapse { display: inline-flex; }
-.kf-rail__collapse:hover,
-.kf-rail__close:hover {
-  background: color-mix(in srgb, white 7%, transparent);
+.kf-shell--slim .kf-rail__notch-inner { transform: rotate(180deg); }
+.kf-rail__notch:hover { transform: scale(1.1); border-color: var(--sp-navy); }
+.kf-rail__notch:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--sp-card), 0 0 0 4px var(--sp-navy), var(--sp-shadow-float);
 }
 
+/* -------- Level 2 (Stockpot) back row + section label -------- */
 .kf-rail__back {
-  margin: 0 12px 8px;
-  padding: 8px 12px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  color: var(--sp-on-navy-dim);
+  gap: var(--sp-sp-3);
+  min-height: 44px;
+  padding: 0 var(--sp-sp-4);
+  color: var(--sp-on-navy-text);
   font-family: var(--sp-ui);
-  font-size: var(--sp-t-micro);
-  border-radius: var(--sp-r-sm);
+  font-weight: 600;
+  font-size: 14.5px;
+  text-decoration: none;
+  border-bottom: 1px solid var(--sp-navy-line);
 }
 .kf-rail__back:hover {
-  background: color-mix(in srgb, white 5%, transparent);
-  color: var(--sp-on-navy-text);
+  background: color-mix(in srgb, white 7%, transparent);
   text-decoration: none;
 }
+.kf-rail__back-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px; height: 20px;
+  flex: 0 0 20px;
+}
+.kf-rail__back-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.kf-shell--slim .kf-rail__back { justify-content: center; padding: 0; }
+.kf-shell--slim .kf-rail__back-label { display: none; }
 
+.kf-rail__section {
+  padding: var(--sp-sp-3) var(--sp-sp-4) var(--sp-sp-2);
+  color: var(--sp-on-navy-dim);
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+.kf-shell--slim .kf-rail__section { display: none; }
+
+/* -------- Rail nav items -------- */
 .kf-rail__nav {
-  padding: 4px 12px;
+  padding: var(--sp-sp-1) var(--sp-sp-3);
   flex: 1;
   overflow-y: auto;
 }
 .kf-rail__nav ul {
   list-style: none;
-  margin: 0;
-  padding: 0;
+  margin: 0; padding: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -113,9 +154,9 @@
 .kf-rail__item {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--sp-sp-3);
   height: var(--sp-floor-chef);
-  padding: 0 12px;
+  padding: 0 var(--sp-sp-3);
   border-radius: var(--sp-r-sm);
   color: var(--sp-on-navy-text);
   font-family: var(--sp-ui);
@@ -138,63 +179,126 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: opacity var(--sp-fast) var(--sp-ease);
 }
 .kf-rail__dot {
-  width: 8px;
-  height: 8px;
+  width: 8px; height: 8px;
   background: var(--sp-sky);
   border-radius: var(--sp-r-pill);
   display: inline-block;
 }
-.kf-shell--slim .kf-rail__label,
-.kf-shell--slim .kf-rail__dot,
-.kf-shell--slim .kf-rail__back {
-  display: none;
-}
+/* Slim mode: labels fade before layout collapse; live dot goes to the icon corner. */
+.kf-shell--slim .kf-rail__label { opacity: 0; pointer-events: none; }
 .kf-shell--slim .kf-rail__item {
   justify-content: center;
   padding: 0;
 }
+.kf-shell--slim .kf-rail__dot {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 6px;
+  height: 6px;
+}
 
+/* -------- Account row -------- */
 .kf-rail__foot {
-  padding: 12px 12px 16px;
+  padding: var(--sp-sp-3);
   border-top: 1px solid var(--sp-navy-mid);
 }
-.kf-rail__who {
-  color: var(--sp-on-navy-dim);
-  font-size: var(--sp-t-micro);
+.kf-account { position: relative; }
+.kf-account__btn {
+  width: 100%;
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sp-3);
+  background: transparent;
+  color: var(--sp-on-navy);
+  border: 1px solid transparent;
+  border-radius: var(--sp-r-ctl);
+  padding: var(--sp-sp-2) var(--sp-sp-3);
+  cursor: pointer;
+  text-align: left;
+}
+.kf-account__btn:hover,
+.kf-account__btn.is-open { background: color-mix(in srgb, white 7%, transparent); }
+.kf-account__ini {
+  width: 32px; height: 32px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--sp-navy-mid);
+  color: var(--sp-on-navy);
+  border-radius: var(--sp-r-pill);
   font-family: var(--sp-ui);
-  margin-bottom: 8px;
+  font-weight: 700;
+  font-size: 13px;
+  flex: 0 0 32px;
+}
+.kf-account__who {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+.kf-account__name {
+  font-family: var(--sp-ui);
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--sp-on-navy);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.kf-rail__signout {
+.kf-account__email {
+  color: var(--sp-on-navy-dim);
+  font-family: var(--sp-ui);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kf-account__caret { color: var(--sp-on-navy-text); transition: transform var(--sp-fast) var(--sp-ease); }
+.kf-account__btn.is-open .kf-account__caret { transform: rotate(180deg); }
+.kf-shell--slim .kf-account__btn { justify-content: center; padding: var(--sp-sp-2); }
+
+.kf-account__menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  min-width: 220px;
+  background: var(--sp-card);
+  color: var(--sp-ink);
+  border-radius: var(--sp-r-ctl);
+  box-shadow: var(--sp-shadow-float);
+  padding: var(--sp-sp-1);
+  z-index: var(--sp-z-notch);
+}
+.kf-account__menu--slim {
+  left: calc(100% + 8px);
+  bottom: auto;
+  top: 0;
+}
+.kf-account__item {
+  width: 100%;
+  min-height: 44px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  width: 100%;
+  gap: var(--sp-sp-2);
   background: transparent;
-  border: 1px solid var(--sp-navy-mid);
-  color: var(--sp-on-navy-text);
+  color: var(--sp-ink);
+  border: none;
   border-radius: var(--sp-r-sm);
-  padding: 8px 10px;
-  font-size: var(--sp-t-micro);
-  font-weight: 700;
+  padding: 0 var(--sp-sp-3);
   font-family: var(--sp-ui);
+  font-weight: 700;
+  cursor: pointer;
+  text-align: left;
 }
-.kf-rail__signout:hover {
-  background: color-mix(in srgb, white 7%, transparent);
-}
-.kf-shell--slim .kf-rail__who,
-.kf-shell--slim .kf-rail__signout span {
-  display: none;
-}
+.kf-account__item:hover { background: var(--sp-sky-tint); color: var(--sp-navy); }
 
 /* --------------------- Topbar / canvas --------------------- */
-.kf-main {
-  min-width: 0;
-}
+.kf-main { min-width: 0; }
 
 .kf-topbar {
   position: sticky;
@@ -204,60 +308,85 @@
   min-height: var(--sp-topbar);
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 24px;
-  z-index: 10;
+  gap: var(--sp-sp-3);
+  padding: 0 var(--sp-sp-5);
+  z-index: var(--sp-z-topbar);
 }
-
-/*
- * The burger ships hidden by `.kf-only-phone`. Its own `display` must only
- * fire at phone widths; otherwise the component rule would beat the utility
- * at desktop and the burger would leak back in (same failure mode that
- * caused the Home identity-band regression).
- */
 .kf-topbar__burger {
   background: transparent;
   color: var(--sp-ink);
-  border: 1px solid var(--sp-line);
-  border-radius: var(--sp-r-sm);
-  width: 44px;
-  height: 44px;
+  border: none;
+  width: 48px;
+  height: 48px;
   align-items: center;
   justify-content: center;
 }
-
 .kf-topbar__title {
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  gap: var(--sp-sp-3);
   flex: 1;
   min-width: 0;
 }
 .kf-topbar__title h1 {
   font-size: var(--sp-t-title);
   color: var(--sp-navy);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.kf-topbar__context {
+.kf-topbar__crumb {
   color: var(--sp-muted);
   font-family: var(--sp-ui);
   font-size: var(--sp-t-micro);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.kf-topbar__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  flex: 0 0 auto;
+}
+.kf-topbar__actions:empty { display: none; }
+
+/*
+ * Progress bar for topbar busy state. 2px --sp-red bar on the topbar's
+ * bottom edge; scaleX(0) at rest; .is-busy on the topbar scales it to .85
+ * over 600ms; completes to 1 and fades when the transition settles.
+ */
+.kf-topbar__progress {
+  position: absolute;
+  left: 0; right: 0; bottom: -1px;
+  height: 2px;
+  background: var(--sp-red);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 600ms var(--sp-ease), opacity var(--sp-base) var(--sp-ease);
+  pointer-events: none;
+  opacity: 0;
+}
+.kf-topbar.is-busy .kf-topbar__progress { transform: scaleX(0.85); opacity: 1; }
+.kf-topbar.is-busy-complete .kf-topbar__progress {
+  transform: scaleX(1);
+  opacity: 0;
+  transition: transform var(--sp-base) var(--sp-ease), opacity var(--sp-slow) var(--sp-ease);
 }
 
 .kf-canvas {
   max-width: var(--sp-canvas-max);
   margin: 0 auto;
-  padding: 24px;
-}
-@media (max-width: 860px) {
-  .kf-canvas { padding: 16px; padding-bottom: calc(var(--sp-tabbar) + 24px); }
+  padding: var(--sp-sp-5);
 }
 
 /* --------------------- Phone layout --------------------- */
 @media (max-width: 860px) {
-  .kf-shell {
-    grid-template-columns: 1fr;
-  }
+  .kf-shell { grid-template-columns: 1fr; }
   .kf-rail {
     position: fixed;
     top: 0;
@@ -266,8 +395,8 @@
     max-width: 86vw;
     height: 100dvh;
     transform: translateX(-100%);
-    transition: transform var(--sp-fast);
-    z-index: 50;
+    transition: transform var(--sp-base) var(--sp-ease);
+    z-index: var(--sp-z-rail-phone);
     border-right: none;
   }
   .kf-rail--open { transform: translateX(0); }
@@ -275,12 +404,13 @@
     position: fixed;
     inset: 0;
     background: color-mix(in srgb, var(--sp-navy-deep) 45%, transparent);
-    z-index: 40;
+    z-index: calc(var(--sp-z-rail-phone) - 1);
   }
-  .kf-topbar { padding: 0 16px; }
-  .kf-topbar__title h1 { font-size: var(--sp-t-h3); }
+  .kf-topbar { padding: 0 var(--sp-sp-4); min-height: 56px; }
+  .kf-topbar__title h1 { font-size: 20px; }
   .kf-topbar__burger { display: inline-flex; }
   .kf-rail__close { display: inline-flex; }
+  .kf-canvas { padding: var(--sp-sp-4); padding-bottom: calc(var(--sp-tabbar) + var(--sp-sp-5)); }
 }
 
 /* --------------------- Tab bar (phone) --------------------- */
@@ -295,7 +425,7 @@
   display: none;
   justify-content: space-around;
   align-items: stretch;
-  z-index: 20;
+  z-index: calc(var(--sp-z-rail-phone) - 10);
   border-top: 1px solid var(--sp-navy-line);
 }
 .kf-tabbar__item {
@@ -307,18 +437,26 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: var(--sp-sp-1);
   text-decoration: none;
   font-family: var(--sp-ui);
   font-size: 11px;
   font-weight: 700;
   min-height: var(--sp-floor-chef);
-  padding: 6px 4px;
+  padding: var(--sp-sp-1) var(--sp-sp-1);
 }
-.kf-tabbar__item--active {
-  color: var(--sp-sky);
-}
+.kf-tabbar__item--active { color: var(--sp-sky); }
 .kf-tabbar__item:hover { text-decoration: none; }
-@media (max-width: 860px) {
-  .kf-tabbar { display: flex; }
+@media (max-width: 860px) { .kf-tabbar { display: flex; } }
+
+/* Rail close (phone only) */
+.kf-rail__close {
+  background: transparent;
+  color: var(--sp-on-navy-text);
+  border: 1px solid transparent;
+  border-radius: var(--sp-r-sm);
+  width: 32px; height: 32px;
+  align-items: center;
+  justify-content: center;
 }
+.kf-rail__close:hover { background: color-mix(in srgb, white 7%, transparent); }

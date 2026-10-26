@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import {
   Home as HomeIcon,
@@ -14,14 +14,13 @@ import {
   Menu as MenuIcon,
   X,
   ChevronLeft,
-  PanelLeftClose,
-  PanelLeftOpen,
-  LogOut,
+  ArrowLeft,
   Soup,
   FileText,
   Image as ImageIcon,
   LayoutGrid,
 } from "lucide-react";
+import { AccountMenu } from "./AccountMenu";
 import "./shell.css";
 
 export type NavItem = {
@@ -42,7 +41,7 @@ const SHELL_NAV: NavItem[] = [
   { href: "/stockpot", label: "Stockpot", Icon: ChefHat, liveDot: true },
 ];
 
-// Stockpot-level nav: tool pages + climb-out row.
+// Stockpot-level nav.
 const STOCKPOT_NAV: NavItem[] = [
   { href: "/stockpot/ingredients", label: "Ingredients", Icon: Soup },
   { href: "/stockpot/recipes", label: "Recipes", Icon: FileText },
@@ -69,19 +68,21 @@ const PHONE_STOCKPOT_TABS: Array<NavItem | { kind: "menu" }> = [
 function isStockpotRoute(pathname: string): boolean {
   return pathname === "/stockpot" || pathname.startsWith("/stockpot/");
 }
-
 function isActive(pathname: string, href: string): boolean {
   if (href === "/") return pathname === "/";
   return pathname === href || pathname.startsWith(href + "/");
 }
 
-export function Shell({
-  children,
-  email,
-}: {
-  children: React.ReactNode;
+type Props = {
+  children: ReactNode;
+  topbar: ReactNode;
   email: string;
-}) {
+  name: string;
+  title: string;
+  crumb?: ReactNode;
+};
+
+export function Shell({ children, topbar, email, name, title, crumb }: Props) {
   const pathname = usePathname();
   const inStockpot = isStockpotRoute(pathname);
   const nav = inStockpot ? STOCKPOT_NAV : SHELL_NAV;
@@ -95,10 +96,9 @@ export function Shell({
       const raw = window.localStorage.getItem("kf.rail.collapsed");
       if (raw === "1") setCollapsed(true);
     } catch {
-      // private mode or similar; non-fatal
+      // non-fatal
     }
   }, []);
-
   useEffect(() => {
     try {
       window.localStorage.setItem("kf.rail.collapsed", collapsed ? "1" : "0");
@@ -106,7 +106,6 @@ export function Shell({
       // non-fatal
     }
   }, [collapsed]);
-
   useEffect(() => setDrawerOpen(false), [pathname]);
 
   return (
@@ -119,27 +118,18 @@ export function Shell({
           <span className="kf-rail__brand-mark" aria-label="KitchFix">
             {collapsed ? (
               <img
-                src="/brand/kitchfix-white-circle.png"
+                src="/brand/kitchfix-white-circle.svg"
                 alt="KitchFix"
                 className="kf-rail__logo kf-rail__logo--circle"
               />
             ) : (
               <img
-                src="/brand/kitchfix-white-stacked.png"
+                src="/brand/kitchfix-white-horizontal.svg"
                 alt="KitchFix"
-                className="kf-rail__logo kf-rail__logo--stacked"
+                className="kf-rail__logo kf-rail__logo--horizontal"
               />
             )}
           </span>
-          <button
-            type="button"
-            className="kf-rail__collapse kf-only-desktop"
-            onClick={() => setCollapsed((v) => !v)}
-            aria-label={collapsed ? "Expand rail" : "Collapse rail"}
-            title={collapsed ? "Expand rail" : "Collapse rail"}
-          >
-            {collapsed ? <PanelLeftOpen size={18} strokeWidth={1.5} /> : <PanelLeftClose size={18} strokeWidth={1.5} />}
-          </button>
           <button
             type="button"
             className="kf-rail__close kf-only-phone"
@@ -151,10 +141,17 @@ export function Shell({
         </div>
 
         {inStockpot ? (
-          <Link href="/" className="kf-rail__back">
-            <ChevronLeft size={16} />
-            <span>All tools</span>
-          </Link>
+          <>
+            <Link href="/" className="kf-rail__back">
+              <span className="kf-rail__back-ico" aria-hidden>
+                <ArrowLeft size={16} strokeWidth={1.5} />
+              </span>
+              <span className="kf-rail__back-label">All tools</span>
+            </Link>
+            <div className="kf-rail__section" aria-hidden>
+              <span>Stockpot</span>
+            </div>
+          </>
         ) : null}
 
         <nav className="kf-rail__nav">
@@ -176,15 +173,21 @@ export function Shell({
         </nav>
 
         <div className="kf-rail__foot">
-          <div className="kf-rail__who" title={email}>{email}</div>
-          <form action="/api/auth/signout" method="post">
-            <button type="submit" className="kf-rail__signout">
-              <LogOut size={16} strokeWidth={1.5} />
-              <span>Sign out</span>
-            </button>
-          </form>
+          <AccountMenu email={email} name={name} slim={collapsed} />
         </div>
       </aside>
+
+      <button
+        type="button"
+        className="kf-rail__notch kf-only-desktop"
+        onClick={() => setCollapsed((v) => !v)}
+        aria-label={collapsed ? "Expand rail" : "Collapse rail"}
+        title={collapsed ? "Expand rail" : "Collapse rail"}
+      >
+        <span className="kf-rail__notch-inner" aria-hidden>
+          <ChevronLeft size={16} strokeWidth={1.5} />
+        </span>
+      </button>
 
       {drawerOpen ? (
         <div
@@ -205,14 +208,17 @@ export function Shell({
             <MenuIcon size={20} strokeWidth={1.5} />
           </button>
           <div className="kf-topbar__title">
-            <TopbarTitle pathname={pathname} />
+            <h1>{title}</h1>
+            {crumb ? <span className="kf-topbar__crumb">{crumb}</span> : null}
           </div>
+          <div className="kf-topbar__actions">{topbar}</div>
+          <div className="kf-topbar__progress" aria-hidden />
         </header>
         <main className="kf-canvas">{children}</main>
       </div>
 
       <nav className="kf-tabbar kf-only-phone" aria-label="Section">
-        {phoneTabs.map((t, i) =>
+        {phoneTabs.map((t) =>
           "kind" in t ? (
             <button
               key="menu"
@@ -237,34 +243,5 @@ export function Shell({
         )}
       </nav>
     </div>
-  );
-}
-
-function TopbarTitle({ pathname }: { pathname: string }) {
-  // Every entry here must land somewhere. The fallback at the bottom used to
-  // render the raw pathname when a new route was added without a mapping,
-  // which leaked route strings into product chrome (e.g. "/stockpot/recipes"
-  // as the Recipes page title). Keep the map exhaustive.
-  const map: Array<{ test: (p: string) => boolean; title: string; context?: string }> = [
-    { test: (p) => p === "/", title: "KitchFix" },
-    { test: (p) => p === "/people", title: "People Portal", context: "Reserved door" },
-    { test: (p) => p === "/ops", title: "Ops Hub", context: "Reserved door" },
-    { test: (p) => p === "/service", title: "Service Calendar", context: "Reserved door" },
-    { test: (p) => p === "/kpi", title: "KPI Dashboard", context: "Reserved door" },
-    { test: (p) => p === "/academy", title: "Academy", context: "Reserved door" },
-    { test: (p) => p === "/stockpot" || p === "/stockpot/ingredients", title: "Ingredients", context: "Stockpot" },
-    { test: (p) => p === "/stockpot/ingredients/vendor-items", title: "Vendor items", context: "Stockpot / Ingredients" },
-    { test: (p) => p === "/stockpot/recipes", title: "Recipes", context: "Stockpot" },
-    { test: (p) => p === "/stockpot/menus", title: "Menus", context: "Stockpot" },
-    { test: (p) => p === "/stockpot/signs", title: "Signs & labels", context: "Stockpot" },
-  ];
-  const hit = map.find((m) => m.test(pathname));
-  const title = hit?.title ?? "KitchFix";
-  const context = hit?.context;
-  return (
-    <>
-      <h1>{title}</h1>
-      {context ? <span className="kf-topbar__context">{context}</span> : null}
-    </>
   );
 }

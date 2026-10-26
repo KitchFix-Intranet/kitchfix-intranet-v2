@@ -9,7 +9,6 @@
 import Link from "next/link";
 import { serviceClient } from "@/lib/supabase/service";
 import { Tabs } from "./Tabs";
-import { RunIntakeButton } from "./RunIntakeButton";
 import "./ingredients.css";
 
 type IntakeRun = {
@@ -149,7 +148,9 @@ export async function Overview() {
             <span className="kf-ing__status-label">Last intake</span>
             <span className="kf-ing__status-value">{lastRunLabel}</span>
           </div>
-          <RunIntakeButton />
+          <span className="kf-ing__status-sub">
+            Run intake from the top bar after a vendor upload.
+          </span>
         </div>
         <p className="kf-ing__status-sub">{intakeRunsTotal} total runs</p>
       </section>
