@@ -354,7 +354,9 @@ export async function runMatcher(
         const result = await callAnthropicJson<{ decisions: ModelDecision[] }>({
           system: SYSTEM_PROMPT,
           user: userPrompt(ingredients, batchRefs),
-          maxTokens: 2048,
+          // ~90 output tokens per item of JSON; size to the batch with headroom
+          // so a full batch is never truncated (batchSize is capped at 60).
+          maxTokens: Math.min(16384, 512 + slice.length * 160),
           temperature: 0,
         });
         counts.input_tokens += result.usage.input_tokens;
