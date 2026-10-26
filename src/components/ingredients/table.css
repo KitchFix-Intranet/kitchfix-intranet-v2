@@ -15,6 +15,7 @@
 
 .kf-filters__row {
   display: flex;
+  align-items: flex-end;
   gap: var(--sp-sp-3);
   flex-wrap: wrap;
 }
@@ -301,7 +302,8 @@
   white-space: nowrap;
   overflow: hidden;
 }
-.kf-table tbody tr:hover td { background: var(--sp-raise); }
+.kf-table tbody tr td { transition: background var(--sp-fast) var(--sp-ease); }
+.kf-table tbody tr:hover td { background: var(--sp-sky-soft); }
 .kf-table__num { text-align: right; font-variant-numeric: tabular-nums; }
 .kf-table__num.is-sorted { color: var(--sp-navy); }
 

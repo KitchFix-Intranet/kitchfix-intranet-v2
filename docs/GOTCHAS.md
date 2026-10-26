@@ -172,6 +172,31 @@ only); use `<div>` for any row that may contain a component. Verify
 hydration warnings from the un-minified `next dev` console or the
 Vercel runtime logs, not from the minified client `#418`.
 
+## 15. Supabase SSR cold-load 404: forward refreshed cookies onto the request, not just the response
+
+`getUser()` inside the proxy rotates the refresh token and writes new
+cookies. If those cookies are set only on the response, each
+downstream server-component `getUser()` reads the still-stale request
+cookies and retries a refresh with the already-rotated refresh token;
+Supabase refuses it, the session reads empty, and
+`requireOwnerPage()` calls `notFound()` - a spurious 404 that only
+appears once the access token has expired (a cold load). Fix:
+re-create `NextResponse.next({ request: { headers } })` inside the
+`setAll` callback with the refreshed cookies written back onto the
+request too, per Supabase's canonical `updateSession` pattern.
+Never reproduces on a warm load; verify across a token-expiry
+boundary.
+
+## 16. Slim nav: `opacity: 0` is not out of flow
+
+A label hidden with only `opacity: 0` still occupies its flex space,
+so "center the icon" centers icon-plus-hidden-label and the icon
+drifts left; anything pinned to the item's right edge (a status dot,
+a badge) detaches from the icon. Collapse the label's `width` and
+`flex` to zero (or `display: none`) and zero the item's `gap` so the
+icon truly centers, then pin the dot to the icon's own corner, not
+the item's.
+
 ---
 
 Branch-specific items we have already lived through on

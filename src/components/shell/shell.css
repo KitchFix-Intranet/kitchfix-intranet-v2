@@ -94,21 +94,25 @@
 }
 
 /* -------- Level 2 (Stockpot) back row + section label -------- */
+/*
+ * Quiet tertiary back-link that recedes above the section label - no
+ * divider, dim text, brightens on hover.
+ */
 .kf-rail__back {
   display: flex;
   align-items: center;
-  gap: var(--sp-sp-3);
+  gap: var(--sp-sp-2);
   min-height: 44px;
   padding: 0 var(--sp-sp-4);
-  color: var(--sp-on-navy-text);
+  color: var(--sp-on-navy-dim);
   font-family: var(--sp-ui);
-  font-weight: 600;
-  font-size: 14.5px;
+  font-weight: 500;
+  font-size: 13px;
   text-decoration: none;
-  border-bottom: 1px solid var(--sp-navy-line);
 }
 .kf-rail__back:hover {
   background: color-mix(in srgb, white 7%, transparent);
+  color: var(--sp-on-navy);
   text-decoration: none;
 }
 .kf-rail__back-ico {
@@ -191,8 +195,8 @@
  * Rail count badge. Academy "To do" uses this to show remaining
  * requirements. R-AC19: sky background, navy text - not red. Red is for
  * things that block; a count of documents to read does not block.
- * In slim mode the badge moves to the icon's top-right corner, same shape
- * as .kf-rail__dot but larger so a number can fit.
+ * In slim mode the badge pins to the icon's top-right corner, same place
+ * as the live dot (and taking priority when both would fire).
  */
 .kf-rail__count {
   min-width: 22px;
@@ -210,16 +214,30 @@
   font-variant-numeric: tabular-nums;
   flex: 0 0 auto;
 }
-/* Slim mode: labels fade before layout collapse; live dot goes to the icon corner. */
-.kf-shell--slim .kf-rail__label { opacity: 0; pointer-events: none; }
+
+/* Slim mode: label collapses OUT OF FLOW (not just opacity) so the icon
+   truly centers; each item becomes a centered square the active/hover
+   highlight hugs; the live dot pins to the icon's top-right corner, not
+   the item's edge. See docs/GOTCHAS.md - opacity:0 keeps a flex child in
+   flow and the icon drifts; width/flex 0 removes it. */
+.kf-shell--slim .kf-rail__label {
+  opacity: 0;
+  width: 0;
+  flex: 0 0 0;
+  pointer-events: none;
+}
 .kf-shell--slim .kf-rail__item {
   justify-content: center;
+  gap: 0;
+  width: 44px;
+  height: 44px;
+  margin: 0 auto;
   padding: 0;
 }
 .kf-shell--slim .kf-rail__dot {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  top: 8px;
+  right: 8px;
   width: 6px;
   height: 6px;
 }

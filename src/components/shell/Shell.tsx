@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import {
   Home as HomeIcon,
@@ -111,6 +111,14 @@ export function Shell({ children, topbar, email, name, title, crumb, todoCount =
   const [collapsed, setCollapsed] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
+  // Topbar progress state. "idle" at first paint (no hydration mismatch).
+  // Click on any rail nav Link -> "busy"; pathname settles -> "complete" for
+  // a tick then back to "idle". A 3500ms safety timeout clears a stuck
+  // same-route click.
+  const [busy, setBusy] = useState<"idle" | "busy" | "complete">("idle");
+  const navStartRef = useRef<string | null>(null);
+  const safetyRef = useRef<number | null>(null);
+
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem("kf.rail.collapsed");
@@ -127,6 +135,31 @@ export function Shell({ children, topbar, email, name, title, crumb, todoCount =
     }
   }, [collapsed]);
   useEffect(() => setDrawerOpen(false), [pathname]);
+
+  // Settle the progress bar when the pathname changes to the target the
+  // nav Link started us toward, or when a same-route click clears it.
+  useEffect(() => {
+    if (busy !== "busy") return;
+    if (navStartRef.current && pathname === navStartRef.current) {
+      navStartRef.current = null;
+      setBusy("complete");
+      const t = window.setTimeout(() => setBusy("idle"), 360);
+      return () => window.clearTimeout(t);
+    }
+  }, [busy, pathname]);
+
+  function markNavStart(href: string) {
+    const target = href.startsWith("/") ? href.split("?")[0] : null;
+    if (!target) return;
+    if (target === pathname) return;
+    navStartRef.current = target;
+    setBusy("busy");
+    if (safetyRef.current) window.clearTimeout(safetyRef.current);
+    safetyRef.current = window.setTimeout(() => {
+      navStartRef.current = null;
+      setBusy("idle");
+    }, 3500);
+  }
 
   return (
     <div className={`kf-shell${collapsed ? " kf-shell--slim" : ""}`}>
@@ -162,7 +195,7 @@ export function Shell({ children, topbar, email, name, title, crumb, todoCount =
 
         {inStockpot || inAcademy ? (
           <>
-            <Link href="/" className="kf-rail__back">
+            <Link href="/" className="kf-rail__back" onClick={() => markNavStart("/")}>
               <span className="kf-rail__back-ico" aria-hidden>
                 <ArrowLeft size={16} strokeWidth={1.5} />
               </span>
@@ -186,6 +219,7 @@ export function Shell({ children, topbar, email, name, title, crumb, todoCount =
                     href={href}
                     className={`kf-rail__item${isActive(pathname, href) ? " kf-rail__item--active" : ""}`}
                     title={label}
+                    onClick={() => markNavStart(href)}
                   >
                     <Icon size={20} strokeWidth={1.5} />
                     <span className="kf-rail__label">{label}</span>
@@ -228,7 +262,9 @@ export function Shell({ children, topbar, email, name, title, crumb, todoCount =
       ) : null}
 
       <div className="kf-main">
-        <header className="kf-topbar">
+        <header
+          className={`kf-topbar${busy === "busy" ? " is-busy" : busy === "complete" ? " is-busy-complete" : ""}`}
+        >
           <button
             type="button"
             className="kf-topbar__burger kf-only-phone"
@@ -265,6 +301,7 @@ export function Shell({ children, topbar, email, name, title, crumb, todoCount =
               key={t.href}
               href={t.href}
               className={`kf-tabbar__item${isActive(pathname, t.href) ? " kf-tabbar__item--active" : ""}`}
+              onClick={() => markNavStart(t.href)}
             >
               <t.Icon size={20} strokeWidth={1.5} />
               <span>{t.label}</span>

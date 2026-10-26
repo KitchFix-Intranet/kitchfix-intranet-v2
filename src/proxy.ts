@@ -36,7 +36,7 @@ export async function proxy(req: NextRequest) {
   // it (Next does not expose `pathname` through `headers()` by default).
   const requestHeaders = new Headers(req.headers);
   requestHeaders.set("x-pathname", pathname);
-  const res = NextResponse.next({ request: { headers: requestHeaders } });
+  let res = NextResponse.next({ request: { headers: requestHeaders } });
 
   const supa = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
@@ -47,6 +47,15 @@ export async function proxy(req: NextRequest) {
           return req.cookies.getAll();
         },
         setAll(all: { name: string; value: string; options: CookieOptions }[]) {
+          // Forward refreshed cookies onto the REQUEST the server components
+          // read, not just the response. Without this, a cold load with an
+          // expired access token makes each server-component getUser() try a
+          // second refresh with the already-rotated refresh token; it fails,
+          // email is null, requireOwnerPage() -> notFound() -> a spurious
+          // 404. See docs/GOTCHAS.md.
+          for (const { name, value } of all) req.cookies.set(name, value);
+          requestHeaders.set("cookie", req.cookies.toString());
+          res = NextResponse.next({ request: { headers: requestHeaders } });
           for (const { name, value, options } of all) {
             res.cookies.set(name, value, options);
           }
