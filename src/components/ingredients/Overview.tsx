@@ -1,15 +1,19 @@
-// Overview tab for the Ingredients tool.
+// Ingredients landing. Render V4 shape: identity band carrying the status
+// headline + the Open-vendor-items CTA, five tiles with hydration-safe
+// count-up, two coverage meter cards side by side, a Data health + Last
+// intake pair, phone layout with the manifesto behind a <details>.
 //
-// All vendor-item aggregation happens server-side via pr_v_overview_totals /
-// pr_v_overview_by_account / pr_v_overview_by_vendor. The previous version did
-// one unpaginated .select() on pr_vendor_items, which PostgREST capped at
-// db-max-rows and silently truncated the tiles. The views aggregate every row
-// in Postgres; the page reads scalars and sorted lists only.
+// All vendor-item aggregation goes through the pr_v_overview_* views so
+// no PostgREST truncation ever hits this page.
 
 import Link from "next/link";
+import { ArrowRight } from "lucide-react";
 import { serviceClient } from "@/lib/supabase/service";
+import { fmtCount, fmtDate, fmtDuration, fmtStatus, fmtUsd, fmtUsdLong } from "@/lib/fmt";
+import { IdentBand } from "@/components/ui/IdentBand";
+import { CountUp } from "@/components/ui/CountUp";
 import { Tabs } from "./Tabs";
-import { fmtCount, fmtDate, fmtStatus } from "@/lib/fmt";
+import { CoverageMeters } from "./CoverageMeters";
 import "./ingredients.css";
 
 type IntakeRun = {
@@ -23,7 +27,6 @@ type IntakeRun = {
 
 type Totals = {
   food_items_active: number;
-  food_items_total: number;
   food_items_with_number: number;
   food_items_waiting: number;
   food_items_waiting_usd: number;
@@ -37,30 +40,17 @@ type Totals = {
   twins_count: number;
 };
 
-function usd(n: number): string {
-  const sign = n < 0 ? "-" : "";
-  const abs = Math.abs(n);
-  if (abs >= 1_000_000) return `${sign}${(abs / 1_000_000).toFixed(2)}M`;
-  if (abs >= 1_000) return `${sign}${Math.round(abs / 1_000)}K`;
-  return `${sign}${Math.round(abs)}`;
-}
+type MeterRow = { name: string; food: number; linked: number };
 
-function pct(num: number, den: number): string {
-  if (den <= 0) return "0%";
-  return `${Math.round((num / den) * 100)}%`;
-}
-
-async function loadTotals(): Promise<{
+async function loadOverview(): Promise<{
   totals: Totals;
   lastRun: IntakeRun | null;
   ingredientsNamed: number;
-  intakeRunsTotal: number;
-  bySite: Array<[string, { food: number; linked: number }]>;
-  topVendors: Array<[string, { food: number; linked: number }]>;
+  bySite: MeterRow[];
+  topVendors: MeterRow[];
 }> {
   const client = serviceClient();
-
-  const [totalsRes, byAcctRes, byVendorRes, runsRes, ingredientsRes, runCountRes, needsReviewLinesRes] =
+  const [totalsRes, byAcctRes, byVendorRes, runsRes, ingredientsRes, needsReviewLinesRes] =
     await Promise.all([
       client.from("pr_v_overview_totals").select("*").single(),
       client
@@ -78,19 +68,16 @@ async function loadTotals(): Promise<{
         .order("started_at", { ascending: false })
         .limit(1),
       client.from("pr_ingredients").select("id", { count: "exact", head: true }).eq("status", "active"),
-      client.from("pr_intake_runs").select("id", { count: "exact", head: true }),
       client.from("pr_price_observations").select("id", { count: "exact", head: true }).eq("needs_review", true),
     ]);
   if (totalsRes.error) throw totalsRes.error;
   if (byAcctRes.error) throw byAcctRes.error;
   if (byVendorRes.error) throw byVendorRes.error;
 
-  // PostgREST returns numeric columns as strings; Number() handles both.
   const t = (totalsRes.data ?? {}) as Record<string, unknown>;
   const n = (k: string) => Number(t[k] ?? 0);
   const totals: Totals = {
     food_items_active: n("food_items_active"),
-    food_items_total: n("food_items_active"),
     food_items_with_number: n("food_items_with_number"),
     food_items_waiting: n("food_items_waiting"),
     food_items_waiting_usd: n("food_items_waiting_usd"),
@@ -104,160 +91,255 @@ async function loadTotals(): Promise<{
     twins_count: n("twins_count"),
   };
 
-  const bySite: Array<[string, { food: number; linked: number }]> = (
-    (byAcctRes.data ?? []) as Array<{ account_key: string; food: unknown; linked: unknown }>
-  ).map((r) => [r.account_key, { food: Number(r.food ?? 0), linked: Number(r.linked ?? 0) }]);
-
-  const topVendors: Array<[string, { food: number; linked: number }]> = (
-    (byVendorRes.data ?? []) as Array<{ vendor_name: string; food: unknown; linked: unknown }>
-  ).map((r) => [r.vendor_name, { food: Number(r.food ?? 0), linked: Number(r.linked ?? 0) }]);
+  const bySite: MeterRow[] = (byAcctRes.data ?? []).map((r) => {
+    const row = r as { account_key: string; food: unknown; linked: unknown };
+    return { name: row.account_key, food: Number(row.food ?? 0), linked: Number(row.linked ?? 0) };
+  });
+  const topVendors: MeterRow[] = (byVendorRes.data ?? []).map((r) => {
+    const row = r as { vendor_name: string; food: unknown; linked: unknown };
+    return { name: row.vendor_name, food: Number(row.food ?? 0), linked: Number(row.linked ?? 0) };
+  });
 
   return {
     totals,
     lastRun: ((runsRes.data ?? [])[0] ?? null) as IntakeRun | null,
     ingredientsNamed: ingredientsRes.count ?? 0,
-    intakeRunsTotal: runCountRes.count ?? 0,
     bySite,
     topVendors,
   };
 }
 
-export async function Overview() {
-  const { totals, lastRun, ingredientsNamed, intakeRunsTotal, bySite, topVendors } = await loadTotals();
+function pct(num: number, den: number): string {
+  if (den <= 0) return "0%";
+  return `${Math.round((num / den) * 100)}%`;
+}
 
-  const lastRunLabel = lastRun
-    ? `${fmtDate(lastRun.started_at, "time")} - ${fmtStatus(lastRun.status)}`
+function identityOf(n: number): string { return fmtCount(n); }
+
+export async function Overview() {
+  let overview: Awaited<ReturnType<typeof loadOverview>>;
+  let bandStatus: "ok" | "failed" | "running" = "ok";
+  try {
+    overview = await loadOverview();
+  } catch {
+    return (
+      <div className="kf-ing">
+        <Tabs active="overview" />
+        <IdentBand
+          eyebrow="Where we stand"
+          title="Status unavailable"
+          kick="Couldn't read intake status."
+          status="failed"
+          pageName="Ingredients"
+        />
+      </div>
+    );
+  }
+  const { totals, lastRun, ingredientsNamed, bySite, topVendors } = overview;
+  if (lastRun?.status === "running") bandStatus = "running";
+  else if (lastRun?.status === "failed") bandStatus = "failed";
+
+  const unlinkedUsd = totals.food_items_waiting_usd;
+  const bandHeadline = `${fmtUsd(unlinkedUsd)} of food waiting to be named`;
+  const lastIntakeFactNote = lastRun
+    ? `${fmtStatus(lastRun.status)} - ${fmtDate(lastRun.started_at, "time")}`
     : "No intake run yet";
+  const linesReadFromRun = Number(
+    (lastRun?.counts as Record<string, unknown> | null)?.lines_read ?? 0
+  );
 
   return (
     <div className="kf-ing">
-      <header className="kf-ing__header">
-        <span className="kf-eyebrow">Culinary office</span>
-        <h2>Ingredients</h2>
-        <p className="kf-ing__kicker">
-          What we buy, in our words. Invoice lines become vendor items, vendor
-          items link to one ingredient, and the price a recipe sees is the
-          company price with a date on it. Nothing enters without a human saying so.
-        </p>
-      </header>
+      <IdentBand
+        eyebrow="Where we stand"
+        title={bandHeadline}
+        kick="What we buy, in our words: every line, named once."
+        kickInfo={
+          <>
+            <p style={{ margin: 0 }}>
+              Invoice lines become vendor items; vendor items link to one
+              ingredient; the price a recipe sees is the company price with a
+              date on it.
+            </p>
+            <p style={{ margin: "var(--sp-sp-2) 0 0" }}>
+              Nothing enters without a human saying so.
+            </p>
+          </>
+        }
+        facts={[
+          { label: "Last intake", value: lastRun ? fmtStatus(lastRun.status) : "-", note: lastRun ? fmtDate(lastRun.started_at, "time") : "No run yet" },
+          { label: "Lines read", value: identityOf(linesReadFromRun) },
+        ]}
+        cta={{ label: "Open vendor items", href: "/stockpot/ingredients/vendor-items" }}
+        status={bandStatus}
+        runningStartedAt={bandStatus === "running" ? lastRun?.started_at ?? null : null}
+        pageName="Ingredients"
+      />
+
+      <section className="kf-only-phone kf-ing__phone-action" aria-label="Intake">
+        <article className="kf-fact">
+          <span className="kf-fact__label">Last intake</span>
+          <span className="kf-fact__value">{lastRun ? fmtStatus(lastRun.status) : "-"}</span>
+          <span className="kf-fact__note">{lastIntakeFactNote}</span>
+        </article>
+        <Link href="/stockpot/ingredients/vendor-items" className="kf-btn kf-btn--soft kf-btn--sm">
+          <span>Vendor items</span>
+          <ArrowRight size={14} strokeWidth={1.5} />
+        </Link>
+      </section>
 
       <Tabs active="overview" />
 
-      <section className="kf-ing__status" aria-label="Intake status">
-        <div className="kf-ing__status-row">
-          <div>
-            <span className="kf-ing__status-label">Last intake</span>
-            <span className="kf-ing__status-value">{lastRunLabel}</span>
-          </div>
-          <span className="kf-ing__status-sub">
-            Run intake from the top bar after a vendor upload.
-          </span>
-        </div>
-        <p className="kf-ing__status-sub">{intakeRunsTotal} total runs</p>
-      </section>
-
-      <section className="kf-tiles" aria-label="Headline numbers">
+      <section className="kf-tiles kf-reveal" aria-label="Headline numbers" style={{ ["--i" as never]: 2 }}>
         <article className="kf-tile kf-tile--lead">
-          <span className="kf-tile__label">Food dollars linked (12m)</span>
-          <span className="kf-tile__value">{pct(totals.food_dollars_linked, totals.food_dollars_total)}</span>
+          <span className="kf-tile__label">Food dollars linked</span>
+          <span className="kf-tile__value">
+            {pct(totals.food_dollars_linked, totals.food_dollars_total)}
+          </span>
           <span className="kf-tile__sub">
-            ${usd(totals.food_dollars_linked)} / ${usd(totals.food_dollars_total)}
+            {fmtUsd(totals.food_dollars_linked)} of {fmtUsd(totals.food_dollars_total)}, 12 months
           </span>
         </article>
         <article className="kf-tile">
-          <span className="kf-tile__label">Vendor items (food, active)</span>
-          <span className="kf-tile__value">{fmtCount(totals.food_items_active)}</span>
-          <span className="kf-tile__sub">{fmtCount(totals.food_items_with_number)} have an item number</span>
-        </article>
-        <article className="kf-tile">
-          <span className="kf-tile__label">Packs read</span>
-          <span className="kf-tile__value">{fmtCount(totals.packs_clean)}</span>
-          <span className="kf-tile__sub">Parser arrives in step 3</span>
+          <span className="kf-tile__label">Active food items</span>
+          <span className="kf-tile__value">
+            <CountUp value={totals.food_items_active} format={fmtCount} />
+          </span>
+          <span className="kf-tile__sub">
+            {fmtCount(totals.food_items_with_number)} carry an item number
+          </span>
         </article>
         <article className="kf-tile">
           <span className="kf-tile__label">Waiting for you</span>
-          <span className="kf-tile__value">{fmtCount(totals.food_items_waiting)}</span>
-          <span className="kf-tile__sub">${usd(totals.food_items_waiting_usd)} unlinked (12m)</span>
+          <span className="kf-tile__value">
+            <CountUp value={totals.food_items_waiting} format={fmtCount} />
+          </span>
+          <span className="kf-tile__sub">{fmtUsd(totals.food_items_waiting_usd)} unlinked (12m)</span>
         </article>
         <article className="kf-tile">
+          <span className="kf-tile__label">Twins to resolve</span>
+          <span className="kf-tile__value">
+            <CountUp value={totals.twins_count} format={fmtCount} />
+          </span>
+          <span className="kf-tile__sub">Same item, two numbers</span>
+        </article>
+        <article className="kf-tile kf-tile--named">
           <span className="kf-tile__label">Ingredients named</span>
-          <span className="kf-tile__value">{fmtCount(ingredientsNamed)}</span>
-          <span className="kf-tile__sub">Naming lands in step 5</span>
+          <span className="kf-tile__value">
+            <CountUp value={ingredientsNamed} format={fmtCount} />
+          </span>
+          <span className="kf-tile__sub">Starts with the review queue</span>
         </article>
       </section>
 
-      <section className="kf-coverage" aria-label="Coverage by site">
-        <h3>Coverage by site</h3>
-        <p className="kf-coverage__note">Linking starts in step 5. The dark bar fills as items are named.</p>
-        {bySite.length === 0 ? (
-          <div className="kf-state">
-            <div className="kf-state__title">No food dollars yet</div>
-            <div className="kf-state__body">Run intake and the per-site meters will fill.</div>
-          </div>
-        ) : (
-          <ul className="kf-meters">
-            {bySite.map(([acct, { food, linked }]) => (
-              <li key={acct}>
-                <div className="kf-meter__row">
-                  <span className="kf-meter__name">{acct}</span>
-                  <span className="kf-meter__nums">
-                    ${usd(linked)} / ${usd(food)}
-                  </span>
-                </div>
-                <div className="kf-meter__bar">
-                  <div
-                    className="kf-meter__fill"
-                    style={{ width: pct(linked, food) }}
-                  />
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
+      <details className="kf-only-phone kf-ing__manifesto">
+        <summary>What is this?</summary>
+        <p>
+          Invoice lines become vendor items; vendor items link to one
+          ingredient; the price a recipe sees is the company price with a
+          date on it. Nothing enters without a human saying so.
+        </p>
+      </details>
+
+      <section className="kf-two kf-reveal" style={{ ["--i" as never]: 3 }} aria-label="Coverage">
+        <article className="kf-card kf-coverage-card">
+          <header className="kf-section-head">
+            <span className="kf-eyebrow kf-eyebrow--plain">Coverage by site</span>
+            <h3>How food dollars split</h3>
+            <ul className="kf-coverage__legend" aria-label="Legend">
+              <li><span className="kf-swatch kf-swatch--share" aria-hidden /> Share of this list</li>
+              <li><span className="kf-swatch kf-swatch--linked" aria-hidden /> Linked</li>
+            </ul>
+          </header>
+          <CoverageMeters rows={bySite} />
+        </article>
+
+        <article className="kf-card kf-coverage-card">
+          <header className="kf-section-head">
+            <span className="kf-eyebrow kf-eyebrow--plain">Coverage by vendor</span>
+            <h3>Top 10 by 12-month dollars</h3>
+            <ul className="kf-coverage__legend" aria-label="Legend">
+              <li><span className="kf-swatch kf-swatch--share" aria-hidden /> Share of this list</li>
+              <li><span className="kf-swatch kf-swatch--linked" aria-hidden /> Linked</li>
+            </ul>
+          </header>
+          <CoverageMeters rows={topVendors} />
+        </article>
       </section>
 
-      <section className="kf-coverage" aria-label="Coverage by vendor">
-        <h3>Coverage by vendor (top 10 by 12-month dollars)</h3>
-        <p className="kf-coverage__note">Linking starts in step 5.</p>
-        {topVendors.length === 0 ? (
-          <div className="kf-state">
-            <div className="kf-state__title">No vendors with food dollars yet</div>
-            <div className="kf-state__body">Run intake and this list will populate.</div>
-          </div>
-        ) : (
-          <ul className="kf-meters">
-            {topVendors.map(([name, { food, linked }]) => (
-              <li key={name}>
-                <div className="kf-meter__row">
-                  <span className="kf-meter__name">{name}</span>
-                  <span className="kf-meter__nums">
-                    ${usd(linked)} / ${usd(food)}
-                  </span>
-                </div>
-                <div className="kf-meter__bar">
-                  <div className="kf-meter__fill" style={{ width: pct(linked, food) }} />
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section className="kf-health" aria-label="Data health">
+      <section className="kf-health kf-reveal" style={{ ["--i" as never]: 4 }} aria-label="Health + last intake">
         <article className="kf-card">
-          <header><span className="kf-eyebrow">Data health</span><h3>What the lines look like</h3></header>
+          <header><span className="kf-eyebrow kf-eyebrow--plain">Data health</span><h3>What the lines look like</h3></header>
           <dl className="kf-kv">
-            <div><dt>Lines with no item number</dt><dd>{fmtCount(totals.no_number_items)} items / ${usd(totals.no_number_dollars)}</dd></div>
-            <div><dt>Lines flagged on the invoice</dt><dd>{fmtCount(totals.needs_review_lines)}</dd></div>
-            <div><dt>Catch-weight items</dt><dd>{fmtCount(totals.catch_weight_items)}</dd></div>
-            <div><dt>Packs parsed</dt><dd>{fmtCount(totals.packs_clean)}</dd></div>
-            <div><dt>Twins found</dt><dd>{fmtCount(totals.twins_count)}</dd></div>
-            <div><dt>Last intake</dt><dd>{lastRunLabel}</dd></div>
+            <div>
+              <dt>{fmtCount(totals.no_number_items)} items with no number</dt>
+              <dd>{fmtUsd(totals.no_number_dollars)}</dd>
+            </div>
+            <div>
+              <dt>{fmtCount(totals.needs_review_lines)} flagged on the invoice</dt>
+              <dd>-</dd>
+            </div>
+            <div>
+              <dt>{fmtCount(totals.catch_weight_items)} catch-weight items</dt>
+              <dd>-</dd>
+            </div>
+            <div>
+              <dt>{fmtCount(totals.twins_count)} twins</dt>
+              <dd>-</dd>
+            </div>
+            <div className="is-missing">
+              <dt>Packs parsed</dt>
+              <dd>Not read yet</dd>
+            </div>
           </dl>
-          <footer className="kf-card__foot">
-            <Link href="/stockpot/ingredients/vendor-items" className="kf-link">
-              Open vendor items -&gt;
+          <footer className="kf-card__foot kf-card__foot--split">
+            <span>Counts refresh with every intake</span>
+            <Link href="/stockpot/ingredients/vendor-items" className="kf-btn kf-btn--ghost kf-btn--sm">
+              <span>Open vendor items</span>
+              <ArrowRight size={14} strokeWidth={1.5} />
             </Link>
+          </footer>
+        </article>
+
+        <article className="kf-card">
+          <header>
+            <span className="kf-eyebrow kf-eyebrow--plain">Last intake</span>
+            <h3>{lastRun ? fmtDate(lastRun.started_at, "time") : "No intake run yet"}</h3>
+          </header>
+          {lastRun ? (
+            <dl className="kf-kv">
+              <div>
+                <dt>Result</dt>
+                <dd>
+                  <span
+                    className={`kf-pill ${lastRun.status === "failed" ? "kf-pill--block" : "kf-pill--live"}`}
+                  >
+                    {fmtStatus(lastRun.status)}
+                  </span>
+                </dd>
+              </div>
+              <div>
+                <dt>Duration</dt>
+                <dd>{fmtDuration(lastRun.started_at, lastRun.finished_at)}</dd>
+              </div>
+              <div>
+                <dt>Lines read</dt>
+                <dd>{fmtCount(Number((lastRun.counts as Record<string, unknown> | null)?.lines_read ?? 0))}</dd>
+              </div>
+              <div>
+                <dt>Set aside as not food</dt>
+                <dd>{fmtCount(Number((lastRun.counts as Record<string, unknown> | null)?.lines_excluded_not_food ?? 0))}</dd>
+              </div>
+              <div>
+                <dt>Set aside for review</dt>
+                <dd>{fmtCount(Number((lastRun.counts as Record<string, unknown> | null)?.lines_excluded_needs_review ?? 0))}</dd>
+              </div>
+            </dl>
+          ) : (
+            <p className="kf-card__muted">Nothing has been read yet. Run intake from the top bar.</p>
+          )}
+          <footer className="kf-card__foot">
+            Runs nightly; run it now from the top bar after a vendor upload.
           </footer>
         </article>
       </section>

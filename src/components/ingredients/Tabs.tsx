@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Lock } from "lucide-react";
 
 type ActiveTab = "overview" | "vendor-items";
 
@@ -11,11 +12,21 @@ export function Tabs({ active }: { active: ActiveTab }) {
       >
         Overview
       </Link>
-      <span className="kf-tab kf-tab--disabled" aria-disabled="true" title="Arrives in step 5">
-        Review queue <small>step 5</small>
+      <span
+        className="kf-tab kf-tab--disabled"
+        aria-disabled="true"
+        title="Arrives with the review queue (step 5)"
+      >
+        <Lock size={14} strokeWidth={1.5} />
+        Review queue
       </span>
-      <span className="kf-tab kf-tab--disabled" aria-disabled="true" title="Arrives in step 5">
-        Ingredients <small>step 5</small>
+      <span
+        className="kf-tab kf-tab--disabled"
+        aria-disabled="true"
+        title="Arrives with the review queue (step 5)"
+      >
+        <Lock size={14} strokeWidth={1.5} />
+        Ingredients
       </span>
       <Link
         href="/stockpot/ingredients/vendor-items"

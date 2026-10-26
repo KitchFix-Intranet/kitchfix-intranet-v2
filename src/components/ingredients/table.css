@@ -1,26 +1,36 @@
+/*
+ * Vendor items table + filters. Dense dashboard: 48px rows,
+ * table-layout: fixed, sticky thead, no wrapping. Pill family lives in
+ * components.css; this file is layout + the two row flags only.
+ */
+
 /* ---------- Filters ---------- */
 .kf-filters {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--sp-sp-3);
+  transition: opacity var(--sp-fast) var(--sp-ease);
 }
+.kf-filters.is-pending { opacity: 0.6; pointer-events: none; }
+
 .kf-filters__row {
   display: flex;
-  gap: 12px;
+  gap: var(--sp-sp-3);
   flex-wrap: wrap;
 }
 .kf-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--sp-sp-1);
   font-family: var(--sp-ui);
   font-size: var(--sp-t-micro);
   color: var(--sp-muted);
+  position: relative;
 }
 .kf-field > select,
 .kf-field input[type="search"] {
-  min-height: var(--sp-floor-chef);
-  padding: 0 12px;
+  min-height: var(--sp-floor-corp);
+  padding: 0 var(--sp-sp-3);
   border: 1px solid var(--sp-line);
   border-radius: var(--sp-r-ctl);
   background: var(--sp-card);
@@ -28,36 +38,73 @@
   font-size: var(--sp-t-body);
   color: var(--sp-ink);
 }
+.kf-field > select { width: 240px; max-width: 100%; }
 .kf-field > select:focus-visible,
 .kf-field input:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
-.kf-field--search { position: relative; flex: 1; min-width: 240px; }
-.kf-field--search input { padding-left: 36px; width: 100%; }
-/*
- * The icon sits inside the input, vertically centered against the input's
- * own box. `.kf-field` is `display: flex column` with a label above the
- * input, so we anchor off the input's own position via `bottom:0` on the
- * icon's own absolute box; the previous `top: 50%; translateY(10px)`
- * pushed the magnifier below the input entirely.
- */
+
+.kf-field--search { flex: 1; min-width: 240px; }
+.kf-field--search input { padding-left: 36px; padding-right: 72px; width: 100%; }
+
 .kf-field__icon {
   position: absolute;
   left: 10px;
   bottom: 0;
-  height: var(--sp-floor-chef);
+  height: var(--sp-floor-corp);
   display: inline-flex;
   align-items: center;
   color: var(--sp-muted);
   pointer-events: none;
 }
+.kf-field__kbd {
+  position: absolute;
+  right: 10px;
+  bottom: calc((var(--sp-floor-corp) - 20px) / 2);
+  height: 20px;
+  padding: 0 var(--sp-sp-1);
+  background: var(--sp-sky-tint);
+  color: var(--sp-navy);
+  border-radius: 4px;
+  font-family: var(--sp-ui);
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+}
+.kf-field__clear {
+  position: absolute;
+  right: 4px;
+  bottom: 0;
+  height: var(--sp-floor-corp);
+  width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--sp-muted);
+  border: none;
+  cursor: pointer;
+}
+.kf-field__clear:hover { color: var(--sp-ink); }
 
 .kf-segs {
   display: flex;
-  gap: 6px;
+  gap: var(--sp-sp-1);
   flex-wrap: wrap;
 }
+@media (max-width: 860px) {
+  .kf-segs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent);
+            mask-image: linear-gradient(90deg, #000 85%, transparent);
+  }
+}
 .kf-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-1);
   min-height: var(--sp-floor-corp);
-  padding: 0 14px;
+  padding: 0 var(--sp-sp-3);
   border: 1px solid var(--sp-line);
   border-radius: var(--sp-r-pill);
   background: var(--sp-card);
@@ -65,8 +112,13 @@
   font-weight: 700;
   font-size: var(--sp-t-micro);
   color: var(--sp-body);
-  transition: background var(--sp-fast), color var(--sp-fast), border-color var(--sp-fast);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--sp-fast) var(--sp-ease),
+              color var(--sp-fast) var(--sp-ease),
+              border-color var(--sp-fast) var(--sp-ease);
 }
+.kf-seg b { font-weight: 800; font-variant-numeric: tabular-nums; }
 .kf-seg:hover { background: var(--sp-sky-tint); color: var(--sp-navy); border-color: var(--sp-sky-line); }
 .kf-seg--active,
 .kf-seg--active:hover {
@@ -74,9 +126,8 @@
   color: var(--sp-on-navy);
   border-color: var(--sp-navy);
 }
-.kf-filters__pending { color: var(--sp-muted); font-size: var(--sp-t-micro); }
 
-/* ---------- Table ---------- */
+/* ---------- Table card ---------- */
 .kf-table-wrap {
   background: var(--sp-card);
   border: 1px solid var(--sp-line);
@@ -85,16 +136,38 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  transition: opacity var(--sp-fast) var(--sp-ease);
 }
+.kf-table-wrap.is-pending { opacity: 0.6; pointer-events: none; }
+
 .kf-table-meta {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 16px;
+  justify-content: space-between;
+  gap: var(--sp-sp-3);
+  padding: var(--sp-sp-3) var(--sp-sp-4);
   color: var(--sp-muted);
   font-size: var(--sp-t-micro);
   border-bottom: 1px solid var(--sp-line);
   flex-wrap: wrap;
+  min-height: 56px;
+}
+.kf-table-meta__left {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  color: var(--sp-body);
+}
+.kf-table-meta__left strong {
+  font-size: var(--sp-t-body);
+  color: var(--sp-ink);
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+}
+.kf-table-meta__right {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-3);
 }
 .kf-table-meta__dot {
   width: 4px; height: 4px;
@@ -103,19 +176,16 @@
   display: inline-block;
 }
 
-/*
- * Legend of link-status pills + the CW flag, sitting between the table meta
- * line and the first table row so a first-time viewer can read the badges
- * without hunting.
- */
+/* Legend row */
 .kf-table-legend {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 16px 10px;
+  gap: var(--sp-sp-2);
+  padding: 8px var(--sp-sp-4) 10px;
   border-bottom: 1px solid var(--sp-line-soft);
   background: var(--sp-sky-soft);
   flex-wrap: wrap;
+  min-height: 36px;
 }
 .kf-table-legend__label {
   color: var(--sp-muted);
@@ -124,14 +194,13 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 1px;
-  margin-right: 4px;
 }
 .kf-table-legend__sep {
   display: inline-block;
   width: 1px;
   height: 16px;
   background: var(--sp-line);
-  margin: 0 6px;
+  margin: 0 var(--sp-sp-1);
 }
 .kf-table-legend__hint {
   color: var(--sp-muted);
@@ -139,15 +208,76 @@
 }
 .kf-table-legend .kf-pill { margin-left: 0; }
 
+/* Sort select */
+.kf-sort select {
+  min-height: 36px;
+  padding: 0 var(--sp-sp-3);
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 700;
+  color: var(--sp-ink);
+}
+.kf-sort select:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
+
+/* Compact pager */
+.kf-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-1);
+}
+.kf-pager__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px; height: 36px;
+  color: var(--sp-navy);
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+  text-decoration: none;
+  transition: background var(--sp-fast) var(--sp-ease);
+}
+.kf-pager__btn:hover { background: var(--sp-sky-tint); text-decoration: none; }
+.kf-pager__btn.is-disabled { pointer-events: none; opacity: 0.4; }
+.kf-pager__loc {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-ink);
+  padding: 0 var(--sp-sp-2);
+  min-width: 56px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.kf-pager-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  color: var(--sp-muted);
+  font-size: var(--sp-t-micro);
+}
+
+/* ---------- Table body ---------- */
+.kf-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
 .kf-table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
   font-family: var(--sp-ui);
   font-size: var(--sp-t-table);
 }
 .kf-table thead th {
+  position: sticky;
+  top: 0;
   text-align: left;
-  padding: 10px 12px;
+  padding: 10px var(--sp-sp-3);
   font-size: 12.5px;
   font-family: var(--sp-disp);
   font-weight: 700;
@@ -156,43 +286,87 @@
   color: var(--sp-muted);
   background: var(--sp-sky-soft);
   border-bottom: 1px solid var(--sp-line);
+  white-space: nowrap;
 }
+.kf-table thead th.is-sorted { color: var(--sp-navy); }
+.kf-table thead th.is-sorted span { margin-right: 4px; }
+.kf-table thead th.is-sorted svg { vertical-align: -2px; }
+
 .kf-table tbody td {
-  padding: 10px 12px;
+  height: var(--sp-row);
+  padding: 0 var(--sp-sp-3);
   border-bottom: 1px solid var(--sp-line-soft);
-  vertical-align: top;
+  vertical-align: middle;
+  color: var(--sp-ink);
+  white-space: nowrap;
+  overflow: hidden;
 }
 .kf-table tbody tr:hover td { background: var(--sp-raise); }
 .kf-table__num { text-align: right; font-variant-numeric: tabular-nums; }
+.kf-table__num.is-sorted { color: var(--sp-navy); }
+
+.kf-cell-ellipsis {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
 .kf-cell-strong { font-weight: 700; color: var(--sp-ink); }
-.kf-cell-sub { color: var(--sp-muted); font-size: var(--sp-t-micro); }
-.kf-cell-link { color: var(--sp-ink); font-weight: 600; text-decoration: none; }
-.kf-cell-link:hover { color: var(--sp-link); text-decoration: underline; }
 .kf-muted { color: var(--sp-muted); }
 
-/*
- * Pill family (warn / info / good / muted / twin) lives in components.css as
- * .kf-pill--*. Row-level pills carry a small left margin to breathe past the
- * cell contents - a tiny table-specific tweak only.
- */
-.kf-table td .kf-pill { margin-left: var(--sp-sp-1); }
-.kf-cards__chips .kf-pill { margin-left: 0; }
+/* Whole-row clickable */
+.kf-row-link { cursor: pointer; }
+.kf-row-link:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: -2px; }
 
-/* ---------- Pagination ---------- */
-.kf-pagination {
+/* Description cell with flags on the right */
+.kf-desc {
   display: flex;
   align-items: center;
-  gap: var(--sp-sp-3);
-  padding: var(--sp-sp-3) var(--sp-sp-4);
-  border-top: 1px solid var(--sp-line);
+  gap: var(--sp-sp-1);
+  min-width: 0;
 }
-.kf-pagination__loc { color: var(--sp-muted); font-size: var(--sp-t-micro); font-family: var(--sp-ui); }
+.kf-desc__text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kf-flag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px; height: 22px;
+  border-radius: var(--sp-r-sm);
+  flex: 0 0 22px;
+}
+.kf-flag--warn { background: var(--sp-warn-bg); color: var(--sp-warn-strong); }
+.kf-flag--twin { background: var(--sp-sky-tint); color: var(--sp-navy); }
+
+/* Empty row inside the table card */
+.kf-table-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-sp-3);
+  margin: 0;
+  border: none;
+  border-radius: 0;
+}
 
 /* ---------- Phone card list ---------- */
-.kf-cards { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; padding: 12px; }
+.kf-cards {
+  list-style: none;
+  margin: 0;
+  padding: var(--sp-sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+}
 .kf-cards__item {
   display: block;
-  padding: 12px;
+  padding: var(--sp-sp-3);
   border: 1px solid var(--sp-line);
   border-radius: var(--sp-r-sm);
   text-decoration: none;
@@ -200,11 +374,9 @@
   background: var(--sp-card);
 }
 .kf-cards__item:hover { background: var(--sp-raise); text-decoration: none; }
-.kf-cards__head { display: flex; justify-content: space-between; margin-bottom: 4px; font-size: var(--sp-t-micro); }
+.kf-cards__head { display: flex; justify-content: space-between; margin-bottom: var(--sp-sp-1); font-size: var(--sp-t-micro); }
 .kf-cards__vendor { font-weight: 700; color: var(--sp-ink); }
-.kf-cards__num { color: var(--sp-muted); }
-.kf-cards__name { font-size: var(--sp-t-item); font-weight: 700; color: var(--sp-navy); margin-bottom: 6px; }
-.kf-cards__meta { display: flex; gap: 10px; color: var(--sp-body); font-size: var(--sp-t-micro); margin-bottom: 6px; flex-wrap: wrap; }
-.kf-cards__chips { display: flex; flex-wrap: wrap; gap: 4px; }
-
-.kf-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.kf-cards__num { color: var(--sp-muted); font-variant-numeric: tabular-nums; }
+.kf-cards__name { font-size: var(--sp-t-item); font-weight: 700; color: var(--sp-navy); margin-bottom: var(--sp-sp-1); }
+.kf-cards__meta { display: flex; gap: var(--sp-sp-3); color: var(--sp-body); font-size: var(--sp-t-micro); margin-bottom: var(--sp-sp-1); flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+.kf-cards__chips { display: flex; flex-wrap: wrap; gap: var(--sp-sp-1); align-items: center; }

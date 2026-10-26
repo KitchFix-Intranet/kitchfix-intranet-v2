@@ -4,18 +4,25 @@
  * utility class can hide the band at phone widths without being overridden.
  */
 .kf-band { margin-bottom: var(--sp-sp-5); }
+/*
+ * Band frame: height is pinned to --sp-band (128) exactly. The content
+ * (eyebrow + bar + h2 + kick) plus 14px top/bottom padding and the 4px
+ * left-column gap totals 128 at the display font-metrics; measured at
+ * 1440 and 1280 - no overflow, no clipping.
+ */
 .kf-band__frame {
   position: relative;
   background: var(--sp-navy-deep);
   color: var(--sp-on-navy);
   border-radius: var(--sp-r-lg);
   overflow: hidden;
-  padding: 22px var(--sp-sp-6);
-  min-height: var(--sp-band);
+  padding: 14px var(--sp-sp-6);
+  height: var(--sp-band);
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--sp-sp-5);
   align-items: center;
+  box-sizing: border-box;
 }
 .kf-band__sheen {
   position: absolute;
@@ -36,7 +43,7 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-sp-2);
+  gap: var(--sp-sp-1);
   min-width: 0;
 }
 .kf-band__eyebrow { color: var(--sp-red); }

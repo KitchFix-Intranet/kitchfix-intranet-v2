@@ -1,23 +1,22 @@
+// Vendor item drawer. Server-rendered on ?drawer=<id>; wrapped in a client
+// <DrawerFrame> that handles mount/exit animations, Escape close, focus trap
+// and focus restore to the originating row.
+
 import type { ReactNode } from "react";
-import Link from "next/link";
+import { Archive, Scale } from "lucide-react";
 import { serviceClient } from "@/lib/supabase/service";
+import { fmtCount, fmtDate, fmtUsd, fmtUsdLong, timeAgo } from "@/lib/fmt";
+import { humanizeKind } from "@/lib/humanizeKind";
+import { DrawerFrame } from "./DrawerFrame";
 import { ItemStatusActions } from "./ItemStatusActions";
-import { X } from "lucide-react";
-import type { StatusSeg } from "./Filters";
-import { fmtCount, fmtDate } from "@/lib/fmt";
 import "./drawer.css";
 
 type Props = {
   id: string;
-  params: Record<string, string | undefined>;
-  seg: StatusSeg;
-  q: string;
+  closeHref: string;
   vendorNameById: Record<string, string>;
 };
 
-// Humanize the internal enum values before they reach the UI. The schema
-// values ("active", "none", "ok", "proposed", "charge", etc.) are plumbing;
-// the user sees plain words.
 const STATUS_LABELS: Record<string, string> = {
   active: "Active",
   archived: "Archived",
@@ -40,26 +39,52 @@ function renderPack(packText: string | null, packState: string): ReactNode {
   return <span className="kf-muted">unparsed</span>;
 }
 
-function usdLong(n: number): string {
-  const sign = n < 0 ? "-" : "";
-  const abs = Math.abs(n);
-  if (abs >= 1_000_000) return `${sign}${(abs / 1_000_000).toFixed(2)}M`;
-  if (abs >= 1_000) return `${sign}${(abs / 1_000).toFixed(1)}K`;
-  return `${sign}${Math.round(abs)}`;
-}
+type Item = {
+  id: string;
+  vendor_id: string;
+  item_number: string | null;
+  item_number_norm: string | null;
+  name: string;
+  description_key: string;
+  pack_text: string | null;
+  pack_state: string;
+  billed_unit: string | null;
+  catch_weight: boolean;
+  is_food: boolean | null;
+  food_reason: string | null;
+  status: string;
+  link_status: string;
+  duplicate_of_id: string | null;
+  usd: number | null;
+  usd_12m: number | null;
+  lines: number | null;
+  lines_12m: number | null;
+  accounts: string[] | null;
+  first_seen: string | null;
+  last_seen: string | null;
+  needs_review_lines: number | null;
+};
 
-function closeHref(params: Record<string, string | undefined>, seg: StatusSeg, q: string): string {
-  const u = new URLSearchParams();
-  if (params.vendor && params.vendor !== "all") u.set("vendor", params.vendor);
-  if (seg !== "all") u.set("status", seg);
-  if (q.length > 0) u.set("q", q);
-  if (params.page && params.page !== "0") u.set("page", params.page);
-  return "?" + u.toString();
-}
+type ObsRow = {
+  account_key: string;
+  invoice_date: string | null;
+  unit_price: number | null;
+  quantity: number | null;
+  extended_price: number | null;
+};
 
-export async function VendorItemDrawer({ id, params, seg, q, vendorNameById }: Props) {
+type EventRow = {
+  id: string;
+  kind: string;
+  at: string;
+  actor: string | null;
+  note: string | null;
+};
+
+type AliasRow = { description: string; count: number; last_seen: string | null };
+
+export async function VendorItemDrawer({ id, closeHref, vendorNameById }: Props) {
   const client = serviceClient();
-
   const [itemRes, aliasesRes, obsRes, eventsRes] = await Promise.all([
     client
       .from("pr_vendor_items")
@@ -82,62 +107,37 @@ export async function VendorItemDrawer({ id, params, seg, q, vendorNameById }: P
       .limit(1000),
     client
       .from("pr_events")
-      .select("id,kind,at,note,before,after,actor")
+      .select("id,kind,at,note,actor")
       .eq("entity_type", "vendor_item")
       .eq("entity_id", id)
       .order("at", { ascending: false })
       .limit(50),
   ]);
 
-  const item = itemRes.data as
-    | {
-        id: string;
-        vendor_id: string;
-        item_number: string | null;
-        item_number_norm: string | null;
-        name: string;
-        description_key: string;
-        pack_text: string | null;
-        pack_state: string;
-        billed_unit: string | null;
-        catch_weight: boolean;
-        is_food: boolean | null;
-        food_reason: string | null;
-        status: string;
-        link_status: string;
-        duplicate_of_id: string | null;
-        usd: number | null;
-        usd_12m: number | null;
-        lines: number | null;
-        lines_12m: number | null;
-        accounts: string[] | null;
-        first_seen: string | null;
-        last_seen: string | null;
-        needs_review_lines: number | null;
-      }
-    | null;
-
-  const close = closeHref(params, seg, q);
+  const item = itemRes.data as Item | null;
+  const labelId = `kf-drawer-title-${id}`;
 
   if (!item) {
     return (
-      <>
-        <Link href={close} className="kf-drawer__backdrop" aria-label="Close drawer" />
-        <aside className="kf-drawer" aria-label="Vendor item">
-          <div className="kf-drawer__head">
-            <div><span className="kf-eyebrow">Vendor item</span><h3>Not found</h3></div>
-            <Link href={close} className="kf-drawer__close"><X size={20} strokeWidth={1.5} /></Link>
+      <DrawerFrame closeHref={closeHref} labelledBy={labelId}>
+        <div className="kf-drawer__head">
+          <div>
+            <span className="kf-eyebrow kf-eyebrow--plain">Vendor item</span>
+            <h3 id={labelId}>Not found</h3>
           </div>
-          <div className="kf-state"><div className="kf-state__title">Row missing</div><div className="kf-state__body">The item may have been archived or merged.</div></div>
-        </aside>
-      </>
+        </div>
+        <div className="kf-empty">
+          <div>
+            <div className="kf-empty__title">Row missing</div>
+            <div className="kf-empty__body">The item may have been archived or merged.</div>
+          </div>
+        </div>
+      </DrawerFrame>
     );
   }
 
   const vendorName = vendorNameById[item.vendor_id] ?? item.vendor_id;
 
-  // Group observations by account.
-  type ObsRow = { account_key: string; invoice_date: string | null; unit_price: number | null; quantity: number | null; extended_price: number | null };
   const bySite = new Map<string, { lines: number; last_date: string | null; last_price: number | null; dollars: number }>();
   for (const o of (obsRes.data ?? []) as ObsRow[]) {
     const prior = bySite.get(o.account_key) ?? { lines: 0, last_date: null, last_price: null, dollars: 0 };
@@ -151,97 +151,148 @@ export async function VendorItemDrawer({ id, params, seg, q, vendorNameById }: P
   }
   const sitesSorted = Array.from(bySite.entries()).sort((a, b) => b[1].dollars - a[1].dollars);
 
+  const flagged = Number(item.needs_review_lines ?? 0);
+  const lines12m = Number(item.lines_12m ?? 0);
+  const allFlagged = sitesSorted.length === 0 && lines12m > 0 && flagged >= lines12m;
+
   return (
-    <>
-      <Link href={close} className="kf-drawer__backdrop" aria-label="Close drawer" />
-      <aside className="kf-drawer" aria-label="Vendor item">
-        <div className="kf-drawer__head">
-          <div>
-            <span className="kf-eyebrow">{vendorName} - {item.item_number ?? "no number"}</span>
-            <h3>{item.name}</h3>
-          </div>
-          <Link href={close} className="kf-drawer__close" aria-label="Close">
-            <X size={20} strokeWidth={1.5} />
-          </Link>
+    <DrawerFrame closeHref={closeHref} labelledBy={labelId}>
+      <div className="kf-drawer__head">
+        <span className="kf-eyebrow kf-eyebrow--plain">
+          {vendorName} - {item.item_number ? `#${item.item_number}` : "no number"}
+        </span>
+        <h3 id={labelId} className="kf-drawer__name">{item.name}</h3>
+        <div className="kf-drawer__chips">
+          <span className="kf-pill kf-pill--info">{humanizeLinkStatus(item.link_status)}</span>
+          <span className="kf-pill kf-pill--muted">{humanizeStatus(item.status)}</span>
+          <span className="kf-pill kf-pill--muted">{item.is_food ? "Food" : "Not food"}</span>
+          {item.catch_weight ? (
+            <span className="kf-pill kf-pill--warn">
+              <Scale size={12} strokeWidth={1.5} />
+              <span>Catch weight</span>
+            </span>
+          ) : null}
         </div>
+      </div>
 
-        <section className="kf-drawer__facts">
-          <dl className="kf-kv">
-            <div><dt>Status</dt><dd>{humanizeStatus(item.status)}</dd></div>
-            <div><dt>Link status</dt><dd>{humanizeLinkStatus(item.link_status)}</dd></div>
-            <div><dt>Food</dt><dd>{item.is_food ? "Yes" : "No"}</dd></div>
-            <div><dt>Pack</dt><dd>{renderPack(item.pack_text, item.pack_state)}</dd></div>
-            <div><dt>Billed unit</dt><dd>{item.billed_unit ?? "-"}</dd></div>
-            <div><dt>Catch weight</dt><dd>{item.catch_weight ? "Yes" : "No"}</dd></div>
-            <div><dt>12m dollars</dt><dd>${usdLong(Number(item.usd_12m ?? 0))}</dd></div>
-            <div><dt>12m lines</dt><dd>{fmtCount(Number(item.lines_12m ?? 0))}</dd></div>
-            <div><dt>Lifetime</dt><dd>${usdLong(Number(item.usd ?? 0))} / {fmtCount(Number(item.lines ?? 0))} lines</dd></div>
-            <div><dt>First seen</dt><dd>{item.first_seen ? fmtDate(item.first_seen) : "-"}</dd></div>
-            <div><dt>Last seen</dt><dd>{item.last_seen ? fmtDate(item.last_seen) : "-"}</dd></div>
-            <div><dt>Lines flagged</dt><dd>{fmtCount(Number(item.needs_review_lines ?? 0))}</dd></div>
-          </dl>
-        </section>
+      <section className="kf-drawer__block" aria-label="Facts">
+        <dl className="kf-facts">
+          <div>
+            <dt>12m spend</dt>
+            <dd>${fmtUsdLong(Number(item.usd_12m ?? 0)).replace(/^\$/, "")}</dd>
+          </div>
+          <div>
+            <dt>12m lines</dt>
+            <dd>
+              {fmtCount(lines12m)}
+              {flagged > 0 ? (
+                <span className="kf-facts__note kf-facts__note--warn">{fmtCount(flagged)} flagged on the invoice</span>
+              ) : null}
+            </dd>
+          </div>
+          <div>
+            <dt>Pack</dt>
+            <dd>{renderPack(item.pack_text, item.pack_state)}</dd>
+          </div>
+          <div>
+            <dt>Billed unit</dt>
+            <dd>{item.billed_unit ?? "-"}</dd>
+          </div>
+          <div>
+            <dt>First seen</dt>
+            <dd>{item.first_seen ? fmtDate(item.first_seen) : "-"}</dd>
+          </div>
+          <div>
+            <dt>Last seen</dt>
+            <dd>{item.last_seen ? fmtDate(item.last_seen) : "-"}</dd>
+          </div>
+        </dl>
+      </section>
 
-        <section className="kf-drawer__block">
-          <h4>Description variants</h4>
-          {(aliasesRes.data?.length ?? 0) === 0 ? (
-            <p className="kf-muted">No aliases recorded yet.</p>
-          ) : (
-            <ul className="kf-aliases">
-              {(aliasesRes.data as { description: string; count: number; last_seen: string | null }[]).map((a) => (
-                <li key={a.description}>
-                  <span>{a.description}</span>
-                  <span className="kf-aliases__count">x{a.count}</span>
-                  <span className="kf-aliases__date">{a.last_seen ?? "-"}</span>
-                </li>
+      <section className="kf-drawer__block" aria-label="Spend by site">
+        <header className="kf-drawer__block-head">
+          <h4>Spend by site</h4>
+          <small>12 months</small>
+        </header>
+        {sitesSorted.length === 0 && allFlagged ? (
+          <p className="kf-note">
+            {fmtCount(lines12m)} lines, all flagged on the invoice - nothing to price yet.
+          </p>
+        ) : sitesSorted.length === 0 ? (
+          <p className="kf-muted">No observations recorded yet.</p>
+        ) : (
+          <table className="kf-table kf-table--compact">
+            <thead>
+              <tr>
+                <th>Site</th>
+                <th className="kf-table__num">Lines</th>
+                <th>Last paid</th>
+                <th>Last date</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sitesSorted.map(([k, v]) => (
+                <tr key={k}>
+                  <td>{k}</td>
+                  <td className="kf-table__num">{fmtCount(v.lines)}</td>
+                  <td>
+                    {v.last_price != null
+                      ? `${fmtUsd(Number(v.last_price))} / ${item.billed_unit ?? "unit"}`
+                      : "-"}
+                  </td>
+                  <td>{v.last_date ? fmtDate(v.last_date) : "-"}</td>
+                </tr>
               ))}
-            </ul>
-          )}
-        </section>
+            </tbody>
+          </table>
+        )}
+      </section>
 
-        <section className="kf-drawer__block">
-          <h4>By site</h4>
-          {sitesSorted.length === 0 ? (
-            <p className="kf-muted">No observations recorded yet.</p>
-          ) : (
-            <table className="kf-table">
-              <thead><tr><th>Site</th><th className="kf-table__num">Lines</th><th>Last paid</th><th>Last date</th></tr></thead>
-              <tbody>
-                {sitesSorted.map(([k, v]) => (
-                  <tr key={k}>
-                    <td>{k}</td>
-                    <td className="kf-table__num">{fmtCount(v.lines)}</td>
-                    <td>{v.last_price != null ? `$${Number(v.last_price).toFixed(2)}` : "-"}</td>
-                    <td>{v.last_date ? fmtDate(v.last_date) : "-"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </section>
+      <section className="kf-drawer__block" aria-label="Description variants">
+        <h4>Description variants</h4>
+        {(aliasesRes.data?.length ?? 0) === 0 ? (
+          <p className="kf-muted">No aliases recorded yet.</p>
+        ) : (
+          <ul className="kf-aliases">
+            {(aliasesRes.data as AliasRow[]).map((a) => (
+              <li key={a.description}>
+                <span className="kf-aliases__desc">{a.description}</span>
+                <span className="kf-aliases__count">x{fmtCount(a.count)}</span>
+                <span className="kf-aliases__date">{a.last_seen ? fmtDate(a.last_seen) : "-"}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
-        <section className="kf-drawer__block">
-          <h4>Ledger</h4>
-          {(eventsRes.data?.length ?? 0) === 0 ? (
-            <p className="kf-muted">No events recorded yet.</p>
-          ) : (
-            <ul className="kf-events">
-              {(eventsRes.data as { id: string; kind: string; at: string; note: string | null; actor: string | null }[]).map((e) => (
-                <li key={e.id}>
-                  <span className="kf-events__kind">{e.kind}</span>
-                  <span className="kf-events__who">{e.actor ?? "-"}</span>
-                  <time dateTime={e.at} title={fmtDate(e.at, "time")}>{fmtDate(e.at, "time")}</time>
-                  {e.note ? <p>{e.note}</p> : null}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+      <section className="kf-drawer__block" aria-label="Ledger">
+        <h4>Ledger</h4>
+        {(eventsRes.data?.length ?? 0) === 0 ? (
+          <div className="kf-empty kf-empty--inline">
+            <div>
+              <div className="kf-empty__title">No changes yet</div>
+              <div className="kf-empty__body">
+                Archiving, naming and link decisions will show here with who made them.
+              </div>
+            </div>
+          </div>
+        ) : (
+          <ul className="kf-events">
+            {(eventsRes.data as EventRow[]).map((e) => (
+              <li key={e.id}>
+                <span className="kf-events__kind">{humanizeKind(e.kind, 1)}</span>
+                <span className="kf-events__who">{e.actor ?? "-"}</span>
+                <time dateTime={e.at} title={fmtDate(e.at, "time")}>{timeAgo(e.at)}</time>
+                {e.note ? <p>{e.note}</p> : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
-        <section className="kf-drawer__actions">
-          <ItemStatusActions id={item.id} status={item.status} />
-        </section>
-      </aside>
-    </>
+      <footer className="kf-drawer__footer" aria-label="Actions">
+        <ItemStatusActions id={item.id} status={item.status} closeHref={closeHref} />
+      </footer>
+    </DrawerFrame>
   );
 }

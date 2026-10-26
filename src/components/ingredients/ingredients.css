@@ -1,27 +1,69 @@
-.kf-ing { display: flex; flex-direction: column; gap: 20px; }
-
 /*
- * Tightened header rhythm so the hero does not eat vertical space. The
- * kicker now sits at ~92ch instead of 78ch so intro copy folds to two lines
- * on wide viewports.
+ * Ingredients layout. The band + tiles + coverage grid + health card lives
+ * here; shared primitives (buttons, pills, cards, kv) live in components.css.
  */
-.kf-ing__header { margin-top: 4px; }
-.kf-ing__header h2 { color: var(--sp-navy); font-size: var(--sp-t-title); margin-top: 4px; }
-.kf-ing__kicker { color: var(--sp-body); font-size: var(--sp-t-body); max-width: 92ch; margin-top: 6px; }
+
+.kf-ing { display: flex; flex-direction: column; gap: var(--sp-sp-5); }
+
+/* Phone intake row that replaces the band on phones */
+.kf-ing__phone-action {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-sp-3);
+  padding: var(--sp-sp-3) 0;
+}
+@media (max-width: 860px) {
+  .kf-ing__phone-action { display: flex; }
+}
+
+.kf-ing__manifesto {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  padding: 0 var(--sp-sp-4);
+}
+.kf-ing__manifesto summary {
+  min-height: var(--sp-floor-chef);
+  display: flex;
+  align-items: center;
+  font-family: var(--sp-ui);
+  font-weight: 700;
+  color: var(--sp-navy);
+  cursor: pointer;
+  list-style: none;
+}
+.kf-ing__manifesto summary::-webkit-details-marker { display: none; }
+.kf-ing__manifesto[open] { padding-bottom: var(--sp-sp-4); }
+.kf-ing__manifesto p {
+  margin: 0 0 var(--sp-sp-2);
+  color: var(--sp-body);
+  font-size: var(--sp-t-body);
+}
 
 /* ---------- Tabs ---------- */
 .kf-tabs {
   display: flex;
-  gap: 4px;
+  gap: var(--sp-sp-1);
   border-bottom: 2px solid var(--sp-line);
   overflow-x: auto;
+  position: relative;
+}
+@media (max-width: 860px) {
+  /* Phone tabs scroll under a right-edge fade. The mask-image value is a
+   * black->transparent gradient, not a color token - it is a mask, not a
+   * paint. Allowed per the token rule carve-out. */
+  .kf-tabs {
+    -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent);
+            mask-image: linear-gradient(90deg, #000 85%, transparent);
+  }
 }
 .kf-tab {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-sp-2);
   min-height: var(--sp-floor-chef);
-  padding: 0 16px;
+  padding: 0 var(--sp-sp-4);
   color: var(--sp-body);
   font-family: var(--sp-ui);
   font-weight: 700;
@@ -31,72 +73,40 @@
   margin-bottom: -2px;
   position: relative;
   white-space: nowrap;
-  transition: color var(--sp-fast), border-color var(--sp-fast);
+  transition: color var(--sp-fast) var(--sp-ease), border-color var(--sp-fast) var(--sp-ease);
 }
 .kf-tab:hover { color: var(--sp-navy); text-decoration: none; }
 .kf-tab--active { color: var(--sp-navy); border-bottom-color: var(--sp-red); }
 .kf-tab--disabled { color: var(--sp-muted); cursor: not-allowed; }
-.kf-tab small {
-  font-size: var(--sp-t-micro);
-  font-weight: 700;
-  background: var(--sp-info-bg);
-  color: var(--sp-link);
-  padding: 2px 6px;
-  border-radius: var(--sp-r-pill);
-}
-
-/* ---------- Intake status strip ---------- */
-.kf-ing__status {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  background: var(--sp-card);
-  border: 1px solid var(--sp-line);
-  border-radius: var(--sp-r-card);
-  padding: 14px 18px;
-  box-shadow: var(--sp-shadow);
-}
-.kf-ing__status-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-.kf-ing__status-label {
-  display: block;
-  font-family: var(--sp-disp);
-  font-size: var(--sp-t-label);
-  font-weight: 700;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  color: var(--sp-muted);
-}
-.kf-ing__status-value {
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-body);
-  font-weight: 700;
-  color: var(--sp-ink);
-}
-.kf-ing__status-sub { color: var(--sp-muted); font-size: var(--sp-t-micro); margin: 0; }
-.kf-ing__status-err { color: var(--sp-block); font-size: var(--sp-t-micro); }
-.kf-ing__status-ok { color: var(--sp-good); font-size: var(--sp-t-micro); }
+.kf-tab--disabled:hover { color: var(--sp-muted); }
 
 /* ---------- Tiles ---------- */
 .kf-tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--sp-sp-3);
+}
+/* Compact desktop: the lead tile spans two columns so the four body tiles
+ * get full width in the 3-col grid under 1280. */
+@media (max-width: 1280px) {
+  .kf-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .kf-tile--lead { grid-column: span 3; }
+}
+@media (max-width: 860px) {
+  .kf-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kf-tile--lead { grid-column: span 2; }
+  .kf-tile--named { grid-column: span 2; }
 }
 .kf-tile {
   background: var(--sp-card);
   border: 1px solid var(--sp-line);
   border-radius: var(--sp-r-card);
   box-shadow: var(--sp-shadow);
-  padding: 16px;
+  padding: var(--sp-sp-4);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--sp-sp-1);
+  min-height: 118px;
 }
 .kf-tile--lead {
   background: var(--sp-navy);
@@ -110,6 +120,9 @@
   letter-spacing: 2px;
   text-transform: uppercase;
   color: var(--sp-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .kf-tile--lead .kf-tile__label { color: var(--sp-on-navy-text); }
 .kf-tile__value {
@@ -118,82 +131,151 @@
   font-size: var(--sp-t-value);
   color: var(--sp-ink);
   line-height: 1;
-  margin-top: 4px;
+  margin-top: var(--sp-sp-1);
+  font-variant-numeric: tabular-nums;
 }
 .kf-tile--lead .kf-tile__value { color: var(--sp-on-navy); }
 .kf-tile__sub { color: var(--sp-muted); font-size: var(--sp-t-micro); }
-.kf-tile--lead .kf-tile__sub { color: var(--sp-on-navy-dim); }
+.kf-tile--lead .kf-tile__sub { color: var(--sp-on-navy-text); }
 
-/* ---------- Coverage ---------- */
-.kf-coverage h3 { color: var(--sp-navy); font-size: var(--sp-t-h3); margin-bottom: 10px; }
+/* ---------- Two-column meter grid ---------- */
+.kf-two {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-sp-4);
+}
+@media (max-width: 1279px) {
+  .kf-two { grid-template-columns: 1fr; }
+}
+
+.kf-coverage-card { padding: var(--sp-sp-4); }
+.kf-section-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-sp-3);
+  align-items: baseline;
+  margin-bottom: var(--sp-sp-3);
+}
+.kf-section-head h3 {
+  grid-column: 1 / 2;
+  color: var(--sp-navy);
+  font-size: var(--sp-t-h3);
+  margin-top: var(--sp-sp-1);
+}
+.kf-coverage__legend {
+  grid-column: 2 / 3;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: inline-flex;
+  gap: var(--sp-sp-3);
+  color: var(--sp-muted);
+  font-size: var(--sp-t-micro);
+  align-items: center;
+}
+.kf-coverage__legend li { display: inline-flex; align-items: center; gap: var(--sp-sp-1); }
+.kf-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.kf-swatch--share { background: var(--sp-sky-line); }
+.kf-swatch--linked { background: var(--sp-navy); }
+
 .kf-meters {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  background: var(--sp-card);
-  border: 1px solid var(--sp-line);
-  border-radius: var(--sp-r-card);
-  box-shadow: var(--sp-shadow);
-  padding: 16px;
+  gap: var(--sp-sp-2);
 }
-.kf-meter__row {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 4px;
+.kf-meter {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) 124px;
+  gap: var(--sp-sp-3);
+  align-items: center;
+  min-height: 44px;
 }
 .kf-meter__name {
   font-family: var(--sp-ui);
   font-weight: 700;
   color: var(--sp-ink);
   font-size: var(--sp-t-table);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.kf-meter__nums { color: var(--sp-muted); font-size: var(--sp-t-micro); }
 .kf-meter__bar {
+  position: relative;
   height: 8px;
   background: var(--sp-line-soft);
   border-radius: var(--sp-r-pill);
   overflow: hidden;
 }
-.kf-meter__fill {
-  height: 100%;
-  background: var(--sp-navy);
-  min-width: 2px;
-  transition: width var(--sp-rise) ease-out;
+.kf-meter__share,
+.kf-meter__linked {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  transform-origin: left center;
+  animation: kf-bar-grow var(--sp-rise) var(--sp-ease) both;
+  animation-delay: calc(200ms + var(--i, 0) * var(--sp-stagger));
 }
-.kf-coverage__note {
-  color: var(--sp-muted);
-  font-size: var(--sp-t-micro);
-  margin: -4px 0 10px;
+.kf-meter__share  { background: var(--sp-sky-line); }
+.kf-meter__linked { background: var(--sp-navy); }
+.is-revealed .kf-meter__share,
+.is-revealed .kf-meter__linked { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  .kf-meter__share, .kf-meter__linked { animation: none; }
+}
+@keyframes kf-bar-grow {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
 }
 
-/* ---------- Health kv ---------- */
-.kf-kv {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 8px 16px;
-  margin: 10px 0 0;
-}
-.kf-kv > div { display: contents; }
-.kf-kv dt {
-  font-family: var(--sp-ui);
-  color: var(--sp-body);
-  font-size: var(--sp-t-table);
-}
-.kf-kv dd {
-  margin: 0;
+.kf-meter__nums {
   text-align: right;
-  font-family: var(--sp-ui);
-  font-weight: 700;
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+.kf-meter__nums strong {
   color: var(--sp-ink);
   font-size: var(--sp-t-table);
+  font-variant-numeric: tabular-nums;
 }
-.kf-link {
+.kf-meter__linked-note { color: var(--sp-muted); font-size: 12px; }
+
+.kf-meters__more { margin-top: var(--sp-sp-2); }
+.kf-meters__more summary {
+  min-height: 44px;
+  display: flex; align-items: center;
   color: var(--sp-link);
   font-family: var(--sp-ui);
   font-weight: 700;
-  font-size: var(--sp-t-micro);
+  cursor: pointer;
+  list-style: none;
+}
+.kf-meters__more summary::-webkit-details-marker { display: none; }
+
+@media (max-width: 860px) {
+  .kf-meter { grid-template-columns: minmax(0, 1fr) 96px; }
+  .kf-meter__bar { grid-column: 1 / span 2; height: 6px; }
+  .kf-meter__name { grid-column: 1; }
+  .kf-meter__nums { grid-column: 2; align-items: flex-end; }
+}
+
+/* ---------- Data health + Last intake ---------- */
+.kf-health {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-sp-4);
+}
+@media (max-width: 1279px) {
+  .kf-health { grid-template-columns: 1fr; }
+}
+.kf-card__foot--split {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-sp-3);
 }
