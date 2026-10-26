@@ -3,6 +3,7 @@ import { serviceClient } from "@/lib/supabase/service";
 import { Tabs } from "./Tabs";
 import { Filters, StatusSeg } from "./Filters";
 import { VendorItemDrawer } from "./VendorItemDrawer";
+import { fmtCount } from "@/lib/fmt";
 import "./ingredients.css";
 import "./table.css";
 
@@ -155,7 +156,7 @@ export async function VendorItemsPage({
 
       <section aria-label="Vendor items" className="kf-table-wrap">
         <div className="kf-table-meta">
-          Showing {items.length} of {total.toLocaleString()}
+          Showing {items.length} of {fmtCount(total)}
           <span className="kf-table-meta__dot" />
           Sort: 12-month $ desc
         </div>
@@ -228,7 +229,7 @@ function TableRow({
       <td>{r.pack_text ?? "-"}</td>
       <td>{r.billed_unit ?? "-"}</td>
       <td className="kf-table__num">${usdLong(Number(r.usd_12m ?? 0))}</td>
-      <td className="kf-table__num">{Number(r.lines_12m ?? 0).toLocaleString()}</td>
+      <td className="kf-table__num">{fmtCount(Number(r.lines_12m ?? 0))}</td>
       <td>{(r.accounts ?? []).length}</td>
       <td>{r.last_seen ?? "-"}</td>
       <td><StatusChip row={r} /></td>
@@ -257,7 +258,7 @@ function PhoneCard({
         <div className="kf-cards__name">{r.name}</div>
         <div className="kf-cards__meta">
           <span>${usdLong(Number(r.usd_12m ?? 0))} / 12m</span>
-          <span>{Number(r.lines_12m ?? 0).toLocaleString()} lines</span>
+          <span>{fmtCount(Number(r.lines_12m ?? 0))} lines</span>
           <span>{(r.accounts ?? []).length} sites</span>
         </div>
         <div className="kf-cards__chips">

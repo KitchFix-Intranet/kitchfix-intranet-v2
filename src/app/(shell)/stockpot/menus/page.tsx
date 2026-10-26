@@ -1,9 +1,8 @@
-import { ReservedDoor } from "@/components/reserved/ReservedDoor";
+import { StockpotNext } from "@/components/reserved/StockpotNext";
 
 export default function Page() {
   return (
-    <ReservedDoor
-      name="Menus"
+    <StockpotNext
       one_line="Collections of recipes with sort, allergens, and sign-and-label behavior."
       arrives="Coming after Recipes"
     />

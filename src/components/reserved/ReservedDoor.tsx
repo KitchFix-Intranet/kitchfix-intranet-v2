@@ -1,33 +1,49 @@
+import Link from "next/link";
+import { ExternalLink } from "lucide-react";
+import { IdentBand } from "@/components/ui/IdentBand";
 import "./reserved.css";
 
-// Reserved doors are landing pages for tools that aren't live in this shell
-// yet. Keep the copy product-shaped: a sentence on what the door will be, a
-// plain "Coming after Ingredients" note. No step numbers (the Ingredients
-// tabs carry that detail where it matters), no table / schema names.
+export type ReservedTool = "people" | "ops" | "service" | "kpi" | "academy";
 
-type Props = {
-  name: string;
-  one_line: string;
-  arrives?: string;
+const V1_BASE = "https://kitchfix-intranet.vercel.app";
+const V1_URLS: Record<ReservedTool, string> = {
+  people: "/people",
+  ops: "/ops",
+  service: "/service-calendar",
+  kpi: "/kpi/overview",
+  academy: "/playbook",
+};
+const NAMES: Record<ReservedTool, string> = {
+  people: "People Portal",
+  ops: "Ops Hub",
+  service: "Service Calendar",
+  kpi: "KPI Dashboard",
+  academy: "Academy",
 };
 
-export function ReservedDoor({ name, one_line, arrives }: Props) {
+export function ReservedDoor({ slug, one_line }: { slug: ReservedTool; one_line: string }) {
+  const name = NAMES[slug];
+  const href = `${V1_BASE}${V1_URLS[slug]}`;
   return (
-    <section className="kf-reserved">
-      <header className="kf-reserved__header">
-        <span className="kf-eyebrow">KitchFix</span>
-        <h2>{name}</h2>
-        <p className="kf-reserved__lede">{one_line}</p>
-      </header>
-
-      <article className="kf-reserved__card">
-        <span className="kf-reserved__pill">{arrives ?? "Coming after Ingredients"}</span>
-        <p className="kf-reserved__body">
-          Until this door is live, {name} runs on the current intranet.
-          The link in the rail is a placeholder so the shape of KitchFix
-          stays visible from day one.
-        </p>
-      </article>
-    </section>
+    <>
+      <IdentBand eyebrow="KitchFix" title={name} kick={one_line} />
+      <section className="kf-reserved kf-reveal" style={{ ["--i" as never]: 1 }}>
+        <article className="kf-card kf-reserved__card">
+          <header>
+            <span className="kf-pill kf-pill--info">Runs on the current intranet</span>
+          </header>
+          <p className="kf-reserved__body">
+            {one_line} The link below opens the current intranet in this tab;
+            come back to KitchFix when you&rsquo;re done.
+          </p>
+          <footer className="kf-card__foot">
+            <Link href={href} target="_self" rel="noopener" className="kf-btn kf-btn--line kf-btn--sm">
+              <span>Open {name}</span>
+              <ExternalLink size={14} strokeWidth={1.5} />
+            </Link>
+          </footer>
+        </article>
+      </section>
+    </>
   );
 }

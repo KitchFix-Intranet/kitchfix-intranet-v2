@@ -4,6 +4,7 @@ import { serviceClient } from "@/lib/supabase/service";
 import { ItemStatusActions } from "./ItemStatusActions";
 import { X } from "lucide-react";
 import type { StatusSeg } from "./Filters";
+import { fmtCount, fmtDate } from "@/lib/fmt";
 import "./drawer.css";
 
 type Props = {
@@ -173,11 +174,11 @@ export async function VendorItemDrawer({ id, params, seg, q, vendorNameById }: P
             <div><dt>Billed unit</dt><dd>{item.billed_unit ?? "-"}</dd></div>
             <div><dt>Catch weight</dt><dd>{item.catch_weight ? "Yes" : "No"}</dd></div>
             <div><dt>12m dollars</dt><dd>${usdLong(Number(item.usd_12m ?? 0))}</dd></div>
-            <div><dt>12m lines</dt><dd>{Number(item.lines_12m ?? 0).toLocaleString()}</dd></div>
-            <div><dt>Lifetime</dt><dd>${usdLong(Number(item.usd ?? 0))} / {Number(item.lines ?? 0).toLocaleString()} lines</dd></div>
-            <div><dt>First seen</dt><dd>{item.first_seen ?? "-"}</dd></div>
-            <div><dt>Last seen</dt><dd>{item.last_seen ?? "-"}</dd></div>
-            <div><dt>Lines flagged</dt><dd>{Number(item.needs_review_lines ?? 0).toLocaleString()}</dd></div>
+            <div><dt>12m lines</dt><dd>{fmtCount(Number(item.lines_12m ?? 0))}</dd></div>
+            <div><dt>Lifetime</dt><dd>${usdLong(Number(item.usd ?? 0))} / {fmtCount(Number(item.lines ?? 0))} lines</dd></div>
+            <div><dt>First seen</dt><dd>{item.first_seen ? fmtDate(item.first_seen) : "-"}</dd></div>
+            <div><dt>Last seen</dt><dd>{item.last_seen ? fmtDate(item.last_seen) : "-"}</dd></div>
+            <div><dt>Lines flagged</dt><dd>{fmtCount(Number(item.needs_review_lines ?? 0))}</dd></div>
           </dl>
         </section>
 
@@ -209,9 +210,9 @@ export async function VendorItemDrawer({ id, params, seg, q, vendorNameById }: P
                 {sitesSorted.map(([k, v]) => (
                   <tr key={k}>
                     <td>{k}</td>
-                    <td className="kf-table__num">{v.lines.toLocaleString()}</td>
+                    <td className="kf-table__num">{fmtCount(v.lines)}</td>
                     <td>{v.last_price != null ? `$${Number(v.last_price).toFixed(2)}` : "-"}</td>
-                    <td>{v.last_date ?? "-"}</td>
+                    <td>{v.last_date ? fmtDate(v.last_date) : "-"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -229,7 +230,7 @@ export async function VendorItemDrawer({ id, params, seg, q, vendorNameById }: P
                 <li key={e.id}>
                   <span className="kf-events__kind">{e.kind}</span>
                   <span className="kf-events__who">{e.actor ?? "-"}</span>
-                  <time>{new Date(e.at).toLocaleString()}</time>
+                  <time dateTime={e.at} title={fmtDate(e.at, "time")}>{fmtDate(e.at, "time")}</time>
                   {e.note ? <p>{e.note}</p> : null}
                 </li>
               ))}

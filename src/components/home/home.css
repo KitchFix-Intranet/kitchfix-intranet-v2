@@ -1,62 +1,36 @@
-/* ---------- Identity band (desktop/tablet only) ---------- */
-.kf-ident {
-  position: relative;
-  background: var(--sp-navy-deep);
-  color: var(--sp-on-navy);
-  border-radius: var(--sp-r-lg);
-  overflow: hidden;
-  padding: 28px 32px;
-  margin-bottom: 24px;
-  min-height: 130px;
-}
-.kf-ident__sheen {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    125deg,
-    var(--sp-navy-mid) 0%,
-    var(--sp-navy-mid) 42%,
-    transparent 72%
-  );
-  opacity: 0.55;
-  transform: skewX(-30deg) translateX(-20%);
-}
-.kf-ident__content { position: relative; display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
-.kf-ident__eyebrow { color: var(--sp-red); }
-.kf-ident__eyebrow::after { background: var(--sp-red); }
-.kf-ident__title {
-  color: var(--sp-on-navy);
-  font-size: var(--sp-t-h1);
-  margin: 2px 0 0;
-}
-.kf-ident__status { color: var(--sp-on-navy-text); font-family: var(--sp-ui); font-size: var(--sp-t-body); max-width: 68ch; }
+/*
+ * Home layout. Band is in IdentBand/ident.css; this file carries the doors
+ * grid and the phone state feed. Shared primitives (buttons, pills, cards)
+ * live in components.css.
+ */
 
-/* ---------- Phone status (replaces identity band) ---------- */
-.kf-phone-status { margin-bottom: 16px; }
-.kf-phone-status h2 { color: var(--sp-navy); font-size: var(--sp-t-title); margin: 6px 0 4px; }
-.kf-phone-status p { color: var(--sp-body); font-size: var(--sp-t-body); }
-
-/* ---------- Doors grid ---------- */
-.kf-doors { margin-bottom: 24px; }
+/* ---------- Door grid ---------- */
+.kf-doors { margin-bottom: var(--sp-sp-5); }
 .kf-doors__grid {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-sp-4);
 }
+@media (max-width: 1099px) {
+  .kf-doors__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 .kf-door {
   display: flex;
-  gap: 16px;
-  padding: 20px;
+  gap: var(--sp-sp-4);
+  padding: var(--sp-sp-5);
   background: var(--sp-card);
   border: 1px solid var(--sp-line);
   border-radius: var(--sp-r-card);
   box-shadow: var(--sp-shadow);
   text-decoration: none;
   color: inherit;
-  transition: transform var(--sp-fast), box-shadow var(--sp-fast), border-color var(--sp-fast);
+  transition: transform var(--sp-fast) var(--sp-ease),
+              box-shadow var(--sp-fast) var(--sp-ease),
+              border-color var(--sp-fast) var(--sp-ease);
   position: relative;
   overflow: hidden;
 }
@@ -67,7 +41,7 @@
   height: 4px;
   background: var(--sp-navy);
   transform: translateY(-100%);
-  transition: transform var(--sp-fast);
+  transition: transform var(--sp-fast) var(--sp-ease);
 }
 .kf-door:hover {
   transform: translateY(-2px);
@@ -75,6 +49,7 @@
   text-decoration: none;
 }
 .kf-door:hover::before { transform: translateY(0); }
+
 .kf-door__icon {
   width: 44px;
   height: 44px;
@@ -85,63 +60,136 @@
   background: var(--sp-sky-tint);
   color: var(--sp-navy);
   border-radius: var(--sp-r-ctl);
+  transition: background var(--sp-fast) var(--sp-ease),
+              color var(--sp-fast) var(--sp-ease);
 }
-/*
- * Door-card body: title on its own row, tagline below, pill on its own row
- * at the bottom. The pill used to share a row with the title and got clipped
- * ("On the current intran...") at narrow widths because the overflow:hidden
- * on .kf-door cropped it. Giving the pill its own row removes the
- * horizontal competition entirely.
- */
+.kf-door:hover .kf-door__icon { background: var(--sp-navy); color: var(--sp-on-navy); }
+
 .kf-door__body {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--sp-sp-1);
 }
-.kf-door__title { font-size: var(--sp-t-h3); color: var(--sp-navy); margin: 0; }
-.kf-door__tagline { color: var(--sp-body); font-size: var(--sp-t-micro); margin: 0; }
-
-/*
- * Buttons / pills / cards moved to components.css. Door-specific pill tweaks
- * only; the base pill family (live, info, muted, etc.) lives there now.
- */
-.kf-door .kf-pill { white-space: normal; align-self: flex-start; margin-top: var(--sp-sp-1); }
-
-.kf-home-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
-@media (max-width: 860px) {
-  .kf-home-row { grid-template-columns: 1fr; }
-}
-
-/* ---------- Ledger ---------- */
-.kf-ledger {
-  list-style: none;
+.kf-door__title {
+  font-size: var(--sp-t-h3);
+  color: var(--sp-navy);
   margin: 0;
-  padding: 0;
 }
-.kf-ledger li {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 12px;
-  padding: 8px 0;
-  border-top: 1px solid var(--sp-line-soft);
-  font-size: var(--sp-t-table);
+.kf-door__tagline {
   color: var(--sp-body);
+  font-size: var(--sp-t-micro);
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.kf-door .kf-pill { align-self: flex-start; margin-top: var(--sp-sp-1); }
+
+.kf-meta {
+  display: inline-flex;
   align-items: center;
-}
-.kf-ledger li:first-child { border-top: none; }
-.kf-ledger__kind {
+  gap: var(--sp-sp-1);
+  color: var(--sp-muted);
   font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
   font-weight: 700;
-  color: var(--sp-ink);
+  margin-top: var(--sp-sp-1);
 }
-.kf-ledger time {
+
+/* ---------- Phone home ---------- */
+.kf-phone-home {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-4);
+}
+.kf-phone-home__title {
+  color: var(--sp-navy);
+  font-size: var(--sp-t-title);
+  margin: var(--sp-sp-1) 0 0;
+}
+.kf-phone-home__kick {
+  color: var(--sp-body);
+  font-size: var(--sp-t-body);
+  margin: 0;
+}
+
+.kf-phone-home__facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-sp-3);
+}
+.kf-fact {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  padding: var(--sp-sp-4);
+  box-shadow: var(--sp-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+}
+.kf-fact__label {
+  font-family: var(--sp-disp);
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--sp-muted);
+}
+.kf-fact__value {
+  font-family: var(--sp-disp);
+  font-weight: 800;
+  font-size: var(--sp-t-num);
+  color: var(--sp-ink);
+  line-height: 1;
+}
+.kf-fact__note {
   color: var(--sp-muted);
   font-size: var(--sp-t-micro);
-  white-space: nowrap;
 }
+
+/* More tools card (phone only) */
+.kf-more-tools__list {
+  list-style: none;
+  margin: var(--sp-sp-3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.kf-more-tools__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sp-3);
+  min-height: var(--sp-floor-chef);
+  padding: 0 var(--sp-sp-1);
+  color: var(--sp-ink);
+  text-decoration: none;
+  border-top: 1px solid var(--sp-line-soft);
+}
+.kf-more-tools__list li:first-child .kf-more-tools__row { border-top: none; }
+.kf-more-tools__icon {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--sp-sky-tint);
+  color: var(--sp-navy);
+  border-radius: var(--sp-r-sm);
+  flex: 0 0 32px;
+}
+.kf-more-tools__name {
+  flex: 1;
+  font-family: var(--sp-ui);
+  font-weight: 700;
+  font-size: var(--sp-t-body);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.kf-more-tools__ext { color: var(--sp-muted); }
+.kf-more-tools__row:hover { background: var(--sp-raise); text-decoration: none; }

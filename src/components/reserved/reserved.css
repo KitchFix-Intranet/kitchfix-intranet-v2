@@ -1,28 +1,11 @@
-.kf-reserved { display: flex; flex-direction: column; gap: 20px; }
-.kf-reserved__header h2 { color: var(--sp-navy); font-size: var(--sp-t-title); margin-top: 6px; }
-.kf-reserved__lede { max-width: 92ch; color: var(--sp-body); margin-top: 10px; font-size: var(--sp-t-body); }
-
-.kf-reserved__card {
-  background: var(--sp-card);
-  border: 1px solid var(--sp-line);
-  border-radius: var(--sp-r-card);
-  box-shadow: var(--sp-shadow);
-  padding: 24px;
-  max-width: 760px;
+.kf-reserved {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-4);
 }
-.kf-reserved__pill {
-  display: inline-flex;
-  align-items: center;
-  padding: 4px 12px;
-  background: var(--sp-info-bg);
-  color: var(--sp-link);
-  border-radius: var(--sp-r-pill);
-  font-family: var(--sp-ui);
-  font-weight: 700;
-  font-size: var(--sp-t-micro);
-  margin-bottom: 12px;
-}
+.kf-reserved__card { max-width: 760px; }
 .kf-reserved__body {
   color: var(--sp-body);
   font-size: var(--sp-t-body);
+  margin: var(--sp-sp-3) 0 0;
 }

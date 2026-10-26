@@ -16,25 +16,11 @@
   text-align: center;
 }
 
-.kf-signin__mark {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-family: var(--sp-disp);
-  font-weight: 800;
-  font-size: 44px;
-  color: var(--sp-navy-deep);
-  line-height: 1;
-  letter-spacing: 0.5px;
-  margin-bottom: 28px;
-}
-
-.kf-signin__mark-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: var(--sp-r-pill);
-  background: var(--sp-red);
+.kf-signin__logo {
+  display: block;
+  margin: 0 auto var(--sp-sp-6);
+  height: 48px;
+  width: auto;
 }
 
 .kf-signin__btn {

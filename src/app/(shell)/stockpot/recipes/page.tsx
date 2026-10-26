@@ -1,9 +1,8 @@
-import { ReservedDoor } from "@/components/reserved/ReservedDoor";
+import { StockpotNext } from "@/components/reserved/StockpotNext";
 
 export default function Page() {
   return (
-    <ReservedDoor
-      name="Recipes"
+    <StockpotNext
       one_line="Every dish, in our words - built on the ingredient layer below."
       arrives="Coming after Ingredients"
     />

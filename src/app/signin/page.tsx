@@ -14,11 +14,12 @@ export default function SignInPage() {
   return (
     <main className="kf-signin">
       <div className="kf-signin__card">
-        <div className="kf-signin__mark" aria-label="KF">
-          <span className="kf-signin__mark-k">K</span>
-          <span className="kf-signin__mark-dot" />
-          <span className="kf-signin__mark-f">F</span>
-        </div>
+        <img
+          src="/brand/kitchfix-navy-horizontal.svg"
+          alt="KitchFix"
+          height={48}
+          className="kf-signin__logo"
+        />
         <SignInButton />
         <p className="kf-signin__hint">Sign in with your kitchfix.com Google account</p>
       </div>

@@ -9,6 +9,7 @@
 import Link from "next/link";
 import { serviceClient } from "@/lib/supabase/service";
 import { Tabs } from "./Tabs";
+import { fmtCount, fmtDate, fmtStatus } from "@/lib/fmt";
 import "./ingredients.css";
 
 type IntakeRun = {
@@ -125,7 +126,7 @@ export async function Overview() {
   const { totals, lastRun, ingredientsNamed, intakeRunsTotal, bySite, topVendors } = await loadTotals();
 
   const lastRunLabel = lastRun
-    ? `${new Date(lastRun.started_at).toLocaleString()} - ${lastRun.status}`
+    ? `${fmtDate(lastRun.started_at, "time")} - ${fmtStatus(lastRun.status)}`
     : "No intake run yet";
 
   return (
@@ -165,22 +166,22 @@ export async function Overview() {
         </article>
         <article className="kf-tile">
           <span className="kf-tile__label">Vendor items (food, active)</span>
-          <span className="kf-tile__value">{totals.food_items_active.toLocaleString()}</span>
-          <span className="kf-tile__sub">{totals.food_items_with_number.toLocaleString()} have an item number</span>
+          <span className="kf-tile__value">{fmtCount(totals.food_items_active)}</span>
+          <span className="kf-tile__sub">{fmtCount(totals.food_items_with_number)} have an item number</span>
         </article>
         <article className="kf-tile">
           <span className="kf-tile__label">Packs read</span>
-          <span className="kf-tile__value">{totals.packs_clean.toLocaleString()}</span>
+          <span className="kf-tile__value">{fmtCount(totals.packs_clean)}</span>
           <span className="kf-tile__sub">Parser arrives in step 3</span>
         </article>
         <article className="kf-tile">
           <span className="kf-tile__label">Waiting for you</span>
-          <span className="kf-tile__value">{totals.food_items_waiting.toLocaleString()}</span>
+          <span className="kf-tile__value">{fmtCount(totals.food_items_waiting)}</span>
           <span className="kf-tile__sub">${usd(totals.food_items_waiting_usd)} unlinked (12m)</span>
         </article>
         <article className="kf-tile">
           <span className="kf-tile__label">Ingredients named</span>
-          <span className="kf-tile__value">{ingredientsNamed.toLocaleString()}</span>
+          <span className="kf-tile__value">{fmtCount(ingredientsNamed)}</span>
           <span className="kf-tile__sub">Naming lands in step 5</span>
         </article>
       </section>
@@ -246,11 +247,11 @@ export async function Overview() {
         <article className="kf-card">
           <header><span className="kf-eyebrow">Data health</span><h3>What the lines look like</h3></header>
           <dl className="kf-kv">
-            <div><dt>Lines with no item number</dt><dd>{totals.no_number_items.toLocaleString()} items / ${usd(totals.no_number_dollars)}</dd></div>
-            <div><dt>Lines flagged on the invoice</dt><dd>{totals.needs_review_lines.toLocaleString()}</dd></div>
-            <div><dt>Catch-weight items</dt><dd>{totals.catch_weight_items.toLocaleString()}</dd></div>
-            <div><dt>Packs parsed</dt><dd>{totals.packs_clean.toLocaleString()}</dd></div>
-            <div><dt>Twins found</dt><dd>{totals.twins_count.toLocaleString()}</dd></div>
+            <div><dt>Lines with no item number</dt><dd>{fmtCount(totals.no_number_items)} items / ${usd(totals.no_number_dollars)}</dd></div>
+            <div><dt>Lines flagged on the invoice</dt><dd>{fmtCount(totals.needs_review_lines)}</dd></div>
+            <div><dt>Catch-weight items</dt><dd>{fmtCount(totals.catch_weight_items)}</dd></div>
+            <div><dt>Packs parsed</dt><dd>{fmtCount(totals.packs_clean)}</dd></div>
+            <div><dt>Twins found</dt><dd>{fmtCount(totals.twins_count)}</dd></div>
             <div><dt>Last intake</dt><dd>{lastRunLabel}</dd></div>
           </dl>
           <footer className="kf-card__foot">

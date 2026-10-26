@@ -4,6 +4,7 @@ import { serviceClient } from "@/lib/supabase/service";
 import { currentPeriod } from "@/lib/fiscalPeriod";
 import { fmtDate } from "@/lib/fmt";
 import { Shell } from "@/components/shell/Shell";
+import { RevealGate } from "@/components/ui/RevealGate";
 
 // Topbar title + crumb map. One entry per route; a non-match falls back to
 // "KitchFix" with no crumb (the fallback used to render the raw pathname,
@@ -67,6 +68,7 @@ export default async function ShellLayout({
 
   return (
     <Shell email={email} name={name} title={title} crumb={crumb} topbar={topbar}>
+      <RevealGate />
       {children}
     </Shell>
   );
