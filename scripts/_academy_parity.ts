@@ -92,12 +92,41 @@ interface V1RunOptions {
   params?: Record<string, string>;
 }
 
+// Produce a shimmed copy of v1's resolveIdentity.js once per invocation.
+// Two mods:
+//   1. `@/lib/supabase` -> absolute file:// to v1's src/lib/supabase.js
+//      (raw Node ESM has no path aliases).
+//   2. ACADEMY_PREVIEW_ONLY -> false. The v2 fence is OWNER_EMAILS at
+//      the route edge, which replaces v1's hardcoded Kevin-only pilot
+//      gate. Leaving the v1 fence closed would surface Kevin-only
+//      allowlist rejection as the "diff" for every other owner we
+//      probe; we want the DATA-LAYER parity to show. Documented in
+//      the script header.
+let _shimmedIdentityUrl: string | null = null;
+function shimmedV1Identity(): string {
+  if (_shimmedIdentityUrl) return _shimmedIdentityUrl;
+  const idSrc = readFileSync(join(v1Path, "src/lib/academy/resolveIdentity.js"), "utf8");
+  const v1SupabaseUrl = pathUrl(join(v1Path, "src/lib/supabase.js"));
+  const transformed = idSrc
+    .replace(
+      /import\s*{\s*getServiceClient\s*}\s*from\s*["']@\/lib\/supabase["']\s*;?\s*/g,
+      `import { getServiceClient } from ${JSON.stringify(v1SupabaseUrl)};\n`
+    )
+    .replace(
+      /export\s+const\s+ACADEMY_PREVIEW_ONLY\s*=\s*true\s*;?/,
+      "export const ACADEMY_PREVIEW_ONLY = false;"
+    );
+  const outPath = join(tmpDir, "resolveIdentity.shim.mjs");
+  writeFileSync(outPath, transformed);
+  _shimmedIdentityUrl = pathUrl(outPath);
+  return _shimmedIdentityUrl;
+}
+
 async function runV1Handler(opts: V1RunOptions): Promise<{ status: number; body: Json }> {
   const absRoute = join(v1Path, opts.routeFile);
   const src = readFileSync(absRoute, "utf8");
 
-  const v1IdentityPath = join(v1Path, "src/lib/academy/resolveIdentity.js");
-  const v1IdentityUrl = pathUrl(v1IdentityPath);
+  const v1IdentityUrl = shimmedV1Identity();
   const v1SupabasePath = join(v1Path, "src/lib/supabase.js");
   const v1SupabaseUrl = pathUrl(v1SupabasePath);
   const v1CertPdfPath = join(v1Path, "src/lib/academy/certificatePdf.js");
@@ -107,7 +136,14 @@ async function runV1Handler(opts: V1RunOptions): Promise<{ status: number; body:
   // SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY; v2's env has
   // NEXT_PUBLIC_SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY. Export
   // SUPABASE_URL from the subprocess env (see spawn below).
+  // Also strip the `next/server` import - raw Node ESM does not
+  // auto-add .js extensions. A tiny inline NextResponse shim replaces
+  // it; the handlers only use NextResponse.json({...}, { status }).
   const transformed = src
+    .replace(
+      /import\s*{\s*NextResponse\s*}\s*from\s*["']next\/server["']\s*;?\s*/g,
+      ""
+    )
     .replace(
       /import\s*{\s*auth\s*}\s*from\s*["']@\/lib\/auth["']\s*;?\s*/g,
       "const auth = async () => ({ user: { email: _PARITY_EMAIL } });\n"
@@ -125,7 +161,16 @@ async function runV1Handler(opts: V1RunOptions): Promise<{ status: number; body:
       `from ${JSON.stringify(v1CertPdfUrl)}`
     );
 
-  const header = `const _PARITY_EMAIL = ${JSON.stringify(opts.email)};\n`;
+  const header = `
+const _PARITY_EMAIL = ${JSON.stringify(opts.email)};
+const NextResponse = {
+  json(body, init) {
+    const status = (init && init.status) || 200;
+    const headers = new Headers({ "content-type": "application/json" });
+    return new Response(JSON.stringify(body), { status, headers });
+  },
+};
+`;
   const script = header + transformed;
 
   // Write into the v1 clone's own tree so NextResponse + supabase-js
@@ -170,7 +215,9 @@ process.stdout.write(JSON.stringify({ status: res.status, body }));
   };
 
   const result: { status: number; body: Json } = await new Promise((resolve, reject) => {
-    const proc = spawn("node", ["--import", "tsx", runnerPath], {
+    // Subprocess is plain ESM .mjs - no tsx needed. v1 does not have tsx
+    // as a dependency anyway.
+    const proc = spawn("node", [runnerPath], {
       cwd: v1Path,
       env,
     });
@@ -303,12 +350,60 @@ function summarizeDiffs(diffs: Difference[]): string {
     .join("\n");
 }
 
+// Count every leaf comparison a diff pass would have made, so a
+// "diffs=0" result is distinguishable from "nothing was compared".
+// Also records container sizes so zero-length arrays are visible.
+interface CompareShape {
+  leaves: number;
+  objects: number;
+  arrays: number;
+  arrayLens: Record<string, number>;
+}
+function shapeStats(x: Json, path: DiffPath = [], acc?: CompareShape): CompareShape {
+  const a = acc || { leaves: 0, objects: 0, arrays: 0, arrayLens: {} };
+  if (x === null || typeof x !== "object") {
+    a.leaves += 1;
+    return a;
+  }
+  if (Array.isArray(x)) {
+    a.arrays += 1;
+    a.arrayLens[formatPath(path) || "(root)"] = x.length;
+    for (let i = 0; i < x.length; i += 1) {
+      shapeStats(x[i], [...path, i], a);
+    }
+    return a;
+  }
+  a.objects += 1;
+  for (const [k, v] of Object.entries(x as Record<string, unknown>)) {
+    shapeStats(v, [...path, k], a);
+  }
+  return a;
+}
+function summarizeShape(x: Json): string {
+  const s = shapeStats(x);
+  const topArrays = Object.entries(s.arrayLens)
+    .sort(([, la], [, lb]) => lb - la)
+    .slice(0, 4)
+    .map(([p, l]) => `${p || "(root)"}=${l}`)
+    .join(", ");
+  return `leaves=${s.leaves} objects=${s.objects} arrays=${s.arrays}${
+    topArrays ? ` (top: ${topArrays})` : ""
+  }`;
+}
+
 // ─── main ────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
   const supa = serviceClient();
 
-  const results: Array<{ surface: string; status1: number; status2: number; diffs: Difference[] }> = [];
+  const results: Array<{
+    surface: string;
+    status1: number;
+    status2: number;
+    diffs: Difference[];
+    shapeV1: string;
+    shapeV2: string;
+  }> = [];
 
   // 1. whoami
   {
@@ -343,7 +438,14 @@ async function main(): Promise<void> {
       v2Status = 200;
     }
     const diffs = diffJson(canonicalize(v1.body), canonicalize(v2Body), [], COMMON_IGNORE_KEYS);
-    results.push({ surface: "whoami", status1: v1.status, status2: v2Status, diffs });
+    results.push({
+      surface: "whoami",
+      status1: v1.status,
+      status2: v2Status,
+      diffs,
+      shapeV1: summarizeShape(canonicalize(v1.body)),
+      shapeV2: summarizeShape(canonicalize(v2Body)),
+    });
   }
 
   // 2. room
@@ -356,7 +458,14 @@ async function main(): Promise<void> {
     const v2Status = v2.ok ? 200 : v2.status;
     const v2Body: Json = v2.ok ? v2 : v2;
     const diffs = diffJson(canonicalize(v1.body), canonicalize(v2Body), [], COMMON_IGNORE_KEYS);
-    results.push({ surface: "room", status1: v1.status, status2: v2Status, diffs });
+    results.push({
+      surface: "room",
+      status1: v1.status,
+      status2: v2Status,
+      diffs,
+      shapeV1: summarizeShape(canonicalize(v1.body)),
+      shapeV2: summarizeShape(canonicalize(v2Body)),
+    });
   }
 
   // 3. library
@@ -369,7 +478,14 @@ async function main(): Promise<void> {
     const v2Status = v2.ok ? 200 : v2.status;
     const v2Body: Json = v2.ok ? v2 : v2;
     const diffs = diffJson(canonicalize(v1.body), canonicalize(v2Body), [], COMMON_IGNORE_KEYS);
-    results.push({ surface: "library", status1: v1.status, status2: v2Status, diffs });
+    results.push({
+      surface: "library",
+      status1: v1.status,
+      status2: v2Status,
+      diffs,
+      shapeV1: summarizeShape(canonicalize(v1.body)),
+      shapeV2: summarizeShape(canonicalize(v2Body)),
+    });
   }
 
   // 4. records
@@ -382,7 +498,14 @@ async function main(): Promise<void> {
     const v2Status = v2.ok ? 200 : v2.status;
     const v2Body: Json = v2.ok ? v2 : v2;
     const diffs = diffJson(canonicalize(v1.body), canonicalize(v2Body), [], COMMON_IGNORE_KEYS);
-    results.push({ surface: "records", status1: v1.status, status2: v2Status, diffs });
+    results.push({
+      surface: "records",
+      status1: v1.status,
+      status2: v2Status,
+      diffs,
+      shapeV1: summarizeShape(canonicalize(v1.body)),
+      shapeV2: summarizeShape(canonicalize(v2Body)),
+    });
   }
 
   // 5. module - first open requirement from v2 room.queue
@@ -393,16 +516,12 @@ async function main(): Promise<void> {
       : null;
     if (!firstOpen) {
       results.push({
-        surface: "module",
+        surface: "module (SKIPPED: no open requirement)",
         status1: -1,
         status2: -1,
-        diffs: [
-          {
-            path: ["(no open requirement)"],
-            v1: null,
-            v2: null,
-          },
-        ],
+        diffs: [],
+        shapeV1: "(n/a)",
+        shapeV2: "(n/a)",
       });
     } else {
       const requirementId = String(firstOpen.requirement_id);
@@ -437,7 +556,14 @@ async function main(): Promise<void> {
       const v1Canon = sortOptions(canonicalize(v1.body));
       const v2Canon = sortOptions(canonicalize(v2Body));
       const diffs = diffJson(v1Canon, v2Canon, [], COMMON_IGNORE_KEYS);
-      results.push({ surface: "module", status1: v1.status, status2: v2Status, diffs });
+      results.push({
+        surface: "module",
+        status1: v1.status,
+        status2: v2Status,
+        diffs,
+        shapeV1: summarizeShape(v1Canon),
+        shapeV2: summarizeShape(v2Canon),
+      });
     }
   }
 
@@ -447,7 +573,9 @@ async function main(): Promise<void> {
   console.log(`DB: ${process.env.NEXT_PUBLIC_SUPABASE_URL}`);
   for (const r of results) {
     console.log(`\n--- ${r.surface} ---`);
-    console.log(`  status  v1=${r.status1}  v2=${r.status2}`);
+    console.log(`  status   v1=${r.status1}  v2=${r.status2}`);
+    console.log(`  shape v1 ${r.shapeV1}`);
+    console.log(`  shape v2 ${r.shapeV2}`);
     console.log(`  diffs (${r.diffs.length}):`);
     console.log(summarizeDiffs(r.diffs));
   }
