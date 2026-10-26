@@ -79,12 +79,20 @@ export async function loadLibrary(email: string, supaIn?: SupabaseClient): Promi
     identity = null;
   }
 
+  // Live-only. The documents table carries status values In Build,
+  // Pending, Blocked, Placeholder and Retired alongside Live - 51 of
+  // the 133 rows today. The Library is a learner surface; a document
+  // that is not Live is not something a chef should be reading. Match
+  // the string case EXACTLY: `documents.status` is title-case
+  // ("Live"), and a lowercase comparison returns zero rows silently
+  // because Postgres text equality is case-sensitive. See GOTCHA 14.
+  // A later library_admin surface may widen this; D1 does not build
+  // that.
   const [docsQ, obQ] = await Promise.all([
     supa
       .from("documents")
       .select("id, title, card_line, version, shelf, doc_class, updated_at, effective_date")
-      .eq("archived", false)
-      .neq("status", "Retired")
+      .eq("status", "Live")
       .not("shelf", "is", null)
       .order("shelf", { ascending: true })
       .order("sort_order", { ascending: true })

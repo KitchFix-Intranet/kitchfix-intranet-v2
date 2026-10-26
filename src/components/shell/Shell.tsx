@@ -10,6 +10,7 @@ import {
   Calendar,
   BarChart2,
   BookOpen,
+  BookMarked,
   ChefHat,
   Menu as MenuIcon,
   X,
@@ -21,6 +22,7 @@ import {
   LayoutGrid,
   CheckCircle2,
   ListTodo,
+  Library as LibraryIcon,
 } from "lucide-react";
 import { AccountMenu } from "./AccountMenu";
 import "./shell.css";
@@ -32,7 +34,9 @@ export type NavItem = {
   liveDot?: boolean;
 };
 
-// Shell-level nav: Home + the six tool doors.
+// Shell-level nav: Home + the tool doors. R-AC2 ruling - Library is
+// its own live door, ordered after Academy (so the live-tool run is
+// Academy -> Library -> Stockpot).
 const SHELL_NAV: NavItem[] = [
   { href: "/", label: "Home", Icon: HomeIcon },
   { href: "/people", label: "People Portal", Icon: Users },
@@ -40,6 +44,7 @@ const SHELL_NAV: NavItem[] = [
   { href: "/service", label: "Service Calendar", Icon: Calendar },
   { href: "/kpi", label: "KPI Dashboard", Icon: BarChart2 },
   { href: "/academy", label: "Academy", Icon: BookOpen },
+  { href: "/library", label: "Library", Icon: LibraryIcon, liveDot: true },
   { href: "/stockpot", label: "Stockpot", Icon: ChefHat, liveDot: true },
 ];
 
@@ -58,6 +63,14 @@ const STOCKPOT_NAV: NavItem[] = [
 const ACADEMY_NAV: NavItem[] = [
   { href: "/academy", label: "To do", Icon: ListTodo },
   { href: "/academy/done", label: "Done", Icon: CheckCircle2 },
+];
+
+// Library-level nav. Train D1 ships Shelves (browse) only. Find /
+// search is train D2 and the engine has no search surface yet, so do
+// NOT add a dead "Find" item today - R-AC10. The shell-level phone
+// tabbar stays as the five shell doors even inside Library.
+const LIBRARY_NAV: NavItem[] = [
+  { href: "/library", label: "Shelves", Icon: BookMarked },
 ];
 
 const PHONE_SHELL_TABS: Array<NavItem | { kind: "menu" }> = [
@@ -82,6 +95,9 @@ function isStockpotRoute(pathname: string): boolean {
 function isAcademyRoute(pathname: string): boolean {
   return pathname === "/academy" || pathname.startsWith("/academy/");
 }
+function isLibraryRoute(pathname: string): boolean {
+  return pathname === "/library" || pathname.startsWith("/library/");
+}
 function isActive(pathname: string, href: string): boolean {
   if (href === "/") return pathname === "/";
   return pathname === href || pathname.startsWith(href + "/");
@@ -104,8 +120,15 @@ export function Shell({ children, topbar, email, name, title, crumb, todoCount =
   const pathname = usePathname();
   const inStockpot = isStockpotRoute(pathname);
   const inAcademy = isAcademyRoute(pathname);
-  const nav = inStockpot ? STOCKPOT_NAV : inAcademy ? ACADEMY_NAV : SHELL_NAV;
-  // R-AC5: phone tabbar stays shell-level even inside Academy.
+  const inLibrary = isLibraryRoute(pathname);
+  const nav = inStockpot
+    ? STOCKPOT_NAV
+    : inAcademy
+      ? ACADEMY_NAV
+      : inLibrary
+        ? LIBRARY_NAV
+        : SHELL_NAV;
+  // R-AC5: phone tabbar stays shell-level even inside Academy / Library.
   const phoneTabs = inStockpot ? PHONE_STOCKPOT_TABS : PHONE_SHELL_TABS;
 
   const [collapsed, setCollapsed] = useState(false);
@@ -193,7 +216,7 @@ export function Shell({ children, topbar, email, name, title, crumb, todoCount =
           </button>
         </div>
 
-        {inStockpot || inAcademy ? (
+        {inStockpot || inAcademy || inLibrary ? (
           <>
             <Link href="/" className="kf-rail__back" onClick={() => markNavStart("/")}>
               <span className="kf-rail__back-ico" aria-hidden>
@@ -202,7 +225,7 @@ export function Shell({ children, topbar, email, name, title, crumb, todoCount =
               <span className="kf-rail__back-label">All tools</span>
             </Link>
             <div className="kf-rail__section" aria-hidden>
-              <span>{inStockpot ? "Stockpot" : "Academy"}</span>
+              <span>{inStockpot ? "Stockpot" : inAcademy ? "Academy" : "Library"}</span>
             </div>
           </>
         ) : null}

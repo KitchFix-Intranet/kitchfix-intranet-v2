@@ -1,0 +1,312 @@
+/*
+ * Library train D1. Shelves (browse) + the read-only document view.
+ * Every value is a token; no literal hex, no literal duration. The
+ * document view reuses the Academy reader pane (.kf-reader) classes
+ * read-only; this file carries Library-specific additions only.
+ */
+
+/* ---------- Shelves (browse) ---------- */
+.kf-library {
+  max-width: var(--sp-canvas-max);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-5);
+}
+.kf-library__grid {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: var(--sp-sp-5);
+  align-items: start;
+}
+@media (max-width: 860px) {
+  .kf-library__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.kf-library__shelves {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  padding: var(--sp-sp-2);
+  position: sticky;
+  top: calc(var(--sp-topbar) + var(--sp-sp-3));
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+@media (max-width: 860px) {
+  .kf-library__shelves { position: static; }
+}
+.kf-library__shelf-btn {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-sp-3);
+  align-items: center;
+  min-height: var(--sp-floor-corp);
+  padding: 0 var(--sp-sp-3);
+  background: transparent;
+  color: var(--sp-ink);
+  border: none;
+  border-radius: var(--sp-r-sm);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  font-weight: 700;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.kf-library__shelf-btn:hover { background: var(--sp-raise); text-decoration: none; }
+.kf-library__shelf-btn--active { background: var(--sp-sky-tint); color: var(--sp-navy); }
+.kf-library__shelf-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--sp-muted);
+  font-weight: 700;
+  font-size: var(--sp-t-micro);
+}
+.kf-library__shelf-btn--active .kf-library__shelf-count { color: var(--sp-navy); }
+
+.kf-library__shelf-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-4);
+}
+.kf-library__shelf-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+}
+.kf-library__shelf-name {
+  font-family: var(--sp-disp);
+  text-transform: uppercase;
+  letter-spacing: .2px;
+  font-weight: 800;
+  font-size: var(--sp-t-h3);
+  color: var(--sp-ink);
+  line-height: 1;
+}
+.kf-library__shelf-sub {
+  color: var(--sp-muted);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+}
+
+/* ---------- Document rows ---------- */
+.kf-library__docs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+}
+.kf-library__doc {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--sp-sp-3);
+  align-items: center;
+  min-height: var(--sp-floor-chef);
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  color: var(--sp-ink);
+  text-decoration: none;
+  transition: background var(--sp-fast) var(--sp-ease),
+    border-color var(--sp-fast) var(--sp-ease);
+}
+.kf-library__doc:hover,
+.kf-library__doc:focus-visible {
+  background: var(--sp-raise);
+  border-color: var(--sp-sky-line);
+  text-decoration: none;
+}
+.kf-library__doc-class {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: var(--sp-r-pill);
+  background: var(--sp-sky-tint);
+  color: var(--sp-navy);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.kf-library__doc-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.kf-library__doc-title {
+  font-family: var(--sp-ui);
+  font-weight: 700;
+  font-size: var(--sp-t-body);
+  color: var(--sp-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kf-library__doc-sub {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kf-library__doc-flags {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+}
+.kf-pill--on-todo { background: var(--sp-sky-tint); color: var(--sp-navy); }
+
+/* ---------- Document view (read-only) ---------- */
+/*
+ * Layout: pane + right rail (facts). The pane reuses .kf-reader /
+ * .kf-reader__head / .kf-reader__body classes from academy.css. The
+ * right rail is a thin facts card. On phone both stack.
+ */
+.kf-docview {
+  max-width: var(--sp-canvas-max);
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--sp-sp-5);
+  align-items: start;
+}
+@media (max-width: 1180px) {
+  .kf-docview { grid-template-columns: minmax(0, 1fr); }
+}
+.kf-docview__pane .kf-reader__body { gap: var(--sp-sp-3); }
+.kf-docview__contents {
+  background: var(--sp-raise);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+  margin-bottom: var(--sp-sp-3);
+}
+.kf-docview__contents-head {
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-micro);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--sp-navy);
+}
+.kf-docview__contents-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.kf-docview__contents-item {
+  display: block;
+  padding: 6px var(--sp-sp-2);
+  border-radius: var(--sp-r-sm);
+  color: var(--sp-link);
+  text-decoration: none;
+  font-size: var(--sp-t-table);
+  min-height: var(--sp-floor-corp);
+  display: flex;
+  align-items: center;
+}
+.kf-docview__contents-item:hover { background: var(--sp-card); text-decoration: underline; }
+.kf-docview__contents-item--l2 { padding-left: var(--sp-sp-5); }
+.kf-docview__contents-item--l3 { padding-left: var(--sp-sp-7); font-size: var(--sp-t-micro); color: var(--sp-muted); }
+.kf-docview__foot-note {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  text-align: center;
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  border-top: 1px solid var(--sp-line);
+  background: var(--sp-raise);
+}
+
+/* ---------- Facts rail (right) ---------- */
+.kf-docfacts {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  padding: var(--sp-sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-4);
+}
+.kf-docfacts__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+}
+.kf-docfacts__eyebrow {
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-micro);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--sp-navy);
+}
+.kf-docfacts__title {
+  font-family: var(--sp-ui);
+  font-weight: 800;
+  font-size: var(--sp-t-h3);
+  color: var(--sp-ink);
+  line-height: 1.25;
+}
+.kf-docfacts__status {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+  padding: var(--sp-sp-3);
+  background: var(--sp-raise);
+  border-radius: var(--sp-r-sm);
+}
+.kf-docfacts__status-signed { color: var(--sp-good); font-weight: 700; }
+.kf-docfacts__status-todo { color: var(--sp-navy); font-weight: 700; }
+.kf-docfacts__cta-row { display: flex; flex-wrap: wrap; gap: var(--sp-sp-2); }
+
+/* ---------- Empty-content state ---------- */
+.kf-docview__empty {
+  text-align: center;
+  padding: var(--sp-sp-7) var(--sp-sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+}
+.kf-docview__empty-title {
+  font-family: var(--sp-ui);
+  font-weight: 800;
+  font-size: var(--sp-t-h3);
+  color: var(--sp-ink);
+}
+.kf-docview__empty-body {
+  color: var(--sp-muted);
+  font-size: var(--sp-t-body);
+}
+
+/* ---------- Print rules: hide chrome, flatten pane ---------- */
+@media print {
+  .kf-rail,
+  .kf-rail__notch,
+  .kf-topbar,
+  .kf-tabbar,
+  .kf-docfacts,
+  .kf-docview__contents,
+  .kf-docview__foot-note { display: none !important; }
+  .kf-docview {
+    display: block;
+    max-width: none;
+    margin: 0;
+  }
+  .kf-reader, .kf-reader__body {
+    max-height: none !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+  }
+  .kf-reader__head { border-bottom: 1px solid var(--sp-line); padding: var(--sp-sp-3) 0; }
+  main.kf-canvas { padding: 0 !important; }
+}

@@ -197,6 +197,16 @@ a badge) detaches from the icon. Collapse the label's `width` and
 icon truly centers, then pin the dot to the icon's own corner, not
 the item's.
 
+## 17. `documents.status` is title-case; lowercase matches return zero rows silently
+
+Postgres text equality is case-sensitive. `documents.status` stores
+`Live`, `In Build`, `Pending`, `Retired`, `Blocked`, `Placeholder` in
+title-case. `.eq("status", "live")` returns zero rows with no error -
+the Library would show an empty catalog and the surface fails open as
+"nothing here" rather than loudly. Use `.eq("status", "Live")` and
+keep the capitalisation in every filter + fixture. Same discipline
+for every title-cased enum column added later.
+
 ---
 
 Branch-specific items we have already lived through on

@@ -20,6 +20,8 @@ function titleFor(pathname: string, dateLong: string, periodTag: string | null):
     { test: (p) => p === "/academy",         v: { title: "To do",      crumb: "Academy" } },
     { test: (p) => p === "/academy/done",    v: { title: "Done",       crumb: "Academy" } },
     { test: (p) => p.startsWith("/academy/read/"), v: { title: "Reading", crumb: "Academy / To do" } },
+    { test: (p) => p === "/library",                v: { title: "Library",  crumb: "Every operating document, current" } },
+    { test: (p) => p.startsWith("/library/"),       v: { title: "Document", crumb: "Library" } },
     { test: (p) => p === "/stockpot" || p === "/stockpot/ingredients", v: { title: "Ingredients", crumb: "Stockpot / Culinary office" } },
     { test: (p) => p === "/stockpot/ingredients/vendor-items", v: { title: "Vendor items", crumb: "Stockpot / Ingredients" } },
     { test: (p) => p === "/stockpot/recipes", v: { title: "Recipes", crumb: "Stockpot" } },
