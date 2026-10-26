@@ -97,19 +97,44 @@ Paginate with `.range(from, from + pageSize - 1)` breaking on an empty
 page, or move the aggregation into a Postgres view (see
 `0004_potrack_overview_views.sql`).
 
-## 13. A function prop from a Server Component to a Client Component throws at render, not at build
+## 13. The RSC boundary throws at render, not at build - and the rule covers inline helpers in server files too
 
 `next build` and `tsc` pass; the page dies with a minified React error
 (e.g. #441) behind the error boundary. The RSC Flight payload cannot
 serialize a function, so React throws when the client tries to receive
-it. Client components own their formatters and handlers; server parents
-pass only serializable props - ReactNode, strings, numbers, plain
-objects / arrays, hrefs. Event handlers are created inside the client
-component, not passed from the server. Verifying a data page means
-loading it in a production build, never just compiling it. First case:
-`<CountUp value={n} format={fmtCount} />` on Overview.tsx (server)
-crashed `/stockpot/ingredients`; the fix was to drop the `format` prop
-and have `CountUp` import `fmtCount` itself.
+it. Three shapes of the same crash:
+
+1. **Function prop from a Server Component to a Client Component.**
+   `<CountUp value={n} format={fmtCount} />` on `Overview.tsx` (server)
+   handed `format` to a `"use client"` component. Fix: the client
+   component owns its formatter (imports `fmtCount` itself); the prop
+   is removed.
+2. **Event handler inside an inline helper defined in a server file.**
+   `SortSelect` was a plain `function` declared inside
+   `VendorItemsPage.tsx` (server) rendering `<select onChange={...}>`.
+   React threw at render. Fix: extract the helper to its own file
+   starting with `"use client";` and import it. Marking only the
+   top-level file `"use client"` is not enough; the rule applies to
+   every function that renders JSX inside a server module.
+3. **A hook inside an inline helper in a server file.** Same shape;
+   `useState` / `useEffect` / `useRef` are client-only. If an inline
+   sub-component uses hooks or browser APIs, extract it.
+
+Verification cannot stop at `next build`. Both prior crashes compiled
+clean. The sweep is:
+
+- `grep -rnE "on[A-Z][a-zA-Z]+=" src/components src/app` and confirm
+  every hit's enclosing file carries `"use client"` at line 1.
+- `grep -rnE "(format|render|children|on[A-Z][a-zA-Z]+)=\{" src` and
+  confirm no function value crosses from a server parent.
+- For every server file, audit inline helpers for `useState` /
+  `useEffect` / `useRef` / `window` / `document` / `on[A-Z]` handlers.
+- Load the page in a production build (`next build && next start`), or
+  on the Vercel preview; "compiles" is not acceptance.
+
+Client components own their formatters, handlers and hooks; server
+parents pass only serializable props (ReactNode, strings, numbers,
+plain objects / arrays, hrefs).
 
 ---
 

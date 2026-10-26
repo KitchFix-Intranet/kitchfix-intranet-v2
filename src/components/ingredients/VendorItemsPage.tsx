@@ -9,6 +9,7 @@ import { fmtCount, fmtDate, fmtUsdLong } from "@/lib/fmt";
 import { Tabs } from "./Tabs";
 import { Filters, StatusSeg } from "./Filters";
 import { RowLink } from "./RowLink";
+import { SortSelect, type SortKey, parseSort } from "./SortSelect";
 import { VendorItemDrawer } from "./VendorItemDrawer";
 import "./ingredients.css";
 import "./table.css";
@@ -37,13 +38,6 @@ type Row = {
 
 type Vendor = { id: string; name: string };
 
-type SortKey = "spend" | "lines" | "last_seen";
-const SORT_LABELS: Record<SortKey, string> = {
-  spend: "12-month spend, highest first",
-  lines: "12-month lines, highest first",
-  last_seen: "Last seen, newest first",
-};
-
 type Params = {
   vendor?: string;
   status?: string;
@@ -62,11 +56,6 @@ function parseSeg(v: string | undefined): StatusSeg {
   const s = (v ?? "all").toLowerCase();
   if (s === "unlinked" || s === "catch_weight" || s === "no_number" || s === "not_food" || s === "duplicates") return s;
   return "all";
-}
-
-function parseSort(v: string | undefined): SortKey {
-  if (v === "lines" || v === "last_seen") return v;
-  return "spend";
 }
 
 function parsePer(v: string | undefined): number {
@@ -431,26 +420,6 @@ function StatusLegend() {
       <span className="kf-flag kf-flag--twin" aria-hidden><Copy size={12} strokeWidth={1.5} /></span>
       <span className="kf-table-legend__hint">Twin of another number</span>
     </div>
-  );
-}
-
-function SortSelect({ value }: { value: SortKey }) {
-  return (
-    <form className="kf-sort" method="get" aria-label="Sort by">
-      <input type="hidden" name="sort" value={value} />
-      <select
-        name="sort"
-        defaultValue={value}
-        aria-label="Sort by"
-        onChange={(e) => {
-          e.currentTarget.form?.requestSubmit();
-        }}
-      >
-        {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
-          <option key={k} value={k}>{SORT_LABELS[k]}</option>
-        ))}
-      </select>
-    </form>
   );
 }
 
