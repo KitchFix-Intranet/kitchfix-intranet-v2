@@ -93,7 +93,18 @@ export async function GET(
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
 
-  let doc: { id: string; title: string | null; doc_class: string | null; version: string | number | null } | null = null;
+  type DocRow = {
+    id: string;
+    title: string | null;
+    doc_class: string | null;
+    version: string | number | null;
+  };
+  type OblRow = {
+    doc_id: string;
+    obligation_key: string;
+    source_section: string | null;
+  };
+  let doc: DocRow | null = null;
   if (attestation.doc_id) {
     const docQ = await supa
       .from("documents")
@@ -103,12 +114,11 @@ export async function GET(
     if (docQ.error) {
       console.warn("[api/academy/certificate] doc lookup:", docQ.error.message);
     } else if (docQ.data) {
-      doc = docQ.data as typeof doc;
+      doc = docQ.data as DocRow;
     }
   }
 
-  let obligation: { doc_id: string; obligation_key: string; source_section: string | null } | null =
-    null;
+  let obligation: OblRow | null = null;
   if (attestation.doc_id && attestation.obligation_key) {
     const oblQ = await supa
       .from("academy_obligations")
@@ -119,7 +129,7 @@ export async function GET(
     if (oblQ.error) {
       console.warn("[api/academy/certificate] obligation lookup:", oblQ.error.message);
     } else if (oblQ.data) {
-      obligation = oblQ.data as typeof obligation;
+      obligation = oblQ.data as OblRow;
     }
   }
 
@@ -136,12 +146,16 @@ export async function GET(
   const titlePart = safeFilenameSegment(doc?.title || attestation.doc_id || "module", 80);
   const filename = `${serialPart} ${titlePart}.pdf`.replace(/\s+/g, " ").trim();
 
-  return new Response(pdfBytes, {
+  // Copy into a fresh ArrayBuffer so TypeScript sees a BodyInit-compatible
+  // view. pdf-lib returns Uint8Array<ArrayBufferLike>, and the Fetch Response
+  // type requires an ArrayBuffer-backed view.
+  const bodyBuffer = new Uint8Array(pdfBytes);
+  return new Response(bodyBuffer, {
     status: 200,
     headers: {
       "Content-Type": "application/pdf",
       "Content-Disposition": `attachment; filename="${filename}"`,
-      "Content-Length": String(pdfBytes.length),
+      "Content-Length": String(bodyBuffer.length),
       "Cache-Control": "private, no-store",
     },
   });
