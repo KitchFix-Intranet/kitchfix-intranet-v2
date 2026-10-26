@@ -29,26 +29,40 @@
   padding: 16px 16px 12px;
   min-height: var(--sp-topbar);
 }
+/*
+ * At 76px the full logo + chevron can't sit side by side; stack them so the
+ * circle mark stays visible AND the toggle stays reachable.
+ */
+.kf-shell--slim .kf-rail__brand {
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 6px 10px;
+  min-height: calc(var(--sp-topbar) + 32px);
+}
+.kf-shell--slim .kf-rail__logo--circle { height: 36px; width: 36px; }
 
 .kf-rail__brand-mark {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-family: var(--sp-disp);
-  font-size: 28px;
-  font-weight: 800;
+  justify-content: center;
   color: var(--sp-on-navy);
-  letter-spacing: 0.5px;
   line-height: 1;
 }
-.kf-rail__brand-dot {
-  width: 6px;
-  height: 6px;
-  background: var(--sp-red);
-  border-radius: var(--sp-r-pill);
-  display: inline-block;
+.kf-rail__logo {
+  display: block;
+  height: auto;
+  width: auto;
 }
+.kf-rail__logo--stacked { height: 32px; max-width: 160px; }
+.kf-rail__logo--circle  { height: 44px; width: 44px; }
 
+/*
+ * The collapse toggle is desktop-only (kf-only-desktop); the close "X" is
+ * phone-only (kf-only-phone). Keep the shared visuals here but only set a
+ * flex-centering display on the one that is always visible at the breakpoint
+ * (collapse at desktop); the close `inline-flex` lives in the phone media
+ * query at the bottom of the file, same reason as .kf-topbar__burger.
+ */
 .kf-rail__collapse,
 .kf-rail__close {
   background: transparent;
@@ -57,10 +71,10 @@
   border-radius: var(--sp-r-sm);
   width: 32px;
   height: 32px;
-  display: inline-flex;
   align-items: center;
   justify-content: center;
 }
+.kf-rail__collapse { display: inline-flex; }
 .kf-rail__collapse:hover,
 .kf-rail__close:hover {
   background: color-mix(in srgb, white 7%, transparent);
@@ -134,8 +148,7 @@
 }
 .kf-shell--slim .kf-rail__label,
 .kf-shell--slim .kf-rail__dot,
-.kf-shell--slim .kf-rail__back,
-.kf-shell--slim .kf-rail__brand-mark {
+.kf-shell--slim .kf-rail__back {
   display: none;
 }
 .kf-shell--slim .kf-rail__item {
@@ -196,6 +209,12 @@
   z-index: 10;
 }
 
+/*
+ * The burger ships hidden by `.kf-only-phone`. Its own `display` must only
+ * fire at phone widths; otherwise the component rule would beat the utility
+ * at desktop and the burger would leak back in (same failure mode that
+ * caused the Home identity-band regression).
+ */
 .kf-topbar__burger {
   background: transparent;
   color: var(--sp-ink);
@@ -203,7 +222,6 @@
   border-radius: var(--sp-r-sm);
   width: 44px;
   height: 44px;
-  display: inline-flex;
   align-items: center;
   justify-content: center;
 }
@@ -261,6 +279,8 @@
   }
   .kf-topbar { padding: 0 16px; }
   .kf-topbar__title h1 { font-size: var(--sp-t-h3); }
+  .kf-topbar__burger { display: inline-flex; }
+  .kf-rail__close { display: inline-flex; }
 }
 
 /* --------------------- Tab bar (phone) --------------------- */

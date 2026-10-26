@@ -99,9 +99,16 @@ button:disabled { cursor: not-allowed; }
 }
 
 /* Utility: hide on phone / desktop */
-.kf-only-desktop { display: block; }
-.kf-only-phone { display: none; }
+/*
+ * The two utilities below have to win against any component's own `display`
+ * rule, or a mobile-only element will leak into desktop (and vice versa) the
+ * moment a component sets `display: flex` / `inline-flex` on itself. We hide
+ * with !important and show with `revert` so the element goes back to its
+ * natural display, not whatever CSS-initial `inline` happens to be.
+ */
+.kf-only-desktop { display: revert; }
+.kf-only-phone { display: none !important; }
 @media (max-width: 860px) {
   .kf-only-desktop { display: none !important; }
-  .kf-only-phone { display: block; }
+  .kf-only-phone { display: revert !important; }
 }

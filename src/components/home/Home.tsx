@@ -76,7 +76,6 @@ const DOORS: Door[] = [
 
 type LedgerEvent = {
   id: string;
-  entity_type: string;
   kind: string;
   at: string;
   note: string | null;
@@ -90,11 +89,37 @@ type IntakeRun = {
   counts: Record<string, unknown> | null;
 };
 
-function firstName(email: string): string {
+type LedgerGroup = {
+  kind: string;
+  count: number;
+  newest_at: string;
+};
+
+// Known event kinds get a human label + a plural form; unknown kinds fall
+// back to a title-cased, hyphenated form of the enum so nothing ever renders
+// a raw "vendor_item_twin" string.
+const EVENT_LABELS: Record<string, { single: string; plural: string }> = {
+  vendor_item_twin: { single: "twin flagged", plural: "twins flagged" },
+  vendor_created: { single: "vendor created", plural: "vendors created" },
+  status_changed: { single: "status change", plural: "status changes" },
+};
+function humanizeKind(kind: string, count: number): string {
+  const label = EVENT_LABELS[kind];
+  if (label) return count === 1 ? label.single : label.plural;
+  const words = kind.replace(/_/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+function nameFromEmail(email: string): string {
   const local = email.split("@")[0] ?? "";
-  const base = local.split(".")[0] ?? local;
-  if (!base) return "there";
-  return base.charAt(0).toUpperCase() + base.slice(1);
+  if (!local) return "there";
+  // Title-case the WHOLE local-part so "k.fietek" becomes "K.Fietek" rather
+  // than the one-letter "K" we were showing. Not pretty, but never wrong.
+  return local
+    .split(".")
+    .filter((p) => p.length > 0)
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+    .join(" ");
 }
 
 function timeAgo(iso: string): string {
@@ -110,33 +135,57 @@ function timeAgo(iso: string): string {
   return `${days}d ago`;
 }
 
-async function loadStatus() {
+function groupLedger(rows: LedgerEvent[], max: number): LedgerGroup[] {
+  // Walk the time-ordered list; collapse consecutive same-kind rows into one
+  // summary row carrying the group's size and the newest timestamp.
+  const out: LedgerGroup[] = [];
+  for (const r of rows) {
+    const last = out[out.length - 1];
+    if (last && last.kind === r.kind) {
+      last.count += 1;
+      // Rows arrive newest-first, so the first one in a run has the newest at.
+    } else {
+      out.push({ kind: r.kind, count: 1, newest_at: r.at });
+    }
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+async function loadStatus(email: string) {
   try {
     const client = serviceClient();
-    const [events, runs] = await Promise.all([
+    const [events, runs, nameRow] = await Promise.all([
       client
         .from("pr_events")
-        .select("id,entity_type,kind,at,note")
+        .select("id,kind,at,note")
         .order("at", { ascending: false })
-        .limit(6),
+        .limit(50),
       client
         .from("pr_intake_runs")
         .select("id,started_at,finished_at,status,counts")
         .order("started_at", { ascending: false })
         .limit(1),
+      client.from("pr_users").select("name").eq("email", email).maybeSingle(),
     ]);
+    const ledger = groupLedger((events.data ?? []) as LedgerEvent[], 6);
+    const nameFromDb = (nameRow.data as { name: string | null } | null)?.name ?? null;
     return {
-      events: (events.data ?? []) as LedgerEvent[],
+      ledger,
       lastRun: ((runs.data ?? [])[0] ?? null) as IntakeRun | null,
+      displayName: nameFromDb && nameFromDb.length > 0 ? nameFromDb : nameFromEmail(email),
     };
   } catch {
-    return { events: [] as LedgerEvent[], lastRun: null as IntakeRun | null };
+    return {
+      ledger: [] as LedgerGroup[],
+      lastRun: null as IntakeRun | null,
+      displayName: nameFromEmail(email),
+    };
   }
 }
 
 export async function Home({ email }: { email: string }) {
-  const { events, lastRun } = await loadStatus();
-  const name = firstName(email);
+  const { ledger, lastRun, displayName } = await loadStatus(email);
   const statusLine =
     lastRun && lastRun.status === "ok"
       ? `1 of 6 tools live in the new shell. Last intake ${timeAgo(lastRun.started_at)}; the rest remain on the current intranet.`
@@ -147,8 +196,8 @@ export async function Home({ email }: { email: string }) {
       <section className="kf-ident kf-only-desktop" aria-label="Overview">
         <div className="kf-ident__sheen" aria-hidden />
         <div className="kf-ident__content">
-          <span className="kf-eyebrow kf-ident__eyebrow">KitchFix - one shell, every tool</span>
-          <h2 className="kf-ident__title">Welcome back, {name}</h2>
+          <span className="kf-eyebrow kf-ident__eyebrow">One shell, every tool</span>
+          <h2 className="kf-ident__title">Welcome back, {displayName}</h2>
           <p className="kf-ident__status">{statusLine}</p>
           <Link href="/stockpot" className="kf-btn kf-btn--filled">
             Open Stockpot
@@ -159,7 +208,7 @@ export async function Home({ email }: { email: string }) {
 
       <section className="kf-phone-status kf-only-phone" aria-label="Status">
         <span className="kf-eyebrow">KitchFix</span>
-        <h2>Hello, {name}</h2>
+        <h2>Hello, {displayName}</h2>
         <p>{statusLine}</p>
       </section>
 
@@ -172,11 +221,9 @@ export async function Home({ email }: { email: string }) {
                   <Icon size={24} strokeWidth={1.5} />
                 </span>
                 <div className="kf-door__body">
-                  <div className="kf-door__title-row">
-                    <h3>{name}</h3>
-                    <span className={`kf-pill kf-pill--${pillTone}`}>{pill}</span>
-                  </div>
-                  <p>{tagline}</p>
+                  <h3 className="kf-door__title">{name}</h3>
+                  <p className="kf-door__tagline">{tagline}</p>
+                  <span className={`kf-pill kf-pill--${pillTone}`}>{pill}</span>
                 </div>
               </Link>
             </li>
@@ -201,18 +248,19 @@ export async function Home({ email }: { email: string }) {
             <span className="kf-eyebrow">Ledger</span>
             <h3>Recent activity</h3>
           </header>
-          {events.length === 0 ? (
+          {ledger.length === 0 ? (
             <p className="kf-card__muted">
               No events yet. Once intake runs or someone makes an edit, the
               last few actions will show here.
             </p>
           ) : (
             <ul className="kf-ledger">
-              {events.map((e) => (
-                <li key={e.id}>
-                  <span className="kf-ledger__kind">{e.kind}</span>
-                  <span className="kf-ledger__entity">{e.entity_type}</span>
-                  <time>{timeAgo(e.at)}</time>
+              {ledger.map((g) => (
+                <li key={`${g.kind}-${g.newest_at}`}>
+                  <span className="kf-ledger__kind">
+                    {g.count > 1 ? `${g.count.toLocaleString()} ${humanizeKind(g.kind, g.count)}` : humanizeKind(g.kind, g.count)}
+                  </span>
+                  <time>{timeAgo(g.newest_at)}</time>
                 </li>
               ))}
             </ul>

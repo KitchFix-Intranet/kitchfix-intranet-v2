@@ -14,7 +14,8 @@ import {
   Menu as MenuIcon,
   X,
   ChevronLeft,
-  ChevronRight,
+  PanelLeftClose,
+  PanelLeftOpen,
   LogOut,
   Soup,
   FileText,
@@ -115,10 +116,20 @@ export function Shell({
         aria-label="Main navigation"
       >
         <div className="kf-rail__brand">
-          <span className="kf-rail__brand-mark">
-            <span>K</span>
-            <span className="kf-rail__brand-dot" aria-hidden />
-            <span>F</span>
+          <span className="kf-rail__brand-mark" aria-label="KitchFix">
+            {collapsed ? (
+              <img
+                src="/brand/kitchfix-white-circle.png"
+                alt="KitchFix"
+                className="kf-rail__logo kf-rail__logo--circle"
+              />
+            ) : (
+              <img
+                src="/brand/kitchfix-white-stacked.png"
+                alt="KitchFix"
+                className="kf-rail__logo kf-rail__logo--stacked"
+              />
+            )}
           </span>
           <button
             type="button"
@@ -127,7 +138,7 @@ export function Shell({
             aria-label={collapsed ? "Expand rail" : "Collapse rail"}
             title={collapsed ? "Expand rail" : "Collapse rail"}
           >
-            {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+            {collapsed ? <PanelLeftOpen size={18} strokeWidth={1.5} /> : <PanelLeftClose size={18} strokeWidth={1.5} />}
           </button>
           <button
             type="button"
@@ -230,8 +241,12 @@ export function Shell({
 }
 
 function TopbarTitle({ pathname }: { pathname: string }) {
+  // Every entry here must land somewhere. The fallback at the bottom used to
+  // render the raw pathname when a new route was added without a mapping,
+  // which leaked route strings into product chrome (e.g. "/stockpot/recipes"
+  // as the Recipes page title). Keep the map exhaustive.
   const map: Array<{ test: (p: string) => boolean; title: string; context?: string }> = [
-    { test: (p) => p === "/", title: "KitchFix", context: "One shell, every tool." },
+    { test: (p) => p === "/", title: "KitchFix" },
     { test: (p) => p === "/people", title: "People Portal", context: "Reserved door" },
     { test: (p) => p === "/ops", title: "Ops Hub", context: "Reserved door" },
     { test: (p) => p === "/service", title: "Service Calendar", context: "Reserved door" },
@@ -239,13 +254,17 @@ function TopbarTitle({ pathname }: { pathname: string }) {
     { test: (p) => p === "/academy", title: "Academy", context: "Reserved door" },
     { test: (p) => p === "/stockpot" || p === "/stockpot/ingredients", title: "Ingredients", context: "Stockpot" },
     { test: (p) => p === "/stockpot/ingredients/vendor-items", title: "Vendor items", context: "Stockpot / Ingredients" },
+    { test: (p) => p === "/stockpot/recipes", title: "Recipes", context: "Stockpot" },
+    { test: (p) => p === "/stockpot/menus", title: "Menus", context: "Stockpot" },
+    { test: (p) => p === "/stockpot/signs", title: "Signs & labels", context: "Stockpot" },
   ];
   const hit = map.find((m) => m.test(pathname));
-  if (!hit) return <span>{pathname}</span>;
+  const title = hit?.title ?? "KitchFix";
+  const context = hit?.context;
   return (
     <>
-      <h1>{hit.title}</h1>
-      {hit.context ? <span className="kf-topbar__context">{hit.context}</span> : null}
+      <h1>{title}</h1>
+      {context ? <span className="kf-topbar__context">{context}</span> : null}
     </>
   );
 }

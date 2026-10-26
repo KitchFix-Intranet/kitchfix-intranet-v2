@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { serviceClient } from "@/lib/supabase/service";
 import { ItemStatusActions } from "./ItemStatusActions";
@@ -12,6 +13,31 @@ type Props = {
   q: string;
   vendorNameById: Record<string, string>;
 };
+
+// Humanize the internal enum values before they reach the UI. The schema
+// values ("active", "none", "ok", "proposed", "charge", etc.) are plumbing;
+// the user sees plain words.
+const STATUS_LABELS: Record<string, string> = {
+  active: "Active",
+  archived: "Archived",
+  one_off: "One off",
+  not_food: "Not food",
+  resale: "Resale",
+  duplicate: "Duplicate",
+};
+const LINK_LABELS: Record<string, string> = {
+  none: "Unlinked",
+  proposed: "Proposed",
+  confirmed: "Linked",
+  rejected: "Rejected",
+};
+function humanizeStatus(s: string): string { return STATUS_LABELS[s] ?? s; }
+function humanizeLinkStatus(s: string): string { return LINK_LABELS[s] ?? s; }
+function renderPack(packText: string | null, packState: string): ReactNode {
+  if (packText && packText.trim().length > 0) return packText;
+  if (packState === "ok") return "-";
+  return <span className="kf-muted">unparsed</span>;
+}
 
 function usdLong(n: number): string {
   const sign = n < 0 ? "-" : "";
@@ -140,12 +166,12 @@ export async function VendorItemDrawer({ id, params, seg, q, vendorNameById }: P
 
         <section className="kf-drawer__facts">
           <dl className="kf-kv">
-            <div><dt>Status</dt><dd>{item.status}</dd></div>
-            <div><dt>Link status</dt><dd>{item.link_status}</dd></div>
-            <div><dt>Food</dt><dd>{item.is_food ? `yes (${item.food_reason})` : `no (${item.food_reason})`}</dd></div>
-            <div><dt>Pack</dt><dd>{item.pack_text ?? "-"} ({item.pack_state})</dd></div>
+            <div><dt>Status</dt><dd>{humanizeStatus(item.status)}</dd></div>
+            <div><dt>Link status</dt><dd>{humanizeLinkStatus(item.link_status)}</dd></div>
+            <div><dt>Food</dt><dd>{item.is_food ? "Yes" : "No"}</dd></div>
+            <div><dt>Pack</dt><dd>{renderPack(item.pack_text, item.pack_state)}</dd></div>
             <div><dt>Billed unit</dt><dd>{item.billed_unit ?? "-"}</dd></div>
-            <div><dt>Catch weight</dt><dd>{item.catch_weight ? "yes" : "no"}</dd></div>
+            <div><dt>Catch weight</dt><dd>{item.catch_weight ? "Yes" : "No"}</dd></div>
             <div><dt>12m dollars</dt><dd>${usdLong(Number(item.usd_12m ?? 0))}</dd></div>
             <div><dt>12m lines</dt><dd>{Number(item.lines_12m ?? 0).toLocaleString()}</dd></div>
             <div><dt>Lifetime</dt><dd>${usdLong(Number(item.usd ?? 0))} / {Number(item.lines ?? 0).toLocaleString()} lines</dd></div>

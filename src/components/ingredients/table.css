@@ -32,7 +32,23 @@
 .kf-field input:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
 .kf-field--search { position: relative; flex: 1; min-width: 240px; }
 .kf-field--search input { padding-left: 36px; width: 100%; }
-.kf-field__icon { position: absolute; left: 10px; top: 50%; transform: translateY(10px); color: var(--sp-muted); pointer-events: none; }
+/*
+ * The icon sits inside the input, vertically centered against the input's
+ * own box. `.kf-field` is `display: flex column` with a label above the
+ * input, so we anchor off the input's own position via `bottom:0` on the
+ * icon's own absolute box; the previous `top: 50%; translateY(10px)`
+ * pushed the magnifier below the input entirely.
+ */
+.kf-field__icon {
+  position: absolute;
+  left: 10px;
+  bottom: 0;
+  height: var(--sp-floor-chef);
+  display: inline-flex;
+  align-items: center;
+  color: var(--sp-muted);
+  pointer-events: none;
+}
 
 .kf-segs {
   display: flex;
@@ -49,8 +65,11 @@
   font-weight: 700;
   font-size: var(--sp-t-micro);
   color: var(--sp-body);
+  transition: background var(--sp-fast), color var(--sp-fast), border-color var(--sp-fast);
 }
-.kf-seg--active {
+.kf-seg:hover { background: var(--sp-sky-tint); color: var(--sp-navy); border-color: var(--sp-sky-line); }
+.kf-seg--active,
+.kf-seg--active:hover {
   background: var(--sp-navy);
   color: var(--sp-on-navy);
   border-color: var(--sp-navy);
@@ -83,6 +102,42 @@
   border-radius: var(--sp-r-pill);
   display: inline-block;
 }
+
+/*
+ * Legend of link-status pills + the CW flag, sitting between the table meta
+ * line and the first table row so a first-time viewer can read the badges
+ * without hunting.
+ */
+.kf-table-legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px 10px;
+  border-bottom: 1px solid var(--sp-line-soft);
+  background: var(--sp-sky-soft);
+  flex-wrap: wrap;
+}
+.kf-table-legend__label {
+  color: var(--sp-muted);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-right: 4px;
+}
+.kf-table-legend__sep {
+  display: inline-block;
+  width: 1px;
+  height: 16px;
+  background: var(--sp-line);
+  margin: 0 6px;
+}
+.kf-table-legend__hint {
+  color: var(--sp-muted);
+  font-size: var(--sp-t-micro);
+}
+.kf-table-legend .kf-badge { margin-left: 0; }
 
 .kf-table {
   width: 100%;

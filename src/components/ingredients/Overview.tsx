@@ -2,10 +2,9 @@
 //
 // All vendor-item aggregation happens server-side via pr_v_overview_totals /
 // pr_v_overview_by_account / pr_v_overview_by_vendor. The previous version did
-// one unpaginated .select() on pr_vendor_items, which PostgREST capped at 1,000
-// rows and silently truncated the tiles (630/$389K/291 against 8,039/$1.82M/1,575
-// in the DB). The views aggregate every row in Postgres; the page reads scalars
-// and sorted lists only.
+// one unpaginated .select() on pr_vendor_items, which PostgREST capped at
+// db-max-rows and silently truncated the tiles. The views aggregate every row
+// in Postgres; the page reads scalars and sorted lists only.
 
 import Link from "next/link";
 import { serviceClient } from "@/lib/supabase/service";
@@ -133,7 +132,7 @@ export async function Overview() {
   return (
     <div className="kf-ing">
       <header className="kf-ing__header">
-        <span className="kf-eyebrow">Culinary office - the ingredient database</span>
+        <span className="kf-eyebrow">Culinary office</span>
         <h2>Ingredients</h2>
         <p className="kf-ing__kicker">
           What we buy, in our words. Invoice lines become vendor items, vendor
@@ -187,6 +186,7 @@ export async function Overview() {
 
       <section className="kf-coverage" aria-label="Coverage by site">
         <h3>Coverage by site</h3>
+        <p className="kf-coverage__note">Linking starts in step 5. The dark bar fills as items are named.</p>
         {bySite.length === 0 ? (
           <div className="kf-state">
             <div className="kf-state__title">No food dollars yet</div>
@@ -216,6 +216,7 @@ export async function Overview() {
 
       <section className="kf-coverage" aria-label="Coverage by vendor">
         <h3>Coverage by vendor (top 10 by 12-month dollars)</h3>
+        <p className="kf-coverage__note">Linking starts in step 5.</p>
         {topVendors.length === 0 ? (
           <div className="kf-state">
             <div className="kf-state__title">No vendors with food dollars yet</div>
@@ -247,7 +248,7 @@ export async function Overview() {
             <div><dt>Lines with no item number</dt><dd>{totals.no_number_items.toLocaleString()} items / ${usd(totals.no_number_dollars)}</dd></div>
             <div><dt>Lines flagged on the invoice</dt><dd>{totals.needs_review_lines.toLocaleString()}</dd></div>
             <div><dt>Catch-weight items</dt><dd>{totals.catch_weight_items.toLocaleString()}</dd></div>
-            <div><dt>Items with pack text</dt><dd>{totals.packs_clean.toLocaleString()} parsed</dd></div>
+            <div><dt>Packs parsed</dt><dd>{totals.packs_clean.toLocaleString()}</dd></div>
             <div><dt>Twins found</dt><dd>{totals.twins_count.toLocaleString()}</dd></div>
             <div><dt>Last intake</dt><dd>{lastRunLabel}</dd></div>
           </dl>

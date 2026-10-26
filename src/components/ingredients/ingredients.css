@@ -1,7 +1,13 @@
 .kf-ing { display: flex; flex-direction: column; gap: 20px; }
 
-.kf-ing__header h2 { color: var(--sp-navy); font-size: var(--sp-t-title); margin-top: 6px; }
-.kf-ing__kicker { color: var(--sp-body); font-size: var(--sp-t-body); max-width: 78ch; margin-top: 10px; }
+/*
+ * Tightened header rhythm so the hero does not eat vertical space. The
+ * kicker now sits at ~92ch instead of 78ch so intro copy folds to two lines
+ * on wide viewports.
+ */
+.kf-ing__header { margin-top: 4px; }
+.kf-ing__header h2 { color: var(--sp-navy); font-size: var(--sp-t-title); margin-top: 4px; }
+.kf-ing__kicker { color: var(--sp-body); font-size: var(--sp-t-body); max-width: 92ch; margin-top: 6px; }
 
 /* ---------- Tabs ---------- */
 .kf-tabs {
@@ -25,6 +31,7 @@
   margin-bottom: -2px;
   position: relative;
   white-space: nowrap;
+  transition: color var(--sp-fast), border-color var(--sp-fast);
 }
 .kf-tab:hover { color: var(--sp-navy); text-decoration: none; }
 .kf-tab--active { color: var(--sp-navy); border-bottom-color: var(--sp-red); }
@@ -155,6 +162,12 @@
   height: 100%;
   background: var(--sp-navy);
   min-width: 2px;
+  transition: width var(--sp-rise) ease-out;
+}
+.kf-coverage__note {
+  color: var(--sp-muted);
+  font-size: var(--sp-t-micro);
+  margin: -4px 0 10px;
 }
 
 /* ---------- Health kv ---------- */

@@ -1,6 +1,6 @@
 -- 0004_potrack_overview_views.sql
 -- The overview aggregated pr_vendor_items in JS from one unpaginated select,
--- capped at 1,000 rows -> tiles showed 630/$389K/291 vs a DB of 8,039/$1.82M/1,575.
+-- capped at PostgREST's db-max-rows setting, which truncated the tiles.
 -- Aggregate in Postgres instead. security_invoker so service_role's grants apply.
 
 create or replace view pr_v_overview_totals
