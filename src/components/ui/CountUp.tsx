@@ -2,10 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
+import { fmtCount } from "@/lib/fmt";
 
+// NOTE: do NOT add a `format` function prop here. A function cannot cross
+// the Server->Client boundary (RSC payload is not able to serialize it;
+// React throws #441 at render, not at build). CountUp owns its formatter
+// (fmtCount), which is the only one tiles need. See docs/GOTCHAS.md.
 type Props = {
   value: number;
-  format: (n: number) => string;
   durationMs?: number;
 };
 
@@ -35,7 +39,7 @@ function prefersReducedMotion(): boolean {
 // animate from 0 to value over 600ms with a cubic ease-out. Skipped when
 // the value is 0, under reduced motion, or when RevealGate says the route
 // already played this session.
-export function CountUp({ value, format, durationMs = 600 }: Props) {
+export function CountUp({ value, durationMs = 600 }: Props) {
   const [mounted, setMounted] = useState(false);
   const [shown, setShown] = useState(value);
   const pathname = usePathname();
@@ -63,7 +67,7 @@ export function CountUp({ value, format, durationMs = 600 }: Props) {
 
   return (
     <span style={mounted ? undefined : { visibility: "hidden" }}>
-      {format(shown)}
+      {fmtCount(shown)}
     </span>
   );
 }

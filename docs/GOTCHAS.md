@@ -97,6 +97,20 @@ Paginate with `.range(from, from + pageSize - 1)` breaking on an empty
 page, or move the aggregation into a Postgres view (see
 `0004_potrack_overview_views.sql`).
 
+## 13. A function prop from a Server Component to a Client Component throws at render, not at build
+
+`next build` and `tsc` pass; the page dies with a minified React error
+(e.g. #441) behind the error boundary. The RSC Flight payload cannot
+serialize a function, so React throws when the client tries to receive
+it. Client components own their formatters and handlers; server parents
+pass only serializable props - ReactNode, strings, numbers, plain
+objects / arrays, hrefs. Event handlers are created inside the client
+component, not passed from the server. Verifying a data page means
+loading it in a production build, never just compiling it. First case:
+`<CountUp value={n} format={fmtCount} />` on Overview.tsx (server)
+crashed `/stockpot/ingredients`; the fix was to drop the `format` prop
+and have `CountUp` import `fmtCount` itself.
+
 ---
 
 Branch-specific items we have already lived through on

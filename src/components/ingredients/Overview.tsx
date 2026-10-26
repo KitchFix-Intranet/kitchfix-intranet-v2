@@ -203,7 +203,7 @@ export async function Overview() {
         <article className="kf-tile">
           <span className="kf-tile__label">Active food items</span>
           <span className="kf-tile__value">
-            <CountUp value={totals.food_items_active} format={fmtCount} />
+            <CountUp value={totals.food_items_active} />
           </span>
           <span className="kf-tile__sub">
             {fmtCount(totals.food_items_with_number)} carry an item number
@@ -212,21 +212,21 @@ export async function Overview() {
         <article className="kf-tile">
           <span className="kf-tile__label">Waiting for you</span>
           <span className="kf-tile__value">
-            <CountUp value={totals.food_items_waiting} format={fmtCount} />
+            <CountUp value={totals.food_items_waiting} />
           </span>
           <span className="kf-tile__sub">{fmtUsd(totals.food_items_waiting_usd)} unlinked (12m)</span>
         </article>
         <article className="kf-tile">
           <span className="kf-tile__label">Twins to resolve</span>
           <span className="kf-tile__value">
-            <CountUp value={totals.twins_count} format={fmtCount} />
+            <CountUp value={totals.twins_count} />
           </span>
           <span className="kf-tile__sub">Same item, two numbers</span>
         </article>
         <article className="kf-tile kf-tile--named">
           <span className="kf-tile__label">Ingredients named</span>
           <span className="kf-tile__value">
-            <CountUp value={ingredientsNamed} format={fmtCount} />
+            <CountUp value={ingredientsNamed} />
           </span>
           <span className="kf-tile__sub">Starts with the review queue</span>
         </article>
