@@ -29,23 +29,17 @@ import {
 } from "lucide-react";
 import type { ModuleBody, Step, WireQuestion } from "@/lib/academy/module";
 import { Receipt } from "./Receipt";
-import { buildAttestationSentence } from "@/lib/academy/attestation";
+import {
+  buildAttestationSentence,
+  moduleTitleForAttestation,
+} from "@/lib/academy/attestation";
 
-// Client mirror of the server's partShortTitle (src/lib/academy/
-// certificate.ts). Pure string helper; the certificate module imports
-// pdf-lib, so we duplicate the 10 lines rather than drag pdf-lib into
-// a client bundle.
-function partShortTitle(sourceSection: string | null | undefined): string {
-  const src = String(sourceSection || "").trim();
-  if (!src) return "";
-  const first = src.split(/;/, 1)[0].trim();
-  if (!first) return "";
-  const MAX = 40;
-  if (first.length <= MAX) return first;
-  const cut = first.slice(0, MAX);
-  const lastSp = cut.lastIndexOf(" ");
-  return (lastSp > 20 ? cut.slice(0, lastSp) : cut).replace(/[\s,.·-]+$/, "") + "…";
-}
+// Module title derivation lives in @/lib/academy/attestation and is
+// the single source of truth shared by the sign route, the certificate
+// renderer, and this live preview. For multi-section obligations the
+// title is the module NAME (derived from obligation.description's lead
+// clause) rather than the first section heading; for single-section
+// obligations the section heading stands. See PR #4.
 
 type Option = { id: string; text: string; explanation?: string };
 
@@ -222,29 +216,37 @@ export function Reader({ body }: Props) {
   const goPrev = useCallback(() => setIndex((i) => Math.max(0, i - 1)), []);
   const goNext = useCallback(() => setIndex((i) => Math.min(signIndex, i + 1)), [signIndex]);
 
+  // Compute the module title ONCE, via the shared derivation. Reuse
+  // this value in the attestation preview, the pane header subline,
+  // and (after a successful sign) the Receipt label - everywhere the
+  // Reader surfaces a module name, so a multi-section module reads
+  // the same string in every spot and matches what the server stores.
+  const moduleTitle = useMemo(
+    () =>
+      moduleTitleForAttestation({
+        sourceSection: body.obligation?.source_section ?? null,
+        description: body.obligation?.description ?? null,
+      }),
+    [body.obligation?.source_section, body.obligation?.description],
+  );
+
   const docContextSub = useMemo(() => {
     const version = body.requirement.doc_version ?? body.doc.version;
     const parts: string[] = [body.doc.id];
     if (version != null) parts.push(`v${version}`);
-    const module = partShortTitle(body.obligation?.source_section);
-    if (module) parts.push(module);
+    if (moduleTitle) parts.push(moduleTitle);
     return parts.join(" - ");
-  }, [body]);
-
-  const moduleTitleStripped = useMemo(
-    () => partShortTitle(body.obligation?.source_section),
-    [body.obligation?.source_section],
-  );
+  }, [body, moduleTitle]);
 
   const attestationSentence = useMemo(
     () =>
       buildAttestationSentence({
         displayName: body.viewer.displayName,
-        moduleTitle: moduleTitleStripped || null,
+        moduleTitle: moduleTitle || null,
         documentTitle: body.doc.title || body.doc.id,
         version: body.requirement.doc_version ?? body.doc.version ?? null,
       }),
-    [body, moduleTitleStripped],
+    [body, moduleTitle],
   );
 
   // Check POST handler. The route returns { correct, explanation }
@@ -377,7 +379,6 @@ export function Reader({ body }: Props) {
   // Receipt. For a previously-signed requirement we also show the
   // Receipt rather than invite a double-sign.
   if (postSignAttestation) {
-    const module = partShortTitle(body.obligation?.source_section);
     return (
       <div className="kf-sheet">
         <section className="kf-reader kf-after-sign" aria-label="Signed">
@@ -385,7 +386,7 @@ export function Reader({ body }: Props) {
             <Receipt
               size="full"
               docTitle={body.doc.title}
-              moduleLabel={module || body.doc.card_line}
+              moduleLabel={moduleTitle || body.doc.card_line}
               signedAt={postSignAttestation.signed_at}
               certificateSerial={postSignAttestation.certificate_serial}
               docVersion={postSignAttestation.doc_version}
