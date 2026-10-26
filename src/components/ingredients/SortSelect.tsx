@@ -5,20 +5,14 @@
 // updates server-side. The form + hidden input mean the control still
 // posts even if JS is slow, but React still needs this to be a client
 // island because an event handler cannot cross the RSC boundary.
-// See docs/GOTCHAS.md #13.
+//
+// The SortKey type and SORT_LABELS record live in ./sortKeys (plain
+// module, no "use client"): a Server Component may render this component
+// as JSX, but must never import and call a plain function or const
+// exported from a "use client" file - that was the fourth RSC shape in
+// docs/GOTCHAS.md #13.
 
-export type SortKey = "spend" | "lines" | "last_seen";
-
-export const SORT_LABELS: Record<SortKey, string> = {
-  spend: "12-month spend, highest first",
-  lines: "12-month lines, highest first",
-  last_seen: "Last seen, newest first",
-};
-
-export function parseSort(v: string | undefined): SortKey {
-  if (v === "lines" || v === "last_seen") return v;
-  return "spend";
-}
+import { type SortKey, SORT_LABELS } from "./sortKeys";
 
 export function SortSelect({ value }: { value: SortKey }) {
   return (

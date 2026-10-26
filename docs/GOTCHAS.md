@@ -119,6 +119,26 @@ it. Three shapes of the same crash:
 3. **A hook inside an inline helper in a server file.** Same shape;
    `useState` / `useEffect` / `useRef` are client-only. If an inline
    sub-component uses hooks or browser APIs, extract it.
+4. **A Server Component importing and calling a plain function or
+   const from a `"use client"` module.** A Server Component may
+   RENDER a component exported from a `"use client"` file as JSX,
+   but it may never IMPORT and CALL a non-component value from one -
+   Vercel surfaces this as `"Attempted to call parseSort() from the
+   server but parseSort is on the client. It's not possible to invoke
+   a client function from the server, it can only be rendered as a
+   Component or passed to props of a Client Component."` The fix is
+   to put the shared parser / constants / types in a plain module
+   (no `"use client"`) that both the server page and the client
+   component import; only the component itself carries `"use client"`.
+   First case: `parseSort` + `SortKey` + `SORT_LABELS` moved to
+   `./sortKeys` alongside the client `./SortSelect`. Also, when a
+   client module exports a type, import it with explicit `type`
+   syntax (`import { Component, type SomeType } from "./client"`) so
+   TypeScript erases it at runtime instead of leaving a value
+   reference.
+
+Verify server->client render errors from **Vercel runtime logs** (the
+real `error/function` message), not the minified client `#441`.
 
 Verification cannot stop at `next build`. Both prior crashes compiled
 clean. The sweep is:

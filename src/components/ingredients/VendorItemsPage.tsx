@@ -7,9 +7,10 @@ import { ChevronLeft, ChevronRight, Scale, Copy, ArrowDown } from "lucide-react"
 import { serviceClient } from "@/lib/supabase/service";
 import { fmtCount, fmtDate, fmtUsdLong } from "@/lib/fmt";
 import { Tabs } from "./Tabs";
-import { Filters, StatusSeg } from "./Filters";
+import { Filters, type StatusSeg } from "./Filters";
 import { RowLink } from "./RowLink";
-import { SortSelect, type SortKey, parseSort } from "./SortSelect";
+import { SortSelect } from "./SortSelect";
+import { type SortKey, parseSort } from "./sortKeys";
 import { VendorItemDrawer } from "./VendorItemDrawer";
 import "./ingredients.css";
 import "./table.css";
