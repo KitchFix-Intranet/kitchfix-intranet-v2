@@ -187,6 +187,29 @@
   border-radius: var(--sp-r-pill);
   display: inline-block;
 }
+/*
+ * Rail count badge. Academy "To do" uses this to show remaining
+ * requirements. R-AC19: sky background, navy text - not red. Red is for
+ * things that block; a count of documents to read does not block.
+ * In slim mode the badge moves to the icon's top-right corner, same shape
+ * as .kf-rail__dot but larger so a number can fit.
+ */
+.kf-rail__count {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--sp-sky);
+  color: var(--sp-navy);
+  border-radius: var(--sp-r-pill);
+  font-family: var(--sp-ui);
+  font-weight: 700;
+  font-size: var(--sp-t-micro);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
 /* Slim mode: labels fade before layout collapse; live dot goes to the icon corner. */
 .kf-shell--slim .kf-rail__label { opacity: 0; pointer-events: none; }
 .kf-shell--slim .kf-rail__item {
@@ -199,6 +222,15 @@
   right: 10px;
   width: 6px;
   height: 6px;
+}
+.kf-shell--slim .kf-rail__count {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  font-size: 11px;
 }
 
 /* -------- Account row -------- */

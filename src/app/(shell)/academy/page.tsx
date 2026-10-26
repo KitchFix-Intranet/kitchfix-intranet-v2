@@ -1,10 +1,347 @@
-import { ReservedDoor } from "@/components/reserved/ReservedDoor";
+// /academy - To do. Server component. Renders the viewer's open
+// requirements as a one-column sheet inside the shared shell, from
+// loadRoom(email). States: first-visit welcome (dismissed client-side),
+// past-due band, resting (nothing to do, next cycle exists), the
+// read-failed band path, and the normal "N things to do" state.
+//
+// The "All set" celebration (R-AC7/R-AC11) does not have a clean signal
+// in RoomBody today - without one, we fall back to the resting band
+// when remainingCount === 0, per the prompt's "if there is no clean
+// signal, flag it and render the resting state, and we add the signal
+// in train C". Flagged in the PR body.
 
-export default function Page() {
+import Link from "next/link";
+import { ChevronRight } from "lucide-react";
+import { requireOwnerPage } from "@/lib/gate";
+import { loadRoom } from "@/lib/academy/room";
+import type { QueueItem } from "@/lib/academy/room";
+import { IdentBand } from "@/components/ui/IdentBand";
+import { FirstVisitCard } from "@/components/academy/FirstVisitCard";
+import { fmtDate } from "@/lib/fmt";
+import "@/components/academy/academy.css";
+
+// Numbers one-nine spelled; 10+ use digits. The render V6 title + kick
+// both use words for small counts ("Four things to do, Kevin"); using
+// digits for everything would read mechanically.
+const WORDS = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"];
+function word(n: number): string {
+  if (n < 0) return String(n);
+  if (n < WORDS.length) return WORDS[n];
+  return String(n);
+}
+function wordLower(n: number): string {
+  return word(n).toLowerCase();
+}
+
+function firstName(displayName: string | null): string | null {
+  const trimmed = (displayName ?? "").trim();
+  if (!trimmed) return null;
+  return trimmed.split(/\s+/)[0] || null;
+}
+
+function minutesPhrase(mins: number): string {
+  if (mins <= 0) return "a few minutes";
+  if (mins < 60) return `About ${mins} minutes`;
+  const hours = Math.round(mins / 60);
+  return hours === 1 ? "About 1 hour" : `About ${hours} hours`;
+}
+
+function duePhrase(iso: string | null): string {
+  if (!iso) return "No deadline";
+  return `Due ${fmtDate(iso, "short")}`;
+}
+
+function pluralDocs(n: number): string {
+  return n === 1 ? "document" : "documents";
+}
+
+// "Up next" is the first unsigned, non-locked item. A later part is
+// locked when any predecessor part on the SAME doc_id (same cycle,
+// lower obligation_key order) is unsigned. The queue is pre-sorted by
+// the loader; the predecessor map is built from the queue itself.
+function buildLockMap(queue: QueueItem[]): Map<string | number, QueueItem> {
+  // For each item, find the first unsigned predecessor on the same doc
+  // whose part_number is lower, if any. The loader groups the parts and
+  // orders them; we scan each doc_id's items in order.
+  const byDoc = new Map<string, QueueItem[]>();
+  for (const q of queue) {
+    const list = byDoc.get(q.doc_id) ?? [];
+    list.push(q);
+    byDoc.set(q.doc_id, list);
+  }
+  const lockedBy = new Map<string | number, QueueItem>();
+  for (const [, list] of byDoc) {
+    // list is already in queue order; iterate and record the latest
+    // unsigned seen as the predecessor of every later item.
+    let lastUnsigned: QueueItem | null = null;
+    for (const item of list) {
+      if (lastUnsigned && !item.signed) {
+        lockedBy.set(item.requirement_id, lastUnsigned);
+      }
+      if (!item.signed && lastUnsigned === null) {
+        lastUnsigned = item;
+      }
+    }
+  }
+  return lockedBy;
+}
+
+function todayISO(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+export default async function Page() {
+  const { email } = await requireOwnerPage();
+  const result = await loadRoom(email);
+
+  if (!result.ok) {
+    return (
+      <div className="kf-sheet">
+        <IdentBand
+          eyebrow="Academy"
+          title="Status unavailable"
+          kick="Couldn't read your list."
+          status="failed"
+          pageName="To do"
+        />
+      </div>
+    );
+  }
+
+  const { viewer, queue, queueSummary } = result;
+  const name = firstName(viewer.displayName);
+  const remaining = queueSummary.remainingCount;
+  const totalMinutesRemaining = queueSummary.totalMinutesRemaining;
+
+  // First unsigned (actionable) item - carries the "Up next" pill and is
+  // the Continue CTA target.
+  const firstUnsigned = queue.find((q) => !q.signed) ?? null;
+
+  // Earliest due date among unsigned items.
+  const earliestDueISO = queue
+    .filter((q) => !q.signed && q.due_date)
+    .map((q) => q.due_date as string)
+    .sort((a, b) => a.localeCompare(b))[0] ?? null;
+
+  // All overdue: every unsigned item has a due_date, and all < today.
+  const today = todayISO();
+  const unsigned = queue.filter((q) => !q.signed);
+  const allOverdue =
+    unsigned.length > 0 &&
+    unsigned.every((q) => q.due_date != null && q.due_date < today);
+
+  const lockedBy = buildLockMap(queue);
+
+  const continueHref = firstUnsigned
+    ? `/academy/read/${firstUnsigned.requirement_id}`
+    : null;
+
+  // ─── Resting state (remaining = 0). All-set celebration deferred to
+  // train C per the prompt; without a clean "just-finished" signal we
+  // render the resting band always when remaining === 0.
+  if (remaining === 0) {
+    const nextCycleLine = result.nextCycle
+      ? `The next one shows up here when it is published.`
+      : `No next cycle is published yet.`;
+    const title = name ? `Nothing to do, ${name}` : "Nothing to do";
+    return (
+      <div className="kf-sheet">
+        <IdentBand
+          eyebrow="Academy"
+          title={title}
+          kick={`You are all set. ${nextCycleLine}`.slice(0, 60)}
+          cta={{ label: `Done (${viewer.record.signedAllTime})`, href: "/academy/done" }}
+        />
+        <IdentLine displayName={viewer.displayName} />
+        <PhoneStatus title={title} />
+        <RestingCard nextCycle={result.nextCycle} />
+        <Footer />
+      </div>
+    );
+  }
+
+  // ─── Past-due band. "Two things were due Nov 30, Kevin / They are
+  // still here. About 22 minutes, whenever you can." No red, no
+  // countdown (R-AC19).
+  const overduePhrase = allOverdue && earliestDueISO
+    ? `${word(remaining)} things were due ${fmtDate(earliestDueISO, "short")}${name ? `, ${name}` : ""}`
+    : null;
+
+  const normalTitle = name
+    ? `${word(remaining)} things to do, ${name}`
+    : `${word(remaining)} things to do`;
+  const bandTitle = overduePhrase ?? normalTitle;
+
+  const bandKick = allOverdue
+    ? `They are still here. ${minutesPhrase(totalMinutesRemaining)}, whenever you can.`
+    : `Read and sign ${wordLower(remaining)} ${pluralDocs(remaining)}. ${minutesPhrase(totalMinutesRemaining)}. ${duePhrase(earliestDueISO)}.`;
+  const bandKickCapped = bandKick.length > 60 ? bandKick.slice(0, 60) : bandKick;
+
   return (
-    <ReservedDoor
-      slug="academy"
-      one_line="What every role is expected to know and how to learn it."
-    />
+    <div className="kf-sheet">
+      <IdentBand
+        eyebrow="Academy"
+        title={bandTitle}
+        kick={bandKickCapped}
+        cta={continueHref ? { label: "Continue", href: continueHref } : undefined}
+      />
+      <IdentLine displayName={viewer.displayName} />
+      <PhoneStatus title={bandTitle} />
+      {viewer.record.firstRun ? (
+        <FirstVisitCard displayName={viewer.displayName} />
+      ) : null}
+      <ul className="kf-todo-list" aria-label="To do">
+        {queue.map((q) => {
+          const locked = lockedBy.get(q.requirement_id) ?? null;
+          const isUpNext = firstUnsigned?.requirement_id === q.requirement_id;
+          return (
+            <TodoRow
+              key={String(q.requirement_id)}
+              item={q}
+              locked={locked}
+              isUpNext={isUpNext}
+            />
+          );
+        })}
+      </ul>
+      <p className="kf-sheet-footer">
+        Your place in a document is saved. Nothing is recorded until you sign.
+      </p>
+    </div>
+  );
+}
+
+function IdentLine({ displayName }: { displayName: string | null }) {
+  const nameFull = (displayName ?? "").trim() || "You";
+  return (
+    <p className="kf-ident-line" aria-label="Account">
+      <span className="kf-ident-line__who">{nameFull}</span>
+      <span className="kf-ident-line__sep" aria-hidden>-</span>
+      <span>Not you?</span>
+      <a href="/api/auth/signout" className="kf-ident-line__switch">
+        Switch
+      </a>
+    </p>
+  );
+}
+
+function PhoneStatus({ title }: { title: string }) {
+  return (
+    <p className="kf-pstatus" aria-label="Status">
+      {title}
+    </p>
+  );
+}
+
+function TodoRow({
+  item,
+  locked,
+  isUpNext,
+}: {
+  item: QueueItem;
+  locked: QueueItem | null;
+  isUpNext: boolean;
+}) {
+  const title = item.doc_title;
+  const subParts: string[] = [];
+  if (item.card_line) subParts.push(item.card_line);
+  else {
+    const partsLabel = item.total_parts > 1 ? `Part ${item.part_number} of ${item.total_parts}` : null;
+    if (partsLabel) subParts.push(partsLabel);
+    if (item.est_minutes > 0) subParts.push(`${item.est_minutes} min`);
+  }
+  const sub = subParts.join(" - ");
+
+  if (item.signed) {
+    // Signed items in the queue (if the loader returns any) link to the
+    // Done ledger, not the reader.
+    return (
+      <li>
+        <Link
+          href="/academy/done"
+          className="kf-todo-row kf-todo-row--signed"
+          aria-label={`${title}, signed`}
+        >
+          <div className="kf-todo-row__text">
+            <span className="kf-todo-row__title">{title}</span>
+            <span className="kf-todo-row__sub">
+              {item.certificate_serial ? `Certificate ${item.certificate_serial}` : "Signed"}
+            </span>
+          </div>
+          <span className="kf-todo-row__chev" aria-hidden>
+            <ChevronRight size={20} strokeWidth={1.5} />
+          </span>
+        </Link>
+      </li>
+    );
+  }
+
+  if (locked) {
+    const predecessorLabel =
+      locked.total_parts > 1 ? `After Part ${locked.part_number}` : `After ${locked.doc_title}`;
+    return (
+      <li>
+        <div
+          className="kf-todo-row kf-todo-row--locked"
+          aria-label={`${title}, locked until the earlier part is signed`}
+          aria-disabled="true"
+        >
+          <div className="kf-todo-row__text">
+            <span className="kf-todo-row__title">{title}</span>
+            <span className="kf-todo-row__sub">{sub || "Reading"}</span>
+            <span className="kf-todo-row__flags">
+              <span className="kf-pill kf-pill--muted">{predecessorLabel}</span>
+            </span>
+          </div>
+          <span className="kf-todo-row__chev" aria-hidden>
+            <ChevronRight size={20} strokeWidth={1.5} />
+          </span>
+        </div>
+      </li>
+    );
+  }
+
+  // Actionable row.
+  return (
+    <li>
+      <Link
+        href={`/academy/read/${item.requirement_id}`}
+        className="kf-todo-row"
+        aria-label={title}
+      >
+        <div className="kf-todo-row__text">
+          <span className="kf-todo-row__title">{title}</span>
+          <span className="kf-todo-row__sub">{sub || "Reading"}</span>
+          {isUpNext ? (
+            <span className="kf-todo-row__flags">
+              <span className="kf-pill kf-pill--up-next">Up next</span>
+            </span>
+          ) : null}
+        </div>
+        <span className="kf-todo-row__chev" aria-hidden>
+          <ChevronRight size={20} strokeWidth={1.5} />
+        </span>
+      </Link>
+    </li>
+  );
+}
+
+function RestingCard({ nextCycle }: { nextCycle: { label: string; period_start: string } | null }) {
+  const kick = nextCycle
+    ? `Next cycle: ${nextCycle.label}. Starts ${fmtDate(nextCycle.period_start, "short")}.`
+    : "Nothing is scheduled yet.";
+  return (
+    <section className="kf-state" aria-label="At rest">
+      <p className="kf-state__title">You are current</p>
+      <p className="kf-state__body">{kick}</p>
+    </section>
+  );
+}
+
+function Footer() {
+  return (
+    <p className="kf-sheet-footer">
+      Your record is permanent. Nothing is recorded until you sign.
+    </p>
   );
 }
