@@ -20,6 +20,7 @@
 // Dependency: pdf-lib.
 
 import { PDFDocument, StandardFonts, rgb, type PDFFont } from "pdf-lib";
+import { extractModuleTitleFromAttestationText } from "./attestation";
 
 // Brand palette.
 const NAVY = rgb(15 / 255, 48 / 255, 87 / 255); // #0f3057
@@ -158,16 +159,23 @@ export async function createCertificatePdf({
   });
   cursor -= 26;
 
-  // The large "has completed" line is the MODULE title, derived from
-  // the obligation's source_section by the same partShortTitle logic
-  // the room uses. If no module title can be derived (missing
-  // obligation row or empty source_section), the document title
-  // stands in. Never obligation_key - spec 18.3 prohibits it in
-  // operator-facing copy, and a printed certificate is the strongest
-  // case of operator-facing.
-  const derivedModule = partShortTitle(obligation?.source_section || "");
+  // The large "has completed" line is the MODULE title. Read it OUT
+  // of the stored attestation sentence rather than re-deriving at
+  // render time: the stored sentence is immutable, so this keeps a
+  // certificate's header and body internally consistent across time
+  // even after the module-title derivation rule changes. If the
+  // regex does not match (stored sentence used the document-only
+  // fallback form), the document title stands in. Never
+  // obligation_key - spec 18.3 prohibits it in operator-facing copy,
+  // and a printed certificate is the strongest case of operator-
+  // facing. Keep `obligation` as a type-only input today; a future
+  // signature-less preview path would re-derive via
+  // moduleTitleForAttestation(obligation).
+  void obligation;
+  const extractedModule = extractModuleTitleFromAttestationText(attestation.attestation_text);
   const docTitle = String(doc?.title || "").trim();
-  const moduleTitle = derivedModule || docTitle || attestation.doc_id || "-";
+  const moduleTitle = extractedModule || docTitle || attestation.doc_id || "-";
+  const derivedModule = extractedModule;
   const modSize = 15;
   const modW = fontBold.widthOfTextAtSize(moduleTitle, modSize);
   page.drawText(moduleTitle, {
