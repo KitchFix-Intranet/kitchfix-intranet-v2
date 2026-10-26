@@ -17,6 +17,12 @@ import { resolveAcademyIdentity } from "@/lib/academy/identity";
 import { createCertificatePdf } from "@/lib/academy/certificate";
 
 export const dynamic = "force-dynamic";
+// Pin the Node runtime: pdf-lib depends on Node streams / Buffer and
+// the serverExternalPackages setting in next.config.ts only applies
+// to functions on the Node runtime. A future default change to Edge
+// would silently break certificate rendering; this makes the pin
+// explicit at the route.
+export const runtime = "nodejs";
 
 const UUID_RE =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;

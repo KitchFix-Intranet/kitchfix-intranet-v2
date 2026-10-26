@@ -30,8 +30,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireOwnerApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
 import { resolveAcademyIdentity } from "@/lib/academy/identity";
-import { buildAttestationSentence } from "@/lib/academy/attestation";
-import { partShortTitle } from "@/lib/academy/certificate";
+import {
+  buildAttestationSentence,
+  moduleTitleForAttestation,
+} from "@/lib/academy/attestation";
 import { UUID_RE } from "@/lib/academy/module";
 
 export const dynamic = "force-dynamic";
@@ -262,7 +264,7 @@ export async function POST(request: NextRequest) {
       .maybeSingle(),
     supa
       .from("academy_obligations")
-      .select("doc_id, obligation_key, source_section")
+      .select("doc_id, obligation_key, source_section, description")
       .eq("doc_id", req.doc_id)
       .eq("obligation_key", req.obligation_key)
       .maybeSingle(),
@@ -276,8 +278,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "server_error", scope: "obl_for_text" }, { status: 500 });
   }
   const docRow = docQ.data as { id: string; title: string | null; version: string | number | null } | null;
-  const oblRow = oblQ.data as { source_section: string | null } | null;
-  const moduleTitle = partShortTitle(oblRow?.source_section || "");
+  const oblRow = oblQ.data as { source_section: string | null; description: string | null } | null;
+  // moduleTitleForAttestation handles both cases: single-section
+  // obligations still get the section heading; multi-section ones
+  // get the module name derived from the obligation description's
+  // lead clause. Falls back to empty when neither path can produce
+  // a safe title, and buildAttestationSentence then emits the
+  // document-only form.
+  const moduleTitle = moduleTitleForAttestation({
+    sourceSection: oblRow?.source_section,
+    description: oblRow?.description,
+  });
   const attestationText = buildAttestationSentence({
     displayName: identity.displayName,
     moduleTitle: moduleTitle || null,
