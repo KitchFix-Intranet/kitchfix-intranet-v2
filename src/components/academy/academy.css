@@ -309,3 +309,372 @@
   margin-bottom: var(--sp-sp-3);
 }
 .kf-reader-stub__body { color: var(--sp-muted); font-size: var(--sp-t-body); margin-bottom: var(--sp-sp-5); }
+
+/* ---------- Reader pane (R-AC13) ---------- */
+/*
+ * The pane is a bounded card inside the learner sheet. Header stays
+ * put; the step body scrolls inside; Back/Next sit on the pane floor.
+ * One section per page; the engine pre-split the content into ~600-word
+ * steps, so the body never gets so tall that the user loses the chrome.
+ */
+.kf-reader {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 60vh;
+  max-height: calc(100dvh - var(--sp-topbar) - var(--sp-sp-7));
+}
+.kf-reader__head {
+  padding: var(--sp-sp-4) var(--sp-sp-5);
+  border-bottom: 1px solid var(--sp-line);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-sp-3);
+  align-items: center;
+}
+.kf-reader__head-text { min-width: 0; }
+.kf-reader__title {
+  font-family: var(--sp-ui);
+  font-weight: 800;
+  font-size: var(--sp-t-h3);
+  color: var(--sp-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kf-reader__sub {
+  color: var(--sp-muted);
+  font-size: var(--sp-t-table);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kf-reader__head-right {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-3);
+}
+.kf-reader__minutes {
+  font-family: var(--sp-ui);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--sp-navy);
+}
+/*
+ * Position bar - thin line under the header. --w is a per-render CSS
+ * variable the client sets to currentIndex / totalSteps.
+ */
+.kf-reader__progress {
+  position: relative;
+  height: 2px;
+  background: var(--sp-line-soft);
+}
+.kf-reader__progress::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: calc(var(--w, 0) * 100%);
+  background: var(--sp-navy);
+  transition: width var(--sp-base) var(--sp-ease);
+}
+.kf-reader__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-4);
+}
+/*
+ * Prose inside the pane. The engine renders markdown-ish HTML; we style
+ * only the shapes it actually emits (h1-h3, p, ul, ol, li, strong, em,
+ * a). No raw hex; everything through tokens.
+ */
+.kf-reader__prose {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  color: var(--sp-body);
+  line-height: 1.6;
+}
+.kf-reader__prose h1,
+.kf-reader__prose h2,
+.kf-reader__prose h3 {
+  font-family: var(--sp-ui);
+  color: var(--sp-ink);
+  margin: var(--sp-sp-5) 0 var(--sp-sp-2);
+  line-height: 1.25;
+}
+.kf-reader__prose h1 { font-size: var(--sp-t-h1); font-weight: 800; }
+.kf-reader__prose h2 { font-size: var(--sp-t-h3); font-weight: 800; }
+.kf-reader__prose h3 { font-size: var(--sp-t-body); font-weight: 800; }
+.kf-reader__prose p { margin: 0 0 var(--sp-sp-3); }
+.kf-reader__prose ul,
+.kf-reader__prose ol { margin: 0 0 var(--sp-sp-3) var(--sp-sp-5); padding: 0; }
+.kf-reader__prose li { margin: var(--sp-sp-1) 0; }
+.kf-reader__prose a { color: var(--sp-link); text-decoration: underline; }
+.kf-reader__prose strong { color: var(--sp-ink); }
+.kf-reader__step-title {
+  font-family: var(--sp-disp);
+  text-transform: uppercase;
+  font-weight: 800;
+  letter-spacing: .2px;
+  line-height: 1;
+  font-size: var(--sp-t-h1);
+  color: var(--sp-ink);
+  margin: 0 0 var(--sp-sp-4);
+}
+.kf-reader__foot {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--sp-sp-3);
+  align-items: center;
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  border-top: 1px solid var(--sp-line);
+  background: var(--sp-raise);
+}
+.kf-reader__counter {
+  text-align: center;
+  font-family: var(--sp-ui);
+  color: var(--sp-muted);
+  font-size: var(--sp-t-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Check card (R-AC14) ---------- */
+.kf-check {
+  background: var(--sp-raise);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  padding: var(--sp-sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+}
+.kf-check__eyebrow {
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-micro);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--sp-navy);
+}
+.kf-check__prompt {
+  font-family: var(--sp-ui);
+  font-weight: 700;
+  font-size: var(--sp-t-body);
+  color: var(--sp-ink);
+}
+.kf-check__options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+}
+.kf-check__opt {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-sp-3);
+  min-height: var(--sp-floor-chef);
+  padding: var(--sp-sp-3);
+  background: var(--sp-card);
+  color: var(--sp-ink);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-ctl);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--sp-fast) var(--sp-ease), border-color var(--sp-fast) var(--sp-ease);
+}
+.kf-check__opt:hover:not(:disabled) { background: var(--sp-sky-tint); border-color: var(--sp-sky-line); }
+.kf-check__opt:disabled { opacity: 0.75; cursor: not-allowed; }
+.kf-check__opt--correct { background: var(--sp-good-bg); border-color: var(--sp-good); color: var(--sp-ink); }
+.kf-check__opt--wrong   { background: var(--sp-warn-bg); border-color: var(--sp-warn-strong); color: var(--sp-ink); }
+.kf-check__opt-ltr {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  border-radius: var(--sp-r-pill);
+  background: var(--sp-navy);
+  color: var(--sp-on-navy);
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-micro);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-transform: uppercase;
+}
+.kf-check__verdict {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  padding: var(--sp-sp-3);
+  border-radius: var(--sp-r-sm);
+  color: var(--sp-ink);
+}
+.kf-check__verdict--correct { background: var(--sp-good-bg); color: var(--sp-good); }
+.kf-check__verdict--wrong   { background: var(--sp-warn-bg); color: var(--sp-warn); }
+
+/* ---------- Sections menu (R-AC13 outline) ---------- */
+.kf-sections {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  box-shadow: var(--sp-shadow-float);
+  padding: var(--sp-sp-3);
+  list-style: none;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kf-sections__item {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: var(--sp-sp-3);
+  align-items: center;
+  min-height: var(--sp-floor-chef);
+  padding: 0 var(--sp-sp-3);
+  background: transparent;
+  color: var(--sp-ink);
+  border: none;
+  border-radius: var(--sp-r-sm);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  text-align: left;
+  cursor: pointer;
+}
+.kf-sections__item:hover { background: var(--sp-raise); }
+.kf-sections__item--active { background: var(--sp-sky-tint); color: var(--sp-navy); font-weight: 700; }
+.kf-sections__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--sp-r-pill);
+  background: var(--sp-line);
+}
+.kf-sections__item--seen .kf-sections__dot { background: var(--sp-good); }
+.kf-sections__item--active .kf-sections__dot { background: var(--sp-navy); }
+.kf-sections__meta {
+  color: var(--sp-muted);
+  font-size: var(--sp-t-micro);
+  font-variant-numeric: tabular-nums;
+}
+.kf-sections__label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+
+/* ---------- Sign block (R-AC15) ---------- */
+.kf-sign {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-4);
+}
+.kf-sign__identity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  font-family: var(--sp-ui);
+  color: var(--sp-muted);
+  font-size: var(--sp-t-table);
+}
+.kf-sign__identity-who { color: var(--sp-ink); font-weight: 700; }
+.kf-sign__identity-switch {
+  color: var(--sp-link);
+  font-weight: 700;
+  text-decoration: none;
+  min-height: var(--sp-floor-chef);
+  display: inline-flex;
+  align-items: center;
+}
+.kf-sign__identity-switch:hover { text-decoration: underline; }
+.kf-sign__sentence {
+  font-family: var(--sp-ui);
+  color: var(--sp-body);
+  font-size: var(--sp-t-body);
+  line-height: 1.5;
+  padding: var(--sp-sp-4);
+  background: var(--sp-raise);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+}
+.kf-sign__field { display: flex; flex-direction: column; gap: var(--sp-sp-2); }
+.kf-sign__label {
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-micro);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--sp-navy);
+}
+.kf-sign__input {
+  min-height: var(--sp-floor-chef);
+  padding: 0 var(--sp-sp-4);
+  background: var(--sp-card);
+  color: var(--sp-ink);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-ctl);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+}
+.kf-sign__input:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; border-color: var(--sp-navy); }
+.kf-sign__hint {
+  color: var(--sp-muted);
+  font-size: var(--sp-t-micro);
+}
+.kf-sign__row { display: flex; justify-content: flex-end; }
+/* The Sign button is the largest control on the surface. */
+.kf-sign__cta {
+  min-height: 56px;
+  font-size: var(--sp-t-h3);
+  padding: 0 var(--sp-sp-6);
+}
+
+/* Open-checks state on the sign page */
+.kf-sign-open {
+  padding: var(--sp-sp-5);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+}
+
+/* ---------- Write-failed states ---------- */
+.kf-write-failed {
+  background: var(--sp-warn-bg);
+  border: 1px solid var(--sp-warn-strong);
+  border-radius: var(--sp-r-card);
+  padding: var(--sp-sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+}
+.kf-write-failed__title { font-family: var(--sp-ui); font-weight: 800; color: var(--sp-warn); font-size: var(--sp-t-body); }
+.kf-write-failed__body  { color: var(--sp-body); font-size: var(--sp-t-body); }
+.kf-write-failed__row   { display: flex; gap: var(--sp-sp-2); margin-top: var(--sp-sp-2); flex-wrap: wrap; }
+
+/* ---------- Receipt panel (after a successful sign) ---------- */
+.kf-after-sign {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-4);
+  animation: kf-rise var(--sp-rise) var(--sp-ease) both;
+}
+.kf-after-sign__next {
+  display: flex;
+  gap: var(--sp-sp-3);
+  flex-wrap: wrap;
+}
+@keyframes kf-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kf-after-sign { animation: none; }
+}
+
+/* ---------- All set celebration (closes train B deferral) ---------- */
+/* Reuses kf-allset from train B; nothing new needed here. */
+

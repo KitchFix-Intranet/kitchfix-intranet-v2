@@ -2,13 +2,15 @@
 // requirements as a one-column sheet inside the shared shell, from
 // loadRoom(email). States: first-visit welcome (dismissed client-side),
 // past-due band, resting (nothing to do, next cycle exists), the
-// read-failed band path, and the normal "N things to do" state.
+// read-failed band path, All-set celebration (train C), and the
+// normal "N things to do" state.
 //
-// The "All set" celebration (R-AC7/R-AC11) does not have a clean signal
-// in RoomBody today - without one, we fall back to the resting band
-// when remainingCount === 0, per the prompt's "if there is no clean
-// signal, flag it and render the resting state, and we add the signal
-// in train C". Flagged in the PR body.
+// All-set signal (closes the train B deferral): when the Reader
+// completes the last open requirement it redirects to
+// /academy?signed=<requirementId>. If the param is present AND the
+// queue is now empty, we render the celebration card once; a plain
+// visit with an empty queue renders the resting band. This is a
+// transient URL signal, not a persisted flag.
 
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
@@ -90,8 +92,14 @@ function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-export default async function Page() {
+type PageProps = {
+  searchParams: Promise<{ signed?: string | string[] }>;
+};
+
+export default async function Page({ searchParams }: PageProps) {
   const { email } = await requireOwnerPage();
+  const sp = await searchParams;
+  const justSigned = Array.isArray(sp.signed) ? sp.signed[0] : sp.signed;
   const result = await loadRoom(email);
 
   if (!result.ok) {
@@ -136,14 +144,36 @@ export default async function Page() {
     ? `/academy/read/${firstUnsigned.requirement_id}`
     : null;
 
-  // ─── Resting state (remaining = 0). All-set celebration deferred to
-  // train C per the prompt; without a clean "just-finished" signal we
-  // render the resting band always when remaining === 0.
+  // ─── Resting state (remaining = 0). With a transient ?signed=<id>
+  // param (set by the Reader when the final sign succeeds), show
+  // the one celebration card instead of the plain resting band.
+  // The signal is in the URL and gone on the next plain load - no
+  // persisted flag, per R-AC7/R-AC11.
   if (remaining === 0) {
     const nextCycleLine = result.nextCycle
       ? `The next one shows up here when it is published.`
       : `No next cycle is published yet.`;
     const title = name ? `Nothing to do, ${name}` : "Nothing to do";
+    if (justSigned) {
+      const celebrationTitle = name ? `That is everything, ${name}` : "That is everything";
+      return (
+        <div className="kf-sheet">
+          <IdentBand
+            eyebrow="Academy"
+            title={celebrationTitle}
+            kick="Nothing waiting. Your record is permanent."
+            cta={{ label: `Done (${viewer.record.signedAllTime})`, href: "/academy/done" }}
+          />
+          <IdentLine displayName={viewer.displayName} />
+          <PhoneStatus title={celebrationTitle} />
+          <AllSetCard
+            signedAllTime={viewer.record.signedAllTime}
+            nextCycle={result.nextCycle}
+          />
+          <Footer />
+        </div>
+      );
+    }
     return (
       <div className="kf-sheet">
         <IdentBand
@@ -233,6 +263,18 @@ function PhoneStatus({ title }: { title: string }) {
   );
 }
 
+function partShortTitle(sourceSection: string | null | undefined): string {
+  const src = String(sourceSection || "").trim();
+  if (!src) return "";
+  const first = src.split(/;/, 1)[0].trim();
+  if (!first) return "";
+  const MAX = 40;
+  if (first.length <= MAX) return first;
+  const cut = first.slice(0, MAX);
+  const lastSp = cut.lastIndexOf(" ");
+  return (lastSp > 20 ? cut.slice(0, lastSp) : cut).replace(/[\s,.·-]+$/, "") + "…";
+}
+
 function TodoRow({
   item,
   locked,
@@ -244,12 +286,18 @@ function TodoRow({
 }) {
   const title = item.doc_title;
   const subParts: string[] = [];
-  if (item.card_line) subParts.push(item.card_line);
-  else {
-    const partsLabel = item.total_parts > 1 ? `Part ${item.part_number} of ${item.total_parts}` : null;
-    if (partsLabel) subParts.push(partsLabel);
-    if (item.est_minutes > 0) subParts.push(`${item.est_minutes} min`);
+  // Multi-part docs: lead with the module label (same string Done
+  // uses). Lets a reader tell "Part 1: Origin" from "Part 2:
+  // Standard" at a glance instead of two identical rows. Section-7
+  // fix.
+  if (item.total_parts > 1) {
+    const module = partShortTitle(item.source_section);
+    if (module) subParts.push(`Part ${item.part_number} of ${item.total_parts} - ${module}`);
+    else subParts.push(`Part ${item.part_number} of ${item.total_parts}`);
+  } else if (item.card_line) {
+    subParts.push(item.card_line);
   }
+  if (item.est_minutes > 0) subParts.push(`${item.est_minutes} min`);
   const sub = subParts.join(" - ");
 
   if (item.signed) {
@@ -323,6 +371,28 @@ function TodoRow({
         </span>
       </Link>
     </li>
+  );
+}
+
+function AllSetCard({
+  signedAllTime,
+  nextCycle,
+}: {
+  signedAllTime: number;
+  nextCycle: { label: string; period_start: string } | null;
+}) {
+  const body = nextCycle
+    ? `${signedAllTime} signature${signedAllTime === 1 ? "" : "s"} on record. Next cycle: ${nextCycle.label}.`
+    : `${signedAllTime} signature${signedAllTime === 1 ? "" : "s"} on record. Nothing is scheduled yet.`;
+  return (
+    <section className="kf-allset" aria-label="All set">
+      <span className="kf-allset__eyebrow">All set</span>
+      <h2 className="kf-allset__title">That is everything</h2>
+      <p className="kf-allset__body">{body}</p>
+      <Link href="/academy/done" className="kf-btn kf-btn--primary">
+        <span>See your record</span>
+      </Link>
+    </section>
   );
 }
 
