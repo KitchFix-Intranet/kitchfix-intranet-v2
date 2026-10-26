@@ -19,6 +19,8 @@ import {
   FileText,
   Image as ImageIcon,
   LayoutGrid,
+  CheckCircle2,
+  ListTodo,
 } from "lucide-react";
 import { AccountMenu } from "./AccountMenu";
 import "./shell.css";
@@ -49,6 +51,15 @@ const STOCKPOT_NAV: NavItem[] = [
   { href: "/stockpot/signs", label: "Signs & labels", Icon: ImageIcon },
 ];
 
+// Academy-level nav. Train B ships To do + Done. Team and Admin arrive in
+// later trains; do not add dead items here. R-AC5: the shell-level phone
+// tabbar stays Home / Stockpot / People / Ops / Menu; the Academy level
+// does NOT get its own phone tabbar.
+const ACADEMY_NAV: NavItem[] = [
+  { href: "/academy", label: "To do", Icon: ListTodo },
+  { href: "/academy/done", label: "Done", Icon: CheckCircle2 },
+];
+
 const PHONE_SHELL_TABS: Array<NavItem | { kind: "menu" }> = [
   { href: "/", label: "Home", Icon: HomeIcon },
   { href: "/stockpot", label: "Stockpot", Icon: ChefHat },
@@ -68,6 +79,9 @@ const PHONE_STOCKPOT_TABS: Array<NavItem | { kind: "menu" }> = [
 function isStockpotRoute(pathname: string): boolean {
   return pathname === "/stockpot" || pathname.startsWith("/stockpot/");
 }
+function isAcademyRoute(pathname: string): boolean {
+  return pathname === "/academy" || pathname.startsWith("/academy/");
+}
 function isActive(pathname: string, href: string): boolean {
   if (href === "/") return pathname === "/";
   return pathname === href || pathname.startsWith(href + "/");
@@ -80,12 +94,18 @@ type Props = {
   name: string;
   title: string;
   crumb?: ReactNode;
+  // Count of remaining Academy requirements for the viewer. The server
+  // layout computes this only on academy routes (one extra query);
+  // elsewhere it is null and the badge never renders.
+  todoCount?: number | null;
 };
 
-export function Shell({ children, topbar, email, name, title, crumb }: Props) {
+export function Shell({ children, topbar, email, name, title, crumb, todoCount = null }: Props) {
   const pathname = usePathname();
   const inStockpot = isStockpotRoute(pathname);
-  const nav = inStockpot ? STOCKPOT_NAV : SHELL_NAV;
+  const inAcademy = isAcademyRoute(pathname);
+  const nav = inStockpot ? STOCKPOT_NAV : inAcademy ? ACADEMY_NAV : SHELL_NAV;
+  // R-AC5: phone tabbar stays shell-level even inside Academy.
   const phoneTabs = inStockpot ? PHONE_STOCKPOT_TABS : PHONE_SHELL_TABS;
 
   const [collapsed, setCollapsed] = useState(false);
@@ -140,7 +160,7 @@ export function Shell({ children, topbar, email, name, title, crumb }: Props) {
           </button>
         </div>
 
-        {inStockpot ? (
+        {inStockpot || inAcademy ? (
           <>
             <Link href="/" className="kf-rail__back">
               <span className="kf-rail__back-ico" aria-hidden>
@@ -149,26 +169,36 @@ export function Shell({ children, topbar, email, name, title, crumb }: Props) {
               <span className="kf-rail__back-label">All tools</span>
             </Link>
             <div className="kf-rail__section" aria-hidden>
-              <span>Stockpot</span>
+              <span>{inStockpot ? "Stockpot" : "Academy"}</span>
             </div>
           </>
         ) : null}
 
         <nav className="kf-rail__nav">
           <ul>
-            {nav.map(({ href, label, Icon, liveDot }) => (
-              <li key={href}>
-                <Link
-                  href={href}
-                  className={`kf-rail__item${isActive(pathname, href) ? " kf-rail__item--active" : ""}`}
-                  title={label}
-                >
-                  <Icon size={20} strokeWidth={1.5} />
-                  <span className="kf-rail__label">{label}</span>
-                  {liveDot ? <span className="kf-rail__dot" aria-label="live" /> : null}
-                </Link>
-              </li>
-            ))}
+            {nav.map(({ href, label, Icon, liveDot }) => {
+              // Rail count badge: Academy To do only, when > 0.
+              const showCount =
+                inAcademy && href === "/academy" && typeof todoCount === "number" && todoCount > 0;
+              return (
+                <li key={href}>
+                  <Link
+                    href={href}
+                    className={`kf-rail__item${isActive(pathname, href) ? " kf-rail__item--active" : ""}`}
+                    title={label}
+                  >
+                    <Icon size={20} strokeWidth={1.5} />
+                    <span className="kf-rail__label">{label}</span>
+                    {liveDot ? <span className="kf-rail__dot" aria-label="live" /> : null}
+                    {showCount ? (
+                      <span className="kf-rail__count" aria-label={`${todoCount} to do`}>
+                        {todoCount}
+                      </span>
+                    ) : null}
+                  </Link>
+                </li>
+              );
+            })}
           </ul>
         </nav>
 

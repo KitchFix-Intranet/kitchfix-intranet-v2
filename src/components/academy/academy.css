@@ -1,0 +1,311 @@
+/*
+ * Academy learner CSS. Scoped to the To do / Done / All set surfaces (R-AC12
+ * one-column sheet, max --sp-sheet-max). Every value is a token; no literal
+ * hex, no literal duration.
+ */
+
+/* ---------- Sheet (R-AC12) ---------- */
+.kf-sheet {
+  max-width: var(--sp-sheet-max);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-5);
+}
+
+/* ---------- Identity line (phone + slim-rail only). R-AC15: the full
+ * desktop rail already names the viewer in its account row, so the
+ * identity line only renders where the rail is hidden/collapsed. */
+.kf-ident-line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sp-3);
+  font-family: var(--sp-ui);
+  color: var(--sp-muted);
+  font-size: var(--sp-t-table);
+}
+.kf-ident-line__who { color: var(--sp-ink); font-weight: 700; }
+.kf-ident-line__sep { color: var(--sp-line); }
+.kf-ident-line__switch {
+  color: var(--sp-link);
+  font-weight: 700;
+  text-decoration: none;
+  min-height: var(--sp-floor-chef);
+  display: inline-flex;
+  align-items: center;
+}
+.kf-ident-line__switch:hover { text-decoration: underline; }
+@media (min-width: 861px) {
+  /* Desktop with the full rail: the account row names the viewer, so the
+   * learner-sheet ident line hides. Slim-rail collapses the account row
+   * to an avatar + email-less state, so the ident line comes back - the
+   * shell marks slim mode with .kf-shell--slim on its wrapper. */
+  .kf-ident-line { display: none; }
+  .kf-shell--slim .kf-ident-line { display: flex; }
+}
+
+/* ---------- Phone status line (replaces the band on phone). Follows the
+ * Overview "kf-only-phone action block" pattern. */
+.kf-pstatus {
+  display: none;
+}
+@media (max-width: 860px) {
+  .kf-pstatus {
+    display: block;
+    font-family: var(--sp-ui);
+    font-size: var(--sp-t-body);
+    color: var(--sp-ink);
+    padding: var(--sp-sp-3) 0 0;
+  }
+  .kf-pstatus__who { color: var(--sp-ink); font-weight: 700; }
+}
+
+/* ---------- To do list ---------- */
+.kf-todo-list {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  overflow: hidden;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.kf-todo-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-sp-3);
+  min-height: 72px;
+  padding: var(--sp-sp-3) var(--sp-sp-5);
+  border-top: 1px solid var(--sp-line-soft);
+  color: var(--sp-ink);
+  text-decoration: none;
+  background: var(--sp-card);
+  transition: background var(--sp-fast) var(--sp-ease);
+}
+.kf-todo-row:first-child { border-top: 0; }
+.kf-todo-row:hover,
+.kf-todo-row:focus-visible { background: var(--sp-raise); text-decoration: none; }
+.kf-todo-row__text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+}
+.kf-todo-row__title {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-item);
+  font-weight: 700;
+  color: var(--sp-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.kf-todo-row__sub {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  color: var(--sp-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.kf-todo-row__flags {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  margin-top: var(--sp-sp-1);
+}
+.kf-todo-row__chev {
+  color: var(--sp-muted);
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--sp-floor-chef);
+  height: var(--sp-floor-chef);
+}
+.kf-todo-row--locked {
+  opacity: 0.6;
+  cursor: default;
+  pointer-events: none;
+}
+.kf-todo-row--locked .kf-todo-row__chev { opacity: 0.5; }
+.kf-todo-row--signed .kf-todo-row__title { color: var(--sp-good); }
+
+/* "Up next" pill - the next-actionable row carries this. Sky-tint, navy,
+ * not red (R-AC19). */
+.kf-pill--up-next { background: var(--sp-sky-tint); color: var(--sp-navy); }
+
+/* ---------- Footer line ---------- */
+.kf-sheet-footer {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  text-align: center;
+  padding: 0 var(--sp-sp-5);
+}
+
+/* ---------- First-visit welcome card ---------- */
+.kf-firstvisit {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  padding: var(--sp-sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+}
+.kf-firstvisit__title {
+  font-family: var(--sp-ui);
+  font-weight: 800;
+  font-size: 17px;
+  color: var(--sp-ink);
+}
+.kf-firstvisit__body {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  color: var(--sp-body);
+}
+.kf-firstvisit__row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ---------- All set celebration card ---------- */
+.kf-allset {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  padding: var(--sp-sp-6);
+  text-align: center;
+  animation: kf-allset-rise var(--sp-rise) var(--sp-ease) both;
+}
+.kf-allset__eyebrow {
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-label);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--sp-navy);
+  display: block;
+  margin-bottom: var(--sp-sp-3);
+}
+.kf-allset__title {
+  font-family: var(--sp-disp);
+  font-weight: 800;
+  font-size: var(--sp-t-h1);
+  color: var(--sp-ink);
+  text-transform: uppercase;
+  letter-spacing: .2px;
+  line-height: 1;
+  margin-bottom: var(--sp-sp-3);
+}
+.kf-allset__body {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  color: var(--sp-body);
+  margin-bottom: var(--sp-sp-4);
+}
+@keyframes kf-allset-rise {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kf-allset { animation: none; }
+}
+
+/* ---------- Receipt (component) ---------- */
+/* R-AC17: title-first, white with the angled sky stripe. Three sizes;
+ * train B ships "full" (Done) and "row" (All set) and leaves "compact"
+ * for later. */
+.kf-receipt {
+  position: relative;
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  padding: var(--sp-sp-5);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+}
+.kf-receipt::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -40px;
+  width: 240px;
+  height: 100%;
+  background: var(--sp-sky-tint);
+  transform: skewX(-30deg);
+  z-index: 0;
+  opacity: 0.65;
+}
+.kf-receipt > * { position: relative; z-index: 1; }
+.kf-receipt__title {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-item);
+  font-weight: 800;
+  color: var(--sp-ink);
+}
+.kf-receipt__module {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  color: var(--sp-body);
+}
+.kf-receipt__ref {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  font-variant-numeric: tabular-nums;
+}
+.kf-receipt__cta {
+  margin-top: var(--sp-sp-2);
+  align-self: flex-start;
+}
+
+/* Row variant (used in All set / future surfaces). */
+.kf-receipt--row {
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  gap: var(--sp-sp-1);
+}
+.kf-receipt--row::before { width: 160px; }
+.kf-receipt--row .kf-receipt__title { font-size: var(--sp-t-body); }
+
+/* ---------- Waived list ---------- */
+.kf-waived {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  padding: var(--sp-sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+}
+.kf-waived__row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+  padding: var(--sp-sp-3);
+  background: var(--sp-raise);
+  border-radius: var(--sp-r-sm);
+}
+.kf-waived__title { font-family: var(--sp-ui); font-weight: 700; color: var(--sp-ink); font-size: var(--sp-t-body); }
+.kf-waived__meta { color: var(--sp-muted); font-size: var(--sp-t-micro); font-variant-numeric: tabular-nums; }
+.kf-waived__reason { color: var(--sp-body); font-size: var(--sp-t-table); }
+
+/* ---------- Reader stub ---------- */
+.kf-reader-stub {
+  text-align: center;
+  padding: var(--sp-sp-7) var(--sp-sp-5);
+}
+.kf-reader-stub__title {
+  font-family: var(--sp-ui);
+  font-weight: 800;
+  font-size: 17px;
+  color: var(--sp-ink);
+  margin-bottom: var(--sp-sp-3);
+}
+.kf-reader-stub__body { color: var(--sp-muted); font-size: var(--sp-t-body); margin-bottom: var(--sp-sp-5); }

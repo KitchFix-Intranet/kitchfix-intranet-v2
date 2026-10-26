@@ -5,6 +5,7 @@ import { currentPeriod } from "@/lib/fiscalPeriod";
 import { fmtDate } from "@/lib/fmt";
 import { Shell } from "@/components/shell/Shell";
 import { RevealGate } from "@/components/ui/RevealGate";
+import { resolveAcademyIdentity } from "@/lib/academy/identity";
 
 // Topbar title + crumb map. One entry per route; a non-match falls back to
 // "KitchFix" with no crumb (the fallback used to render the raw pathname,
@@ -16,7 +17,9 @@ function titleFor(pathname: string, dateLong: string, periodTag: string | null):
     { test: (p) => p === "/ops",      v: { title: "Ops Hub",           crumb: "On the current intranet" } },
     { test: (p) => p === "/service",  v: { title: "Service Calendar",  crumb: "On the current intranet" } },
     { test: (p) => p === "/kpi",      v: { title: "KPI Dashboard",     crumb: "On the current intranet" } },
-    { test: (p) => p === "/academy",  v: { title: "Academy",           crumb: "On the current intranet" } },
+    { test: (p) => p === "/academy",         v: { title: "To do",      crumb: "Academy" } },
+    { test: (p) => p === "/academy/done",    v: { title: "Done",       crumb: "Academy" } },
+    { test: (p) => p.startsWith("/academy/read/"), v: { title: "Reading", crumb: "Academy / To do" } },
     { test: (p) => p === "/stockpot" || p === "/stockpot/ingredients", v: { title: "Ingredients", crumb: "Stockpot / Culinary office" } },
     { test: (p) => p === "/stockpot/ingredients/vendor-items", v: { title: "Vendor items", crumb: "Stockpot / Ingredients" } },
     { test: (p) => p === "/stockpot/recipes", v: { title: "Recipes", crumb: "Stockpot" } },
@@ -66,8 +69,39 @@ export default async function ShellLayout({
   const periodTag = period ? `Period ${period.period_no}, week ${period.week}` : null;
   const { title, crumb } = titleFor(pathname, dateLong, periodTag);
 
+  // Academy rail count. Only fetch when on an Academy route (one extra
+  // round-trip per request on that section only). Null elsewhere so the
+  // Shell knows not to render the badge. Resolver failures or missing
+  // roster rows yield null, not a visible 0 - a count of 0 means "all
+  // caught up" and the badge should hide, which is what null does.
+  let todoCount: number | null = null;
+  if (pathname === "/academy" || pathname.startsWith("/academy/")) {
+    try {
+      const identity = await resolveAcademyIdentity(email, { supa: client });
+      if (identity) {
+        const { count } = await client
+          .from("academy_requirements")
+          .select("requirement_id", { count: "exact", head: true })
+          .eq("worker_id", identity.workerId)
+          .is("waived_at", null);
+        if (typeof count === "number") {
+          // Signatures live in academy_attestations; subtract them from
+          // the raw requirements count to get "remaining".
+          const { count: signedCount } = await client
+            .from("academy_attestations")
+            .select("attestation_id", { count: "exact", head: true })
+            .eq("worker_id", identity.workerId);
+          const remaining = Math.max(0, count - (signedCount ?? 0));
+          todoCount = remaining;
+        }
+      }
+    } catch {
+      // non-fatal, badge hides
+    }
+  }
+
   return (
-    <Shell email={email} name={name} title={title} crumb={crumb} topbar={topbar}>
+    <Shell email={email} name={name} title={title} crumb={crumb} topbar={topbar} todoCount={todoCount}>
       <RevealGate />
       {children}
     </Shell>
