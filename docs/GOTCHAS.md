@@ -156,6 +156,22 @@ Client components own their formatters, handlers and hooks; server
 parents pass only serializable props (ReactNode, strings, numbers,
 plain objects / arrays, hrefs).
 
+## 14. A block element inside a `<p>` surfaces as React #418 hydration mismatch, not a build error
+
+HTML forbids a block element inside `<p>`. The server emits the
+`<div>` inside the `<p>`; the browser auto-closes the `<p>` before
+the `<div>` opens; server and client DOMs disagree; React logs #418.
+Easy to introduce by dropping an interactive component into a text
+element typed as `<p>` - e.g. `<p>text <KickInfoButton>...</KickInfoButton></p>`
+where `KickInfoButton` renders its own `<div className="kf-kickinfo">`
+root. The band's kick row carried this exact bug on
+`/stockpot/ingredients` after Phase 3.
+
+Rule: `<p>` is for pure phrasing content (text + inline elements
+only); use `<div>` for any row that may contain a component. Verify
+hydration warnings from the un-minified `next dev` console or the
+Vercel runtime logs, not from the minified client `#418`.
+
 ---
 
 Branch-specific items we have already lived through on

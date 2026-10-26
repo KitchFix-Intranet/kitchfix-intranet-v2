@@ -47,6 +47,10 @@
   gap: var(--sp-sp-1);
   border-bottom: 2px solid var(--sp-line);
   overflow-x: auto;
+  /* overflow-x:auto forces overflow-y to compute as auto, and the 3px active
+     underline over the 2px border is 2px of vertical overflow - that is the
+     stray vertical scrollbar. Clip it; the underline is unaffected. */
+  overflow-y: hidden;
   position: relative;
 }
 @media (max-width: 860px) {
