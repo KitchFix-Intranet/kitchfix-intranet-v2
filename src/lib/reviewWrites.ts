@@ -1,0 +1,381 @@
+// Shared write helpers for the review-queue API routes. Server-only, no
+// React. The learning-loop write (pr_ingredient_aliases) goes with every
+// confirm so the matcher can auto-handle the same description_key next
+// time (future matcher upgrade), and the vendor-items table flips to
+// link_status='confirmed' which coverage already counts in
+// pr_v_overview_totals.
+
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+export type ConfirmResult = {
+  confirmed: number;
+  usd: number;
+  errors: string[];
+};
+
+type ItemRow = {
+  id: string;
+  name: string;
+  description_key: string;
+  usd_12m: number | null;
+  link_status: string;
+  ingredient_id: string | null;
+};
+
+async function readItems(client: SupabaseClient, itemIds: string[]): Promise<ItemRow[]> {
+  if (itemIds.length === 0) return [];
+  const out: ItemRow[] = [];
+  const page = 100;
+  for (let i = 0; i < itemIds.length; i += page) {
+    const slice = itemIds.slice(i, i + page);
+    const { data, error } = await client
+      .from("pr_vendor_items")
+      .select("id,name,description_key,usd_12m,link_status,ingredient_id")
+      .in("id", slice);
+    if (error) throw error;
+    out.push(...((data ?? []) as ItemRow[]));
+  }
+  return out;
+}
+
+// Confirm = write golden link + learned alias + flip link_status to
+// 'confirmed'. The three-write sequence is ordered so a mid-crash leaves
+// the row in a state the next retry can finish cleanly:
+//   1. golden link (upsert on vendor_item_id)
+//   2. link_status='confirmed'
+//   3. pr_ingredient_aliases (upsert on (alias_norm, kind='manual'))
+// The pr_events log lands at the end with the full counts.
+//
+// pr_ingredient_aliases.kind only allows ('vendor','legacy','site','rename',
+// 'manual'); the step-5 spec called this 'learned' but the schema check
+// doesn't allow a new value without a migration. 'manual' fits the
+// semantic ("a human made this decision via confirm") and is the value we
+// write. See docs/GOTCHAS.md if we introduce a 'learned' kind later.
+export async function confirmItems(
+  client: SupabaseClient,
+  args: { ingredientId: string; itemIds: string[]; actorEmail: string }
+): Promise<ConfirmResult> {
+  const { ingredientId, itemIds, actorEmail } = args;
+  const result: ConfirmResult = { confirmed: 0, usd: 0, errors: [] };
+  if (itemIds.length === 0) return result;
+
+  // Validate ingredient exists + is active (not merged).
+  const { data: ing, error: ingErr } = await client
+    .from("pr_ingredients")
+    .select("id,status")
+    .eq("id", ingredientId)
+    .maybeSingle();
+  if (ingErr) throw ingErr;
+  if (!ing || (ing as { status: string }).status === "merged") {
+    throw new Error("Ingredient not found or merged");
+  }
+
+  const rows = await readItems(client, itemIds);
+  const confirmable = rows.filter((r) => r.link_status === "proposed");
+
+  // Golden links (upsert on vendor_item_id so re-confirming is a no-op).
+  const golden = confirmable.map((r) => ({
+    vendor_item_id: r.id,
+    ingredient_id: ingredientId,
+    verified_by: actorEmail,
+  }));
+  if (golden.length > 0) {
+    const { error } = await client
+      .from("pr_golden_links")
+      .upsert(golden, { onConflict: "vendor_item_id" });
+    if (error) throw error;
+  }
+
+  // Flip link_status + lock ingredient_id to the confirmed target. Guard
+  // with .eq('link_status','proposed') so a race against the UI never
+  // overwrites a human-touched state.
+  for (const r of confirmable) {
+    const { error } = await client
+      .from("pr_vendor_items")
+      .update({
+        ingredient_id: ingredientId,
+        link_status: "confirmed",
+        link_confidence: "high",
+        link_reason: `confirmed:${actorEmail}`,
+      })
+      .eq("id", r.id)
+      .eq("link_status", "proposed");
+    if (error) {
+      result.errors.push(`update ${r.id}: ${error.message}`);
+      continue;
+    }
+    result.confirmed += 1;
+    result.usd += Number(r.usd_12m ?? 0);
+  }
+
+  // Learned aliases - one per unique description_key. Upsert on
+  // (alias_norm, kind) which the schema already uniques.
+  const aliasRows = confirmable
+    .filter((r) => r.description_key && r.description_key.length > 0)
+    .map((r) => ({
+      ingredient_id: ingredientId,
+      alias_text: r.name,
+      alias_norm: r.description_key,
+      kind: "manual",
+    }));
+  // Dedupe by alias_norm within this call so the upsert never carries
+  // conflicting rows in a single request.
+  const seen = new Set<string>();
+  const uniqueAliasRows = aliasRows.filter((a) => {
+    if (seen.has(a.alias_norm)) return false;
+    seen.add(a.alias_norm);
+    return true;
+  });
+  if (uniqueAliasRows.length > 0) {
+    const { error: aErr } = await client
+      .from("pr_ingredient_aliases")
+      .upsert(uniqueAliasRows, { onConflict: "alias_norm,kind" });
+    if (aErr) result.errors.push(`aliases: ${aErr.message}`);
+  }
+
+  // Ledger.
+  await client.from("pr_events").insert({
+    entity_type: "ingredient",
+    entity_id: ingredientId,
+    kind: "review_confirm",
+    after: {
+      item_ids: confirmable.map((r) => r.id),
+      confirmed: result.confirmed,
+      usd: Math.round(result.usd),
+      aliases: uniqueAliasRows.length,
+    },
+    actor: actorEmail,
+  });
+
+  return result;
+}
+
+export async function markNotFood(
+  client: SupabaseClient,
+  args: { itemIds: string[]; actorEmail: string }
+): Promise<{ marked: number; errors: string[] }> {
+  const { itemIds, actorEmail } = args;
+  const errors: string[] = [];
+  let marked = 0;
+  for (const id of itemIds) {
+    // Set link_reason to 'notfood:' and link_status='rejected' so the
+    // matcher skips (link_status != 'none') AND the item visibly drops
+    // out of the proposed queue. We do NOT flip is_food - that's intake's
+    // call, and a human disagreement with the AI shouldn't retro-rewrite
+    // the intake classification.
+    const { error } = await client
+      .from("pr_vendor_items")
+      .update({
+        link_status: "rejected",
+        link_reason: `notfood:${actorEmail}`,
+      })
+      .eq("id", id)
+      .in("link_status", ["proposed", "none"]);
+    if (error) {
+      errors.push(`${id}: ${error.message}`);
+      continue;
+    }
+    marked += 1;
+    await client.from("pr_events").insert({
+      entity_type: "vendor_item",
+      entity_id: id,
+      kind: "review_notfood",
+      actor: actorEmail,
+    });
+  }
+  return { marked, errors };
+}
+
+export async function keepSeparate(
+  client: SupabaseClient,
+  args: { itemIds: string[]; actorEmail: string }
+): Promise<{ marked: number; errors: string[] }> {
+  const { itemIds, actorEmail } = args;
+  const errors: string[] = [];
+  let marked = 0;
+  // "Keep separate" = don't propose this item into the current group ever
+  // again. We write link_status='rejected' + link_reason='keep_separate'
+  // so the matcher (which only reads link_status='none') never looks at
+  // it. The item appears on vendor-items with a Rejected pill. If Kevin
+  // later wants to re-propose it (to a different ingredient), there is a
+  // Relink path on the vendor-item drawer that resets link_status.
+  for (const id of itemIds) {
+    const { error } = await client
+      .from("pr_vendor_items")
+      .update({
+        link_status: "rejected",
+        link_reason: `keep_separate:${actorEmail}`,
+      })
+      .eq("id", id)
+      .in("link_status", ["proposed", "none"]);
+    if (error) {
+      errors.push(`${id}: ${error.message}`);
+      continue;
+    }
+    marked += 1;
+    await client.from("pr_events").insert({
+      entity_type: "vendor_item",
+      entity_id: id,
+      kind: "review_keep_separate",
+      actor: actorEmail,
+    });
+  }
+  return { marked, errors };
+}
+
+export async function relinkItems(
+  client: SupabaseClient,
+  args: { ingredientId: string; itemIds: string[]; actorEmail: string }
+): Promise<{ relinked: number; errors: string[] }> {
+  const { ingredientId, itemIds, actorEmail } = args;
+  const errors: string[] = [];
+  let relinked = 0;
+
+  // Validate ingredient.
+  const { data: ing, error: ingErr } = await client
+    .from("pr_ingredients")
+    .select("id,status")
+    .eq("id", ingredientId)
+    .maybeSingle();
+  if (ingErr) throw ingErr;
+  if (!ing || (ing as { status: string }).status === "merged") {
+    throw new Error("Ingredient not found or merged");
+  }
+
+  for (const id of itemIds) {
+    const { error } = await client
+      .from("pr_vendor_items")
+      .update({
+        ingredient_id: ingredientId,
+        link_reason: `relinked:${actorEmail}`,
+      })
+      .eq("id", id)
+      .eq("link_status", "proposed");
+    if (error) {
+      errors.push(`${id}: ${error.message}`);
+      continue;
+    }
+    relinked += 1;
+    await client.from("pr_events").insert({
+      entity_type: "vendor_item",
+      entity_id: id,
+      kind: "review_relink",
+      after: { ingredient_id: ingredientId },
+      actor: actorEmail,
+    });
+  }
+  return { relinked, errors };
+}
+
+export async function undoConfirm(
+  client: SupabaseClient,
+  args: { itemId: string; actorEmail: string }
+): Promise<{ ok: boolean; error?: string }> {
+  const { itemId, actorEmail } = args;
+
+  // Read the item + its golden link.
+  const { data: itm } = await client
+    .from("pr_vendor_items")
+    .select("id,description_key,ingredient_id,link_status")
+    .eq("id", itemId)
+    .maybeSingle();
+  if (!itm) return { ok: false, error: "Item not found" };
+  const row = itm as { id: string; description_key: string; ingredient_id: string | null; link_status: string };
+  if (row.link_status !== "confirmed") return { ok: false, error: "Item is not confirmed; nothing to undo" };
+
+  // Delete the golden link.
+  const { error: delErr } = await client
+    .from("pr_golden_links")
+    .delete()
+    .eq("vendor_item_id", itemId);
+  if (delErr) return { ok: false, error: delErr.message };
+
+  // Revert the item to proposed, keeping its ingredient_id so the group
+  // card still shows the correct target.
+  const { error: upErr } = await client
+    .from("pr_vendor_items")
+    .update({
+      link_status: "proposed",
+      link_reason: `undo:${actorEmail}`,
+    })
+    .eq("id", itemId);
+  if (upErr) return { ok: false, error: upErr.message };
+
+  // Remove the learned alias on this description_key. Only remove the
+  // alias if no OTHER confirmed item on the same alias_norm still points
+  // at the same ingredient (so a two-vendor group's alias survives one
+  // undo). Simplest: count remaining confirmed items with this
+  // description_key + ingredient_id; delete the alias only when zero
+  // remain.
+  if (row.ingredient_id && row.description_key) {
+    const { count } = await client
+      .from("pr_vendor_items")
+      .select("id", { count: "exact", head: true })
+      .eq("link_status", "confirmed")
+      .eq("ingredient_id", row.ingredient_id)
+      .eq("description_key", row.description_key);
+    if ((count ?? 0) === 0) {
+      await client
+        .from("pr_ingredient_aliases")
+        .delete()
+        .eq("alias_norm", row.description_key)
+        .eq("kind", "manual")
+        .eq("ingredient_id", row.ingredient_id);
+    }
+  }
+
+  await client.from("pr_events").insert({
+    entity_type: "vendor_item",
+    entity_id: itemId,
+    kind: "review_undo",
+    actor: actorEmail,
+  });
+
+  return { ok: true };
+}
+
+export async function createIngredient(
+  client: SupabaseClient,
+  args: { name: string; parent: string | null; actorEmail: string }
+): Promise<{ id: string }> {
+  const trimmed = args.name.trim();
+  if (trimmed.length < 2) throw new Error("Ingredient name is required");
+  const nameNorm = trimmed.toLowerCase().replace(/\s+/g, " ");
+
+  // Try to find an existing active ingredient by name_norm first.
+  const { data: existing } = await client
+    .from("pr_ingredients")
+    .select("id")
+    .eq("name_norm", nameNorm)
+    .eq("status", "active")
+    .maybeSingle();
+  if (existing) return { id: (existing as { id: string }).id };
+
+  // base_unit is required by the schema (lb|each|gal|dozen). "each" is the
+  // safest default - the ingredient admin surface in a later step lets
+  // the user refine it.
+  const insert = {
+    name: trimmed,
+    name_norm: nameNorm,
+    parent: args.parent?.trim() || null,
+    base_unit: "each",
+    status: "active",
+    created_by: args.actorEmail,
+  };
+  const { data, error } = await client
+    .from("pr_ingredients")
+    .insert(insert)
+    .select("id")
+    .single();
+  if (error) throw error;
+  const id = (data as { id: string }).id;
+
+  await client.from("pr_events").insert({
+    entity_type: "ingredient",
+    entity_id: id,
+    kind: "ingredient_created",
+    after: { name: trimmed, parent: args.parent ?? null },
+    actor: args.actorEmail,
+  });
+  return { id };
+}

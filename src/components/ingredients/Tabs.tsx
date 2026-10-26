@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Lock } from "lucide-react";
 
-type ActiveTab = "overview" | "vendor-items";
+type ActiveTab = "overview" | "review" | "vendor-items";
 
 export function Tabs({ active }: { active: ActiveTab }) {
   return (
@@ -12,18 +12,16 @@ export function Tabs({ active }: { active: ActiveTab }) {
       >
         Overview
       </Link>
-      <span
-        className="kf-tab kf-tab--disabled"
-        aria-disabled="true"
-        title="Arrives with the review queue (step 5)"
+      <Link
+        href="/stockpot/ingredients/review"
+        className={`kf-tab${active === "review" ? " kf-tab--active" : ""}`}
       >
-        <Lock size={14} strokeWidth={1.5} />
         Review queue
-      </span>
+      </Link>
       <span
         className="kf-tab kf-tab--disabled"
         aria-disabled="true"
-        title="Arrives with the review queue (step 5)"
+        title="Arrives after the first round of confirms (step 5 ingredient admin)"
       >
         <Lock size={14} strokeWidth={1.5} />
         Ingredients
