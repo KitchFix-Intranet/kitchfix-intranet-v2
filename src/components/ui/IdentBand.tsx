@@ -87,10 +87,10 @@ export function IdentBand({
         <div className="kf-band__left">
           <span className="kf-eyebrow kf-band__eyebrow">{eyebrow}</span>
           <h2 className="kf-band__title">{resolvedTitle}</h2>
-          <p className="kf-band__kick">
+          <div className="kf-band__kick">
             <span className="kf-band__kick-text">{kick}</span>
             {kickInfo ? <KickInfoButton>{kickInfo}</KickInfoButton> : null}
-          </p>
+          </div>
         </div>
 
         {resolvedFacts.length > 0 || cta || status === "failed" ? (
