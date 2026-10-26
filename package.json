@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "intake": "node --env-file=.env.local --import tsx scripts/intake.ts"
+    "intake": "node --env-file=.env.local --import tsx scripts/intake.ts",
+    "match": "node --env-file=.env.local --import tsx scripts/match.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
