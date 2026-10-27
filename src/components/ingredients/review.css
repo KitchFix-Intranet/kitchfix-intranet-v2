@@ -149,11 +149,23 @@
 }
 .kf-rvc__totals span { color: var(--sp-muted); font-size: var(--sp-t-micro); }
 
-/* Items table inside the card */
+/* Items table inside the card.
+ *
+ * table-layout: auto lets the browser size each column to its content
+ * so headers sit directly over their cells at 1440 (replaces the old
+ * fixed layout that split 10 columns evenly and misaligned long/short
+ * content). Shared padding + text-align on the th / td pairs; cells
+ * line up by native table rules.
+ *
+ * Phone layout: at <= 760px, the Vendor / Lines / Sites / Last
+ * purchase / Conf columns hide so the essentials (checkbox, Item,
+ * Pack/unit, Unit price, Annual $) stack cleanly in the narrow width;
+ * the hidden details are still reachable via the DetailPanel.
+ */
 .kf-rvc__items {
   width: 100%;
   border-collapse: collapse;
-  table-layout: fixed;
+  table-layout: auto;
   font-family: var(--sp-ui);
   font-size: var(--sp-t-table);
 }
@@ -169,14 +181,83 @@
   background: var(--sp-sky-soft);
   border-bottom: 1px solid var(--sp-line-soft);
   white-space: nowrap;
+  vertical-align: middle;
 }
 .kf-rvc__items tbody td {
   padding: 10px var(--sp-sp-3);
   border-bottom: 1px solid var(--sp-line-soft);
   color: var(--sp-ink);
-  vertical-align: top;
+  vertical-align: middle;
 }
 .kf-rvc__items tbody tr:last-child td { border-bottom: none; }
+/* Right-aligned numeric columns: force both header + cell. */
+.kf-rvc__items thead th.kf-table__num,
+.kf-rvc__items tbody td.kf-table__num {
+  text-align: right;
+}
+
+/* Phone / narrow-tablet: hide heavy columns. Column order on the thead
+ * matches the tbody order so nth-child targets both header and cells. */
+@media (max-width: 760px) {
+  .kf-rvc__items thead th:nth-child(3),  /* Vendor / # */
+  .kf-rvc__items tbody td:nth-child(3),
+  .kf-rvc__items thead th:nth-child(7),  /* Lines */
+  .kf-rvc__items tbody td:nth-child(7),
+  .kf-rvc__items thead th:nth-child(8),  /* Sites */
+  .kf-rvc__items tbody td:nth-child(8),
+  .kf-rvc__items thead th:nth-child(9),  /* Last purchase */
+  .kf-rvc__items tbody td:nth-child(9),
+  .kf-rvc__items thead th:nth-child(10), /* Conf */
+  .kf-rvc__items tbody td:nth-child(10) {
+    display: none;
+  }
+}
+
+/* -----------------------------------------------------------------
+ * Confirm leave-animation. The card dims + slides a tiny upward when
+ * every item was confirmed; otherwise just the affected rows dim +
+ * collapse their font-weight. Reduced-motion falls back to a brief
+ * opacity fade with no transform.
+ * ----------------------------------------------------------------- */
+.kf-rvc { position: relative; transition: opacity 260ms var(--sp-ease), transform 260ms var(--sp-ease); }
+.kf-rvc--leaving {
+  opacity: 0.35;
+  transform: translateY(-6px);
+  pointer-events: none;
+}
+.kf-rvc__row--leaving td {
+  color: var(--sp-muted);
+  text-decoration: line-through;
+  transition: color 220ms var(--sp-ease), opacity 220ms var(--sp-ease);
+  opacity: 0.5;
+}
+.kf-rvc__leaving-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-sp-2);
+  background: color-mix(in srgb, var(--sp-good-bg) 70%, transparent);
+  color: var(--sp-good);
+  font-family: var(--sp-disp);
+  font-weight: 800;
+  font-size: var(--sp-t-h4);
+  letter-spacing: .5px;
+  border-radius: inherit;
+  animation: kf-rvc-fade 180ms var(--sp-ease) both;
+}
+@keyframes kf-rvc-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kf-rvc { transition: opacity 150ms linear; }
+  .kf-rvc--leaving { transform: none; }
+  .kf-rvc__row--leaving td { transition: opacity 150ms linear; }
+  .kf-rvc__leaving-overlay { animation: none; }
+}
 .kf-rvc__desc {
   display: flex;
   align-items: center;
@@ -799,4 +880,82 @@
   font-family: var(--sp-ui);
   font-size: var(--sp-t-body);
   line-height: 1.5;
+}
+
+/* Inline "Saved" / error flash next to each DetailPanel Save button. */
+.kf-dpn__flash {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-1);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 700;
+  padding: 2px var(--sp-sp-2);
+  border-radius: var(--sp-r-sm);
+  animation: kf-dpn-flash 180ms var(--sp-ease) both;
+}
+.kf-dpn__flash--ok { background: var(--sp-good-bg); color: var(--sp-good); }
+.kf-dpn__flash--err { background: var(--sp-warn-bg); color: var(--sp-warn); }
+@keyframes kf-dpn-flash {
+  from { opacity: 0; transform: translateX(-4px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kf-dpn__flash { animation: none; }
+}
+
+/* Per-item change ledger inside the DetailPanel. Read-only list, newest
+ * first, last ~10 events. Timestamps use Chicago-friendly formatting
+ * via the existing fmt helpers. */
+.kf-dpn__ledger-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+}
+.kf-dpn__ledger-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: var(--sp-sp-3);
+  row-gap: 2px;
+  padding: var(--sp-sp-2) 0;
+  border-bottom: 1px dashed var(--sp-line-soft);
+}
+.kf-dpn__ledger-item:last-child { border-bottom: none; }
+.kf-dpn__ledger-kind {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+  letter-spacing: .5px;
+  text-transform: uppercase;
+  color: var(--sp-muted);
+  white-space: nowrap;
+}
+.kf-dpn__ledger-body {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-ink);
+  line-height: 1.4;
+  min-width: 0;
+}
+.kf-dpn__ledger-body strong { font-weight: 700; }
+.kf-dpn__ledger-meta {
+  grid-column: 2 / 3;
+  color: var(--sp-muted);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  letter-spacing: .3px;
+}
+.kf-dpn__ledger-empty {
+  color: var(--sp-muted);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-style: italic;
+}
+.kf-dpn__ledger-loading {
+  color: var(--sp-muted);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
 }

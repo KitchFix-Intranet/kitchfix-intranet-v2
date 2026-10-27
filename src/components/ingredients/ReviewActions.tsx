@@ -47,6 +47,11 @@ type Props = {
   checkedItems: NewIngredientPreviewItem[];
   checkedCount: number;
   memberCount: number;
+  // Called by ReviewActions after a successful Confirm so the parent
+  // ReviewCard can play its leaving-animation before calling
+  // router.refresh(). Fires BEFORE the undo toast lands so the two
+  // animations overlap. Receives the item ids that just left the queue.
+  onLeaveStart?: (itemIds: string[]) => void;
 };
 
 type Op = null | "confirming" | "relinking" | "creating" | "notfood" | "keepsep";
@@ -79,6 +84,7 @@ export function ReviewActions({
   checkedItems,
   checkedCount,
   memberCount,
+  onLeaveStart,
 }: Props) {
   const router = useRouter();
   const [op, setOp] = useState<Op>(null);
@@ -146,7 +152,15 @@ export function ReviewActions({
       },
     });
     setOp(null);
-    router.refresh();
+    // Hand off to the parent card for the leaving-animation + the
+    // deferred router.refresh() (so the card unmounts AFTER the
+    // animation plays). If no handler is wired, refresh immediately
+    // like before.
+    if (onLeaveStart) {
+      onLeaveStart(confirmedIds);
+    } else {
+      router.refresh();
+    }
   }
 
   async function relinkChecked() {

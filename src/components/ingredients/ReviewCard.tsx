@@ -16,7 +16,8 @@
 // docs/GOTCHAS.md.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Pencil, Scale } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Check, Pencil, Scale } from "lucide-react";
 import { fmtCount, fmtDate, fmtUsd, fmtUsdLong } from "@/lib/fmt";
 import { ReviewActions } from "./ReviewActions";
 import { DetailPanel, type DetailPanelOpen } from "./DetailPanel";
@@ -153,6 +154,34 @@ export function ReviewCard({
   const [panelOpen, setPanelOpen] = useState<DetailPanelOpen>(null);
   const ingredientRow = group.ingredient; // null for ai-new groups
 
+  // Confirm leave-animation state. When ReviewActions reports a
+  // successful Confirm, we flip into "leaving" mode: the whole card
+  // dims + shows a check overlay if every item left, otherwise only
+  // the affected rows do. After the CSS transition (~400ms, or 150ms
+  // in reduced-motion), we trigger router.refresh() so the server
+  // data drops the confirmed rows. Undo during the ~6s toast window
+  // still works - it just reverses the DB state and the next refresh
+  // brings the rows back.
+  const router = useRouter();
+  const [leaving, setLeaving] = useState<{ ids: Set<string>; allLeaving: boolean } | null>(null);
+
+  function startLeaveAnimation(itemIds: string[]) {
+    const ids = new Set(itemIds);
+    const allLeaving = itemIds.length === group.items.length;
+    setLeaving({ ids, allLeaving });
+    const prefersReducedMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    const delay = prefersReducedMotion ? 180 : 420;
+    window.setTimeout(() => {
+      // router.refresh() re-fetches the server data; the card either
+      // unmounts (all items left) or re-renders with fewer rows. Our
+      // local leaving state is wiped when the parent re-renders with
+      // fresh group.items.
+      router.refresh();
+    }, delay);
+  }
+
   const footerLine =
     checkedCount === 0
       ? "Select items to confirm."
@@ -160,8 +189,12 @@ export function ReviewCard({
         ? `${fmtUsd(group.totalUsd12m)} will move to Linked when the whole group is confirmed.`
         : `${fmtUsd(checkedUsd)} will move to Linked for the ${checkedCount} selected items.`;
 
+  const leavingAll = leaving?.allLeaving ?? false;
   return (
-    <article className={`kf-rvc${group.kind === "new" ? " kf-rvc--new" : ""}`}>
+    <article
+      className={`kf-rvc${group.kind === "new" ? " kf-rvc--new" : ""}${leavingAll ? " kf-rvc--leaving" : ""}`}
+      aria-busy={leavingAll || undefined}
+    >
       <header className="kf-rvc__head">
         <div className="kf-rvc__title-wrap">
           <label className="kf-rvc__select-all" aria-label="Select all items in this group">
@@ -230,7 +263,13 @@ export function ReviewCard({
         </thead>
         <tbody>
           {group.items.map((it) => (
-            <tr key={it.id} className={checked[it.id] ? "kf-rvc__row kf-rvc__row--on" : "kf-rvc__row"}>
+            <tr
+              key={it.id}
+              className={
+                (checked[it.id] ? "kf-rvc__row kf-rvc__row--on" : "kf-rvc__row") +
+                (leaving && !leavingAll && leaving.ids.has(it.id) ? " kf-rvc__row--leaving" : "")
+              }
+            >
               <td className="kf-rvc__check-col">
                 <input
                   type="checkbox"
@@ -322,7 +361,15 @@ export function ReviewCard({
         checkedItems={checkedItemsPreview}
         checkedCount={checkedCount}
         memberCount={memberCount}
+        onLeaveStart={startLeaveAnimation}
       />
+
+      {leavingAll ? (
+        <div className="kf-rvc__leaving-overlay" aria-live="polite" role="status">
+          <Check size={28} strokeWidth={2} aria-hidden />
+          <span>Confirmed. Leaving the queue.</span>
+        </div>
+      ) : null}
 
       <footer className="kf-rvc__foot">{footerLine}</footer>
 

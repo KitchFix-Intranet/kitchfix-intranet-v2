@@ -20,13 +20,42 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { X } from "lucide-react";
+import { Check, X } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
-import { fmtCount, fmtDate, fmtUsd, fmtUsdLong } from "@/lib/fmt";
+import { fmtCount, fmtDate, fmtUsd, fmtUsdLong, timeAgo } from "@/lib/fmt";
 import { SUPER_CATEGORIES, type SuperCategory } from "@/lib/ingredients/categories";
+import { humanizeKind } from "@/lib/humanizeKind";
 import { IngredientTypeahead } from "./IngredientTypeahead";
 import type { ReviewCardIngredient, ReviewGroupItem } from "./ReviewCard";
 import "./drawer.css";
+
+// Inline "Saved just now" badge. Pass a `savedAt` timestamp (Date.now())
+// after a successful write; the badge renders for 2.5s then hides.
+// Error flashes also live here via `error` string.
+function SaveFlash({ savedAt, error }: { savedAt: number | null; error: string | null }) {
+  const [showSaved, setShowSaved] = useState(false);
+  useEffect(() => {
+    if (!savedAt) {
+      setShowSaved(false);
+      return;
+    }
+    setShowSaved(true);
+    const t = window.setTimeout(() => setShowSaved(false), 2500);
+    return () => window.clearTimeout(t);
+  }, [savedAt]);
+  if (error) {
+    return <span className="kf-dpn__flash kf-dpn__flash--err" role="alert">{error}</span>;
+  }
+  if (showSaved) {
+    return (
+      <span className="kf-dpn__flash kf-dpn__flash--ok" aria-live="polite">
+        <Check size={14} strokeWidth={2} aria-hidden />
+        <span>Saved</span>
+      </span>
+    );
+  }
+  return null;
+}
 
 export type DetailPanelOpen =
   | null
@@ -184,9 +213,231 @@ export function DetailPanel({
         {open.kind === "item" && item ? (
           <PackOverrideBlock item={item} onDone={() => router.refresh()} />
         ) : null}
+
+        <LedgerBlock
+          ingredientId={ingredient?.id ?? null}
+          itemId={open.kind === "item" ? open.itemId : null}
+        />
       </aside>
     </>
   );
+}
+
+// Per-item change ledger. Reads pr_events for THIS ingredient and
+// vendor-item via a dedicated API endpoint (/api/review/item-events).
+// Fetches on mount; shows last ~10 events newest-first with
+// Chicago-friendly timestamps via fmtDate(.., "time") + a relative
+// `timeAgo` sub-line. Each event kind gets a human-readable description
+// pulled from `before`/`after` snapshots.
+type LedgerEvent = {
+  id: string;
+  kind: string;
+  at: string;
+  actor: string | null;
+  entity_type: string;
+  entity_id: string;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+};
+
+function LedgerBlock({ ingredientId, itemId }: { ingredientId: string | null; itemId: string | null }) {
+  const [events, setEvents] = useState<LedgerEvent[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!ingredientId && !itemId) {
+      setEvents([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const params = new URLSearchParams();
+        if (ingredientId) params.set("ingredientId", ingredientId);
+        if (itemId) params.set("itemId", itemId);
+        const res = await fetch(`/api/review/item-events?${params.toString()}`, {
+          method: "GET",
+        });
+        const data = (await res.json().catch(() => null)) as {
+          events?: LedgerEvent[];
+          error?: string;
+        } | null;
+        if (cancelled) return;
+        if (!res.ok || !data?.events) {
+          setError(data?.error ?? `Load ${res.status}`);
+          setEvents([]);
+          return;
+        }
+        setEvents(data.events);
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : String(e));
+          setEvents([]);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [ingredientId, itemId]);
+
+  return (
+    <section className="kf-drawer__block kf-dpn__block" aria-label="Change history">
+      <header className="kf-drawer__block-head">
+        <h4>Change history</h4>
+        <small>last 10 actions, newest first</small>
+      </header>
+
+      {events === null ? (
+        <div className="kf-dpn__ledger-loading">Loading history...</div>
+      ) : error ? (
+        <div className="kf-dpn__ledger-empty">Could not load: {error}</div>
+      ) : events.length === 0 ? (
+        <div className="kf-dpn__ledger-empty">
+          No edits yet. Rename / category / resale / pack changes will show here with who and when.
+        </div>
+      ) : (
+        <ul className="kf-dpn__ledger-list">
+          {events.slice(0, 10).map((e) => (
+            <LedgerRowItem key={e.id} e={e} />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function LedgerRowItem({ e }: { e: LedgerEvent }) {
+  const { label, body } = describeEvent(e);
+  const actor = e.actor ?? "-";
+  return (
+    <li className="kf-dpn__ledger-item">
+      <span className="kf-dpn__ledger-kind">{label}</span>
+      <span className="kf-dpn__ledger-body">{body}</span>
+      <span className="kf-dpn__ledger-meta">
+        <time dateTime={e.at} title={fmtDate(e.at, "time")}>{fmtDate(e.at, "time")}</time>
+        {" · "}
+        {actor}
+        {" · "}
+        {timeAgo(e.at)}
+      </span>
+    </li>
+  );
+}
+
+function asStr(v: unknown): string | null {
+  return typeof v === "string" && v.length > 0 ? v : null;
+}
+
+function describeEvent(e: LedgerEvent): { label: string; body: React.ReactNode } {
+  const before = e.before ?? {};
+  const after = e.after ?? {};
+  if (e.kind === "ingredient_renamed") {
+    const oldName = asStr(before.name);
+    const newName = asStr(after.name);
+    return {
+      label: "Renamed",
+      body: (
+        <>
+          {oldName ? <><strong>{oldName}</strong> → </> : null}
+          <strong>{newName ?? "(unknown)"}</strong>
+        </>
+      ),
+    };
+  }
+  if (e.kind === "ingredient_category_set") {
+    const oldCat = asStr(before.category);
+    const newCat = asStr(after.category);
+    const oldSub = asStr(before.parent);
+    const newSub = asStr(after.parent);
+    return {
+      label: "Category",
+      body: (
+        <>
+          {oldCat || oldSub ? <>{oldCat ?? "Needs category"}{oldSub ? ` / ${oldSub}` : ""} → </> : null}
+          <strong>{newCat ?? "Needs category"}{newSub ? ` / ${newSub}` : ""}</strong>
+        </>
+      ),
+    };
+  }
+  if (e.kind === "ingredient_resale_set") {
+    const next = after.resale === true;
+    return {
+      label: "Resale",
+      body: <>Moved to <strong>{next ? "resale bucket" : "recipe coverage"}</strong></>,
+    };
+  }
+  if (e.kind === "pack_override_set") {
+    const packText = asStr(after.pack_text);
+    const unit = asStr(after.billed_unit);
+    return {
+      label: "Pack size",
+      body: (
+        <>
+          Set to <strong>{packText ?? "-"}</strong>
+          {unit ? <> / {unit}</> : null} (manually entered)
+        </>
+      ),
+    };
+  }
+  if (e.kind === "ingredient_merged") {
+    const srcName = asStr(before.source_name);
+    const tgtName = asStr(after.target_name);
+    const moved =
+      typeof after.moved_items === "number" ? after.moved_items : null;
+    return {
+      label: "Merged",
+      body: (
+        <>
+          {srcName ? <><strong>{srcName}</strong></> : "This ingredient"} merged into{" "}
+          <strong>{tgtName ?? "another"}</strong>
+          {moved != null ? <> ({moved} items moved)</> : null}
+        </>
+      ),
+    };
+  }
+  if (e.kind === "ingredient_merge_undo") {
+    return { label: "Undo merge", body: <>Merge reversed; items restored.</> };
+  }
+  if (e.kind === "ingredient_created") {
+    const name = asStr(after.name);
+    return {
+      label: "Created",
+      body: (
+        <>
+          Ingredient <strong>{name ?? "(unknown)"}</strong> created
+        </>
+      ),
+    };
+  }
+  if (e.kind === "ingredient_split_create") {
+    const name = asStr(after.name);
+    const movedIds = Array.isArray(after.moved_item_ids) ? after.moved_item_ids.length : null;
+    return {
+      label: "Split",
+      body: (
+        <>
+          Split into new ingredient <strong>{name ?? "(unknown)"}</strong>
+          {movedIds != null ? <> ({movedIds} items)</> : null}
+        </>
+      ),
+    };
+  }
+  if (e.kind === "review_confirm") {
+    const n = typeof after.confirmed === "number" ? after.confirmed : null;
+    return {
+      label: "Confirmed",
+      body: n != null ? <>Confirmed <strong>{n}</strong> items</> : <>Confirmed</>,
+    };
+  }
+  if (e.kind === "review_undo") {
+    return { label: "Undo confirm", body: <>Reversed one confirm.</> };
+  }
+  // Fallback for any other kind - humanize via the shared helper.
+  return {
+    label: humanizeKind(e.kind, 1),
+    body: <span className="kf-muted">(no details)</span>,
+  };
 }
 
 // For ai-new groups: the ingredient doesn't exist yet, so the normal
@@ -343,14 +594,20 @@ function IngredientBlock({
   // the server-rendered cards so the chip/row readouts update.
   const [renameDraft, setRenameDraft] = useState(ingredient.name);
   const [renameBusy, setRenameBusy] = useState(false);
+  const [renameSavedAt, setRenameSavedAt] = useState<number | null>(null);
+  const [renameError, setRenameError] = useState<string | null>(null);
 
   const [superDraft, setSuperDraft] = useState<string>(ingredient.category ?? "");
   const [subMode, setSubMode] = useState<"pick" | "new">("pick");
   const [subPick, setSubPick] = useState<string>(ingredient.parent ?? "");
   const [subNew, setSubNew] = useState("");
   const [catBusy, setCatBusy] = useState(false);
+  const [catSavedAt, setCatSavedAt] = useState<number | null>(null);
+  const [catError, setCatError] = useState<string | null>(null);
 
   const [resaleBusy, setResaleBusy] = useState(false);
+  const [resaleSavedAt, setResaleSavedAt] = useState<number | null>(null);
+  const [resaleError, setResaleError] = useState<string | null>(null);
 
   const [mergeTarget, setMergeTarget] = useState<string>("");
   const [mergeBusy, setMergeBusy] = useState(false);
@@ -367,21 +624,25 @@ function IngredientBlock({
     if (next.length < 2) { toast("Name is too short", { tone: "block" }); return; }
     if (next === ingredient.name) { toast("Same name, nothing to save"); return; }
     setRenameBusy(true);
+    setRenameError(null);
     const r = await postJson("/api/review/rename-ingredient", {
       ingredientId: ingredient.id,
       newName: next,
     });
     if (!r.ok) {
-      toast(errMsg(r.data, `Rename failed (${r.status})`), { tone: "block" });
+      const msg = errMsg(r.data, `Rename failed (${r.status})`);
+      setRenameError(msg);
+      toast(msg, { tone: "block" });
       setRenameBusy(false);
       return;
     }
     const d = r.data as { aliasWritten?: boolean };
     toast(
       d.aliasWritten
-        ? `Renamed - old name kept as an alias so links survive`
-        : `Renamed`
+        ? `Saved - old name kept as an alias so links survive`
+        : `Saved: name`
     );
+    setRenameSavedAt(Date.now());
     setRenameBusy(false);
     onDone();
   }
@@ -392,17 +653,21 @@ function IngredientBlock({
     const nextSub =
       subMode === "new" ? subNew.trim() || null : (subPick === "" ? null : subPick);
     setCatBusy(true);
+    setCatError(null);
     const r = await postJson("/api/review/set-category", {
       ingredientId: ingredient.id,
       category: nextSuper,
       parent: nextSub,
     });
     if (!r.ok) {
-      toast(errMsg(r.data, `Save failed (${r.status})`), { tone: "block" });
+      const msg = errMsg(r.data, `Save failed (${r.status})`);
+      setCatError(msg);
+      toast(msg, { tone: "block" });
       setCatBusy(false);
       return;
     }
-    toast(nextSuper ? `Set to ${nextSuper}` : "Marked as Needs category");
+    toast(nextSuper ? `Saved: category ${nextSuper}` : "Saved: Needs category");
+    setCatSavedAt(Date.now());
     setCatBusy(false);
     onDone();
   }
@@ -410,16 +675,20 @@ function IngredientBlock({
   async function toggleResale(next: boolean) {
     if (resaleBusy) return;
     setResaleBusy(true);
+    setResaleError(null);
     const r = await postJson("/api/review/set-resale", {
       ingredientId: ingredient.id,
       resale: next,
     });
     if (!r.ok) {
-      toast(errMsg(r.data, `Save failed (${r.status})`), { tone: "block" });
+      const msg = errMsg(r.data, `Save failed (${r.status})`);
+      setResaleError(msg);
+      toast(msg, { tone: "block" });
       setResaleBusy(false);
       return;
     }
-    toast(next ? "Moved to resale bucket" : "Moved to recipe-coverage bucket");
+    toast(next ? "Saved: moved to resale bucket" : "Saved: moved to recipe-coverage bucket");
+    setResaleSavedAt(Date.now());
     setResaleBusy(false);
     onDone();
   }
@@ -495,6 +764,7 @@ function IngredientBlock({
           >
             Save name
           </button>
+          <SaveFlash savedAt={renameSavedAt} error={renameError} />
         </div>
       </div>
 
@@ -543,6 +813,7 @@ function IngredientBlock({
           >
             Save category
           </button>
+          <SaveFlash savedAt={catSavedAt} error={catError} />
         </div>
       </div>
 
@@ -560,6 +831,7 @@ function IngredientBlock({
               disabled={resaleBusy}
             />
             <span>Resale (not a recipe ingredient)</span>
+            <SaveFlash savedAt={resaleSavedAt} error={resaleError} />
           </label>
           <div className="kf-dpn__hint">
             Resale items (bottled water, disposables) are tracked but excluded from recipe-coverage.
@@ -608,12 +880,15 @@ function PackOverrideBlock({
   const [billedUnit, setBilledUnit] = useState(item.billedUnit ?? "");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   async function save() {
     if (busy) return;
     const next = packText.trim();
     if (next.length < 1) { toast("Pack text is required", { tone: "block" }); return; }
     setBusy(true);
+    setError(null);
     const r = await postJson("/api/review/set-pack-override", {
       itemId: item.id,
       packText: next,
@@ -621,11 +896,14 @@ function PackOverrideBlock({
       note: note.trim() || null,
     });
     if (!r.ok) {
-      toast(errMsg(r.data, `Save failed (${r.status})`), { tone: "block" });
+      const msg = errMsg(r.data, `Save failed (${r.status})`);
+      setError(msg);
+      toast(msg, { tone: "block" });
       setBusy(false);
       return;
     }
-    toast("Pack size saved");
+    toast("Saved: pack size");
+    setSavedAt(Date.now());
     setBusy(false);
     onDone();
   }
@@ -678,6 +956,7 @@ function PackOverrideBlock({
           >
             Save pack
           </button>
+          <SaveFlash savedAt={savedAt} error={error} />
         </div>
       </div>
     </section>
