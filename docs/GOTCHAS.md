@@ -207,7 +207,42 @@ the Library would show an empty catalog and the surface fails open as
 keep the capitalisation in every filter + fixture. Same discipline
 for every title-cased enum column added later.
 
----
+## 18. Column ownership: an upsert payload overwrites EVERY column it carries on an existing row
+
+PostgREST `ON CONFLICT ... DO UPDATE` sets every column present in the
+request body - no exceptions, no "only when null". Any column one
+writer owns (defaults aside) must stay out of a second writer's
+payload or that writer silently clobbers the first on every re-run.
+
+Live case 2026-10-26: `intake.ts` carried `link_status: "none"` in the
+`pr_vendor_items` upsert. Every intake run reset `link_status` from
+`'proposed'` (matcher) and `'confirmed'` (human) back to `'none'`,
+wiping the entire 538-item proposal queue and dropping confirmed
+items out of coverage - a silent whole-queue destruction with no
+error logged, because the upsert "succeeded". `ingredient_id`,
+`link_reason`, `link_confidence` survived only because they weren't
+in the payload at all; `link_status` was the one curation column
+that slipped in.
+
+Ownership for `pr_vendor_items`:
+
+- Intake writes: identity + observed rollups (vendor, item number,
+  description, pack text, dollars/lines, last_seen, catch_weight,
+  is_food, status active/duplicate, dedup_key).
+- Matcher + humans write: `link_status`, `ingredient_id`,
+  `link_reason`, `link_confidence`.
+
+Rules:
+
+1. Drop any column the other writer owns from your upsert body.
+   Rely on the column DEFAULT for a new row's starting value, never
+   on an explicit payload field.
+2. For every new multi-writer table, write down ownership in a
+   comment at the upsert call site and in the migration header -
+   both sides read it.
+3. Verify a double-run before claiming "intake works": run it twice
+   and prove that neither pass changes any curation column on an
+   existing row. A clean build / clean grep is not enough.
 
 Branch-specific items we have already lived through on
 `step-1-shell-and-ingredients`:

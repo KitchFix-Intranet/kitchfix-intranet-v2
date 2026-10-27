@@ -11,7 +11,17 @@
 // unique.
 //
 // Scope for step 1: NO pack parsing, NO ingredient proposals, NO price
-// estimates. pack_state stays 'none'; link_status stays 'none'.
+// estimates. pack_state stays 'none' on new rows.
+//
+// Column ownership (data-integrity rule - see docs/GOTCHAS.md):
+//   Intake owns the "observed" fields only (identity + rollups).
+//   The curation fields - link_status, ingredient_id, link_reason,
+//   link_confidence - belong to the matcher + humans. Intake MUST NOT
+//   include them in the pr_vendor_items upsert payload: PostgREST
+//   overwrites every column present in the body on an existing row
+//   (ON CONFLICT DO UPDATE), and that wipes the proposal queue AND
+//   human-confirmed links on every run. A new row still lands at
+//   link_status='none' via the column DEFAULT.
 
 import { SupabaseClient } from "@supabase/supabase-js";
 import { descriptionKey, descriptionNorm, itemNumberNorm } from "./normalize";
@@ -348,6 +358,18 @@ export async function runIntake(
 
     logger(`Grouped ${items.size} vendor items. Writing...`);
 
+    // Intake owns the "observed" columns (identity + rollups) only. The
+    // curation columns - link_status, ingredient_id, link_reason,
+    // link_confidence - belong to the matcher + humans; intake must NOT
+    // write them in this upsert, because PostgREST's ON CONFLICT DO UPDATE
+    // overwrites every column present in the body on an existing row, and
+    // that would wipe the proposal queue AND human-confirmed links on
+    // every run. A brand-new vendor_item still lands at link_status='none'
+    // via the column DEFAULT ('none'::text) - already set in 0001; checked
+    // against information_schema.columns before this change.
+    //
+    // See docs/GOTCHAS.md: do not re-add any of the four curation columns
+    // to this payload.
     const vItemRows = Array.from(items.values()).map((it) => {
       const pickName = mostFrequent(it.nameCounts) ?? Array.from(it.nameCounts.keys())[0];
       const pickPack = mostFrequent(it.packCounts);
@@ -364,7 +386,6 @@ export async function runIntake(
         catch_weight: it.catch_weight,
         is_food: it.is_food ?? false,
         food_reason: it.food_reason,
-        link_status: "none" as const,
         first_seen: it.first_seen,
         last_seen: it.last_seen,
         lines: it.lines,
