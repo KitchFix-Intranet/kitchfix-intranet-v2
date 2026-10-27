@@ -57,13 +57,14 @@ export type ReviewGroupItem = {
   // Backfilled per-base price (step 5 Phase 1). perBase + perBaseUom
   // only populated when the parser was high/low confident AND a case
   // price was available. perBaseConfidence='high' renders a quiet check
-  // chip; 'low' renders an amber "est." chip; null falls back to the
-  // catalog-or-billed case price display.
+  // chip; 'low' renders an amber "est." chip; 'override' renders a
+  // sturdier green "override" chip (human-attested, Phase 1.8); null
+  // falls back to the catalog-or-billed case price display.
   perBase: number | null;
   perBaseUom: string | null;
-  perBaseConfidence: "high" | "low" | null;
+  perBaseConfidence: "high" | "low" | "override" | null;
   perBaseNote: string | null;
-  caseSource: "catalog" | "billed" | "catch_weight" | null;
+  caseSource: "catalog" | "billed" | "catch_weight" | "catalog_lb" | "override" | null;
 };
 
 export type ReviewCardIngredient = {
@@ -419,16 +420,23 @@ function UnitPriceCell({ item }: { item: ReviewGroupItem }) {
       item.perBaseUom === "EA" ? "each" :
       item.perBaseUom.toLowerCase();
     const title =
-      (item.perBaseConfidence === "high"
-        ? "Per-unit estimate from pack size + case price"
-        : "Low-confidence estimate (range / catch-weight / soft parse)") +
+      (item.perBaseConfidence === "override"
+        ? "Human-attested override (structured)"
+        : item.perBaseConfidence === "high"
+          ? "Per-unit estimate from pack size + case price"
+          : "Low-confidence estimate (range / catch-weight / soft parse)") +
       (item.perBaseNote ? ` - ${item.perBaseNote}` : "");
     return (
       <span title={title}>
         <strong>{fmtUsd(item.perBase)}</strong>
         <span className="kf-muted"> / {uomLower}</span>
         <br />
-        {item.perBaseConfidence === "high" ? (
+        {item.perBaseConfidence === "override" ? (
+          <span className="kf-conf-chip kf-conf-chip--override">
+            <Check size={10} strokeWidth={2.5} aria-hidden />
+            override
+          </span>
+        ) : item.perBaseConfidence === "high" ? (
           <span className="kf-conf-chip kf-conf-chip--ok">
             <Check size={10} strokeWidth={2.5} aria-hidden />
             per-unit

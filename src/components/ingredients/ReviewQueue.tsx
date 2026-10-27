@@ -278,8 +278,8 @@ async function loadReview() {
             ? Number(pe.per_base)
             : null;
         const perBaseConfidence =
-          pe && (pe.confidence === "high" || pe.confidence === "low")
-            ? (pe.confidence as "high" | "low")
+          pe && (pe.confidence === "high" || pe.confidence === "low" || pe.confidence === "override")
+            ? (pe.confidence as "high" | "low" | "override")
             : null;
         g.items.push({
           id: it.id,
@@ -311,7 +311,7 @@ async function loadReview() {
           perBaseUom: pe?.base_uom ?? null,
           perBaseConfidence,
           perBaseNote: pe?.note ?? null,
-          caseSource: (pe?.case_price_source as "catalog" | "billed" | "catch_weight" | null) ?? null,
+          caseSource: (pe?.case_price_source as "catalog" | "billed" | "catch_weight" | "catalog_lb" | "override" | null) ?? null,
         });
       }
       groups.set(key, g);
@@ -367,8 +367,8 @@ async function loadReview() {
             ? Number(pe.per_base)
             : null;
         const perBaseConfidence =
-          pe && (pe.confidence === "high" || pe.confidence === "low")
-            ? (pe.confidence as "high" | "low")
+          pe && (pe.confidence === "high" || pe.confidence === "low" || pe.confidence === "override")
+            ? (pe.confidence as "high" | "low" | "override")
             : null;
         g.items.push({
           id: it.id,
@@ -400,7 +400,7 @@ async function loadReview() {
           perBaseUom: pe?.base_uom ?? null,
           perBaseConfidence,
           perBaseNote: pe?.note ?? null,
-          caseSource: (pe?.case_price_source as "catalog" | "billed" | "catch_weight" | null) ?? null,
+          caseSource: (pe?.case_price_source as "catalog" | "billed" | "catch_weight" | "catalog_lb" | "override" | null) ?? null,
         });
       }
       groups.set(key, g);

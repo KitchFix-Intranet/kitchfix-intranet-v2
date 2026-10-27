@@ -4,6 +4,7 @@
 import { requireOwnerPage } from "@/lib/gate";
 import { Tabs } from "@/components/ingredients/Tabs";
 import { PackBackfillButton } from "@/components/ingredients/PackBackfillButton";
+import { PackOverrideMigrateButton } from "@/components/ingredients/PackOverrideMigrateButton";
 import "@/components/ingredients/ingredients.css";
 import "@/components/ingredients/review.css";
 
@@ -36,6 +37,21 @@ export default async function IngredientAdminPage() {
         </header>
 
         <PackBackfillButton />
+      </section>
+
+      <section className="kf-admin-section" aria-labelledby="pack-override-migrate-head">
+        <header className="kf-admin-section__head">
+          <h3 id="pack-override-migrate-head">Migrate text pack overrides to structured</h3>
+          <p>
+            One-time pass over the pre-Phase-1.8 free-text pack overrides. Converts each via the
+            shared <code>parsePack</code> + <code>estimateFromOverride</code> helpers so every row
+            ends up with <code>pack_qty / pack_size / pack_uom</code> and a recomputed per-unit.
+            Rows the parser can&rsquo;t reduce flip to <code>pack_state=&apos;override&apos;</code> with a
+            re-enter note so Kevin spots them in the panel. Idempotent.
+          </p>
+        </header>
+
+        <PackOverrideMigrateButton />
       </section>
     </div>
   );

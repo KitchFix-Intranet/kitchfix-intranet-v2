@@ -889,6 +889,39 @@ function IngredientBlock({
   );
 }
 
+// Structured pack-override editor (Phase 1.8). Replaces the free-text
+// single input. Captures qty/size/uom via typed inputs + a dropdown so
+// every save has the fields the per-unit math needs; computes the live
+// preview from the same base-unit table as the server (OVERRIDE_TO_BASE
+// in estimate.ts; mirrored here for the client preview). On save,
+// propagates to same-SKU twins.
+const UOM_GROUPS: Array<{ label: string; options: string[] }> = [
+  { label: "Weight", options: ["LB", "OZ", "G", "KG"] },
+  { label: "Volume", options: ["FLOZ", "GAL", "QT", "L", "ML", "PT"] },
+  { label: "Count", options: ["EA", "CT", "DZ", "PC"] },
+];
+const UOM_TO_BASE: Record<string, { base: "LB" | "FLOZ" | "EA"; factor: number }> = {
+  LB: { base: "LB", factor: 1 },
+  OZ: { base: "LB", factor: 1 / 16 },
+  G: { base: "LB", factor: 1 / 453.592 },
+  KG: { base: "LB", factor: 2.20462 },
+  FLOZ: { base: "FLOZ", factor: 1 },
+  L: { base: "FLOZ", factor: 33.814 },
+  ML: { base: "FLOZ", factor: 0.033814 },
+  GAL: { base: "FLOZ", factor: 128 },
+  QT: { base: "FLOZ", factor: 32 },
+  PT: { base: "FLOZ", factor: 16 },
+  EA: { base: "EA", factor: 1 },
+  CT: { base: "EA", factor: 1 },
+  DZ: { base: "EA", factor: 12 },
+  PC: { base: "EA", factor: 1 },
+};
+const UOM_LABEL: Record<"LB" | "FLOZ" | "EA", string> = {
+  LB: "lb",
+  FLOZ: "fl oz",
+  EA: "each",
+};
+
 function PackOverrideBlock({
   item,
   onDone,
@@ -896,25 +929,95 @@ function PackOverrideBlock({
   item: ReviewGroupItem;
   onDone: () => void;
 }) {
-  const [packText, setPackText] = useState(item.pack ?? "");
-  const [billedUnit, setBilledUnit] = useState(item.billedUnit ?? "");
-  const [note, setNote] = useState("");
+  // Prefill: catch-weight toggle takes the item's current flag; $/lb
+  // takes any existing per-base when catch; qty/size left blank for
+  // the human to type (we don't surface the raw override jsonb on the
+  // ReviewGroupItem). UOM defaults to LB - the most common choice.
+  const [catchWeight, setCatchWeight] = useState<boolean>(item.catchWeight);
+  const [qtyStr, setQtyStr] = useState<string>("");
+  const [sizeStr, setSizeStr] = useState<string>("");
+  const [uom, setUom] = useState<string>("LB");
+  const [perLbStr, setPerLbStr] = useState<string>(
+    item.perBase != null && item.catchWeight ? String(item.perBase) : ""
+  );
+  const [billedUnit, setBilledUnit] = useState<string>(item.billedUnit ?? "");
+  const [note, setNote] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [lastTwins, setLastTwins] = useState<number | null>(null);
+
+  const qty = Number(qtyStr);
+  const size = Number(sizeStr);
+  const perLb = Number(perLbStr);
+  const qtyValid = Number.isFinite(qty) && qty > 0;
+  const sizeValid = Number.isFinite(size) && size > 0;
+  const perLbValid = Number.isFinite(perLb) && perLb > 0;
+
+  // Live preview math - mirrors estimateFromOverride for a client-side
+  // display BEFORE the save; the server re-does the math from the same
+  // table so there's no drift risk.
+  const previewCasePrice =
+    item.catalogPrice != null && item.catalogPrice > 0
+      ? { v: item.catalogPrice, src: "catalog" as const }
+      : item.unitPrice != null && item.unitPrice > 0
+        ? { v: item.unitPrice, src: "billed" as const }
+        : null;
+
+  let preview: { line: string; dim: string | null; perBase: number | null } = { line: "", dim: null, perBase: null };
+  if (catchWeight) {
+    if (perLbValid) {
+      preview = {
+        line: `${fmtUsd(perLb)} / lb (catch-weight)`,
+        dim: "weight",
+        perBase: perLb,
+      };
+    } else {
+      preview = { line: "enter $/lb to preview", dim: null, perBase: null };
+    }
+  } else {
+    if (qtyValid && sizeValid && uom && UOM_TO_BASE[uom]) {
+      const b = UOM_TO_BASE[uom];
+      const total = qty * size * b.factor;
+      if (previewCasePrice) {
+        preview = {
+          line: `${qty} x ${size} ${uom} = ${total.toFixed(2)} ${UOM_LABEL[b.base]} -> ${fmtUsd(previewCasePrice.v / total)} / ${UOM_LABEL[b.base]}  (case ${fmtUsd(previewCasePrice.v)} ${previewCasePrice.src})`,
+          dim: "math",
+          perBase: previewCasePrice.v / total,
+        };
+      } else {
+        preview = {
+          line: `${qty} x ${size} ${uom} = ${total.toFixed(2)} ${UOM_LABEL[b.base]}  (no case price on file - per-unit will be blank)`,
+          dim: "no-price",
+          perBase: null,
+        };
+      }
+    } else {
+      preview = { line: "enter qty / size / uom to preview", dim: null, perBase: null };
+    }
+  }
+
+  const readyToSave = catchWeight ? perLbValid : qtyValid && sizeValid && !!UOM_TO_BASE[uom];
 
   async function save() {
-    if (busy) return;
-    const next = packText.trim();
-    if (next.length < 1) { toast("Pack text is required", { tone: "block" }); return; }
+    if (busy || !readyToSave) return;
     setBusy(true);
     setError(null);
-    const r = await postJson("/api/review/set-pack-override", {
+    setLastTwins(null);
+    const body: Record<string, unknown> = {
       itemId: item.id,
-      packText: next,
+      catchWeight,
       billedUnit: billedUnit.trim() || null,
       note: note.trim() || null,
-    });
+    };
+    if (catchWeight) {
+      body.perLb = perLb;
+    } else {
+      body.qty = qty;
+      body.size = size;
+      body.uom = uom;
+    }
+    const r = await postJson("/api/review/set-pack-override", body);
     if (!r.ok) {
       const msg = errMsg(r.data, `Save failed (${r.status})`);
       setError(msg);
@@ -922,7 +1025,14 @@ function PackOverrideBlock({
       setBusy(false);
       return;
     }
-    toast("Saved: pack size");
+    const d = (r.data ?? {}) as { twins?: number; perBase?: number | null };
+    const twins = d.twins ?? 0;
+    setLastTwins(twins);
+    toast(
+      twins > 0
+        ? `Saved: pack override (applied to ${fmtCount(twins + 1)} matching items)`
+        : "Saved: pack override"
+    );
     setSavedAt(Date.now());
     setBusy(false);
     onDone();
@@ -931,22 +1041,108 @@ function PackOverrideBlock({
   return (
     <section className="kf-drawer__block kf-dpn__block" aria-label="Pack override">
       <header className="kf-drawer__block-head">
-        <h4>Pack size</h4>
-        <small>fills missing pack size; marked as manually entered</small>
+        <h4>Pack size (override)</h4>
+        <small>
+          structured override: qty + size + uom OR $/lb for catch-weight. Writes
+          <code> pack_state=&apos;override&apos;</code> and propagates to same-SKU twins.
+        </small>
       </header>
 
       <div className="kf-dpn__row">
+        <div className="kf-dpn__toggle">
+          <label className="kf-dpn__toggle-label">
+            <input
+              type="checkbox"
+              checked={catchWeight}
+              aria-label="Priced by the pound (catch-weight)"
+              onChange={(e) => {
+                const v = e.currentTarget.checked;
+                setCatchWeight(v);
+              }}
+              disabled={busy}
+            />
+            <span>Priced by the pound (catch-weight)</span>
+          </label>
+          <div className="kf-dpn__hint">
+            Catch-weight items are billed by actual shipped weight. The $/lb below is used
+            directly; qty/size/uom are ignored.
+          </div>
+        </div>
+      </div>
+
+      {catchWeight ? (
+        <div className="kf-dpn__row">
+          <label className="kf-dpn__label">
+            <span>$ / lb</span>
+            <input
+              type="number"
+              inputMode="decimal"
+              step="0.01"
+              min="0"
+              value={perLbStr}
+              onChange={(e) => setPerLbStr(e.target.value)}
+              placeholder="e.g. 5.299"
+            />
+          </label>
+        </div>
+      ) : (
+        <>
+          <div className="kf-dpn__row kf-newing__row">
+            <label className="kf-dpn__label">
+              <span>Qty</span>
+              <input
+                type="number"
+                inputMode="numeric"
+                step="1"
+                min="0"
+                value={qtyStr}
+                onChange={(e) => setQtyStr(e.target.value)}
+                placeholder="e.g. 6"
+              />
+            </label>
+            <label className="kf-dpn__label">
+              <span>Size</span>
+              <input
+                type="number"
+                inputMode="decimal"
+                step="0.01"
+                min="0"
+                value={sizeStr}
+                onChange={(e) => setSizeStr(e.target.value)}
+                placeholder="e.g. 5"
+              />
+            </label>
+            <label className="kf-dpn__label">
+              <span>UOM</span>
+              <select value={uom} onChange={(e) => setUom(e.target.value)}>
+                {UOM_GROUPS.map((g) => (
+                  <optgroup key={g.label} label={g.label}>
+                    {g.options.map((o) => (
+                      <option key={o} value={o}>
+                        {o === "FLOZ" ? "FL OZ" : o}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <div className="kf-dpn__row">
+            <div className="kf-dpn__hint">
+              Case price on file: {previewCasePrice ? (
+                <strong>{fmtUsd(previewCasePrice.v)} ({previewCasePrice.src})</strong>
+              ) : (
+                <span className="kf-muted">none - pack will save, per-unit will be blank</span>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      <div className="kf-dpn__row">
         <label className="kf-dpn__label">
-          <span>Pack text</span>
-          <input
-            type="text"
-            value={packText}
-            onChange={(e) => setPackText(e.target.value)}
-            placeholder="e.g. 4/10lb or 24/16oz"
-          />
-        </label>
-        <label className="kf-dpn__label">
-          <span>Billed unit</span>
+          <span>Billed unit (optional)</span>
           <input
             type="text"
             value={billedUnit}
@@ -960,24 +1156,34 @@ function PackOverrideBlock({
             type="text"
             value={note}
             onChange={(e) => setNote(e.target.value)}
-            placeholder="e.g. confirmed with vendor rep 10/27"
+            placeholder="e.g. confirmed with vendor rep"
           />
         </label>
-        <div className="kf-dpn__hint">
-          Normalized $/lb across pack sizes comes later (step 3 pack parsing). This saves the
-          human-attested pack as-is.
+      </div>
+
+      <div className="kf-dpn__row kf-dpn__preview-row">
+        <div className="kf-dpn__preview" aria-live="polite">
+          <span className="kf-dpn__preview-label">Preview</span>
+          <span className={`kf-dpn__preview-body${preview.dim === "no-price" ? " kf-dpn__preview-body--warn" : ""}`}>
+            {preview.line}
+          </span>
         </div>
         <div className="kf-dpn__btns">
           <button
             type="button"
             className={`kf-btn kf-btn--primary kf-btn--sm${busy ? " is-busy" : ""}`}
-            disabled={busy || packText.trim().length < 1}
+            disabled={busy || !readyToSave}
             onClick={save}
           >
-            Save pack
+            Save override
           </button>
           <SaveFlash savedAt={savedAt} error={error} />
         </div>
+        {lastTwins != null && lastTwins > 0 ? (
+          <div className="kf-dpn__hint">
+            Applied to <strong>{fmtCount(lastTwins + 1)}</strong> matching items (same vendor SKU).
+          </div>
+        ) : null}
       </div>
     </section>
   );

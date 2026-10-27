@@ -979,6 +979,14 @@
 }
 .kf-conf-chip--ok { color: var(--sp-good); background: var(--sp-good-bg); }
 .kf-conf-chip--low { color: var(--sp-warn); background: var(--sp-warn-bg); }
+/* Override = human-attested; distinct from auto 'high' so Kevin can
+ * tell "this was set by hand" at a glance. */
+.kf-conf-chip--override {
+  color: var(--sp-navy);
+  background: color-mix(in srgb, var(--sp-navy) 10%, var(--sp-card));
+  border: 1px solid color-mix(in srgb, var(--sp-navy) 25%, transparent);
+  padding: 0 5px;
+}
 
 /* ---------------------------------------------------------------------
  * Admin surface: /stockpot/ingredients/admin PackBackfillButton.
@@ -1061,3 +1069,66 @@
   font-size: var(--sp-t-micro);
   margin: 0;
 }
+.kf-admin-run__samples {
+  background: var(--sp-ground);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+  padding: var(--sp-sp-2) var(--sp-sp-3);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+}
+.kf-admin-run__samples summary {
+  cursor: pointer;
+  color: var(--sp-link);
+  font-weight: 700;
+}
+.kf-admin-run__samples ul {
+  list-style: none;
+  margin: var(--sp-sp-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+}
+.kf-admin-run__samples code {
+  background: var(--sp-sky-tint);
+  padding: 1px 4px;
+  border-radius: var(--sp-r-sm);
+  font-family: var(--sp-mono, var(--sp-ui));
+  font-size: var(--sp-t-label);
+}
+.kf-admin-run__k--converted { color: var(--sp-good); }
+.kf-admin-run__k--flagged { color: var(--sp-warn); }
+
+/* ---------------------------------------------------------------------
+ * Pack-override structured editor preview strip (Phase 1.8). Lives in
+ * the DetailPanel below the inputs; shows the live computed per-unit
+ * so Kevin sees the number before Save.
+ * --------------------------------------------------------------------- */
+.kf-dpn__preview-row { gap: var(--sp-sp-2); }
+.kf-dpn__preview {
+  background: var(--sp-sky-tint);
+  border: 1px solid var(--sp-line-soft);
+  border-radius: var(--sp-r-sm);
+  padding: var(--sp-sp-2) var(--sp-sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kf-dpn__preview-label {
+  color: var(--sp-muted);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+.kf-dpn__preview-body {
+  color: var(--sp-ink);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+}
+.kf-dpn__preview-body--warn { color: var(--sp-warn); font-weight: 500; }

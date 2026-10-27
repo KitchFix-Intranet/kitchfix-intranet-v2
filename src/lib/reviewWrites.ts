@@ -7,6 +7,8 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { categoryForParent, type SuperCategory } from "@/lib/ingredients/categories";
+import { estimateFromOverride } from "@/lib/ingredients/estimate";
+import { parsePack } from "@/lib/ingredients/pack";
 
 export type ConfirmResult = {
   confirmed: number;
@@ -679,81 +681,483 @@ export async function setIngredientResale(
   return { ok: true };
 }
 
-// Manual pack-size entry for an "-/case" item. We stamp the user's text
-// into pack_text + billed_unit (where previously null), snapshot the full
-// payload + actor + timestamp into pack_override jsonb (so the override
-// is auditable + queryable), and leave pack_qty/pack_size/pack_uom null
-// (true parsing is step 3's job). pack_state flips to 'ok' - the human
-// attests the value is known. The jsonb presence of pack_override is the
-// "manually entered" flag that renders a badge on the row.
+// Structured pack-override (Phase 1.8). Replaces the free-text version
+// that only stored `{pack_text, billed_unit}`. The editor now captures
+// qty/size/uom (non-catch) or $/lb (catch) directly from a UI with
+// typed inputs + a UOM dropdown; this helper:
+//   1. Reads the item + its latest billed price + its catalog match.
+//   2. Computes per-base via estimateFromOverride (reuses the shared
+//      base-unit table; no second estimator).
+//   3. Writes pack_override jsonb (structured) + pack_qty/pack_size/
+//      pack_uom + pack_text (human-readable) + billed_unit + pack_state
+//      = 'override' + price_estimate on the target row.
+//   4. Propagates the same write to every pr_vendor_items row with the
+//      SAME (vendor_id, item_number_norm) - these are the identical
+//      vendor SKU, so the pack is by definition the same. Does NOT
+//      propagate across different vendors or SKUs even on the same
+//      ingredient.
+//   5. Logs one pr_events 'pack_override_set' per touched row.
+// Idempotent + override-safe (every row carries pack_override after).
+// Returns twin count so the UI can show "applied to N matching items".
+export type StructuredOverridePayload = {
+  catch_weight: boolean;
+  qty: number | null;
+  size: number | null;
+  uom: string | null;
+  per_lb: number | null;
+  billed_unit: string | null;
+  note: string | null;
+};
+
 export async function setVendorItemPackOverride(
   client: SupabaseClient,
   args: {
     itemId: string;
-    packText: string;
-    billedUnit: string | null;
-    note: string | null;
+    payload: StructuredOverridePayload;
     actorEmail: string;
   }
-): Promise<{ ok: boolean; error?: string }> {
-  const { itemId, packText, billedUnit, note, actorEmail } = args;
-  const packTrim = packText.trim();
-  if (packTrim.length < 1) return { ok: false, error: "Pack text is required" };
+): Promise<{
+  ok: boolean;
+  error?: string;
+  mainWritten: boolean;
+  twins: number;
+  perBase: number | null;
+  baseUom: string | null;
+}> {
+  const { itemId, payload, actorEmail } = args;
 
-  const { data: cur, error: curErr } = await client
+  // Load the target row (we need vendor_id + item_number_norm for twin
+  // propagation; billed_unit + catalog data for the price fallback).
+  const { data: itemRow, error: itemErr } = await client
     .from("pr_vendor_items")
-    .select("id,pack_text,billed_unit,pack_state,pack_override,status")
+    .select("id,vendor_id,item_number,item_number_norm,pack_text,billed_unit,pack_state,pack_override,catch_weight,status")
     .eq("id", itemId)
     .maybeSingle();
-  if (curErr) return { ok: false, error: curErr.message };
-  if (!cur) return { ok: false, error: "Item not found" };
-  const row = cur as {
+  if (itemErr) return { ok: false, error: itemErr.message, mainWritten: false, twins: 0, perBase: null, baseUom: null };
+  if (!itemRow) return { ok: false, error: "Item not found", mainWritten: false, twins: 0, perBase: null, baseUom: null };
+  const item = itemRow as {
     id: string;
+    vendor_id: string;
+    item_number: string | null;
+    item_number_norm: string | null;
     pack_text: string | null;
     billed_unit: string | null;
     pack_state: string;
     pack_override: unknown;
+    catch_weight: boolean;
     status: string;
   };
 
+  // Fetch latest valid unit_price for the item (billed fallback on the
+  // non-catch price path; and for catch-weight when the user doesn't
+  // supply per_lb we still null it, we don't invent one here).
+  let latestUnitPrice: number | null = null;
+  {
+    const { data: obsRow } = await client
+      .from("pr_price_observations")
+      .select("unit_price")
+      .eq("vendor_item_id", itemId)
+      .is("excluded_reason", null)
+      .not("unit_price", "is", null)
+      .order("invoice_date", { ascending: false, nullsFirst: false })
+      .limit(1)
+      .maybeSingle();
+    if (obsRow && typeof (obsRow as { unit_price?: unknown }).unit_price === "number") {
+      latestUnitPrice = (obsRow as { unit_price: number }).unit_price;
+    } else if (obsRow && (obsRow as { unit_price?: unknown }).unit_price != null) {
+      const n = Number((obsRow as { unit_price: unknown }).unit_price);
+      if (Number.isFinite(n)) latestUnitPrice = n;
+    }
+  }
+
+  // Catalog match on (vendor_id, item_number_norm).
+  let catalogPrice: number | null = null;
+  if (item.item_number_norm) {
+    const { data: catRow } = await client
+      .from("pr_vendor_catalog")
+      .select("catalog_price")
+      .eq("vendor_id", item.vendor_id)
+      .eq("item_number_norm", item.item_number_norm)
+      .maybeSingle();
+    if (catRow && (catRow as { catalog_price?: unknown }).catalog_price != null) {
+      const n = Number((catRow as { catalog_price: unknown }).catalog_price);
+      if (Number.isFinite(n) && n > 0) catalogPrice = n;
+    }
+  }
+
+  // Compute the structured estimate (reuses the shared base-unit table).
+  const result = estimateFromOverride({
+    catch_weight: payload.catch_weight,
+    qty: payload.qty,
+    size: payload.size,
+    uom: payload.uom?.toUpperCase() ?? null,
+    per_lb: payload.per_lb,
+    catalog_price: catalogPrice,
+    latest_unit_price: latestUnitPrice,
+    note: payload.note,
+  });
+
   const nowIso = new Date().toISOString();
-  const unitTrim = billedUnit?.trim() || null;
-  const noteTrim = note?.trim() || null;
+  const unitTrim = payload.billed_unit?.trim() || null;
+
+  // Human-readable pack_text echo of the structured payload - useful for
+  // old UI surfaces + legacy JSON exports.
+  const packTextEcho = payload.catch_weight
+    ? "catch-weight"
+    : result.qty != null && result.size != null && result.uom
+      ? result.qty === 1
+        ? `${result.size} ${result.uom}`
+        : `${result.qty}/${result.size} ${result.uom}`
+      : item.pack_text ?? "";
+
   const override = {
-    pack_text: packTrim,
+    catch_weight: payload.catch_weight,
+    qty: result.qty,
+    size: result.size,
+    uom: result.uom,
+    dim: result.dim,
+    base_uom: result.base_uom,
+    total_base: result.total_base,
+    per_lb: payload.catch_weight ? payload.per_lb : null,
+    case_price: result.case_price,
+    case_price_source: result.case_price_source,
     billed_unit: unitTrim,
-    note: noteTrim,
+    pack_text: packTextEcho,
+    note: result.note,
     by: actorEmail,
     at: nowIso,
   };
 
-  const { error: upErr } = await client
-    .from("pr_vendor_items")
-    .update({
-      pack_text: packTrim,
-      billed_unit: unitTrim ?? row.billed_unit,
-      pack_state: "ok",
-      pack_override: override,
-      updated_at: nowIso,
-    })
-    .eq("id", itemId);
-  if (upErr) return { ok: false, error: upErr.message };
+  const priceEstimate = {
+    per_base: result.per_base,
+    base_uom: result.base_uom,
+    case_price: result.case_price,
+    case_price_source: "override" as const,
+    pack_source: "override" as const,
+    confidence: "override" as const,
+    note: result.note,
+  };
 
-  await client.from("pr_events").insert({
-    entity_type: "vendor_item",
-    entity_id: itemId,
-    kind: "pack_override_set",
-    before: {
-      pack_text: row.pack_text,
-      billed_unit: row.billed_unit,
-      pack_state: row.pack_state,
-      had_override: row.pack_override !== null,
+  const writeTargets: Array<{
+    id: string;
+    before: Record<string, unknown>;
+  }> = [
+    {
+      id: item.id,
+      before: {
+        pack_text: item.pack_text,
+        billed_unit: item.billed_unit,
+        pack_state: item.pack_state,
+        had_override: item.pack_override !== null,
+      },
     },
-    after: override,
-    actor: actorEmail,
-  });
+  ];
 
-  return { ok: true };
+  // Twin propagation: same (vendor_id, item_number_norm) only. We skip
+  // when item_number_norm is null (then there's no stable twin key).
+  let twins = 0;
+  if (item.item_number_norm) {
+    const { data: twinRows, error: twinErr } = await client
+      .from("pr_vendor_items")
+      .select("id,pack_text,billed_unit,pack_state,pack_override")
+      .eq("vendor_id", item.vendor_id)
+      .eq("item_number_norm", item.item_number_norm)
+      .neq("id", item.id);
+    if (twinErr) return { ok: false, error: twinErr.message, mainWritten: false, twins: 0, perBase: null, baseUom: null };
+    for (const t of (twinRows ?? []) as Array<{
+      id: string;
+      pack_text: string | null;
+      billed_unit: string | null;
+      pack_state: string;
+      pack_override: unknown;
+    }>) {
+      writeTargets.push({
+        id: t.id,
+        before: {
+          pack_text: t.pack_text,
+          billed_unit: t.billed_unit,
+          pack_state: t.pack_state,
+          had_override: t.pack_override !== null,
+          twin_of: item.id,
+        },
+      });
+      twins += 1;
+    }
+  }
+
+  let mainWritten = false;
+  for (const t of writeTargets) {
+    const { error: upErr } = await client
+      .from("pr_vendor_items")
+      .update({
+        pack_text: packTextEcho || null,
+        pack_qty: result.qty,
+        pack_size: result.size,
+        pack_uom: result.uom,
+        billed_unit: unitTrim ?? undefined,
+        pack_state: "override",
+        pack_override: override,
+        price_estimate: priceEstimate,
+        updated_at: nowIso,
+      })
+      .eq("id", t.id);
+    if (upErr) {
+      // First-target failure aborts; twin failures are logged and skipped.
+      if (t.id === item.id) {
+        return { ok: false, error: upErr.message, mainWritten: false, twins: 0, perBase: null, baseUom: null };
+      }
+      // eslint-disable-next-line no-console
+      console.error(`pack override twin write failed for ${t.id}: ${upErr.message}`);
+      continue;
+    }
+    if (t.id === item.id) mainWritten = true;
+
+    await client.from("pr_events").insert({
+      entity_type: "vendor_item",
+      entity_id: t.id,
+      kind: "pack_override_set",
+      before: t.before,
+      after: override,
+      actor: actorEmail,
+    });
+  }
+
+  return {
+    ok: mainWritten,
+    mainWritten,
+    twins,
+    perBase: result.per_base,
+    baseUom: result.base_uom,
+  };
+}
+
+// One-time migration for the pre-Phase-1.8 text overrides. These rows
+// have pack_override.pack_text + pack_state='ok' but a null per_base.
+// We re-parse the text via parsePack and, when it parses high/low,
+// convert to the structured shape via estimateFromOverride; when parse
+// is 'none', we still flip pack_state='override' with a note so the
+// row is permanent, but leave per_base null for Kevin to re-enter.
+// Owner-gated through the admin route; idempotent (converted rows have
+// pack_override.qty populated so they're skipped on re-run).
+export async function migrateTextPackOverrides(
+  client: SupabaseClient,
+  args: { actorEmail: string }
+): Promise<{
+  ok: boolean;
+  converted: number;
+  flagged: number;
+  skipped: number;
+  samples: Array<{ id: string; result: "converted" | "flagged"; from: string; to?: string }>;
+}> {
+  const { actorEmail } = args;
+  // Pull all rows with a pack_override set.
+  const batch = 500;
+  let from = 0;
+  const samples: Array<{ id: string; result: "converted" | "flagged"; from: string; to?: string }> = [];
+  let converted = 0;
+  let flagged = 0;
+  let skipped = 0;
+  for (;;) {
+    const { data, error } = await client
+      .from("pr_vendor_items")
+      .select("id,vendor_id,item_number_norm,pack_text,billed_unit,pack_state,pack_override,catch_weight")
+      .not("pack_override", "is", null)
+      .order("id", { ascending: true })
+      .range(from, from + batch - 1);
+    if (error) return { ok: false, converted, flagged, skipped, samples };
+    const rows = (data ?? []) as Array<{
+      id: string;
+      vendor_id: string;
+      item_number_norm: string | null;
+      pack_text: string | null;
+      billed_unit: string | null;
+      pack_state: string;
+      pack_override: Record<string, unknown> | null;
+      catch_weight: boolean;
+    }>;
+    if (rows.length === 0) break;
+    for (const r of rows) {
+      const po = r.pack_override ?? {};
+      // Skip rows already in the structured shape (idempotent re-run).
+      if (po.qty != null || po.catch_weight != null || po.base_uom != null) {
+        skipped += 1;
+        continue;
+      }
+      const legacyText = typeof po.pack_text === "string" ? po.pack_text : r.pack_text ?? "";
+      const parsed = parsePack(legacyText);
+
+      if (parsed.confidence === "none" || parsed.total_base == null) {
+        // Flag for re-entry; keep pack_text so Kevin sees the original
+        // in the editor. pack_state flips to 'override' so the backfill
+        // skips it from here on.
+        const nowIso = new Date().toISOString();
+        const newOverride = {
+          ...po,
+          qty: null,
+          size: null,
+          uom: null,
+          dim: null,
+          base_uom: null,
+          total_base: null,
+          catch_weight: r.catch_weight,
+          per_lb: null,
+          case_price: null,
+          case_price_source: null,
+          billed_unit: typeof po.billed_unit === "string" ? po.billed_unit : r.billed_unit,
+          pack_text: legacyText,
+          note: "override needs re-entry in structured editor (migrated from text)",
+          by: actorEmail,
+          at: nowIso,
+        };
+        const priceEstimate = {
+          per_base: null,
+          base_uom: null,
+          case_price: null,
+          case_price_source: "override" as const,
+          pack_source: "override" as const,
+          confidence: "override" as const,
+          note: "override needs re-entry in structured editor",
+        };
+        const { error: upErr } = await client
+          .from("pr_vendor_items")
+          .update({
+            pack_state: "override",
+            pack_override: newOverride,
+            price_estimate: priceEstimate,
+            updated_at: nowIso,
+          })
+          .eq("id", r.id);
+        if (upErr) continue;
+        await client.from("pr_events").insert({
+          entity_type: "vendor_item",
+          entity_id: r.id,
+          kind: "pack_override_set",
+          before: {
+            pack_text: r.pack_text,
+            billed_unit: r.billed_unit,
+            pack_state: r.pack_state,
+            migrated_from: "text",
+          },
+          after: newOverride,
+          actor: actorEmail,
+          note: "migration: flagged for re-entry (parse=none)",
+        });
+        flagged += 1;
+        if (samples.length < 20) samples.push({ id: r.id, result: "flagged", from: legacyText });
+        continue;
+      }
+
+      // Parsed - convert via estimateFromOverride. Pull catalog price
+      // for the price-fallback math.
+      let catalogPrice: number | null = null;
+      if (r.item_number_norm) {
+        const { data: catRow } = await client
+          .from("pr_vendor_catalog")
+          .select("catalog_price")
+          .eq("vendor_id", r.vendor_id)
+          .eq("item_number_norm", r.item_number_norm)
+          .maybeSingle();
+        if (catRow && (catRow as { catalog_price?: unknown }).catalog_price != null) {
+          const n = Number((catRow as { catalog_price: unknown }).catalog_price);
+          if (Number.isFinite(n) && n > 0) catalogPrice = n;
+        }
+      }
+      // Pull latest billed too.
+      let latestUnitPrice: number | null = null;
+      {
+        const { data: obsRow } = await client
+          .from("pr_price_observations")
+          .select("unit_price")
+          .eq("vendor_item_id", r.id)
+          .is("excluded_reason", null)
+          .not("unit_price", "is", null)
+          .order("invoice_date", { ascending: false, nullsFirst: false })
+          .limit(1)
+          .maybeSingle();
+        if (obsRow && (obsRow as { unit_price?: unknown }).unit_price != null) {
+          const n = Number((obsRow as { unit_price: unknown }).unit_price);
+          if (Number.isFinite(n)) latestUnitPrice = n;
+        }
+      }
+
+      const result = estimateFromOverride({
+        catch_weight: r.catch_weight,
+        qty: parsed.qty,
+        size: parsed.size,
+        uom: parsed.uom,
+        per_lb: null, // text overrides never carried a direct $/lb
+        catalog_price: catalogPrice,
+        latest_unit_price: latestUnitPrice,
+        note: `migrated from text override: "${legacyText}"`,
+      });
+      const nowIso = new Date().toISOString();
+      const newOverride = {
+        catch_weight: r.catch_weight,
+        qty: result.qty,
+        size: result.size,
+        uom: result.uom,
+        dim: result.dim,
+        base_uom: result.base_uom,
+        total_base: result.total_base,
+        per_lb: null,
+        case_price: result.case_price,
+        case_price_source: result.case_price_source,
+        billed_unit: typeof po.billed_unit === "string" ? po.billed_unit : r.billed_unit,
+        pack_text: legacyText,
+        note: result.note,
+        by: actorEmail,
+        at: nowIso,
+      };
+      const packTextEcho =
+        result.qty != null && result.size != null && result.uom
+          ? result.qty === 1
+            ? `${result.size} ${result.uom}`
+            : `${result.qty}/${result.size} ${result.uom}`
+          : legacyText;
+      const priceEstimate = {
+        per_base: result.per_base,
+        base_uom: result.base_uom,
+        case_price: result.case_price,
+        case_price_source: "override" as const,
+        pack_source: "override" as const,
+        confidence: "override" as const,
+        note: result.note,
+      };
+      const { error: upErr } = await client
+        .from("pr_vendor_items")
+        .update({
+          pack_text: packTextEcho,
+          pack_qty: result.qty,
+          pack_size: result.size,
+          pack_uom: result.uom,
+          pack_state: "override",
+          pack_override: newOverride,
+          price_estimate: priceEstimate,
+          updated_at: nowIso,
+        })
+        .eq("id", r.id);
+      if (upErr) continue;
+      await client.from("pr_events").insert({
+        entity_type: "vendor_item",
+        entity_id: r.id,
+        kind: "pack_override_set",
+        before: {
+          pack_text: r.pack_text,
+          billed_unit: r.billed_unit,
+          pack_state: r.pack_state,
+          migrated_from: "text",
+        },
+        after: newOverride,
+        actor: actorEmail,
+        note: `migration: converted from text (parse=${parsed.confidence})`,
+      });
+      converted += 1;
+      if (samples.length < 20) samples.push({ id: r.id, result: "converted", from: legacyText, to: packTextEcho });
+    }
+    if (rows.length < batch) break;
+    from += batch;
+  }
+  return { ok: true, converted, flagged, skipped, samples };
 }
 
 // ---------------------------------------------------------------------------
