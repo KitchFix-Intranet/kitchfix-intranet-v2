@@ -8,6 +8,7 @@ import { serviceClient } from "@/lib/supabase/service";
 import { fmtCount, fmtUsd, fmtUsdLong, fmtDate } from "@/lib/fmt";
 import { Tabs } from "./Tabs";
 import { ReviewCard, type ReviewCardGroup } from "./ReviewCard";
+import { ReviewLedger } from "./ReviewLedger";
 import "./ingredients.css";
 import "./review.css";
 
@@ -242,6 +243,8 @@ export async function ReviewQueue() {
         {fmtUsdLong(totals.groupedUsd)} across {fmtCount(groups.length)} groups.
         Confirmed last seen on each row {groups.length > 0 && groups[0].items.length > 0 && groups[0].items[0].lastSeen ? fmtDate(groups[0].items[0].lastSeen) : "-"}.
       </p>
+
+      <ReviewLedger ingredients={ingredients} />
     </div>
   );
 }

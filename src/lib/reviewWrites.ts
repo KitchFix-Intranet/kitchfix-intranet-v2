@@ -73,11 +73,18 @@ export async function confirmItems(
   const rows = await readItems(client, itemIds);
   const confirmable = rows.filter((r) => r.link_status === "proposed");
 
-  // Golden links (upsert on vendor_item_id so re-confirming is a no-op).
+  // Golden links. Plain UNIQUE on (vendor_item_id) already enforces one
+  // row per vendor item; upsert on that constraint keeps a confirm ->
+  // undo -> re-confirm cycle mutating the same row (revoked_at:null ->
+  // now() -> null). revoked_at:null in the payload reactivates a prior
+  // revoke; verified_by + verified_at retake the newest confirm.
+  const nowIso = new Date().toISOString();
   const golden = confirmable.map((r) => ({
     vendor_item_id: r.id,
     ingredient_id: ingredientId,
     verified_by: actorEmail,
+    verified_at: nowIso,
+    revoked_at: null,
   }));
   if (golden.length > 0) {
     const { error } = await client
@@ -117,6 +124,11 @@ export async function confirmItems(
       alias_text: r.name,
       alias_norm: r.description_key,
       kind: "manual",
+      // Reactivate a prior revoke. The plain UNIQUE on (alias_norm, kind)
+      // forces one row per alias; the upsert UPDATE clears revoked_at and
+      // can repoint ingredient_id if the alias is reused for a different
+      // ingredient after a prior undo.
+      revoked_at: null,
     }));
   // Dedupe by alias_norm within this call so the upsert never carries
   // conflicting rows in a single request.
@@ -267,13 +279,18 @@ export async function relinkItems(
   return { relinked, errors };
 }
 
+// Soft-revoke undo. The pr_ tables grant no DELETE (PR24 never-delete),
+// so undo cannot remove rows - it stamps revoked_at on the golden link
+// and the learned alias, and flips the vendor item back to 'proposed'.
+// Re-confirming the same item mutates the same rows (revoked_at:null in
+// the upsert payload), so there is never a duplicate active row.
 export async function undoConfirm(
   client: SupabaseClient,
   args: { itemId: string; actorEmail: string }
 ): Promise<{ ok: boolean; error?: string }> {
   const { itemId, actorEmail } = args;
 
-  // Read the item + its golden link.
+  // Read the item + its ingredient / description_key.
   const { data: itm } = await client
     .from("pr_vendor_items")
     .select("id,description_key,ingredient_id,link_status")
@@ -283,30 +300,32 @@ export async function undoConfirm(
   const row = itm as { id: string; description_key: string; ingredient_id: string | null; link_status: string };
   if (row.link_status !== "confirmed") return { ok: false, error: "Item is not confirmed; nothing to undo" };
 
-  // Delete the golden link.
-  const { error: delErr } = await client
-    .from("pr_golden_links")
-    .delete()
-    .eq("vendor_item_id", itemId);
-  if (delErr) return { ok: false, error: delErr.message };
+  const nowIso = new Date().toISOString();
 
-  // Revert the item to proposed, keeping its ingredient_id so the group
-  // card still shows the correct target.
+  // Soft-revoke the active golden link for this vendor item. No DELETE.
+  const { error: revErr } = await client
+    .from("pr_golden_links")
+    .update({ revoked_at: nowIso })
+    .eq("vendor_item_id", itemId)
+    .is("revoked_at", null);
+  if (revErr) return { ok: false, error: revErr.message };
+
+  // Flip the item back to proposed - this is what drives coverage + the
+  // review queue back. Keep ingredient_id so the card still shows the
+  // correct target when the item reappears in the queue.
   const { error: upErr } = await client
     .from("pr_vendor_items")
     .update({
       link_status: "proposed",
       link_reason: `undo:${actorEmail}`,
     })
-    .eq("id", itemId);
+    .eq("id", itemId)
+    .eq("link_status", "confirmed");
   if (upErr) return { ok: false, error: upErr.message };
 
-  // Remove the learned alias on this description_key. Only remove the
-  // alias if no OTHER confirmed item on the same alias_norm still points
-  // at the same ingredient (so a two-vendor group's alias survives one
-  // undo). Simplest: count remaining confirmed items with this
-  // description_key + ingredient_id; delete the alias only when zero
-  // remain.
+  // Soft-revoke the learned alias on this description_key - but only if
+  // no OTHER confirmed item on the same (description_key, ingredient_id)
+  // still relies on it. A two-vendor group's alias survives one undo.
   if (row.ingredient_id && row.description_key) {
     const { count } = await client
       .from("pr_vendor_items")
@@ -315,12 +334,20 @@ export async function undoConfirm(
       .eq("ingredient_id", row.ingredient_id)
       .eq("description_key", row.description_key);
     if ((count ?? 0) === 0) {
-      await client
+      const { error: aliasErr } = await client
         .from("pr_ingredient_aliases")
-        .delete()
+        .update({ revoked_at: nowIso })
         .eq("alias_norm", row.description_key)
         .eq("kind", "manual")
-        .eq("ingredient_id", row.ingredient_id);
+        .eq("ingredient_id", row.ingredient_id)
+        .is("revoked_at", null);
+      if (aliasErr) {
+        // Non-fatal - the undo already landed; the alias will keep
+        // pointing to the ingredient until someone else revokes it.
+        // Log it so we see it in Vercel runtime; don't break the undo.
+        // eslint-disable-next-line no-console
+        console.error(`undoConfirm alias revoke failed: ${aliasErr.message}`);
+      }
     }
   }
 

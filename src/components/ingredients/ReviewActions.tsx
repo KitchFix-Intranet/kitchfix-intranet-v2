@@ -90,7 +90,17 @@ export function ReviewActions({
       return;
     }
     const d = r.data as { confirmed?: number; usd?: number };
-    toast(`Confirmed ${fmtCount(d.confirmed ?? checkedCount)} items`);
+    const confirmedIds = [...checkedIds];
+    toast(`Confirmed ${fmtCount(d.confirmed ?? checkedCount)} items`, {
+      undo: async () => {
+        // Short-lived Undo in the toast (6s auto-dismiss). The ledger
+        // below the queue has a durable Undo for later.
+        for (const id of confirmedIds) {
+          await postJson("/api/review/undo", { itemId: id });
+        }
+        router.refresh();
+      },
+    });
     setOp(null);
     router.refresh();
   }
@@ -132,7 +142,18 @@ export function ReviewActions({
       return;
     }
     const d = r.data as { confirmed?: number; ingredientId?: string };
-    toast(`Created "${name}" and confirmed ${fmtCount(d.confirmed ?? checkedCount)} items`);
+    const confirmedIds = [...checkedIds];
+    toast(`Created "${name}" and confirmed ${fmtCount(d.confirmed ?? checkedCount)} items`, {
+      undo: async () => {
+        // Short-lived Undo in the toast; the ingredient itself stays
+        // created (undo only reverts the item confirms, since the
+        // ingredient may already be used by other items).
+        for (const id of confirmedIds) {
+          await postJson("/api/review/undo", { itemId: id });
+        }
+        router.refresh();
+      },
+    });
     setShowNew(false);
     setOp(null);
     router.refresh();

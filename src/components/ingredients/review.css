@@ -245,3 +245,92 @@
   font-size: var(--sp-t-micro);
   text-align: right;
 }
+
+/* ---------- Recent decisions ledger ---------- */
+.kf-review__ledger {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  box-shadow: var(--sp-shadow);
+  padding: var(--sp-sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+}
+.kf-review__ledger-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-sp-3);
+  flex-wrap: wrap;
+}
+.kf-review__ledger-head h3 {
+  color: var(--sp-navy);
+  font-family: var(--sp-disp);
+  font-weight: 800;
+  font-size: var(--sp-t-h3);
+  margin: 0;
+}
+.kf-review__ledger-head span { color: var(--sp-muted); font-size: var(--sp-t-micro); }
+.kf-review__ledger-empty {
+  color: var(--sp-muted);
+  font-size: var(--sp-t-body);
+  margin: 0;
+}
+.kf-review__ledger-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.kf-review__ledger-list li { border-top: 1px solid var(--sp-line-soft); }
+.kf-review__ledger-list li:first-child { border-top: none; }
+.kf-review__ledger-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--sp-sp-3);
+  padding: var(--sp-sp-3) 0;
+  flex-wrap: wrap;
+}
+.kf-review__ledger-row--muted .kf-review__ledger-text { color: var(--sp-muted); }
+.kf-review__ledger-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  flex: 1;
+  min-width: 0;
+}
+.kf-review__ledger-kind {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: var(--sp-r-pill);
+  background: var(--sp-line-soft);
+  color: var(--sp-body);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.kf-review__ledger-kind--confirm { background: var(--sp-good-bg); color: var(--sp-good); }
+.kf-review__ledger-kind--undo { background: var(--sp-warn-bg); color: var(--sp-warn); }
+.kf-review__ledger-text {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  color: var(--sp-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.kf-review__ledger-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-3);
+  flex: 0 0 auto;
+}
+.kf-review__ledger-when { color: var(--sp-muted); font-size: var(--sp-t-micro); }
+.kf-review__ledger-actor { color: var(--sp-muted); font-size: var(--sp-t-micro); font-family: var(--sp-ui); }
+.kf-review__ledger-done { color: var(--sp-muted); font-size: var(--sp-t-micro); font-style: italic; }
