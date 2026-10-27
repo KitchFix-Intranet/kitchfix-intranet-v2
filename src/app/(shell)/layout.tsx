@@ -20,6 +20,7 @@ function titleFor(pathname: string, dateLong: string, periodTag: string | null):
     { test: (p) => p === "/academy",         v: { title: "To do",      crumb: "Academy" } },
     { test: (p) => p === "/academy/done",    v: { title: "Done",       crumb: "Academy" } },
     { test: (p) => p.startsWith("/academy/read/"), v: { title: "Reading", crumb: "Academy / To do" } },
+    { test: (p) => p === "/academy/admin",   v: { title: "Admin",      crumb: "Cycles" } },
     { test: (p) => p === "/library",                v: { title: "Library",  crumb: "Find any document" } },
     { test: (p) => p === "/library/shelves",        v: { title: "Library",  crumb: "Every operating document, current" } },
     { test: (p) => p.startsWith("/library/"),       v: { title: "Document", crumb: "Library" } },
@@ -103,8 +104,23 @@ export default async function ShellLayout({
     }
   }
 
+  // `requireOwnerPage` 404s a non-owner before this returns, so if we
+  // got here the viewer IS an owner. Pass it through so the Admin
+  // rail entry is correctly gated when the layout gate changes to
+  // let learners in (train F+). Keeping the signal explicit means
+  // Shell does not need to know about `requireOwnerPage`.
+  const isOwner = true;
+
   return (
-    <Shell email={email} name={name} title={title} crumb={crumb} topbar={topbar} todoCount={todoCount}>
+    <Shell
+      email={email}
+      name={name}
+      title={title}
+      crumb={crumb}
+      topbar={topbar}
+      todoCount={todoCount}
+      isOwner={isOwner}
+    >
       <RevealGate />
       {children}
     </Shell>

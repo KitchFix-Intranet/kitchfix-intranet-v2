@@ -24,6 +24,8 @@ import {
   ListTodo,
   Library as LibraryIcon,
   Search as SearchIcon,
+  SlidersHorizontal,
+  CalendarRange,
 } from "lucide-react";
 import { AccountMenu } from "./AccountMenu";
 import "./shell.css";
@@ -57,13 +59,28 @@ const STOCKPOT_NAV: NavItem[] = [
   { href: "/stockpot/signs", label: "Signs & labels", Icon: ImageIcon },
 ];
 
-// Academy-level nav. Train B ships To do + Done. Team and Admin arrive in
-// later trains; do not add dead items here. R-AC5: the shell-level phone
-// tabbar stays Home / Stockpot / People / Ops / Menu; the Academy level
-// does NOT get its own phone tabbar.
-const ACADEMY_NAV: NavItem[] = [
+// Academy-level nav. Train B ships To do + Done. Train E1 adds the
+// owner-only Admin entry (gated by the viewer being an owner - see
+// `isOwner` prop). R-AC5: shell-level phone tabbar stays Home /
+// Stockpot / People / Ops / Menu; the Academy level does NOT get
+// its own phone tabbar.
+const ACADEMY_NAV_BASE: NavItem[] = [
   { href: "/academy", label: "To do", Icon: ListTodo },
   { href: "/academy/done", label: "Done", Icon: CheckCircle2 },
+];
+// The Admin entry - visible only when `isOwner` is true. Appended
+// to ACADEMY_NAV_BASE at render time inside the Shell. Lucide
+// `SlidersHorizontal` reads as "controls" without being an alarm.
+const ADMIN_ACADEMY_ENTRY: NavItem = {
+  href: "/academy/admin",
+  label: "Admin",
+  Icon: SlidersHorizontal,
+};
+
+// Admin-level nav. Train E1 ships Cycles. Questions / People / Team
+// arrive in later trains; do not add dead items here.
+const ADMIN_NAV: NavItem[] = [
+  { href: "/academy/admin", label: "Cycles", Icon: CalendarRange },
 ];
 
 // Library-level nav. Train D1 ships Shelves (browse) only. Find /
@@ -101,6 +118,9 @@ function isAcademyRoute(pathname: string): boolean {
 function isLibraryRoute(pathname: string): boolean {
   return pathname === "/library" || pathname.startsWith("/library/");
 }
+function isAdminRoute(pathname: string): boolean {
+  return pathname === "/academy/admin" || pathname.startsWith("/academy/admin/");
+}
 function isActive(pathname: string, href: string): boolean {
   if (href === "/") return pathname === "/";
   return pathname === href || pathname.startsWith(href + "/");
@@ -117,20 +137,43 @@ type Props = {
   // layout computes this only on academy routes (one extra query);
   // elsewhere it is null and the badge never renders.
   todoCount?: number | null;
+  // Owner flag. Today the shell layout only lets owners load any
+  // page (`requireOwnerPage` 404s non-owners), so this is always
+  // true at runtime. Threaded as a prop so when the app opens to
+  // learners, the Admin rail entry still correctly stays hidden
+  // for non-owners without touching Shell internals.
+  isOwner?: boolean;
 };
 
-export function Shell({ children, topbar, email, name, title, crumb, todoCount = null }: Props) {
+export function Shell({
+  children,
+  topbar,
+  email,
+  name,
+  title,
+  crumb,
+  todoCount = null,
+  isOwner = false,
+}: Props) {
   const pathname = usePathname();
   const inStockpot = isStockpotRoute(pathname);
   const inAcademy = isAcademyRoute(pathname);
+  const inAdmin = isAdminRoute(pathname);
   const inLibrary = isLibraryRoute(pathname);
+  const academyNav = isOwner ? [...ACADEMY_NAV_BASE, ADMIN_ACADEMY_ENTRY] : ACADEMY_NAV_BASE;
+  // Admin is nested inside Academy; the admin check runs first so
+  // the rail swaps to Cycles/etc. when the owner is in /academy/
+  // admin, and shows the Academy items (incl. Admin link) elsewhere
+  // inside Academy.
   const nav = inStockpot
     ? STOCKPOT_NAV
-    : inAcademy
-      ? ACADEMY_NAV
-      : inLibrary
-        ? LIBRARY_NAV
-        : SHELL_NAV;
+    : inAdmin
+      ? ADMIN_NAV
+      : inAcademy
+        ? academyNav
+        : inLibrary
+          ? LIBRARY_NAV
+          : SHELL_NAV;
   // R-AC5: phone tabbar stays shell-level even inside Academy / Library.
   const phoneTabs = inStockpot ? PHONE_STOCKPOT_TABS : PHONE_SHELL_TABS;
 
@@ -228,7 +271,15 @@ export function Shell({ children, topbar, email, name, title, crumb, todoCount =
               <span className="kf-rail__back-label">All tools</span>
             </Link>
             <div className="kf-rail__section" aria-hidden>
-              <span>{inStockpot ? "Stockpot" : inAcademy ? "Academy" : "Library"}</span>
+              <span>
+                {inStockpot
+                  ? "Stockpot"
+                  : inAdmin
+                    ? "Admin"
+                    : inAcademy
+                      ? "Academy"
+                      : "Library"}
+              </span>
             </div>
           </>
         ) : null}
