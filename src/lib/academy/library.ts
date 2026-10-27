@@ -192,3 +192,133 @@ export async function loadLibrary(email: string, supaIn?: SupabaseClient): Promi
       : { displayName: null, isSalaried: false, onRoster: false },
   };
 }
+
+// ──────────────────────────────────────────────────────────────────
+// Lean search index for the Library's Find surface (D2).
+// ──────────────────────────────────────────────────────────────────
+//
+// Returns a flat array of the Live documents with the four fields
+// the Find island actually filters on - title, card_line, summary,
+// keywords (text[]) - plus id/shelf/doc_class/trains_you for
+// display. 82 rows at this scale fit comfortably in memory and
+// filter client-side instantly; no FTS, no `tsvector` column, no
+// per-keystroke round-trip. Section-level search (into
+// `document_content`) is a later train.
+//
+// Parallels `loadLibrary`: same Live-only filter (GOTCHA 17: title-
+// case 'Live'), same obligation-based trains-you join. `loadLibrary`
+// is left intact.
+
+export interface LibraryIndexDoc {
+  id: string;
+  title: string;
+  card_line: string | null;
+  summary: string | null;
+  keywords: string[];
+  shelf: string | null;
+  doc_class: string | null;
+  trains_you: boolean;
+}
+
+export type LibraryIndexResult =
+  | { ok: false; status: 500; error: string; scope: string }
+  | ({ ok: true } & LibraryIndexBody);
+
+export interface LibraryIndexBody {
+  docs: LibraryIndexDoc[];
+  totalDocs: number;
+  totalTrainsYou: number;
+  viewer: {
+    displayName: string | null;
+    isSalaried: boolean;
+    onRoster: boolean;
+  };
+}
+
+export async function loadLibraryIndex(
+  email: string,
+  supaIn?: SupabaseClient,
+): Promise<LibraryIndexResult> {
+  const supa = supaIn || serviceClient();
+
+  // Null for anyone off the roster; Find still renders, with no
+  // trains-you markers.
+  let identity = null as Awaited<ReturnType<typeof resolveAcademyIdentity>>;
+  try {
+    identity = await resolveAcademyIdentity(email, { supa });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[academy/loadLibraryIndex] identity resolve threw:", msg);
+    identity = null;
+  }
+
+  const [docsQ, obQ] = await Promise.all([
+    supa
+      .from("documents")
+      .select("id, title, card_line, summary, keywords, shelf, doc_class")
+      .eq("status", "Live")
+      .not("shelf", "is", null)
+      .order("shelf", { ascending: true })
+      .order("sort_order", { ascending: true })
+      .order("id", { ascending: true }),
+    supa.from("academy_obligations").select("doc_id, applies_to"),
+  ]);
+
+  if (docsQ.error) {
+    console.error("[academy/loadLibraryIndex] documents:", docsQ.error.message);
+    return { ok: false, status: 500, error: "server_error", scope: "documents" };
+  }
+  if (obQ.error) {
+    console.error("[academy/loadLibraryIndex] obligations:", obQ.error.message);
+    return { ok: false, status: 500, error: "server_error", scope: "obligations" };
+  }
+
+  type DocRow = {
+    id: string;
+    title: string | null;
+    card_line: string | null;
+    summary: string | null;
+    keywords: string[] | null;
+    shelf: string | null;
+    doc_class: string | null;
+  };
+  type ObRow = { doc_id: string; applies_to: unknown };
+
+  const docs = (docsQ.data as DocRow[]) || [];
+  const obligations = (obQ.data as ObRow[]) || [];
+
+  const viewerIsSalaried = !!(identity && identity.isSalaried);
+  const trainsYou = new Set<string>();
+  if (identity) {
+    for (const ob of obligations) {
+      if (obligationTrainsViewer(ob.applies_to, viewerIsSalaried)) {
+        trainsYou.add(ob.doc_id);
+      }
+    }
+  }
+
+  const out: LibraryIndexDoc[] = docs.map((d) => ({
+    id: d.id,
+    title: d.title || d.id,
+    card_line: d.card_line || null,
+    summary: d.summary || null,
+    keywords: Array.isArray(d.keywords) ? d.keywords : [],
+    shelf: d.shelf || null,
+    doc_class: d.doc_class || null,
+    trains_you: trainsYou.has(d.id),
+  }));
+
+  return {
+    ok: true,
+    docs: out,
+    totalDocs: out.length,
+    totalTrainsYou: trainsYou.size,
+    viewer: identity
+      ? {
+          displayName: identity.displayName,
+          isSalaried: identity.isSalaried,
+          onRoster: true,
+        }
+      : { displayName: null, isSalaried: false, onRoster: false },
+  };
+}

@@ -23,6 +23,7 @@ import {
   CheckCircle2,
   ListTodo,
   Library as LibraryIcon,
+  Search as SearchIcon,
 } from "lucide-react";
 import { AccountMenu } from "./AccountMenu";
 import "./shell.css";
@@ -66,11 +67,13 @@ const ACADEMY_NAV: NavItem[] = [
 ];
 
 // Library-level nav. Train D1 ships Shelves (browse) only. Find /
-// search is train D2 and the engine has no search surface yet, so do
-// NOT add a dead "Find" item today - R-AC10. The shell-level phone
-// tabbar stays as the five shell doors even inside Library.
+// Library-level nav - R-AC10 says Find / Shelves, Find first. D2
+// ships both items; D1 shipped only Shelves at /library, which has
+// since moved to /library/shelves. The shell-level phone tabbar
+// stays the five shell doors even inside Library (R-AC5).
 const LIBRARY_NAV: NavItem[] = [
-  { href: "/library", label: "Shelves", Icon: BookMarked },
+  { href: "/library", label: "Find", Icon: SearchIcon },
+  { href: "/library/shelves", label: "Shelves", Icon: BookMarked },
 ];
 
 const PHONE_SHELL_TABS: Array<NavItem | { kind: "menu" }> = [
@@ -236,11 +239,24 @@ export function Shell({ children, topbar, email, name, title, crumb, todoCount =
               // Rail count badge: Academy To do only, when > 0.
               const showCount =
                 inAcademy && href === "/academy" && typeof todoCount === "number" && todoCount > 0;
+              // Active-state rule for Library sub-items: Find is only
+              // active on an exact /library hit; Shelves is active on
+              // /library/shelves. A document page (/library/[docId])
+              // highlights neither (leaf page). Elsewhere the shared
+              // prefix match applies.
+              let active: boolean;
+              if (inLibrary && href === "/library") {
+                active = pathname === "/library";
+              } else if (inLibrary && href === "/library/shelves") {
+                active = pathname === "/library/shelves" || pathname.startsWith("/library/shelves/");
+              } else {
+                active = isActive(pathname, href);
+              }
               return (
                 <li key={href}>
                   <Link
                     href={href}
-                    className={`kf-rail__item${isActive(pathname, href) ? " kf-rail__item--active" : ""}`}
+                    className={`kf-rail__item${active ? " kf-rail__item--active" : ""}`}
                     title={label}
                     onClick={() => markNavStart(href)}
                   >
