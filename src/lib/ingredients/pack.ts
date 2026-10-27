@@ -41,7 +41,7 @@ const EMPTY: ParsedPack = {
 // may emit. "CT" and "PC" fall through to count/EA (treated as units).
 const DIM_BY_UOM: Record<string, Dim> = {
   LB: "weight", OZ: "weight", G: "weight", KG: "weight",
-  FLOZ: "volume", L: "volume", ML: "volume", GAL: "volume", QT: "volume",
+  FLOZ: "volume", L: "volume", ML: "volume", GAL: "volume", QT: "volume", PT: "volume",
   CT: "count", DZ: "count", PC: "count", EA: "count",
 };
 const BASE_BY_DIM: Record<Dim, BaseUom> = {
@@ -62,6 +62,7 @@ const TO_BASE: Record<string, number> = {
   ML: 0.033814,
   GAL: 128,
   QT: 32,
+  PT: 16,
   // count -> EA
   EA: 1,
   DZ: 12,
@@ -76,19 +77,25 @@ function normUom(raw: string | null | undefined): string | null {
   const u = raw.toUpperCase().replace(/\./g, "").trim();
   if (!u) return null;
   if (/^LBS?$/.test(u)) return "LB";
+  // LBA: common OCR typo for LB seen on real invoice data (step 5
+  // Phase 1.6). Benign everywhere; LBA is not a legitimate unit.
+  if (u === "LBA") return "LB";
   if (u === "#") return "LB";
   if (u === "OZ" || u === "OUNCE" || u === "OUNCES") return "OZ";
   if (u === "G" || u === "GR" || u === "GRAM" || u === "GRAMS") return "G";
   if (u === "KG") return "KG";
   if (u === "L" || u === "LTR" || u === "LT" || u === "LITER" || u === "LITRE") return "L";
   if (u === "ML") return "ML";
-  if (u === "FLOZ" || u === "FO" || u === "FL OZ" || u === "FLUID OZ") return "FLOZ";
+  // FOZ: OCR-shortened "FL OZ" seen on real data. PT: pint (16 fl oz).
+  if (u === "FLOZ" || u === "FO" || u === "FOZ" || u === "FL OZ" || u === "FLUID OZ") return "FLOZ";
+  if (u === "PT" || u === "PINT" || u === "PINTS") return "PT";
   // GL is a common vendor shorthand for GAL (gallon). Added for the
   // Phase 1.5 slash-before-unit family (`4/1/GL`, `6/1/GL`).
   if (u === "GAL" || u === "GALLON" || u === "GALLONS" || u === "GL") return "GAL";
   if (u === "QT" || u === "QUART" || u === "QUARTS") return "QT";
   if (u === "DZ" || u === "DOZ" || u === "DZN" || u === "DOZEN") return "DZ";
-  if (u === "CT" || u === "CNT" || u === "COUNT") return "CT";
+  // CO: OCR-shortened CT (count), seen on real data.
+  if (u === "CT" || u === "CNT" || u === "COUNT" || u === "CO") return "CT";
   if (u === "PC" || u === "PCS" || u === "PIECE" || u === "PIECES") return "PC";
   if (u === "EA" || u === "EACH") return "EA";
   return null;
@@ -105,7 +112,10 @@ function toBase(size: number, uom: string): { base_uom: BaseUom; total: number; 
 // Trailing pack-container words we want to strip before parsing. Kept
 // deliberately narrow so we don't eat a real unit; "PC" / "EA" are NOT
 // in this list because they ARE units.
-const TRAILING_CONTAINER = /\s+(CS|CASE|BX|BOX|BG|BAG|PK|PACK|COV|TUB|JAR|CTN|CARTON|CAN|CANS)\s*$/i;
+// Trailing pack-container words we strip before parsing. CA is a common
+// OCR-truncated "CASE" seen on real data (step 5 Phase 1.6). "PC"/"EA"
+// deliberately NOT here - they are units.
+const TRAILING_CONTAINER = /\s+(CS|CA|CASE|BX|BOX|BG|BAG|PK|PACK|COV|TUB|JAR|CTN|CARTON|CAN|CANS)\s*$/i;
 
 export function parsePack(raw: string | null | undefined): ParsedPack {
   if (!raw || typeof raw !== "string") return { ...EMPTY, note: "empty" };
@@ -115,7 +125,19 @@ export function parsePack(raw: string | null | undefined): ParsedPack {
   s = s.toUpperCase().replace(/\s+/g, " ");
   s = s.replace(TRAILING_CONTAINER, "").trim();
 
-  const hasVaries = /\b(VARIES|AVERAGE|AVG)\b/.test(s);
+  // Grade suffix early-reject. Meat grades glued to the pack
+  // (`410-13#CAB`, `320#AVGBCH`, `215#AVGCABSHNT`, `89-11AVCAB`)
+  // ambiguously mix pack text + grade; the range parser would
+  // otherwise produce a midpoint that mixes a grade digit into the
+  // weight. Return `none` so the review surface flags for a human.
+  if (/(CAB|BCH|CABSHNT|AVCAB)$/.test(s)) {
+    return { ...EMPTY, confidence: "none", note: `grade suffix detected: "${raw}"` };
+  }
+
+  // Catch-weight wording. UP (as in "65# UP") is added for Phase 1.6 -
+  // real catch-weight invoices use "UP" alongside AVG. Word-bounded so
+  // it doesn't catch "CUP", "UPGRADE", "GROUP", etc.
+  const hasVaries = /\b(VARIES|AVERAGE|AVG|UP)\b/.test(s);
   const hasRange = /\d+\.?\d*\s*#?\s*[-–]\s*\d+/.test(s);
 
   // 1. #10 (or #N) can pattern: "006/#10 CS". qty is the outer count;
@@ -136,9 +158,41 @@ export function parsePack(raw: string | null | undefined): ParsedPack {
     };
   }
 
-  // 2. Range / average catch-weight: "41#-90# AVERAGE PC", "8-12#",
-  // "2-3 LB". Midpoint used; confidence drops to low with a note.
+  // 2. Range / average catch-weight.
   if (hasRange) {
+    // 2a. Slash-prefixed range: "003/21-23 #", "004/11-14 # AVG",
+    // "003/21-23 #". The qty before the slash is preserved; the inner
+    // range gives a midpoint. This is a Phase 1.6 fix for the real
+    // catch-weight shape - the general range branch below would lose
+    // the qty prefix (qty=1 instead of 3/4).
+    const slashRange = s.match(
+      /^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*(#|[A-Z]+)?/
+    );
+    if (slashRange) {
+      const qty = parseFloat(slashRange[1]);
+      const a = parseFloat(slashRange[2]);
+      const b = parseFloat(slashRange[3]);
+      const uom = normUom(slashRange[4] ?? "#");
+      if (uom != null) {
+        const mid = (a + b) / 2;
+        const conv = toBase(mid, uom);
+        if (conv) {
+          return {
+            qty,
+            size: mid,
+            uom,
+            dim: conv.dim,
+            base_uom: conv.base_uom,
+            total_base: qty * conv.total,
+            confidence: "low",
+            note: `catch-weight average; verify qty/size in review (range ${a}-${b} ${uom}, mid ${mid})`,
+          };
+        }
+      }
+    }
+
+    // 2b. Bare range: "41#-90# AVERAGE PC", "8-12#", "2-3 LB".
+    // Midpoint used; confidence low with a note.
     const r = s.match(
       /(\d+(?:\.\d+)?)\s*(#|[A-Z]+)?\s*[-–]\s*(\d+(?:\.\d+)?)\s*(#|[A-Z]+)?/
     );
@@ -163,9 +217,12 @@ export function parsePack(raw: string | null | undefined): ParsedPack {
         }
       }
     }
+    // Range detected but no uom - garbled. Return `none` (was `low`
+    // with null fields in Phase 1.5; `none` is cleaner for the
+    // backfill mapping and keeps `3-4 PBO` out of the per-unit tier).
     return {
       ...EMPTY,
-      confidence: "low",
+      confidence: "none",
       note: `range detected but uom unclear: "${raw}"`,
     };
   }
@@ -237,6 +294,31 @@ export function parsePack(raw: string | null | undefined): ParsedPack {
     }
   }
 
+  // 2d. x / X separator: "24x8 FOZ", "12X3CT", "6x3 CO", "12x6 LBA",
+  // "8x10 LBA". Same semantics as the N/size UNIT slash form.
+  // Placed before slashMatch so it doesn't collide with triple-slash.
+  const xSepM = s.match(/^(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)\s*([A-Z#]+)/);
+  if (xSepM) {
+    const qty = parseFloat(xSepM[1]);
+    const size = parseFloat(xSepM[2]);
+    const uom = normUom(xSepM[3]);
+    if (uom != null) {
+      const conv = toBase(size, uom);
+      if (conv) {
+        return {
+          qty,
+          size,
+          uom,
+          dim: conv.dim,
+          base_uom: conv.base_uom,
+          total_base: qty * conv.total,
+          confidence: hasVaries ? "low" : "high",
+          note: hasVaries ? "contains VARIES/AVERAGE/UP wording" : null,
+        };
+      }
+    }
+  }
+
   // 3. Standard qty/size UNIT pattern: "6/1 LB", "024/12OZ",
   // "48/2.60 OZ", "4/3 L", "12/5.3 OZ".
   const slashM = s.match(/^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\s*([A-Z#]+)/);
@@ -271,12 +353,45 @@ export function parsePack(raw: string | null | undefined): ParsedPack {
     }
   }
 
+  // Trailing text we tolerate on count/bare matches: catch-weight
+  // variance words only. Anything else (notes like "WRAP", "DRY A",
+  // "SAMPLE") suggests the string is a two-level pack / note that we
+  // can't safely parse - fall through to `none`.
+  const trailingBenign = (tail: string) =>
+    tail.length === 0 || /^(AVG|AVERAGE|VARIES|UP)\b/.test(tail);
+
   // 4. Count-only pattern: "200 CT", "15 DZN", "2 PC", "30 COUNT".
   const countM = s.match(/^(\d+(?:\.\d+)?)\s*(DZ|DZN|DOZ|DOZEN|CT|CNT|COUNT|PC|PCS|PIECE|PIECES|EA|EACH)\b/);
   if (countM) {
+    const tail = s.slice(countM[0].length).trim();
+    if (!trailingBenign(tail)) {
+      return {
+        ...EMPTY,
+        confidence: "none",
+        note: `trailing text after count unit: "${raw}"`,
+      };
+    }
     const n = parseFloat(countM[1]);
     const uom = normUom(countM[2])!;
     const conv = toBase(n, uom)!;
+    // Dozen guard: bare `N DZ` with N > 30 is almost always a dropped
+    // separator (e.g. "115 DZ" is likely "1/15 DZ" or "15 DZ"), not
+    // 115 real dozens. A real egg case is ~15 DZ. We keep the raw
+    // parse (qty 1 x N DZ) but mark low + null total_base so the
+    // backfill doesn't emit a confident wrong per-each from 1,380+ EA.
+    // The row surfaces as `check` for human verification.
+    if (uom === "DZ" && n > 30) {
+      return {
+        qty: 1,
+        size: n,
+        uom,
+        dim: "count",
+        base_uom: "EA",
+        total_base: null,
+        confidence: "low",
+        note: `dozen count implausibly high (${n}); verify split`,
+      };
+    }
     return {
       qty: 1,
       size: n,
@@ -284,19 +399,49 @@ export function parsePack(raw: string | null | undefined): ParsedPack {
       dim: "count",
       base_uom: "EA",
       total_base: conv.total,
-      confidence: "high",
-      note: null,
+      confidence: hasVaries ? "low" : "high",
+      note: hasVaries ? "contains VARIES/AVERAGE/UP wording" : null,
     };
   }
 
-  // 5. Bare "N UNIT": "66 LB", "10 LB", "110#", "25 LBS".
+  // 5. Bare "N UNIT": "66 LB", "10 LB", "110#", "25 LBS", "50 LBS",
+  // "43 L", "12.5 PT", "3210 OZ", "1210 FOZ".
   const bareM = s.match(/^(\d+(?:\.\d+)?)\s*(#|[A-Z]+)/);
   if (bareM) {
+    const bareTail = s.slice(bareM[0].length).trim();
+    if (!trailingBenign(bareTail)) {
+      return {
+        ...EMPTY,
+        confidence: "none",
+        note: `trailing text after bare unit: "${raw}"`,
+      };
+    }
     const n = parseFloat(bareM[1]);
     const uom = normUom(bareM[2]);
     if (uom != null) {
       const conv = toBase(n, uom);
       if (conv) {
+        // Bare-N-large guard: a weight/volume >= 1000 bare integer
+        // (`3210 OZ`, `1210 FOZ`) is almost always a dropped
+        // separator - a real case rarely weighs that much in a single
+        // uom tier. Mark low + null total_base so no confident
+        // per-unit is emitted; the row surfaces as `check`. Count
+        // units (CT, DZ, PC) are not downgraded here - large counts
+        // (`1000 CT`) are legitimate.
+        const isInt = Number.isInteger(n);
+        const bulky = (conv.dim === "weight" || conv.dim === "volume") && isInt && n >= 1000;
+        if (bulky) {
+          return {
+            qty: 1,
+            size: n,
+            uom,
+            dim: conv.dim,
+            base_uom: conv.base_uom,
+            total_base: null,
+            confidence: "low",
+            note: `bare ${n} ${uom} implausibly large; verify split`,
+          };
+        }
         return {
           qty: 1,
           size: n,
@@ -305,7 +450,7 @@ export function parsePack(raw: string | null | undefined): ParsedPack {
           base_uom: conv.base_uom,
           total_base: conv.total,
           confidence: hasVaries ? "low" : "high",
-          note: hasVaries ? "contains VARIES/AVERAGE wording" : null,
+          note: hasVaries ? "contains VARIES/AVERAGE/UP wording" : null,
         };
       }
     }
