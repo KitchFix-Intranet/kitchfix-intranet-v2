@@ -1,11 +1,20 @@
 "use client";
 
+// Stateless action bar for a review card. Selection state (which items
+// are checked) lives in the parent ReviewCard - this component just
+// receives the already-filtered checkedIds + a few summary fields and
+// acts on them. The former "Pick individual items" expander is gone;
+// every item row carries a visible checkbox now (ReviewCard owns the
+// per-row rendering).
+
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check, X as XIcon, Plus, Search, Scissors, Ban } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount } from "@/lib/fmt";
 
+// Kept exported so other call sites that import it keep compiling even
+// though ReviewCard no longer passes a memberItems prop.
 export type ReviewMemberItem = {
   id: string;
   name: string;
@@ -15,13 +24,14 @@ export type ReviewMemberItem = {
 type Ingredient = { id: string; name: string; parent: string | null };
 
 type Props = {
-  groupKey: string;
   kind: "existing" | "new";
   currentIngredientId: string | null;
   proposedName: string | null;
   proposedParent: string | null;
-  memberItems: ReviewMemberItem[];
   ingredients: Ingredient[];
+  checkedIds: string[];
+  checkedCount: number;
+  memberCount: number;
 };
 
 type Op = null | "confirming" | "relinking" | "creating" | "notfood" | "keepsep";
@@ -45,33 +55,28 @@ function errMsg(data: unknown, fallback: string): string {
 }
 
 export function ReviewActions({
-  groupKey,
   kind,
   currentIngredientId,
   proposedName,
   proposedParent,
-  memberItems,
   ingredients,
+  checkedIds,
+  checkedCount,
+  memberCount,
 }: Props) {
   const router = useRouter();
   const [op, setOp] = useState<Op>(null);
-  const [checked, setChecked] = useState<Record<string, boolean>>(() => {
-    const init: Record<string, boolean> = {};
-    for (const m of memberItems) init[m.id] = true;
-    return init;
-  });
   const [showRelink, setShowRelink] = useState(false);
   const [relinkId, setRelinkId] = useState<string>("");
   const [newName, setNewName] = useState(proposedName ?? "");
   const [newParent, setNewParent] = useState(proposedParent ?? "");
   const [showNew, setShowNew] = useState(false);
-  const checkedIds = memberItems.filter((m) => checked[m.id]).map((m) => m.id);
-  const checkedCount = checkedIds.length;
+
+  const noneChecked = checkedCount === 0;
 
   async function confirmChecked() {
-    if (op || checkedCount === 0) return;
+    if (op || noneChecked) return;
     if (kind === "new") {
-      // Must create the ingredient first; use the proposed name/parent.
       setShowNew(true);
       return;
     }
@@ -89,12 +94,10 @@ export function ReviewActions({
       setOp(null);
       return;
     }
-    const d = r.data as { confirmed?: number; usd?: number };
+    const d = r.data as { confirmed?: number };
     const confirmedIds = [...checkedIds];
     toast(`Confirmed ${fmtCount(d.confirmed ?? checkedCount)} items`, {
       undo: async () => {
-        // Short-lived Undo in the toast (6s auto-dismiss). The ledger
-        // below the queue has a durable Undo for later.
         for (const id of confirmedIds) {
           await postJson("/api/review/undo", { itemId: id });
         }
@@ -106,7 +109,7 @@ export function ReviewActions({
   }
 
   async function relinkChecked() {
-    if (op || checkedCount === 0 || !relinkId) return;
+    if (op || noneChecked || !relinkId) return;
     setOp("relinking");
     const r = await postJson("/api/review/relink", {
       ingredientId: relinkId,
@@ -124,7 +127,7 @@ export function ReviewActions({
   }
 
   async function createAndConfirm() {
-    if (op || checkedCount === 0) return;
+    if (op || noneChecked) return;
     const name = newName.trim();
     if (name.length < 2) {
       toast("Ingredient name is required", { tone: "block" });
@@ -145,9 +148,6 @@ export function ReviewActions({
     const confirmedIds = [...checkedIds];
     toast(`Created "${name}" and confirmed ${fmtCount(d.confirmed ?? checkedCount)} items`, {
       undo: async () => {
-        // Short-lived Undo in the toast; the ingredient itself stays
-        // created (undo only reverts the item confirms, since the
-        // ingredient may already be used by other items).
         for (const id of confirmedIds) {
           await postJson("/api/review/undo", { itemId: id });
         }
@@ -160,7 +160,7 @@ export function ReviewActions({
   }
 
   async function markNotFood() {
-    if (op || checkedCount === 0) return;
+    if (op || noneChecked) return;
     setOp("notfood");
     const r = await postJson("/api/review/not-food", { itemIds: checkedIds });
     if (!r.ok) {
@@ -174,7 +174,7 @@ export function ReviewActions({
   }
 
   async function keepSeparate() {
-    if (op || checkedCount === 0) return;
+    if (op || noneChecked) return;
     setOp("keepsep");
     const r = await postJson("/api/review/keep-separate", { itemIds: checkedIds });
     if (!r.ok) {
@@ -187,48 +187,12 @@ export function ReviewActions({
     router.refresh();
   }
 
-  const allChecked = memberItems.length > 0 && checkedCount === memberItems.length;
-  const noneChecked = checkedCount === 0;
-
   return (
     <div className="kf-rvc__actions">
-      <div className="kf-rvc__select-row">
-        <label className="kf-rvc__select-all">
-          <input
-            type="checkbox"
-            checked={allChecked}
-            onChange={(e) => {
-              const v = e.currentTarget.checked;
-              const next: Record<string, boolean> = {};
-              for (const m of memberItems) next[m.id] = v;
-              setChecked(next);
-            }}
-          />
-          <span>
-            {checkedCount} of {memberItems.length} selected
-          </span>
-        </label>
-        {memberItems.length > 1 ? (
-          <details className="kf-rvc__itemlist">
-            <summary>Pick individual items</summary>
-            <ul>
-              {memberItems.map((m) => (
-                <li key={m.id}>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={!!checked[m.id]}
-                      onChange={(e) =>
-                        setChecked((prev) => ({ ...prev, [m.id]: e.currentTarget.checked }))
-                      }
-                    />
-                    <span>{m.name}</span>
-                  </label>
-                </li>
-              ))}
-            </ul>
-          </details>
-        ) : null}
+      <div className="kf-rvc__actions-summary">
+        <span>
+          <strong>{fmtCount(checkedCount)}</strong> of {fmtCount(memberCount)} selected
+        </span>
       </div>
 
       <div className="kf-rvc__btns">

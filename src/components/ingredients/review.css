@@ -199,52 +199,51 @@
   flex-direction: column;
   gap: var(--sp-sp-3);
 }
-.kf-rvc__select-row {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-sp-3);
-  flex-wrap: wrap;
+/*
+ * The old "Pick individual items" expander is gone. Every row carries
+ * its own checkbox in a leading column; a group-level select-all lives
+ * in the card header. These rules style the new layout.
+ */
+.kf-rvc__actions-summary {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-body);
 }
+.kf-rvc__actions-summary strong {
+  color: var(--sp-ink);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Header select-all checkbox. The <label> provides the 44px click
+ * target (header title-wrap is a flex row); the input itself stays
+ * compact. */
 .kf-rvc__select-all {
   display: inline-flex;
   align-items: center;
-  gap: var(--sp-sp-2);
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-micro);
-  font-weight: 700;
-  color: var(--sp-body);
+  justify-content: center;
+  width: 32px;
+  min-height: 44px;
+  margin-right: var(--sp-sp-1);
   cursor: pointer;
 }
-.kf-rvc__select-all input { width: 16px; height: 16px; cursor: pointer; }
+.kf-rvc__select-all input { width: 18px; height: 18px; cursor: pointer; }
 
-.kf-rvc__itemlist summary {
+/* Checkbox column on the items table. 36px keeps the box centered in
+ * a dense row without widening the layout; the <td> is itself a 44px
+ * tap target via its padding + row height. */
+.kf-rvc__check-col { width: 36px; text-align: center; }
+.kf-rvc__items .kf-rvc__check-col input {
+  width: 18px;
+  height: 18px;
   cursor: pointer;
-  color: var(--sp-link);
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-micro);
-  font-weight: 700;
-  padding: var(--sp-sp-1) 0;
-  list-style: none;
+  vertical-align: middle;
 }
-.kf-rvc__itemlist summary::-webkit-details-marker { display: none; }
-.kf-rvc__itemlist ul {
-  list-style: none;
-  margin: var(--sp-sp-2) 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-sp-1);
-  max-height: 200px;
-  overflow-y: auto;
-}
-.kf-rvc__itemlist li label {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-sp-2);
-  color: var(--sp-ink);
-  font-size: var(--sp-t-micro);
-  cursor: pointer;
-}
+
+/* Unselected rows are 60 percent to signal "won't be touched by the
+ * next action" without hiding them. */
+.kf-rvc__row:not(.kf-rvc__row--on) td { opacity: 0.6; }
+.kf-rvc__row:not(.kf-rvc__row--on) .kf-rvc__check-col { opacity: 1; }
 
 .kf-rvc__btns {
   display: flex;
