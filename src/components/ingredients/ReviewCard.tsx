@@ -1,9 +1,24 @@
-// One group card. Server-rendered; interactive bits are in the ReviewActions
-// client island (so no function props cross the RSC boundary).
+"use client";
 
+// Client component: owns the per-item selection state (keyed by stable
+// vendor_item_id, never by array index) and renders a checkbox column on
+// every row by default. A group-level select-all / none sits in the card
+// header; the "N of M selected / $X will move to Linked" line updates
+// live as boxes toggle, and is correct at zero (Confirm disabled, zero
+// total).
+//
+// Crash fix (was: ReviewActions.tsx:221): every onChange handler reads
+// e.currentTarget.checked into a LOCAL variable before calling
+// setChecked. Reading it inside the functional updater (`setChecked(prev
+// => ({ ..., [id]: e.currentTarget.checked }))`) is a React 19 strict-mode
+// trap - the double-invoked updater runs after the SyntheticEvent has
+// nulled currentTarget, which throws on the second invocation. See
+// docs/GOTCHAS.md.
+
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Scale } from "lucide-react";
 import { fmtCount, fmtDate, fmtUsd, fmtUsdLong } from "@/lib/fmt";
-import { ReviewActions, type ReviewMemberItem } from "./ReviewActions";
+import { ReviewActions } from "./ReviewActions";
 
 export type ReviewGroupItem = {
   id: string;
@@ -43,16 +58,72 @@ export function ReviewCard({
   const parent = group.kind === "existing" ? group.ingredient?.parent ?? null : group.proposedParent;
   const hasLow = group.items.some((it) => it.confidence === "low");
 
-  const memberItems: ReviewMemberItem[] = group.items.map((it) => ({
-    id: it.id,
-    name: it.name,
-    confidence: it.confidence,
-  }));
+  // Default to every item selected. State keyed by vendor_item_id so
+  // nothing shifts if the parent re-renders with a reordered list.
+  const [checked, setChecked] = useState<Record<string, boolean>>(() => {
+    const init: Record<string, boolean> = {};
+    for (const it of group.items) init[it.id] = true;
+    return init;
+  });
+
+  const checkedIds = useMemo(
+    () => group.items.filter((it) => checked[it.id]).map((it) => it.id),
+    [checked, group.items]
+  );
+  const checkedCount = checkedIds.length;
+  const memberCount = group.items.length;
+  const allChecked = memberCount > 0 && checkedCount === memberCount;
+  const someChecked = checkedCount > 0 && !allChecked;
+  const checkedUsd = useMemo(
+    () => group.items.reduce((s, it) => (checked[it.id] ? s + it.usd12m : s), 0),
+    [checked, group.items]
+  );
+
+  // <input type="checkbox"> has no "indeterminate" prop in React; set it
+  // imperatively on the DOM node so a partial selection shows the
+  // tri-state glyph. React's strict-mode double-invoke of this effect is
+  // safe (same DOM op twice).
+  const selectAllRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = someChecked;
+  }, [someChecked]);
+
+  function toggleAll(v: boolean) {
+    const next: Record<string, boolean> = {};
+    for (const it of group.items) next[it.id] = v;
+    setChecked(next);
+  }
+
+  function toggleOne(id: string, v: boolean) {
+    // v captured BEFORE setChecked so the updater never reads from a
+    // stale SyntheticEvent during React 19 strict-mode double-invoke.
+    setChecked((prev) => ({ ...prev, [id]: v }));
+  }
+
+  const footerLine =
+    checkedCount === 0
+      ? "Select items to confirm."
+      : checkedCount === memberCount
+        ? `${fmtUsd(group.totalUsd12m)} will move to Linked when the whole group is confirmed.`
+        : `${fmtUsd(checkedUsd)} will move to Linked for the ${checkedCount} selected items.`;
 
   return (
     <article className={`kf-rvc${group.kind === "new" ? " kf-rvc--new" : ""}`}>
       <header className="kf-rvc__head">
         <div className="kf-rvc__title-wrap">
+          <label className="kf-rvc__select-all" aria-label="Select all items in this group">
+            <input
+              ref={selectAllRef}
+              type="checkbox"
+              checked={allChecked}
+              aria-checked={someChecked ? "mixed" : allChecked ? "true" : "false"}
+              onChange={(e) => {
+                // Capture outside the updater (crash guard).
+                const v = e.currentTarget.checked;
+                toggleAll(v);
+              }}
+            />
+          </label>
           <span className={`kf-pill ${group.kind === "new" ? "kf-pill--warn" : "kf-pill--info"}`}>
             {group.kind === "new" ? "New ingredient" : "Existing match"}
           </span>
@@ -62,13 +133,17 @@ export function ReviewCard({
         </div>
         <div className="kf-rvc__totals">
           <strong>{fmtUsdLong(group.totalUsd12m)}</strong>
-          <span>{fmtCount(group.totalLines12m)} lines / {fmtCount(group.items.length)} items</span>
+          <span>
+            {fmtCount(checkedCount)} of {fmtCount(memberCount)} selected
+            {checkedCount > 0 && checkedCount < memberCount ? ` · ${fmtUsd(checkedUsd)}` : ""}
+          </span>
         </div>
       </header>
 
       <table className="kf-rvc__items">
         <thead>
           <tr>
+            <th className="kf-rvc__check-col" aria-label="Select"></th>
             <th>Item</th>
             <th>Vendor / #</th>
             <th>Pack / unit</th>
@@ -81,7 +156,19 @@ export function ReviewCard({
         </thead>
         <tbody>
           {group.items.map((it) => (
-            <tr key={it.id}>
+            <tr key={it.id} className={checked[it.id] ? "kf-rvc__row kf-rvc__row--on" : "kf-rvc__row"}>
+              <td className="kf-rvc__check-col">
+                <input
+                  type="checkbox"
+                  checked={!!checked[it.id]}
+                  aria-label={`Select ${it.name}`}
+                  onChange={(e) => {
+                    // Capture outside the updater (crash guard).
+                    const v = e.currentTarget.checked;
+                    toggleOne(it.id, v);
+                  }}
+                />
+              </td>
               <td title={it.name}>
                 <div className="kf-rvc__desc">
                   <span className="kf-cell-ellipsis">{it.name}</span>
@@ -114,18 +201,17 @@ export function ReviewCard({
       </table>
 
       <ReviewActions
-        groupKey={group.key}
         kind={group.kind}
         currentIngredientId={group.ingredient?.id ?? null}
         proposedName={group.proposedName}
         proposedParent={group.proposedParent}
-        memberItems={memberItems}
         ingredients={ingredients}
+        checkedIds={checkedIds}
+        checkedCount={checkedCount}
+        memberCount={memberCount}
       />
 
-      <footer className="kf-rvc__foot">
-        {fmtUsd(group.totalUsd12m)} will move to Linked when every item here is confirmed.
-      </footer>
+      <footer className="kf-rvc__foot">{footerLine}</footer>
     </article>
   );
 }

@@ -276,3 +276,31 @@ Illustrator "PDF (vector)" exports convert to small SVGs via Poppler
 (`brew install poppler`). The round-coord + `fill-rule` / `fill-opacity`
 scrub cuts output 30-40 percent and keeps the real alpha; do not use the
 matching `.png` copies unless Poppler is unavailable.
+
+## G-E Never read a SyntheticEvent inside a functional state updater
+
+```tsx
+// WRONG - crashes on second invocation in React 19 strict mode:
+onChange={(e) =>
+  setChecked((prev) => ({ ...prev, [id]: e.currentTarget.checked }))
+}
+```
+
+React 19 strict mode double-invokes functional state updaters to surface
+non-pure updates. SyntheticEvents are pooled / nulled right after the
+handler returns, so the second invocation sees `e.currentTarget === null`
+and `.checked` throws. This is the exact pattern that crashed the review
+card on uncheck.
+
+Capture the primitive first, then update:
+
+```tsx
+onChange={(e) => {
+  const v = e.currentTarget.checked;
+  setChecked((prev) => ({ ...prev, [id]: v }));
+}}
+```
+
+Same rule for `e.target.value`, `e.key`, anything else sourced from the
+event. If a handler needs multiple event fields, read them all into locals
+on line 1.
