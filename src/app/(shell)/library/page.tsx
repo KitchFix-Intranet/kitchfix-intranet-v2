@@ -1,15 +1,23 @@
-// /library - Shelves (browse). Server component. Calls loadLibrary
-// which returns only status='Live' documents grouped by shelf, with
-// a trains-you marker per doc. Hands the shelves to a client island
-// (<ShelvesBrowser>) that handles the shelf-selection interactivity.
+// /library - Find. Server component. Loads a lean index of the 82
+// Live documents (title, card_line, summary, keywords, doc_class,
+// trains_you) via loadLibraryIndex and hands it to the Find client
+// island, which filters in memory as the viewer types.
 //
-// This is a READ-ONLY surface. No write path is reachable from here.
+// Document-level search ONLY (R-AC10). Section-level search ("find
+// the sentence inside a document") is a later train and needs an
+// index over document_content that does not exist. Do not search
+// document bodies here.
+//
+// The D1 Shelves page moved to /library/shelves. Reachable from the
+// LIBRARY_NAV rail and from the no-match Find state.
+//
+// READ-ONLY. No write path.
 
 import { requireOwnerPage } from "@/lib/gate";
-import { loadRoom } from "@/lib/academy/room"; // only to carry the viewer's name on the band
-import { loadLibrary } from "@/lib/academy/library";
+import { loadLibraryIndex } from "@/lib/academy/library";
+import { loadRoom } from "@/lib/academy/room"; // viewer first-name only
 import { IdentBand } from "@/components/ui/IdentBand";
-import { ShelvesBrowser } from "@/components/library/ShelvesBrowser";
+import { LibraryFind } from "@/components/library/LibraryFind";
 import "@/components/library/library.css";
 
 function firstName(n: string | null | undefined): string | null {
@@ -20,7 +28,7 @@ function firstName(n: string | null | undefined): string | null {
 
 export default async function Page() {
   const { email } = await requireOwnerPage();
-  const result = await loadLibrary(email);
+  const result = await loadLibraryIndex(email);
 
   if (!result.ok) {
     return (
@@ -36,9 +44,8 @@ export default async function Page() {
     );
   }
 
-  // Pull viewer first name for the band greeting via loadRoom (same
-  // identity path the Academy pages use). If it fails we just drop
-  // the name - the Library still renders.
+  // Viewer first name via loadRoom (same identity path the rest of
+  // Academy uses). Non-fatal if it fails.
   let name: string | null = null;
   try {
     const room = await loadRoom(email);
@@ -47,22 +54,18 @@ export default async function Page() {
     // non-fatal
   }
 
-  const trains = result.totalTrainsYou;
   const total = result.totalDocs;
-  const title = `All ${total} live documents are current`;
+  const trains = result.totalTrainsYou;
+  const title = `Find a document, across ${total} live docs`;
   const kick = trains > 0
-    ? `${trains} on your to-do list${name ? `, ${name}` : ""}. Browse by shelf.`
-    : "Browse by shelf. Read anything; sign only what is on your to-do list.";
+    ? `${trains} on your to-do list${name ? `, ${name}` : ""}. Type to find.`
+    : "Type a title, a topic, or what you're trying to do.";
   const kickCapped = kick.length > 60 ? kick.slice(0, 60) : kick;
 
   return (
     <div className="kf-library">
-      <IdentBand
-        eyebrow="Library"
-        title={title}
-        kick={kickCapped}
-      />
-      <ShelvesBrowser shelves={result.shelves} />
+      <IdentBand eyebrow="Library" title={title} kick={kickCapped} />
+      <LibraryFind docs={result.docs} />
     </div>
   );
 }

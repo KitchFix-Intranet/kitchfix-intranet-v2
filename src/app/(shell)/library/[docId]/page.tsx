@@ -152,9 +152,19 @@ export default async function Page({
           ) : (
             <>
               {outline.length > 0 ? (
-                <nav className="kf-docview__contents" aria-label="Contents">
-                  <span className="kf-docview__contents-head">Contents</span>
-                  <ul className="kf-docview__contents-list">
+                // Native <details> - no "use client", no JS. On narrow
+                // the browser handles the collapse (chef lands on
+                // prose; the summary sits below as "Jump to a
+                // section"). On wide the CSS media query force-shows
+                // the list regardless of [open] state so the sticky
+                // side-rail is always expanded. The summary carries
+                // the aria-label; the <details> itself does not need
+                // one (summary is the accessible name).
+                <details className="kf-docview__contents">
+                  <summary>
+                    <span>Jump to a section</span>
+                  </summary>
+                  <ul className="kf-docview__contents-list" aria-label="Contents">
                     {outline.map((o) => (
                       <li key={o.anchor}>
                         <a
@@ -166,7 +176,7 @@ export default async function Page({
                       </li>
                     ))}
                   </ul>
-                </nav>
+                </details>
               ) : null}
               <article
                 className="kf-reader__prose"

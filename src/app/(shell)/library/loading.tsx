@@ -1,5 +1,7 @@
-// /library loading. Band + two-column shape (shelf list on the left,
-// doc rows on the right) matched to the final layout.
+// /library loading. D2 landing surface is Find - band + search field
+// placeholder + a few result-row-shaped blocks. Matches the final
+// Find layout; the moved D1 Shelves loading lives at
+// /library/shelves/loading.tsx.
 import { Band, Block } from "@/components/ui/Skeleton";
 import "@/components/library/library.css";
 
@@ -9,22 +11,12 @@ export default function Loading() {
       <div className="kf-only-desktop">
         <Band />
       </div>
-      <div className="kf-library__grid">
-        <div className="kf-library__shelves">
-          <Block height={44} radius={10} />
-          <Block height={44} radius={10} />
-          <Block height={44} radius={10} />
-          <Block height={44} radius={10} />
-          <Block height={44} radius={10} />
-          <Block height={44} radius={10} />
-        </div>
-        <div className="kf-library__shelf-pane">
-          <Block height={28} width={240} />
-          <Block height={56} />
-          <Block height={56} />
-          <Block height={56} />
-          <Block height={56} />
-        </div>
+      <div className="kf-find">
+        <Block height={56} radius={12} />
+        <Block height={56} />
+        <Block height={56} />
+        <Block height={56} />
+        <Block height={56} />
       </div>
     </div>
   );

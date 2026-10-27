@@ -310,3 +310,221 @@
   .kf-reader__head { border-bottom: 1px solid var(--sp-line); padding: var(--sp-sp-3) 0; }
   main.kf-canvas { padding: 0 !important; }
 }
+
+/* ---------- Find (D2) ---------- */
+.kf-find {
+  max-width: var(--sp-sheet-max);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-4);
+  width: 100%;
+}
+.kf-find__field {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sp-3);
+  min-height: var(--sp-floor-chef);
+  padding: 0 var(--sp-sp-4);
+  background: var(--sp-card);
+  color: var(--sp-ink);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-ctl);
+  box-shadow: var(--sp-shadow);
+}
+.kf-find__field:focus-within {
+  outline: 2px solid var(--sp-navy);
+  outline-offset: 2px;
+  border-color: var(--sp-navy);
+}
+.kf-find__input {
+  flex: 1;
+  min-width: 0;
+  min-height: var(--sp-floor-chef);
+  background: transparent;
+  color: var(--sp-ink);
+  border: none;
+  outline: none;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+}
+.kf-find__input::placeholder { color: var(--sp-muted); }
+.kf-find__input::-webkit-search-cancel-button { display: none; }
+
+.kf-find__count {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  font-variant-numeric: tabular-nums;
+  margin: 0 var(--sp-sp-2);
+}
+.kf-find__results-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+}
+.kf-find__results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+}
+
+.kf-find__resting {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  padding: var(--sp-sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+}
+.kf-find__resting-title {
+  font-family: var(--sp-ui);
+  font-weight: 700;
+  color: var(--sp-ink);
+  font-size: var(--sp-t-body);
+}
+.kf-find__resting-body {
+  color: var(--sp-muted);
+  font-size: var(--sp-t-table);
+}
+.kf-find__start-here {
+  margin-top: var(--sp-sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+}
+.kf-find__start-here-label {
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-micro);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--sp-navy);
+}
+
+.kf-find__nomatch {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  padding: var(--sp-sp-6);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+  align-items: center;
+}
+.kf-find__nomatch-title {
+  font-family: var(--sp-ui);
+  font-weight: 800;
+  color: var(--sp-ink);
+  font-size: var(--sp-t-h3);
+  line-height: 1.25;
+}
+.kf-find__nomatch-body { color: var(--sp-muted); font-size: var(--sp-t-body); }
+
+/* ---------- Document reader: TOC side-rail (D2) ---------- */
+/*
+ * Replaces the D1 inline-above-prose TOC with a side-rail on wide
+ * and a collapsed <details> on narrow. Pure HTML - the <details>
+ * element handles the collapse without any client code; the server
+ * page keeps rendering the TOC inline in the body, and this CSS
+ * decides where it sits. The outer .kf-docview grid (pane | facts)
+ * is unchanged.
+ */
+.kf-docview__pane .kf-reader__body {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: var(--sp-sp-5);
+  align-items: start;
+}
+@media (max-width: 1180px) {
+  .kf-docview__pane .kf-reader__body {
+    grid-template-columns: 200px minmax(0, 1fr);
+    gap: var(--sp-sp-4);
+  }
+}
+@media (max-width: 860px) {
+  /* Narrow / phone: single column, prose FIRST (lands on words),
+   * TOC collapsed below the prose. The <details> is pure HTML - no
+   * "use client", no JS, safe across the RSC boundary.
+   */
+  .kf-docview__pane .kf-reader__body {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--sp-sp-4);
+  }
+  .kf-reader__prose { order: 1; }
+  .kf-docview__contents { order: 2; }
+}
+
+/* <details> wrapping: hide the native triangle, expose a header-
+ * styled summary (matches the old Contents eyebrow). On wide
+ * screens the TOC is a sticky side-rail with the list force-shown
+ * regardless of [open] state; the summary is a decorative header
+ * (non-interactive). On narrow the browser handles the collapse
+ * natively and the summary is a tap target.
+ */
+.kf-docview__pane .kf-reader {
+  max-height: none;
+  min-height: 0;
+  overflow: visible;
+}
+.kf-docview__contents {
+  margin: 0;
+}
+.kf-docview__contents > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  min-height: var(--sp-floor-chef);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-micro);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--sp-navy);
+  padding: 0 var(--sp-sp-2);
+}
+.kf-docview__contents > summary::-webkit-details-marker { display: none; }
+
+@media (min-width: 861px) {
+  /* Wide: sticky side-rail. List is force-shown regardless of the
+   * <details>'s open state so the rail is always expanded. Summary
+   * becomes a decorative header. */
+  .kf-docview__contents {
+    position: sticky;
+    top: calc(var(--sp-topbar) + var(--sp-sp-4));
+    max-height: calc(100dvh - var(--sp-topbar) - var(--sp-sp-6));
+    overflow-y: auto;
+    background: var(--sp-raise);
+    border: 1px solid var(--sp-line);
+    border-radius: var(--sp-r-sm);
+    padding: var(--sp-sp-3);
+  }
+  .kf-docview__contents > summary {
+    cursor: default;
+    pointer-events: none;
+  }
+  .kf-docview__contents > .kf-docview__contents-list {
+    display: flex !important;
+  }
+}
+@media (max-width: 860px) {
+  /* Narrow: let the browser handle collapse. Visual chrome kept
+   * light so the chef sees prose first. */
+  .kf-docview__contents {
+    background: var(--sp-raise);
+    border: 1px solid var(--sp-line);
+    border-radius: var(--sp-r-sm);
+    padding: var(--sp-sp-3) var(--sp-sp-4);
+  }
+  .kf-docview__contents[open] > .kf-docview__contents-list {
+    margin-top: var(--sp-sp-2);
+  }
+}
