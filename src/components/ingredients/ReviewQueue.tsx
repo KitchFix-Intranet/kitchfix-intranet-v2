@@ -342,6 +342,12 @@ function toFilterGroup(g: ReviewCardGroup): ReviewFilterGroup {
     kind: g.kind,
     ingredientName: g.ingredient?.name ?? null,
     ingredientParent: g.ingredient?.parent ?? null,
+    // category + resale carry the ingredient's super-category and
+    // resale flag to the client-side filters. ai-new groups have no
+    // ingredient yet so both read null/false; those surface under
+    // "Needs category" in the filter chips.
+    category: g.ingredient?.category ?? null,
+    resale: g.ingredient?.resale ?? false,
     proposedName: g.proposedName,
     proposedParent: g.proposedParent,
     totalUsd12m: g.totalUsd12m,

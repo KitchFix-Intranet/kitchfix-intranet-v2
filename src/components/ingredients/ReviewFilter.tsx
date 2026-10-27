@@ -15,8 +15,9 @@
 // swap to a server-side search.
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Search, X } from "lucide-react";
+import { ArrowDownAZ, DollarSign, Search, X } from "lucide-react";
 import { fmtCount, fmtDate, fmtUsd, fmtUsdLong } from "@/lib/fmt";
+import { SUPER_CATEGORIES } from "@/lib/ingredients/categories";
 
 // A copy of the shape the server passes in. Keeping it narrow (not the
 // full ReviewCardGroup) so no stray React-element props leak in.
@@ -25,6 +26,10 @@ export type ReviewFilterGroup = {
   kind: "existing" | "new";
   ingredientName: string | null;
   ingredientParent: string | null;
+  // Super-category (null = "Needs category") and resale flag feed the
+  // category chips + the resale / needs-category quick filters.
+  category: string | null;
+  resale: boolean;
   proposedName: string | null;
   proposedParent: string | null;
   totalUsd12m: number;
@@ -33,6 +38,9 @@ export type ReviewFilterGroup = {
   members: Array<{ name: string; vendor: string }>;
   lastSeen: string | null;
 };
+
+type SortMode = "dollars" | "alpha";
+type KindFilter = "all" | "needs" | "resale";
 
 type RenderedCard = { key: string; node: ReactNode };
 
@@ -65,6 +73,10 @@ function matches(group: ReviewFilterGroup, needle: string): boolean {
   return false;
 }
 
+function displayName(g: ReviewFilterGroup): string {
+  return (g.ingredientName ?? g.proposedName ?? "").toLowerCase();
+}
+
 export function ReviewFilter({
   groups,
   cards,
@@ -75,7 +87,27 @@ export function ReviewFilter({
   totals: Totals;
 }) {
   const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<SortMode>("dollars");
+  const [superCat, setSuperCat] = useState<string | "all">("all");
+  const [kindFilter, setKindFilter] = useState<KindFilter>("all");
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Per-super counts over the FULL group list (not the search-filtered
+  // one), so the chip label always shows the total available under that
+  // super. "All" matches every group; "Needs category" counts groups
+  // with category=null (regardless of resale); "Resale" counts groups
+  // with resale=true.
+  const perSuperCount = useMemo(() => {
+    const m = new Map<string, number>();
+    m.set("all", groups.length);
+    for (const c of SUPER_CATEGORIES) m.set(c, 0);
+    for (const g of groups) {
+      if (g.category && m.has(g.category)) m.set(g.category, (m.get(g.category) ?? 0) + 1);
+    }
+    return m;
+  }, [groups]);
+  const needsCount = useMemo(() => groups.filter((g) => g.category == null).length, [groups]);
+  const resaleCount = useMemo(() => groups.filter((g) => g.resale).length, [groups]);
 
   // `/` focuses the input (unless the user is typing in another input).
   // Esc clears the current search and blurs the input.
@@ -100,12 +132,27 @@ export function ReviewFilter({
   }, []);
 
   const trimmed = query.trim();
+  // All three filters AND together, then the sort runs. Each is cheap
+  // over the small group list; useMemo re-runs only when its own inputs
+  // change. The sort returns a NEW array so React re-renders the <ul>
+  // children in the new order.
   const filtered = useMemo(() => {
-    if (trimmed.length === 0) return groups;
-    return groups.filter((g) => matches(g, trimmed));
-  }, [groups, trimmed]);
+    let out = groups;
+    if (trimmed.length > 0) out = out.filter((g) => matches(g, trimmed));
+    if (superCat !== "all") out = out.filter((g) => g.category === superCat);
+    if (kindFilter === "needs") out = out.filter((g) => g.category == null);
+    else if (kindFilter === "resale") out = out.filter((g) => g.resale);
+    if (sort === "alpha") {
+      out = [...out].sort((a, b) => displayName(a).localeCompare(displayName(b)));
+    } else {
+      out = [...out].sort((a, b) => b.totalUsd12m - a.totalUsd12m);
+    }
+    return out;
+  }, [groups, trimmed, superCat, kindFilter, sort]);
 
   const matchedUsd = useMemo(() => filtered.reduce((s, g) => s + g.totalUsd12m, 0), [filtered]);
+  const anyFilterActive =
+    trimmed.length > 0 || superCat !== "all" || kindFilter !== "all";
 
   const cardByKey = useMemo(() => {
     const m = new Map<string, ReactNode>();
@@ -113,7 +160,14 @@ export function ReviewFilter({
     return m;
   }, [cards]);
 
-  const noneMatch = trimmed.length > 0 && filtered.length === 0;
+  const noneMatch = anyFilterActive && filtered.length === 0;
+
+  function clearAll() {
+    setQuery("");
+    setSuperCat("all");
+    setKindFilter("all");
+    inputRef.current?.focus();
+  }
 
   return (
     <>
@@ -152,7 +206,7 @@ export function ReviewFilter({
           )}
         </form>
         <span className="kf-review__search-count" aria-live="polite">
-          {trimmed.length === 0 ? (
+          {!anyFilterActive ? (
             <>
               <strong>{fmtCount(groups.length)}</strong> groups · <strong>{fmtUsd(totals.groupedUsd)}</strong>
             </>
@@ -165,23 +219,117 @@ export function ReviewFilter({
         </span>
       </div>
 
+      {/* Toolbar: sort toggle on the left, category chips in the
+          middle, resale/needs quick-filters on the right. Everything is
+          purely client-side over the already-loaded groups and composes
+          AND with the search box above. */}
+      <div className="kf-review__toolbar" role="toolbar" aria-label="Sort and filter">
+        <div className="kf-review__toolbar-group" role="radiogroup" aria-label="Sort order">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={sort === "dollars"}
+            className={`kf-chip${sort === "dollars" ? " kf-chip--on" : ""}`}
+            onClick={() => setSort("dollars")}
+            title="Highest dollars first"
+          >
+            <DollarSign size={14} strokeWidth={1.5} aria-hidden />
+            <span>Dollars</span>
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={sort === "alpha"}
+            className={`kf-chip${sort === "alpha" ? " kf-chip--on" : ""}`}
+            onClick={() => setSort("alpha")}
+            title="Alphabetical by ingredient / proposed name"
+          >
+            <ArrowDownAZ size={14} strokeWidth={1.5} aria-hidden />
+            <span>A-Z</span>
+          </button>
+        </div>
+
+        <div className="kf-review__toolbar-group kf-review__cats" role="radiogroup" aria-label="Super-category filter">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={superCat === "all"}
+            className={`kf-chip${superCat === "all" ? " kf-chip--on" : ""}`}
+            onClick={() => setSuperCat("all")}
+          >
+            All <span className="kf-chip__count">{fmtCount(perSuperCount.get("all") ?? 0)}</span>
+          </button>
+          {SUPER_CATEGORIES.map((c) => {
+            const n = perSuperCount.get(c) ?? 0;
+            return (
+              <button
+                key={c}
+                type="button"
+                role="radio"
+                aria-checked={superCat === c}
+                className={`kf-chip${superCat === c ? " kf-chip--on" : ""}${n === 0 ? " kf-chip--empty" : ""}`}
+                onClick={() => setSuperCat(c)}
+                disabled={n === 0}
+              >
+                {c} <span className="kf-chip__count">{fmtCount(n)}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="kf-review__toolbar-group" role="radiogroup" aria-label="Kind filter">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={kindFilter === "needs"}
+            className={`kf-chip kf-chip--warn${kindFilter === "needs" ? " kf-chip--on" : ""}`}
+            onClick={() => setKindFilter((v) => (v === "needs" ? "all" : "needs"))}
+            title="Groups whose ingredient has no super-category yet"
+          >
+            Needs category <span className="kf-chip__count">{fmtCount(needsCount)}</span>
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={kindFilter === "resale"}
+            className={`kf-chip${kindFilter === "resale" ? " kf-chip--on" : ""}`}
+            onClick={() => setKindFilter((v) => (v === "resale" ? "all" : "resale"))}
+            title="Groups whose ingredient is flagged resale"
+          >
+            Resale <span className="kf-chip__count">{fmtCount(resaleCount)}</span>
+          </button>
+          {anyFilterActive ? (
+            <button
+              type="button"
+              className="kf-btn kf-btn--ghost kf-btn--sm"
+              onClick={clearAll}
+            >
+              Clear
+            </button>
+          ) : null}
+        </div>
+      </div>
+
       {noneMatch ? (
         <div className="kf-empty kf-review__search-empty">
           <div>
-            <div className="kf-empty__title">No groups match &ldquo;{trimmed}&rdquo;</div>
+            <div className="kf-empty__title">
+              {trimmed.length > 0
+                ? <>No groups match &ldquo;{trimmed}&rdquo;</>
+                : <>No groups match the active filters</>}
+            </div>
             <div className="kf-empty__body">
-              Try a vendor name, a cut (chicken, salmon), or a grade (premium). Press Esc to clear.
+              {trimmed.length > 0
+                ? "Try a vendor name, a cut (chicken, salmon), or a grade (premium). Press Esc to clear."
+                : "Try switching super-category or clearing the quick filters."}
             </div>
           </div>
           <button
             type="button"
             className="kf-btn kf-btn--soft kf-btn--sm"
-            onClick={() => {
-              setQuery("");
-              inputRef.current?.focus();
-            }}
+            onClick={clearAll}
           >
-            Clear filter
+            Clear filters
           </button>
         </div>
       ) : (

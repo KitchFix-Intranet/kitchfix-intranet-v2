@@ -670,3 +670,255 @@ export async function setVendorItemPackOverride(
 
   return { ok: true };
 }
+
+// ---------------------------------------------------------------------------
+// Merge two ingredients (step 5): move every vendor item + active golden
+// link from the source onto the survivor, mark the source status='merged'
+// with merged_into_id pointing at the survivor, write the source's name
+// as a kind='rename' alias on the survivor so future matcher runs on
+// the old name auto-route to the survivor. No DELETE anywhere; the
+// source row stays queryable forever. Confirmed items stay confirmed -
+// only their ingredient_id changes - so coverage totals are preserved.
+// Fully undoable via undoMergeIngredient, which reads the moved-item
+// list from the pr_events row the merge wrote.
+// ---------------------------------------------------------------------------
+
+export async function mergeIngredients(
+  client: SupabaseClient,
+  args: { sourceId: string; targetId: string; actorEmail: string }
+): Promise<{ ok: boolean; error?: string; movedItems: number; movedGoldenLinks: number }> {
+  const { sourceId, targetId, actorEmail } = args;
+  if (sourceId === targetId) {
+    return { ok: false, error: "Source and target must differ", movedItems: 0, movedGoldenLinks: 0 };
+  }
+
+  const [sourceRes, targetRes] = await Promise.all([
+    client.from("pr_ingredients").select("id,name,name_norm,status,merged_into_id").eq("id", sourceId).maybeSingle(),
+    client.from("pr_ingredients").select("id,name,name_norm,status").eq("id", targetId).maybeSingle(),
+  ]);
+  if (sourceRes.error) return { ok: false, error: sourceRes.error.message, movedItems: 0, movedGoldenLinks: 0 };
+  if (targetRes.error) return { ok: false, error: targetRes.error.message, movedItems: 0, movedGoldenLinks: 0 };
+  const source = sourceRes.data as
+    | { id: string; name: string; name_norm: string; status: string; merged_into_id: string | null }
+    | null;
+  const target = targetRes.data as
+    | { id: string; name: string; name_norm: string; status: string }
+    | null;
+  if (!source) return { ok: false, error: "Source ingredient not found", movedItems: 0, movedGoldenLinks: 0 };
+  if (!target) return { ok: false, error: "Target ingredient not found", movedItems: 0, movedGoldenLinks: 0 };
+  if (source.status === "merged") return { ok: false, error: "Source is already merged", movedItems: 0, movedGoldenLinks: 0 };
+  if (target.status === "merged") return { ok: false, error: "Target is itself merged - pick its survivor", movedItems: 0, movedGoldenLinks: 0 };
+
+  // Collect the item ids that will move. We save them in the merge event
+  // so the undo path knows exactly which items to send back - we never
+  // reclaim items that moved to target by some other path.
+  const { data: itemsData, error: itemsErr } = await client
+    .from("pr_vendor_items")
+    .select("id,link_status")
+    .eq("ingredient_id", sourceId);
+  if (itemsErr) return { ok: false, error: itemsErr.message, movedItems: 0, movedGoldenLinks: 0 };
+  const items = (itemsData ?? []) as Array<{ id: string; link_status: string }>;
+  const itemIds = items.map((i) => i.id);
+
+  // Move items. Only match on current source so a race doesn't move a
+  // row that was re-assigned since we read it.
+  let movedItems = 0;
+  if (itemIds.length > 0) {
+    const { error } = await client
+      .from("pr_vendor_items")
+      .update({ ingredient_id: targetId })
+      .in("id", itemIds)
+      .eq("ingredient_id", sourceId);
+    if (error) return { ok: false, error: error.message, movedItems: 0, movedGoldenLinks: 0 };
+    movedItems = itemIds.length;
+  }
+
+  // Move active golden links.
+  let movedGoldenLinks = 0;
+  const { data: glData } = await client
+    .from("pr_golden_links")
+    .select("id,vendor_item_id")
+    .eq("ingredient_id", sourceId)
+    .is("revoked_at", null);
+  const golden = (glData ?? []) as Array<{ id: string; vendor_item_id: string }>;
+  if (golden.length > 0) {
+    const { error } = await client
+      .from("pr_golden_links")
+      .update({ ingredient_id: targetId })
+      .eq("ingredient_id", sourceId)
+      .is("revoked_at", null);
+    if (error) return { ok: false, error: error.message, movedItems, movedGoldenLinks: 0 };
+    movedGoldenLinks = golden.length;
+  }
+
+  // Flip source to merged. updated_at is auto-maintained by trigger.
+  const { error: srcErr } = await client
+    .from("pr_ingredients")
+    .update({ status: "merged", merged_into_id: targetId, updated_at: new Date().toISOString() })
+    .eq("id", sourceId);
+  if (srcErr) return { ok: false, error: srcErr.message, movedItems, movedGoldenLinks };
+
+  // Source name becomes a rename-alias on the survivor so the matcher
+  // can auto-link on the old name on a future intake. Plain upsert on
+  // the schema's unique (alias_norm, kind) - latest claim wins. The
+  // revoked_at:null in the payload clears a prior rename-revoke if the
+  // same alias was previously revoked.
+  const { error: aliasErr } = await client
+    .from("pr_ingredient_aliases")
+    .upsert(
+      {
+        ingredient_id: targetId,
+        alias_text: source.name,
+        alias_norm: source.name_norm,
+        kind: "rename",
+        revoked_at: null,
+      },
+      { onConflict: "alias_norm,kind" }
+    );
+  if (aliasErr) {
+    // Non-fatal; the merge already landed. Log the detail in pr_events
+    // so we see the alias didn't take.
+    // eslint-disable-next-line no-console
+    console.error(`merge alias upsert failed: ${aliasErr.message}`);
+  }
+
+  await client.from("pr_events").insert({
+    entity_type: "ingredient",
+    entity_id: sourceId,
+    kind: "ingredient_merged",
+    before: {
+      source_id: sourceId,
+      source_name: source.name,
+      source_norm: source.name_norm,
+      item_ids: itemIds,
+      golden_link_ids: golden.map((g) => g.id),
+    },
+    after: {
+      target_id: targetId,
+      target_name: target.name,
+      moved_items: movedItems,
+      moved_golden_links: movedGoldenLinks,
+    },
+    actor: actorEmail,
+  });
+
+  return { ok: true, movedItems, movedGoldenLinks };
+}
+
+// Reverse the most recent merge for `sourceId`: move items + active
+// golden links back from the survivor, flip source status back to
+// 'active' with merged_into_id cleared, soft-revoke the rename alias.
+// Reads the moved-item list from the merge's pr_events row so we only
+// return items that this merge brought in - not any that joined target
+// by some other path.
+export async function undoMergeIngredient(
+  client: SupabaseClient,
+  args: { sourceId: string; actorEmail: string }
+): Promise<{ ok: boolean; error?: string; restoredItems: number; restoredGoldenLinks: number }> {
+  const { sourceId, actorEmail } = args;
+
+  const { data: srcData, error: srcErr } = await client
+    .from("pr_ingredients")
+    .select("id,name,name_norm,status,merged_into_id")
+    .eq("id", sourceId)
+    .maybeSingle();
+  if (srcErr) return { ok: false, error: srcErr.message, restoredItems: 0, restoredGoldenLinks: 0 };
+  const source = srcData as
+    | { id: string; name: string; name_norm: string; status: string; merged_into_id: string | null }
+    | null;
+  if (!source) return { ok: false, error: "Source ingredient not found", restoredItems: 0, restoredGoldenLinks: 0 };
+  if (source.status !== "merged" || !source.merged_into_id) {
+    return { ok: false, error: "Ingredient is not merged; nothing to undo", restoredItems: 0, restoredGoldenLinks: 0 };
+  }
+
+  // Find the merge event that landed this state. Pick the latest - a
+  // merge is terminal, but a re-merge after undo could stack events.
+  const { data: evData, error: evErr } = await client
+    .from("pr_events")
+    .select("id,before,after")
+    .eq("entity_type", "ingredient")
+    .eq("entity_id", sourceId)
+    .eq("kind", "ingredient_merged")
+    .order("at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (evErr) return { ok: false, error: evErr.message, restoredItems: 0, restoredGoldenLinks: 0 };
+  const event = evData as
+    | { id: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null }
+    | null;
+  if (!event) return { ok: false, error: "No merge event found for this ingredient", restoredItems: 0, restoredGoldenLinks: 0 };
+
+  const targetId = source.merged_into_id;
+  const before = event.before ?? {};
+  const rawItemIds = Array.isArray((before as { item_ids?: unknown }).item_ids)
+    ? ((before as { item_ids: unknown[] }).item_ids.filter((x) => typeof x === "string") as string[])
+    : [];
+
+  // Move items back - only those that are still on target (defensive
+  // against items that moved elsewhere after the merge).
+  let restoredItems = 0;
+  if (rawItemIds.length > 0) {
+    const { error } = await client
+      .from("pr_vendor_items")
+      .update({ ingredient_id: sourceId })
+      .in("id", rawItemIds)
+      .eq("ingredient_id", targetId);
+    if (error) return { ok: false, error: error.message, restoredItems: 0, restoredGoldenLinks: 0 };
+    restoredItems = rawItemIds.length;
+  }
+
+  // Move active golden links back by vendor_item_id (we have the list).
+  let restoredGoldenLinks = 0;
+  if (rawItemIds.length > 0) {
+    const { data: gl } = await client
+      .from("pr_golden_links")
+      .select("id")
+      .in("vendor_item_id", rawItemIds)
+      .eq("ingredient_id", targetId)
+      .is("revoked_at", null);
+    const toMove = (gl ?? []) as Array<{ id: string }>;
+    if (toMove.length > 0) {
+      const { error } = await client
+        .from("pr_golden_links")
+        .update({ ingredient_id: sourceId })
+        .in("vendor_item_id", rawItemIds)
+        .eq("ingredient_id", targetId)
+        .is("revoked_at", null);
+      if (error) return { ok: false, error: error.message, restoredItems, restoredGoldenLinks: 0 };
+      restoredGoldenLinks = toMove.length;
+    }
+  }
+
+  // Flip source back to active.
+  const { error: upErr } = await client
+    .from("pr_ingredients")
+    .update({ status: "active", merged_into_id: null, updated_at: new Date().toISOString() })
+    .eq("id", sourceId);
+  if (upErr) return { ok: false, error: upErr.message, restoredItems, restoredGoldenLinks };
+
+  // Soft-revoke the rename alias (never DELETE).
+  const nowIso = new Date().toISOString();
+  const { error: aliasErr } = await client
+    .from("pr_ingredient_aliases")
+    .update({ revoked_at: nowIso })
+    .eq("alias_norm", source.name_norm)
+    .eq("kind", "rename")
+    .eq("ingredient_id", targetId)
+    .is("revoked_at", null);
+  if (aliasErr) {
+    // Non-fatal.
+    // eslint-disable-next-line no-console
+    console.error(`undo merge alias revoke failed: ${aliasErr.message}`);
+  }
+
+  await client.from("pr_events").insert({
+    entity_type: "ingredient",
+    entity_id: sourceId,
+    kind: "ingredient_merge_undo",
+    before: { target_id: targetId },
+    after: { restored_items: restoredItems, restored_golden_links: restoredGoldenLinks },
+    actor: actorEmail,
+  });
+
+  return { ok: true, restoredItems, restoredGoldenLinks };
+}

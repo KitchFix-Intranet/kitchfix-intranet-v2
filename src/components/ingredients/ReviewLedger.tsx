@@ -9,6 +9,7 @@
 import { serviceClient } from "@/lib/supabase/service";
 import { fmtUsdLong, timeAgo, fmtDate } from "@/lib/fmt";
 import { UndoLedgerButton } from "./UndoLedgerButton";
+import { UndoMergeButton } from "./UndoMergeButton";
 
 type Ingredient = { id: string; name: string; parent: string | null };
 
@@ -18,6 +19,7 @@ type EventRow = {
   at: string;
   actor: string | null;
   entity_id: string;
+  before: Record<string, unknown> | null;
   after: Record<string, unknown> | null;
 };
 
@@ -39,7 +41,7 @@ export async function ReviewLedger({ ingredients }: { ingredients: Ingredient[] 
   const client = serviceClient();
   const { data, error } = await client
     .from("pr_events")
-    .select("id,kind,at,actor,entity_id,after")
+    .select("id,kind,at,actor,entity_id,before,after")
     .in("kind", [
       "review_confirm",
       "review_undo",
@@ -47,6 +49,8 @@ export async function ReviewLedger({ ingredients }: { ingredients: Ingredient[] 
       "review_keep_separate",
       "review_relink",
       "ingredient_created",
+      "ingredient_merged",
+      "ingredient_merge_undo",
     ])
     .order("at", { ascending: false })
     .limit(25);
@@ -178,6 +182,63 @@ function LedgerRow({
         <div className="kf-review__ledger-primary">
           <span className="kf-review__ledger-kind">Created</span>
           <span className="kf-review__ledger-text">New ingredient <strong>{name}</strong>.</span>
+        </div>
+        <div className="kf-review__ledger-meta">
+          <span className="kf-review__ledger-when">
+            <time dateTime={event.at} title={fmtDate(event.at, "time")}>{timeAgo(event.at)}</time>
+          </span>
+          <span className="kf-review__ledger-actor">{actor}</span>
+        </div>
+      </article>
+    );
+  }
+
+  if (event.kind === "ingredient_merged") {
+    // Snapshot names from the event itself - the source is now merged
+    // so it won't appear in the active ingredients list we have.
+    const before = event.before ?? {};
+    const sourceName = typeof before.source_name === "string" ? before.source_name : "unknown";
+    const targetName = typeof after.target_name === "string" ? after.target_name : "another ingredient";
+    const movedItems = asNumber(after.moved_items);
+    // Only offer Undo if the source is STILL merged. A re-merged source
+    // would resolve as "active" in the ingredients lookup after the
+    // undo+re-merge sequence; in that case this row is historical.
+    const stillMerged = ingredient === null; // active ingredients map misses merged ones
+    return (
+      <article className="kf-review__ledger-row">
+        <div className="kf-review__ledger-primary">
+          <span className="kf-review__ledger-kind">Merged</span>
+          <span className="kf-review__ledger-text">
+            <strong>{sourceName}</strong> into <strong>{targetName}</strong> - {movedItems} items moved
+          </span>
+        </div>
+        <div className="kf-review__ledger-meta">
+          <span className="kf-review__ledger-when">
+            <time dateTime={event.at} title={fmtDate(event.at, "time")}>{timeAgo(event.at)}</time>
+          </span>
+          <span className="kf-review__ledger-actor">{actor}</span>
+          {stillMerged ? (
+            <UndoMergeButton sourceId={event.entity_id} />
+          ) : (
+            <span className="kf-review__ledger-done">Already undone</span>
+          )}
+        </div>
+      </article>
+    );
+  }
+
+  if (event.kind === "ingredient_merge_undo") {
+    const before = event.before ?? {};
+    const _targetId = typeof before.target_id === "string" ? before.target_id : null;
+    void _targetId;
+    const restored = asNumber(event.after?.restored_items);
+    return (
+      <article className="kf-review__ledger-row kf-review__ledger-row--muted">
+        <div className="kf-review__ledger-primary">
+          <span className="kf-review__ledger-kind kf-review__ledger-kind--undo">Undid merge</span>
+          <span className="kf-review__ledger-text">
+            {restored > 0 ? <>Restored {restored} items.</> : <>Reversed one merge.</>}
+          </span>
         </div>
         <div className="kf-review__ledger-meta">
           <span className="kf-review__ledger-when">

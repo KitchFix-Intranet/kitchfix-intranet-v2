@@ -152,6 +152,7 @@ export function DetailPanel({
         <IngredientBlock
           ingredient={ingredient}
           parentOptions={parentOptions}
+          parents={parents}
           onDone={() => router.refresh()}
         />
 
@@ -243,13 +244,15 @@ function errMsg(data: unknown, fallback: string): string {
 function IngredientBlock({
   ingredient,
   parentOptions,
+  parents,
   onDone,
 }: {
   ingredient: ReviewCardIngredient;
   parentOptions: string[];
+  parents: ReviewCardIngredient[];
   onDone: () => void;
 }) {
-  // Each sub-form owns its own draft + busy flag. All three post to a
+  // Each sub-form owns its own draft + busy flag. All post to a
   // distinct /api/review/* route; on success toast + onDone to refresh
   // the server-rendered cards so the chip/row readouts update.
   const [renameDraft, setRenameDraft] = useState(ingredient.name);
@@ -262,6 +265,15 @@ function IngredientBlock({
   const [catBusy, setCatBusy] = useState(false);
 
   const [resaleBusy, setResaleBusy] = useState(false);
+
+  const [mergeTarget, setMergeTarget] = useState<string>("");
+  const [mergeBusy, setMergeBusy] = useState(false);
+  // Other active ingredients to merge INTO. Exclude self; parents is
+  // already filtered server-side to status='active'.
+  const mergeChoices = useMemo(
+    () => parents.filter((p) => p.id !== ingredient.id),
+    [parents, ingredient.id]
+  );
 
   async function doRename() {
     const next = renameDraft.trim();
@@ -323,6 +335,48 @@ function IngredientBlock({
     }
     toast(next ? "Moved to resale bucket" : "Moved to recipe-coverage bucket");
     setResaleBusy(false);
+    onDone();
+  }
+
+  // Merge THIS ingredient (source) INTO a chosen target. Items + active
+  // golden links move; source goes status='merged' with merged_into_id
+  // set; source's old name becomes a kind='rename' alias on the
+  // target. Undo is available from the toast + from the Recent-
+  // decisions ledger. See mergeIngredients() for the full write set.
+  async function doMerge() {
+    if (mergeBusy || !mergeTarget) return;
+    const targetRow = parents.find((p) => p.id === mergeTarget);
+    const targetName = targetRow?.name ?? "the chosen ingredient";
+    const confirmed = window.confirm(
+      `Merge "${ingredient.name}" into "${targetName}"?\n\nEvery item on "${ingredient.name}" will move to "${targetName}". This is reversible from the Recent decisions ledger.`
+    );
+    if (!confirmed) return;
+    setMergeBusy(true);
+    const r = await postJson("/api/review/merge-ingredient", {
+      sourceId: ingredient.id,
+      targetId: mergeTarget,
+    });
+    if (!r.ok) {
+      toast(errMsg(r.data, `Merge failed (${r.status})`), { tone: "block" });
+      setMergeBusy(false);
+      return;
+    }
+    const d = r.data as { movedItems?: number; movedGoldenLinks?: number };
+    const srcId = ingredient.id;
+    toast(
+      `Merged ${d.movedItems ?? 0} items into ${targetName}`,
+      {
+        undo: async () => {
+          await fetch("/api/review/undo-merge", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ sourceId: srcId }),
+          });
+          onDone();
+        },
+      }
+    );
+    setMergeBusy(false);
     onDone();
   }
 
@@ -424,6 +478,39 @@ function IngredientBlock({
           <div className="kf-dpn__hint">
             Resale items (bottled water, disposables) are tracked but excluded from recipe-coverage.
           </div>
+        </div>
+      </div>
+
+      <div className="kf-dpn__row">
+        <label className="kf-dpn__label">
+          <span>Merge into another ingredient</span>
+          <select
+            value={mergeTarget}
+            onChange={(e) => setMergeTarget(e.target.value)}
+            disabled={mergeBusy || mergeChoices.length === 0}
+          >
+            <option value="">Pick a survivor...</option>
+            {mergeChoices.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}{p.parent ? ` - ${p.parent}` : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="kf-dpn__hint">
+          Items + active golden links move to the survivor. &ldquo;{ingredient.name}&rdquo; stays queryable
+          with <code>status=&apos;merged&apos;</code> and its name becomes an alias so matcher runs
+          auto-route the old name. Undoable from Recent decisions.
+        </div>
+        <div className="kf-dpn__btns">
+          <button
+            type="button"
+            className={`kf-btn kf-btn--line kf-btn--sm${mergeBusy ? " is-busy" : ""}`}
+            disabled={mergeBusy || !mergeTarget}
+            onClick={doMerge}
+          >
+            Merge into chosen
+          </button>
         </div>
       </div>
     </section>

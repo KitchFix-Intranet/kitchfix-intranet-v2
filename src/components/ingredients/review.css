@@ -487,3 +487,64 @@
 }
 .kf-dpn__toggle-label input { width: 18px; height: 18px; cursor: pointer; }
 .kf-facts__note { color: var(--sp-warn); font-style: italic; font-size: var(--sp-t-micro); margin-left: var(--sp-sp-2); }
+
+/* ---------------------------------------------------------------------
+ * Toolbar: sort toggle + super-category chips + resale/needs quick
+ * filters. Sits directly under the sticky search bar; wraps on narrow
+ * widths so phone layout stacks the three groups.
+ * --------------------------------------------------------------------- */
+.kf-review__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-sp-3);
+  padding: var(--sp-sp-2) 0 var(--sp-sp-3);
+  align-items: center;
+  justify-content: flex-start;
+}
+.kf-review__toolbar-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--sp-sp-1);
+  align-items: center;
+}
+.kf-review__cats { flex: 1 1 auto; min-width: 0; }
+
+.kf-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-1);
+  min-height: 32px;
+  padding: var(--sp-sp-1) var(--sp-sp-3);
+  background: var(--sp-card);
+  color: var(--sp-body);
+  border: 1px solid var(--sp-line);
+  border-radius: 999px;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.kf-chip:hover:not([disabled]) { background: var(--sp-sky-tint); }
+.kf-chip:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
+.kf-chip--on {
+  background: var(--sp-navy);
+  color: var(--sp-card);
+  border-color: var(--sp-navy);
+}
+.kf-chip--on:hover { background: var(--sp-navy); }
+.kf-chip--warn { color: var(--sp-warn); border-color: color-mix(in srgb, var(--sp-warn) 40%, var(--sp-line)); }
+.kf-chip--warn.kf-chip--on { background: var(--sp-warn); color: var(--sp-card); border-color: var(--sp-warn); }
+.kf-chip--empty { color: var(--sp-muted); background: var(--sp-ground); cursor: not-allowed; opacity: 0.6; }
+.kf-chip__count {
+  color: inherit;
+  opacity: 0.65;
+  font-variant-numeric: tabular-nums;
+  margin-left: var(--sp-sp-1);
+}
+.kf-chip--on .kf-chip__count { opacity: 0.9; }
+
+@media (max-width: 640px) {
+  .kf-review__toolbar { gap: var(--sp-sp-2); }
+  .kf-review__toolbar-group { width: 100%; justify-content: flex-start; }
+}
