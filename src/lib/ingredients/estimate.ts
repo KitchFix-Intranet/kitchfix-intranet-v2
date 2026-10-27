@@ -29,7 +29,14 @@ export type PriceEstimate = {
   per_base: number | null;
   base_uom: BaseUom | null;
   case_price: number | null;
-  case_price_source: "catalog" | "billed" | "catch_weight" | null;
+  // case_price_source values:
+  //   'catalog'     - non-catch pack math: catalog_price (case) / total_base
+  //   'billed'      - non-catch pack math: latest invoice price / total_base
+  //   'catch_weight'- catch-weight item, billed $/lb from invoice (primary)
+  //   'catalog_lb'  - catch-weight item, catalog price interpreted as $/lb
+  //                   (Phase 1.7 fallback when no billed data exists;
+  //                    always 'low' confidence - the shipped weight varies).
+  case_price_source: "catalog" | "billed" | "catch_weight" | "catalog_lb" | null;
   pack_source: "catalog" | "invoice" | null;
   confidence: Confidence;
   note: string | null;
@@ -55,6 +62,16 @@ export function estimatePerUnit(input: EstimateInputs): EstimateResult {
   // Catch-weight short-circuit: billed by actual weight means the
   // invoice unit_price IS $/lb. We never trust the pack formula here
   // (even if it parsed cleanly, the per-case weight is only an average).
+  //
+  // Precedence:
+  //   1. Billed $/lb from the latest invoice - most accurate; it's
+  //      the actual shipped weight.
+  //   2. Phase 1.7 fallback: catalog_price interpreted as $/lb when
+  //      no billed data exists. Verified in real data that
+  //      pr_vendor_catalog.catalog_price for catch-weight items is a
+  //      per-pound rate (not a case total). Flagged `low` so Kevin
+  //      verifies in review; the shipped weight still varies.
+  //   3. Neither: `none` with a note.
   if (input.catch_weight) {
     const perLb = input.latest_unit_price;
     if (perLb != null && perLb > 0) {
@@ -68,6 +85,23 @@ export function estimatePerUnit(input: EstimateInputs): EstimateResult {
           pack_source: packSource,
           confidence: "low",
           note: "catch-weight: latest billed $/lb used",
+        },
+      };
+    }
+    const catalogLb =
+      input.catalog_price != null && input.catalog_price > 0 ? input.catalog_price : null;
+    if (catalogLb != null) {
+      return {
+        parsed,
+        estimate: {
+          per_base: catalogLb,
+          base_uom: "LB",
+          case_price: null,
+          case_price_source: "catalog_lb",
+          pack_source: packSource,
+          confidence: "low",
+          note:
+            "catch-weight: catalog $/lb used (nominal; shipped weight varies - verify)",
         },
       };
     }
