@@ -25,6 +25,9 @@ type ProposedItem = {
   name: string;
   description_key: string;
   pack_text: string | null;
+  pack_qty: number | null;
+  pack_size: number | null;
+  pack_uom: string | null;
   pack_state: string;
   pack_override: unknown;
   billed_unit: string | null;
@@ -36,6 +39,15 @@ type ProposedItem = {
   lines_12m: number | null;
   accounts: string[] | null;
   last_seen: string | null;
+  price_estimate: {
+    per_base?: number | null;
+    base_uom?: string | null;
+    case_price?: number | null;
+    case_price_source?: string | null;
+    pack_source?: string | null;
+    confidence?: string | null;
+    note?: string | null;
+  } | null;
 };
 
 type Ingredient = {
@@ -88,7 +100,7 @@ async function loadReview() {
     const { data, error } = await client
       .from("pr_vendor_items")
       .select(
-        "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_state,pack_override,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen"
+        "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_qty,pack_size,pack_uom,pack_state,pack_override,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen,price_estimate"
       )
       .eq("link_status", "proposed")
       .in("status", ["active", "resale"])
@@ -251,6 +263,24 @@ async function loadReview() {
             : it.pack_text
               ? "invoice"
               : null;
+        // Normalized pack display from the backfill: "6/1 LB" style.
+        // Falls back to the raw pack text when the backfill hasn't
+        // produced qty+size+uom yet.
+        const normalizedPack =
+          it.pack_qty != null && it.pack_size != null && it.pack_uom
+            ? (Number(it.pack_qty) === 1
+                ? `${it.pack_size} ${it.pack_uom}`
+                : `${it.pack_qty}/${it.pack_size} ${it.pack_uom}`)
+            : null;
+        const pe = it.price_estimate ?? null;
+        const perBase =
+          pe && pe.per_base != null && Number.isFinite(Number(pe.per_base))
+            ? Number(pe.per_base)
+            : null;
+        const perBaseConfidence =
+          pe && (pe.confidence === "high" || pe.confidence === "low")
+            ? (pe.confidence as "high" | "low")
+            : null;
         g.items.push({
           id: it.id,
           name: it.name,
@@ -260,6 +290,7 @@ async function loadReview() {
           vendor: vendorNameById.get(it.vendor_id) ?? it.vendor_id,
           itemNumber: it.item_number,
           pack: packDisplay,
+          packNormalized: normalizedPack,
           packState: it.pack_state,
           packSource,
           packManualOverride: hasManualOverride,
@@ -276,6 +307,11 @@ async function loadReview() {
           unitPriceUnit: up ? up.billedUnit ?? it.billed_unit : null,
           catalogPrice,
           gtin,
+          perBase,
+          perBaseUom: pe?.base_uom ?? null,
+          perBaseConfidence,
+          perBaseNote: pe?.note ?? null,
+          caseSource: (pe?.case_price_source as "catalog" | "billed" | "catch_weight" | null) ?? null,
         });
       }
       groups.set(key, g);
@@ -316,6 +352,24 @@ async function loadReview() {
             : it.pack_text
               ? "invoice"
               : null;
+        // Normalized pack display from the backfill: "6/1 LB" style.
+        // Falls back to the raw pack text when the backfill hasn't
+        // produced qty+size+uom yet.
+        const normalizedPack =
+          it.pack_qty != null && it.pack_size != null && it.pack_uom
+            ? (Number(it.pack_qty) === 1
+                ? `${it.pack_size} ${it.pack_uom}`
+                : `${it.pack_qty}/${it.pack_size} ${it.pack_uom}`)
+            : null;
+        const pe = it.price_estimate ?? null;
+        const perBase =
+          pe && pe.per_base != null && Number.isFinite(Number(pe.per_base))
+            ? Number(pe.per_base)
+            : null;
+        const perBaseConfidence =
+          pe && (pe.confidence === "high" || pe.confidence === "low")
+            ? (pe.confidence as "high" | "low")
+            : null;
         g.items.push({
           id: it.id,
           name: it.name,
@@ -325,6 +379,7 @@ async function loadReview() {
           vendor: vendorNameById.get(it.vendor_id) ?? it.vendor_id,
           itemNumber: it.item_number,
           pack: packDisplay,
+          packNormalized: normalizedPack,
           packState: it.pack_state,
           packSource,
           packManualOverride: hasManualOverride,
@@ -341,6 +396,11 @@ async function loadReview() {
           unitPriceUnit: up ? up.billedUnit ?? it.billed_unit : null,
           catalogPrice,
           gtin,
+          perBase,
+          perBaseUom: pe?.base_uom ?? null,
+          perBaseConfidence,
+          perBaseNote: pe?.note ?? null,
+          caseSource: (pe?.case_price_source as "catalog" | "billed" | "catch_weight" | null) ?? null,
         });
       }
       groups.set(key, g);

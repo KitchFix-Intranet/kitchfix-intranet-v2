@@ -492,7 +492,7 @@ function ItemFacts({ item }: { item: ReviewGroupItem }) {
         <div>
           <dt>Pack size</dt>
           <dd>
-            {item.pack ?? <span className="kf-muted">-</span>}
+            {item.packNormalized ?? item.pack ?? <span className="kf-muted">-</span>}
             {packSourceLabel ? (
               <span className={`kf-facts__note${item.packSource === "override" ? " kf-facts__note--warn" : ""}`}>
                 {packSourceLabel}
@@ -507,19 +507,39 @@ function ItemFacts({ item }: { item: ReviewGroupItem }) {
         <div>
           <dt>Unit price</dt>
           <dd>
-            {item.catalogPrice != null ? (
+            {item.perBase != null && item.perBaseUom && item.perBaseConfidence ? (
+              <>
+                {fmtUsd(item.perBase)}
+                <span className="kf-muted">
+                  {" "}/ {item.perBaseUom === "LB" ? "lb"
+                      : item.perBaseUom === "FLOZ" ? "fl oz"
+                      : item.perBaseUom === "EA" ? "each"
+                      : item.perBaseUom.toLowerCase()}
+                </span>
+                {item.perBaseConfidence === "high" ? (
+                  <span className="kf-facts__note">per-unit (high)</span>
+                ) : (
+                  <span className="kf-facts__note kf-facts__note--warn">est. (low)</span>
+                )}
+                {item.perBaseNote ? (
+                  <div className="kf-cell-sub kf-cell-sub--dim">{item.perBaseNote}</div>
+                ) : null}
+              </>
+            ) : item.catalogPrice != null ? (
               <>
                 {fmtUsd(item.catalogPrice)}
-                <span className="kf-cell-sub"> catalog</span>
+                <span className="kf-cell-sub"> catalog case</span>
+                <div className="kf-cell-sub kf-cell-sub--dim">per-unit: needs pack</div>
               </>
             ) : item.unitPrice != null ? (
               <>
                 {fmtUsd(item.unitPrice)}
                 <span className="kf-muted"> /{item.unitPriceUnit ?? "unit"}</span>
                 <span className="kf-cell-sub"> billed, latest</span>
+                <div className="kf-cell-sub kf-cell-sub--dim">per-unit: needs pack</div>
               </>
             ) : (
-              <span className="kf-muted">-</span>
+              <span className="kf-muted">- needs pack</span>
             )}
           </dd>
         </div>

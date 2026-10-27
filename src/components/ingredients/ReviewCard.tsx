@@ -35,6 +35,7 @@ export type ReviewGroupItem = {
   vendor: string;
   itemNumber: string | null;
   pack: string | null;
+  packNormalized: string | null;
   packState: string;
   packSource: "override" | "catalog" | "invoice" | null;
   packManualOverride: boolean;
@@ -53,6 +54,16 @@ export type ReviewGroupItem = {
   unitPriceUnit: string | null;
   catalogPrice: number | null;
   gtin: string | null;
+  // Backfilled per-base price (step 5 Phase 1). perBase + perBaseUom
+  // only populated when the parser was high/low confident AND a case
+  // price was available. perBaseConfidence='high' renders a quiet check
+  // chip; 'low' renders an amber "est." chip; null falls back to the
+  // catalog-or-billed case price display.
+  perBase: number | null;
+  perBaseUom: string | null;
+  perBaseConfidence: "high" | "low" | null;
+  perBaseNote: string | null;
+  caseSource: "catalog" | "billed" | "catch_weight" | null;
 };
 
 export type ReviewCardIngredient = {
@@ -317,7 +328,7 @@ export function ReviewCard({
               </td>
               <td>
                 <div className="kf-cell-ellipsis">
-                  {it.pack ?? "-"}
+                  {it.packNormalized ?? it.pack ?? "-"}
                   <span className="kf-muted"> / {it.billedUnit ?? "-"}</span>
                 </div>
                 {it.packSource === "override" ? (
@@ -329,11 +340,7 @@ export function ReviewCard({
                 ) : null}
               </td>
               <td className="kf-table__num">
-                <UnitPriceCell
-                  catalogPrice={it.catalogPrice}
-                  billedPrice={it.unitPrice}
-                  billedUnit={it.unitPriceUnit}
-                />
+                <UnitPriceCell item={it} />
               </td>
               <td className="kf-table__num"><strong>${fmtUsdLong(it.usd12m).replace(/^\$/, "")}</strong></td>
               <td className="kf-table__num">{fmtCount(it.lines12m)}</td>
@@ -395,40 +402,73 @@ function ConfidenceChip({ c }: { c: string | null }) {
   return <span className="kf-pill kf-pill--muted">-</span>;
 }
 
-// Unit price with source hint. Catalog price (from pr_vendor_catalog)
-// wins when available; otherwise fall back to the latest invoiced
-// price per billed unit from pr_price_observations. "-" when neither
-// is known. The source label ("catalog" / "billed latest") always
-// renders so Kevin can tell which number is which.
-function UnitPriceCell({
-  catalogPrice,
-  billedPrice,
-  billedUnit,
-}: {
-  catalogPrice: number | null;
-  billedPrice: number | null;
-  billedUnit: string | null;
-}) {
-  if (catalogPrice != null) {
+// Unit price. Precedence:
+//   1. Backfilled per-base ($/lb, $/fl oz, $/each) when confidence is
+//      high or low. High renders a quiet check chip; low renders an
+//      amber "est." chip + the parse note on hover.
+//   2. Catalog case price (list) when a catalog match exists.
+//   3. Latest billed case price from pr_price_observations.
+//   4. "- needs pack" when neither pack nor price is available.
+// Never fabricates a per-unit; "none" confidence falls back to case
+// price with a muted "per-unit: needs pack" sub-line.
+function UnitPriceCell({ item }: { item: ReviewGroupItem }) {
+  if (item.perBase != null && item.perBaseUom && item.perBaseConfidence) {
+    const uomLower =
+      item.perBaseUom === "LB" ? "lb" :
+      item.perBaseUom === "FLOZ" ? "fl oz" :
+      item.perBaseUom === "EA" ? "each" :
+      item.perBaseUom.toLowerCase();
+    const title =
+      (item.perBaseConfidence === "high"
+        ? "Per-unit estimate from pack size + case price"
+        : "Low-confidence estimate (range / catch-weight / soft parse)") +
+      (item.perBaseNote ? ` - ${item.perBaseNote}` : "");
     return (
-      <span title="Catalog list price from pr_vendor_catalog">
-        <strong>{fmtUsd(catalogPrice)}</strong>
+      <span title={title}>
+        <strong>{fmtUsd(item.perBase)}</strong>
+        <span className="kf-muted"> / {uomLower}</span>
         <br />
-        <span className="kf-cell-sub">catalog</span>
+        {item.perBaseConfidence === "high" ? (
+          <span className="kf-conf-chip kf-conf-chip--ok">
+            <Check size={10} strokeWidth={2.5} aria-hidden />
+            per-unit
+          </span>
+        ) : (
+          <span className="kf-conf-chip kf-conf-chip--low">est.</span>
+        )}
       </span>
     );
   }
-  if (billedPrice != null) {
+  if (item.catalogPrice != null) {
     return (
-      <span title="Latest invoiced unit price (billed unit, not normalized across pack sizes)">
-        <strong>{fmtUsd(billedPrice)}</strong>
-        <span className="kf-muted"> /{billedUnit ?? "unit"}</span>
+      <span title="Catalog case price - per-unit needs pack normalization">
+        <strong>{fmtUsd(item.catalogPrice)}</strong>
+        <br />
+        <span className="kf-cell-sub">catalog case</span>
+        <br />
+        <span className="kf-cell-sub kf-cell-sub--dim">per-unit: needs pack</span>
+      </span>
+    );
+  }
+  if (item.unitPrice != null) {
+    return (
+      <span title="Latest billed case price - per-unit needs pack normalization">
+        <strong>{fmtUsd(item.unitPrice)}</strong>
+        <span className="kf-muted"> /{item.unitPriceUnit ?? "unit"}</span>
         <br />
         <span className="kf-cell-sub kf-cell-sub--dim">billed, latest</span>
+        <br />
+        <span className="kf-cell-sub kf-cell-sub--dim">per-unit: needs pack</span>
       </span>
     );
   }
-  return <span className="kf-muted">-</span>;
+  return (
+    <span className="kf-muted">
+      -
+      <br />
+      <span className="kf-cell-sub kf-cell-sub--dim">needs pack</span>
+    </span>
+  );
 }
 
 // Site pills: render the item's account-code list as chips (e.g.
