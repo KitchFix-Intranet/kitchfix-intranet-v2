@@ -6,6 +6,7 @@
 // pr_v_overview_totals.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { categoryForParent } from "@/lib/ingredients/categories";
 
 export type ConfirmResult = {
   confirmed: number;
@@ -380,11 +381,16 @@ export async function createIngredient(
 
   // base_unit is required by the schema (lb|each|gal|dozen). "each" is the
   // safest default - the ingredient admin surface in a later step lets
-  // the user refine it.
+  // the user refine it. category is DERIVED from parent via the
+  // canonical src/lib/ingredients/categories map; null (unmapped parent)
+  // is intentional and surfaces as "Needs category" - never guess.
+  const parent = args.parent?.trim() || null;
+  const category = categoryForParent(parent);
   const insert = {
     name: trimmed,
     name_norm: nameNorm,
-    parent: args.parent?.trim() || null,
+    parent,
+    category,
     base_unit: "each",
     status: "active",
     created_by: args.actorEmail,
@@ -401,7 +407,7 @@ export async function createIngredient(
     entity_type: "ingredient",
     entity_id: id,
     kind: "ingredient_created",
-    after: { name: trimmed, parent: args.parent ?? null },
+    after: { name: trimmed, parent, category },
     actor: args.actorEmail,
   });
   return { id };
