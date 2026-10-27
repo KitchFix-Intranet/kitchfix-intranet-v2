@@ -249,7 +249,7 @@ export function ReviewFilter({
           </button>
         </div>
 
-        <div className="kf-review__toolbar-group kf-review__cats" role="radiogroup" aria-label="Super-category filter">
+        <div className="kf-review__toolbar-group kf-review__cats" role="radiogroup" aria-label="Category filter">
           <button
             type="button"
             role="radio"

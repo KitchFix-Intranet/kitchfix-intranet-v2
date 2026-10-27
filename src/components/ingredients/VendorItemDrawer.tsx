@@ -178,11 +178,11 @@ export async function VendorItemDrawer({ id, closeHref, vendorNameById }: Props)
       <section className="kf-drawer__block" aria-label="Facts">
         <dl className="kf-facts">
           <div>
-            <dt>12m spend</dt>
+            <dt>Annual spend</dt>
             <dd>${fmtUsdLong(Number(item.usd_12m ?? 0)).replace(/^\$/, "")}</dd>
           </div>
           <div>
-            <dt>12m lines</dt>
+            <dt>Annual lines</dt>
             <dd>
               {fmtCount(lines12m)}
               {flagged > 0 ? (
@@ -203,7 +203,7 @@ export async function VendorItemDrawer({ id, closeHref, vendorNameById }: Props)
             <dd>{item.first_seen ? fmtDate(item.first_seen) : "-"}</dd>
           </div>
           <div>
-            <dt>Last seen</dt>
+            <dt>Last purchase</dt>
             <dd>{item.last_seen ? fmtDate(item.last_seen) : "-"}</dd>
           </div>
         </dl>

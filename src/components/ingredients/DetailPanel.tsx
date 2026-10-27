@@ -130,7 +130,7 @@ export function DetailPanel({
             {open.kind === "item" ? "Vendor item" : "Ingredient"}
           </span>
           <h3 id={labelId} className="kf-drawer__name">
-            {open.kind === "item" && item ? item.name : ingredient.name}
+            {open.kind === "item" && item ? item.displayName : ingredient.name}
           </h3>
           <div className="kf-drawer__chips">
             {ingredient.category ? (
@@ -165,37 +165,55 @@ export function DetailPanel({
 }
 
 function ItemFacts({ item }: { item: ReviewGroupItem }) {
+  const packSourceLabel =
+    item.packSource === "override" ? "manually entered"
+      : item.packSource === "catalog" ? "catalog"
+        : item.packSource === "invoice" ? "invoice"
+          : null;
   return (
     <section className="kf-drawer__block" aria-label="Item facts">
+      {item.displayNameSource === "catalog" && item.vendorOcrName !== item.displayName ? (
+        <div className="kf-dpn__ocr" title="Vendor's invoice description (verbatim)">
+          Invoice description: <span>{item.vendorOcrName}</span>
+        </div>
+      ) : null}
       <dl className="kf-facts">
         <div>
           <dt>Vendor</dt>
-          <dd>
-            {item.vendor}
-            {item.itemNumber ? <span className="kf-cell-sub"> #{item.itemNumber}</span> : null}
-          </dd>
+          <dd>{item.vendor}</dd>
         </div>
         <div>
-          <dt>Pack</dt>
+          <dt>Vendor item no.</dt>
+          <dd>{item.itemNumber ?? <span className="kf-muted">none</span>}</dd>
+        </div>
+        <div>
+          <dt>Pack size</dt>
           <dd>
-            {item.pack ?? "-"}
-            {item.packManualOverride ? (
-              <span className="kf-facts__note">manually entered</span>
+            {item.pack ?? <span className="kf-muted">-</span>}
+            {packSourceLabel ? (
+              <span className={`kf-facts__note${item.packSource === "override" ? " kf-facts__note--warn" : ""}`}>
+                {packSourceLabel}
+              </span>
             ) : null}
           </dd>
         </div>
         <div>
           <dt>Billed unit</dt>
-          <dd>{item.billedUnit ?? "-"}</dd>
+          <dd>{item.billedUnit ?? <span className="kf-muted">-</span>}</dd>
         </div>
         <div>
-          <dt>Unit price (billed)</dt>
+          <dt>Unit price</dt>
           <dd>
-            {item.unitPrice != null ? (
+            {item.catalogPrice != null ? (
+              <>
+                {fmtUsd(item.catalogPrice)}
+                <span className="kf-cell-sub"> catalog</span>
+              </>
+            ) : item.unitPrice != null ? (
               <>
                 {fmtUsd(item.unitPrice)}
                 <span className="kf-muted"> /{item.unitPriceUnit ?? "unit"}</span>
-                <span className="kf-cell-sub"> latest invoiced</span>
+                <span className="kf-cell-sub"> billed, latest</span>
               </>
             ) : (
               <span className="kf-muted">-</span>
@@ -203,21 +221,37 @@ function ItemFacts({ item }: { item: ReviewGroupItem }) {
           </dd>
         </div>
         <div>
-          <dt>12m spend</dt>
+          <dt>Annual spend</dt>
           <dd>${fmtUsdLong(item.usd12m).replace(/^\$/, "")}</dd>
         </div>
         <div>
-          <dt>12m lines</dt>
+          <dt>Annual lines</dt>
           <dd>{fmtCount(item.lines12m)}</dd>
         </div>
         <div>
           <dt>Sites</dt>
-          <dd>{item.accountsCount}</dd>
+          <dd>
+            {item.accounts.length > 0 ? (
+              <span className="kf-site-pills">
+                {item.accounts.map((c) => (
+                  <span key={c} className="kf-site-pill">{c}</span>
+                ))}
+              </span>
+            ) : (
+              <span className="kf-muted">-</span>
+            )}
+          </dd>
         </div>
         <div>
-          <dt>Last seen</dt>
-          <dd>{item.lastSeen ? fmtDate(item.lastSeen) : "-"}</dd>
+          <dt>Last purchase</dt>
+          <dd>{item.lastSeen ? fmtDate(item.lastSeen) : <span className="kf-muted">-</span>}</dd>
         </div>
+        {item.gtin ? (
+          <div>
+            <dt>GTIN</dt>
+            <dd className="kf-dpn__gtin">{item.gtin}</dd>
+          </div>
+        ) : null}
       </dl>
     </section>
   );
@@ -414,7 +448,7 @@ function IngredientBlock({
 
       <div className="kf-dpn__row">
         <label className="kf-dpn__label">
-          <span>Super-category</span>
+          <span>Category</span>
           <select value={superDraft} onChange={(e) => setSuperDraft(e.target.value)}>
             <option value="">Needs category</option>
             {SUPER_CATEGORIES.map((c) => (

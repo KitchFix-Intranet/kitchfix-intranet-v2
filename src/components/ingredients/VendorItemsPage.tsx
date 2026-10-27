@@ -268,7 +268,7 @@ export async function VendorItemsPage({
                     <th>Description</th>
                     <th>Pack / unit</th>
                     <th className={`kf-table__num${sort === "spend" ? " is-sorted" : ""}`}>
-                      <span>12m $</span>
+                      <span>Annual $</span>
                       {sort === "spend" ? <ArrowDown size={14} strokeWidth={1.5} /> : null}
                     </th>
                     <th className={`kf-table__num${sort === "lines" ? " is-sorted" : ""}`}>
@@ -276,7 +276,7 @@ export async function VendorItemsPage({
                       {sort === "lines" ? <ArrowDown size={14} strokeWidth={1.5} /> : null}
                     </th>
                     <th className={sort === "last_seen" ? "is-sorted" : ""}>
-                      <span>Last seen</span>
+                      <span>Last purchase</span>
                       {sort === "last_seen" ? <ArrowDown size={14} strokeWidth={1.5} /> : null}
                     </th>
                     <th>Status</th>

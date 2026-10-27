@@ -8,9 +8,9 @@
 export type SortKey = "spend" | "lines" | "last_seen";
 
 export const SORT_LABELS: Record<SortKey, string> = {
-  spend: "12-month spend, highest first",
-  lines: "12-month lines, highest first",
-  last_seen: "Last seen, newest first",
+  spend: "Annual spend, highest first",
+  lines: "Annual lines, highest first",
+  last_seen: "Last purchase, newest first",
 };
 
 export function parseSort(v: string | undefined): SortKey {

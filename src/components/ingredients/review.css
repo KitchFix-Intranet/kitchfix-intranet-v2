@@ -548,3 +548,70 @@
   .kf-review__toolbar { gap: var(--sp-sp-2); }
   .kf-review__toolbar-group { width: 100%; justify-content: flex-start; }
 }
+
+/* ---------------------------------------------------------------------
+ * Catalog enrichment + Kevin's casing rule.
+ *
+ * .kf-rvc__ocrname: the verbatim invoice OCR description shown as a
+ *   second line under the clean catalog name. Smaller, lighter, never
+ *   text-transform (OCR text is already BEEF SHORT RIB CHUCK FLAT in
+ *   caps - don't Title-case it, just de-emphasize).
+ * .kf-cell-sub--dim: a dimmer variant of the pack/price "source" sub.
+ * .kf-site-pills: inline-flex wrap of account-code pills. Sentence-case
+ *   is not applicable; account codes are stable short identifiers.
+ * .kf-dpn__ocr: the detail-panel equivalent of the OCR secondary line.
+ * .kf-dpn__gtin: tabular-nums + muted for the GTIN row.
+ * --------------------------------------------------------------------- */
+.kf-rvc__ocrname {
+  color: var(--sp-muted);
+  font-size: var(--sp-t-micro);
+  font-weight: 400;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: none;
+}
+.kf-cell-sub--dim { color: var(--sp-muted); font-size: var(--sp-t-label); font-weight: 400; }
+
+.kf-site-pills {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--sp-sp-1);
+  align-items: center;
+}
+.kf-site-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px var(--sp-sp-2);
+  background: var(--sp-sky-tint);
+  color: var(--sp-ink);
+  border: 1px solid var(--sp-line);
+  border-radius: 999px;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  letter-spacing: .5px;
+}
+.kf-site-pill--more {
+  background: var(--sp-ground);
+  color: var(--sp-muted);
+  font-weight: 400;
+}
+
+.kf-dpn__ocr {
+  padding: var(--sp-sp-2) var(--sp-sp-5);
+  color: var(--sp-muted);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  border-bottom: 1px dashed var(--sp-line-soft);
+}
+.kf-dpn__ocr span { color: var(--sp-body); }
+.kf-dpn__gtin {
+  font-family: var(--sp-mono, var(--sp-ui));
+  font-variant-numeric: tabular-nums;
+  color: var(--sp-body);
+}
+.kf-facts__note--warn { color: var(--sp-warn); }

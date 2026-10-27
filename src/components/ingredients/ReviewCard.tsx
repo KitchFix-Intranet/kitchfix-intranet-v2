@@ -23,15 +23,26 @@ import { DetailPanel, type DetailPanelOpen } from "./DetailPanel";
 
 export type ReviewGroupItem = {
   id: string;
-  name: string;
+  // vendorOcrName = the raw invoice/OCR description (verbatim identifier).
+  // displayName = catalog clean_name when matched, else the OCR name.
+  // Casing rule: never Title-case OCR text; show it de-emphasized when
+  // the catalog clean_name is doing the top-line display.
+  name: string; // kept as alias for displayName for back-compat with any legacy readers
+  vendorOcrName: string;
+  displayName: string;
+  displayNameSource: "catalog" | "invoice";
   vendor: string;
   itemNumber: string | null;
   pack: string | null;
   packState: string;
+  packSource: "override" | "catalog" | "invoice" | null;
   packManualOverride: boolean;
   billedUnit: string | null;
   usd12m: number;
   lines12m: number;
+  // accounts carries the full array of account codes (e.g. STL-FL, TXR-AZ)
+  // so the DetailPanel can render them as pills instead of a count.
+  accounts: string[];
   accountsCount: number;
   lastSeen: string | null;
   confidence: string | null;
@@ -39,6 +50,8 @@ export type ReviewGroupItem = {
   catchWeight: boolean;
   unitPrice: number | null;
   unitPriceUnit: string | null;
+  catalogPrice: number | null;
+  gtin: string | null;
 };
 
 export type ReviewCardIngredient = {
@@ -191,10 +204,10 @@ export function ReviewCard({
             <th>Vendor / #</th>
             <th>Pack / unit</th>
             <th className="kf-table__num">Unit price</th>
-            <th className="kf-table__num">12m $</th>
+            <th className="kf-table__num">Annual $</th>
             <th className="kf-table__num">Lines</th>
             <th>Sites</th>
-            <th>Last seen</th>
+            <th>Last purchase</th>
             <th>Conf</th>
           </tr>
         </thead>
@@ -205,7 +218,7 @@ export function ReviewCard({
                 <input
                   type="checkbox"
                   checked={!!checked[it.id]}
-                  aria-label={`Select ${it.name}`}
+                  aria-label={`Select ${it.displayName}`}
                   onChange={(e) => {
                     // Capture outside the updater (crash guard).
                     const v = e.currentTarget.checked;
@@ -213,23 +226,23 @@ export function ReviewCard({
                   }}
                 />
               </td>
-              <td title={it.name}>
+              <td title={it.displayName}>
                 <div className="kf-rvc__desc">
                   {ingredientRow ? (
                     <button
                       type="button"
                       className="kf-cell-ellipsis kf-rvc__row-btn"
                       onClick={() => setPanelOpen({ kind: "item", itemId: it.id })}
-                      title={`Open details for ${it.name}`}
+                      title={`Open details for ${it.displayName}`}
                     >
-                      {it.name}
+                      {it.displayName}
                     </button>
                   ) : (
                     // ai-new groups have no ingredient yet; detail panel edits
                     // ingredient fields, so the row button is hidden here. Confirm
                     // the group first (creates the ingredient), then this row
                     // becomes clickable.
-                    <span className="kf-cell-ellipsis">{it.name}</span>
+                    <span className="kf-cell-ellipsis">{it.displayName}</span>
                   )}
                   {it.catchWeight ? (
                     <span className="kf-flag kf-flag--warn" title="Priced by actual weight">
@@ -237,6 +250,13 @@ export function ReviewCard({
                     </span>
                   ) : null}
                 </div>
+                {it.displayNameSource === "catalog" && it.vendorOcrName !== it.displayName ? (
+                  // Verbatim OCR identifier below the clean name - never
+                  // Title-cased, always de-emphasized.
+                  <div className="kf-rvc__ocrname" title="Vendor's invoice description (verbatim)">
+                    {it.vendorOcrName}
+                  </div>
+                ) : null}
                 {it.reason ? <div className="kf-rvc__reason">{it.reason}</div> : null}
               </td>
               <td>
@@ -248,16 +268,30 @@ export function ReviewCard({
                   {it.pack ?? "-"}
                   <span className="kf-muted"> / {it.billedUnit ?? "-"}</span>
                 </div>
-                {it.packManualOverride ? (
+                {it.packSource === "override" ? (
                   <div className="kf-cell-sub kf-cell-sub--note">manually entered</div>
+                ) : it.packSource === "catalog" ? (
+                  <div className="kf-cell-sub">catalog</div>
+                ) : it.packSource === "invoice" ? (
+                  <div className="kf-cell-sub kf-cell-sub--dim">invoice</div>
                 ) : null}
               </td>
               <td className="kf-table__num">
-                <UnitPriceCell price={it.unitPrice} unit={it.unitPriceUnit} />
+                <UnitPriceCell
+                  catalogPrice={it.catalogPrice}
+                  billedPrice={it.unitPrice}
+                  billedUnit={it.unitPriceUnit}
+                />
               </td>
               <td className="kf-table__num"><strong>${fmtUsdLong(it.usd12m).replace(/^\$/, "")}</strong></td>
               <td className="kf-table__num">{fmtCount(it.lines12m)}</td>
-              <td>{it.accountsCount}</td>
+              <td>
+                {it.accounts.length > 0 ? (
+                  <SitePills codes={it.accounts} max={3} />
+                ) : (
+                  <span className="kf-muted">-</span>
+                )}
+              </td>
               <td>{it.lastSeen ? fmtDate(it.lastSeen) : "-"}</td>
               <td><ConfidenceChip c={it.confidence} /></td>
             </tr>
@@ -298,18 +332,55 @@ function ConfidenceChip({ c }: { c: string | null }) {
   return <span className="kf-pill kf-pill--muted">-</span>;
 }
 
-// Billed unit price from pr_price_observations (latest valid). The label
-// makes clear this is the raw billed unit, not a normalized $/lb across
-// pack sizes - that's step 3's job (pack parsing). "-" when no valid
-// observation exists; never a fabricated number.
-function UnitPriceCell({ price, unit }: { price: number | null; unit: string | null }) {
-  if (price == null) return <span className="kf-muted">-</span>;
+// Unit price with source hint. Catalog price (from pr_vendor_catalog)
+// wins when available; otherwise fall back to the latest invoiced
+// price per billed unit from pr_price_observations. "-" when neither
+// is known. The source label ("catalog" / "billed latest") always
+// renders so Kevin can tell which number is which.
+function UnitPriceCell({
+  catalogPrice,
+  billedPrice,
+  billedUnit,
+}: {
+  catalogPrice: number | null;
+  billedPrice: number | null;
+  billedUnit: string | null;
+}) {
+  if (catalogPrice != null) {
+    return (
+      <span title="Catalog list price from pr_vendor_catalog">
+        <strong>{fmtUsd(catalogPrice)}</strong>
+        <br />
+        <span className="kf-cell-sub">catalog</span>
+      </span>
+    );
+  }
+  if (billedPrice != null) {
+    return (
+      <span title="Latest invoiced unit price (billed unit, not normalized across pack sizes)">
+        <strong>{fmtUsd(billedPrice)}</strong>
+        <span className="kf-muted"> /{billedUnit ?? "unit"}</span>
+        <br />
+        <span className="kf-cell-sub kf-cell-sub--dim">billed, latest</span>
+      </span>
+    );
+  }
+  return <span className="kf-muted">-</span>;
+}
+
+// Site pills: render the item's account-code list as chips (e.g.
+// STL-FL, TXR-AZ). When the list is longer than `max`, the extras
+// collapse into a "+N" trailing pill. Account codes are stable short
+// identifiers used across the KitchFix stack; shown verbatim.
+function SitePills({ codes, max }: { codes: string[]; max: number }) {
+  const shown = codes.slice(0, max);
+  const hidden = codes.length - shown.length;
   return (
-    <span title="Latest invoiced unit price - billed unit, not normalized">
-      <strong>{fmtUsd(price)}</strong>
-      <span className="kf-muted"> /{unit ?? "unit"}</span>
-      <br />
-      <span className="kf-cell-sub">billed</span>
+    <span className="kf-site-pills" aria-label={`Sites: ${codes.join(", ")}`}>
+      {shown.map((c) => (
+        <span key={c} className="kf-site-pill">{c}</span>
+      ))}
+      {hidden > 0 ? <span className="kf-site-pill kf-site-pill--more">+{hidden}</span> : null}
     </span>
   );
 }

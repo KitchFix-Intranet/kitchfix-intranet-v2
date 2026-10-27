@@ -47,6 +47,20 @@ type Ingredient = {
 };
 type Vendor = { id: string; name: string };
 
+// Catalog row from pr_vendor_catalog (8,867 rows, 8 vendors loaded as
+// of this step). Keyed on (vendor_id, item_number_norm) to join to
+// pr_vendor_items. When present the catalog wins for pack / price /
+// clean name / gtin; the invoice OCR values stay as the fallback and
+// render de-emphasized under the clean name.
+type CatalogRow = {
+  vendor_id: string;
+  item_number_norm: string;
+  clean_name: string | null;
+  pack_text: string | null;
+  catalog_price: number | null;
+  gtin: string | null;
+};
+
 type AiNewPayload = { proposed_name?: string; proposed_parent?: string | null; reason?: string };
 
 function parseReason(raw: string | null): { prefix: "ai" | "ai-new" | "ai-notfood" | "alias" | "other" | null; body: string; aiNew?: AiNewPayload } {
@@ -105,6 +119,42 @@ async function loadReview() {
   ]);
   if (vendorsRes.error) throw vendorsRes.error;
   if (ingredientsRes.error) throw ingredientsRes.error;
+
+  // Catalog enrichment: read pr_vendor_catalog in batches grouped by
+  // vendor_id, keyed on item_number_norm. Only items with a non-null
+  // item_number_norm can match; the rest fall through to invoice-only
+  // values. Pattern mirrors the matcher's catalog read (one query per
+  // vendor; .in() on the normalized numbers from the queue).
+  const catalogByKey = new Map<string, CatalogRow>();
+  {
+    const byVendor = new Map<string, Set<string>>();
+    for (const it of items) {
+      if (!it.item_number_norm) continue;
+      let set = byVendor.get(it.vendor_id);
+      if (!set) {
+        set = new Set();
+        byVendor.set(it.vendor_id, set);
+      }
+      set.add(it.item_number_norm);
+    }
+    for (const [vendorId, nums] of byVendor) {
+      const list = Array.from(nums);
+      const page = 500;
+      for (let i = 0; i < list.length; i += page) {
+        const slice = list.slice(i, i + page);
+        const { data, error } = await client
+          .from("pr_vendor_catalog")
+          .select("vendor_id,item_number_norm,clean_name,pack_text,catalog_price,gtin")
+          .eq("vendor_id", vendorId)
+          .in("item_number_norm", slice);
+        if (error) throw error;
+        for (const r of (data ?? []) as CatalogRow[]) {
+          if (!r.item_number_norm) continue;
+          catalogByKey.set(`${r.vendor_id}#${r.item_number_norm}`, r);
+        }
+      }
+    }
+  }
 
   // Latest unit_price per vendor_item for the "Unit price" column. We
   // narrow to the vendor_item_ids actually on the queue, then paginate
@@ -181,17 +231,42 @@ async function loadReview() {
       g.totalLines12m += Number(it.lines_12m ?? 0);
       {
         const up = unitPriceByItem.get(it.id) ?? null;
+        const cat =
+          it.item_number_norm ? catalogByKey.get(`${it.vendor_id}#${it.item_number_norm}`) ?? null : null;
+        const catalogClean = cat?.clean_name?.trim() || null;
+        const catalogPack = cat?.pack_text?.trim() || null;
+        const catalogPrice = cat && cat.catalog_price != null ? Number(cat.catalog_price) : null;
+        const gtin = cat?.gtin?.trim() || null;
+        const hasManualOverride = it.pack_override !== null;
+        // Pack precedence: user manual override > catalog > invoice
+        // OCR. Each tier carries a source label so the row is clear
+        // about which value Kevin's looking at.
+        const packDisplay = hasManualOverride
+          ? it.pack_text
+          : (catalogPack ?? it.pack_text);
+        const packSource: "override" | "catalog" | "invoice" | null = hasManualOverride
+          ? "override"
+          : catalogPack
+            ? "catalog"
+            : it.pack_text
+              ? "invoice"
+              : null;
         g.items.push({
           id: it.id,
           name: it.name,
+          vendorOcrName: it.name,
+          displayName: catalogClean ?? it.name,
+          displayNameSource: catalogClean ? "catalog" : "invoice",
           vendor: vendorNameById.get(it.vendor_id) ?? it.vendor_id,
           itemNumber: it.item_number,
-          pack: it.pack_text,
+          pack: packDisplay,
           packState: it.pack_state,
-          packManualOverride: it.pack_override !== null,
+          packSource,
+          packManualOverride: hasManualOverride,
           billedUnit: it.billed_unit,
           usd12m: u12,
           lines12m: Number(it.lines_12m ?? 0),
+          accounts: it.accounts ?? [],
           accountsCount: (it.accounts ?? []).length,
           lastSeen: it.last_seen,
           confidence: it.link_confidence,
@@ -199,6 +274,8 @@ async function loadReview() {
           catchWeight: it.catch_weight,
           unitPrice: up ? up.unitPrice : null,
           unitPriceUnit: up ? up.billedUnit ?? it.billed_unit : null,
+          catalogPrice,
+          gtin,
         });
       }
       groups.set(key, g);
@@ -219,17 +296,42 @@ async function loadReview() {
       g.totalLines12m += Number(it.lines_12m ?? 0);
       {
         const up = unitPriceByItem.get(it.id) ?? null;
+        const cat =
+          it.item_number_norm ? catalogByKey.get(`${it.vendor_id}#${it.item_number_norm}`) ?? null : null;
+        const catalogClean = cat?.clean_name?.trim() || null;
+        const catalogPack = cat?.pack_text?.trim() || null;
+        const catalogPrice = cat && cat.catalog_price != null ? Number(cat.catalog_price) : null;
+        const gtin = cat?.gtin?.trim() || null;
+        const hasManualOverride = it.pack_override !== null;
+        // Pack precedence: user manual override > catalog > invoice
+        // OCR. Each tier carries a source label so the row is clear
+        // about which value Kevin's looking at.
+        const packDisplay = hasManualOverride
+          ? it.pack_text
+          : (catalogPack ?? it.pack_text);
+        const packSource: "override" | "catalog" | "invoice" | null = hasManualOverride
+          ? "override"
+          : catalogPack
+            ? "catalog"
+            : it.pack_text
+              ? "invoice"
+              : null;
         g.items.push({
           id: it.id,
           name: it.name,
+          vendorOcrName: it.name,
+          displayName: catalogClean ?? it.name,
+          displayNameSource: catalogClean ? "catalog" : "invoice",
           vendor: vendorNameById.get(it.vendor_id) ?? it.vendor_id,
           itemNumber: it.item_number,
-          pack: it.pack_text,
+          pack: packDisplay,
           packState: it.pack_state,
-          packManualOverride: it.pack_override !== null,
+          packSource,
+          packManualOverride: hasManualOverride,
           billedUnit: it.billed_unit,
           usd12m: u12,
           lines12m: Number(it.lines_12m ?? 0),
+          accounts: it.accounts ?? [],
           accountsCount: (it.accounts ?? []).length,
           lastSeen: it.last_seen,
           confidence: it.link_confidence,
@@ -237,6 +339,8 @@ async function loadReview() {
           catchWeight: it.catch_weight,
           unitPrice: up ? up.unitPrice : null,
           unitPriceUnit: up ? up.billedUnit ?? it.billed_unit : null,
+          catalogPrice,
+          gtin,
         });
       }
       groups.set(key, g);
