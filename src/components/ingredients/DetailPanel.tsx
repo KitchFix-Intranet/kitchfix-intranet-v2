@@ -24,6 +24,7 @@ import { X } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtDate, fmtUsd, fmtUsdLong } from "@/lib/fmt";
 import { SUPER_CATEGORIES, type SuperCategory } from "@/lib/ingredients/categories";
+import { IngredientTypeahead } from "./IngredientTypeahead";
 import type { ReviewCardIngredient, ReviewGroupItem } from "./ReviewCard";
 import "./drawer.css";
 
@@ -40,12 +41,19 @@ export function DetailPanel({
   ingredient,
   items,
   parents,
+  proposedName,
+  proposedParent,
 }: {
   open: Exclude<DetailPanelOpen, null>;
   onClose: () => void;
-  ingredient: ReviewCardIngredient;
+  // null for ai-new groups where the ingredient doesn't exist yet.
+  // The item facts section still renders; the ingredient-edit section
+  // shows a "create ingredient first" placeholder instead.
+  ingredient: ReviewCardIngredient | null;
   items: ReviewGroupItem[];
   parents: ReviewCardIngredient[];
+  proposedName?: string | null;
+  proposedParent?: string | null;
 }) {
   const router = useRouter();
   const labelId = useId();
@@ -130,18 +138,28 @@ export function DetailPanel({
             {open.kind === "item" ? "Vendor item" : "Ingredient"}
           </span>
           <h3 id={labelId} className="kf-drawer__name">
-            {open.kind === "item" && item ? item.displayName : ingredient.name}
+            {open.kind === "item" && item
+              ? item.displayName
+              : ingredient
+                ? ingredient.name
+                : proposedName ?? "New ingredient"}
           </h3>
           <div className="kf-drawer__chips">
-            {ingredient.category ? (
-              <span className="kf-pill kf-pill--muted">{ingredient.category}</span>
+            {ingredient ? (
+              <>
+                {ingredient.category ? (
+                  <span className="kf-pill kf-pill--muted">{ingredient.category}</span>
+                ) : (
+                  <span className="kf-pill kf-pill--warn">Needs category</span>
+                )}
+                {ingredient.parent ? (
+                  <span className="kf-pill kf-pill--muted">{ingredient.parent}</span>
+                ) : null}
+                {ingredient.resale ? <span className="kf-pill kf-pill--muted">Resale</span> : null}
+              </>
             ) : (
-              <span className="kf-pill kf-pill--warn">Needs category</span>
+              <span className="kf-pill kf-pill--warn">Not yet created</span>
             )}
-            {ingredient.parent ? (
-              <span className="kf-pill kf-pill--muted">{ingredient.parent}</span>
-            ) : null}
-            {ingredient.resale ? <span className="kf-pill kf-pill--muted">Resale</span> : null}
           </div>
         </div>
 
@@ -149,18 +167,52 @@ export function DetailPanel({
           <ItemFacts item={item} />
         ) : null}
 
-        <IngredientBlock
-          ingredient={ingredient}
-          parentOptions={parentOptions}
-          parents={parents}
-          onDone={() => router.refresh()}
-        />
+        {ingredient ? (
+          <IngredientBlock
+            ingredient={ingredient}
+            parentOptions={parentOptions}
+            parents={parents}
+            onDone={() => router.refresh()}
+          />
+        ) : (
+          <PendingIngredientBlock
+            proposedName={proposedName ?? null}
+            proposedParent={proposedParent ?? null}
+          />
+        )}
 
         {open.kind === "item" && item ? (
           <PackOverrideBlock item={item} onDone={() => router.refresh()} />
         ) : null}
       </aside>
     </>
+  );
+}
+
+// For ai-new groups: the ingredient doesn't exist yet, so the normal
+// rename / category / resale / merge forms have nothing to act on.
+// This placeholder reads the AI's proposed name + parent and points
+// Kevin at the "Create ingredient" button in the review card.
+function PendingIngredientBlock({
+  proposedName,
+  proposedParent,
+}: {
+  proposedName: string | null;
+  proposedParent: string | null;
+}) {
+  return (
+    <section className="kf-drawer__block kf-dpn__pending" aria-label="Ingredient not yet created">
+      <header className="kf-drawer__block-head">
+        <h4>Ingredient not yet created</h4>
+        <small>finish the create flow to edit</small>
+      </header>
+      <p className="kf-dpn__pending-body">
+        The matcher proposed <strong>{proposedName ?? "a new ingredient"}</strong>
+        {proposedParent ? <> under <strong>{proposedParent}</strong></> : null}. Hit
+        &ldquo;New ingredient&rdquo; on the card below to create it (category required). Rename,
+        category, resale, and merge become available once it exists.
+      </p>
+    </section>
   );
 }
 
@@ -516,21 +568,15 @@ function IngredientBlock({
       </div>
 
       <div className="kf-dpn__row">
-        <label className="kf-dpn__label">
-          <span>Merge into another ingredient</span>
-          <select
-            value={mergeTarget}
-            onChange={(e) => setMergeTarget(e.target.value)}
-            disabled={mergeBusy || mergeChoices.length === 0}
-          >
-            <option value="">Pick a survivor...</option>
-            {mergeChoices.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}{p.parent ? ` - ${p.parent}` : ""}
-              </option>
-            ))}
-          </select>
-        </label>
+        <IngredientTypeahead
+          ingredients={mergeChoices}
+          excludeId={ingredient.id}
+          label="Merge into another ingredient"
+          placeholder="Type to search survivors..."
+          pickedId={mergeTarget || null}
+          onPick={(id) => setMergeTarget(id ?? "")}
+          busy={mergeBusy}
+        />
         <div className="kf-dpn__hint">
           Items + active golden links move to the survivor. &ldquo;{ingredient.name}&rdquo; stays queryable
           with <code>status=&apos;merged&apos;</code> and its name becomes an alias so matcher runs

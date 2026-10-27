@@ -7,11 +7,13 @@
 // every item row carries a visible checkbox now (ReviewCard owns the
 // per-row rendering).
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, X as XIcon, Plus, Search, Scissors, Ban } from "lucide-react";
+import { Check, X as XIcon, Plus, Scissors, Ban, Search } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
-import { fmtCount } from "@/lib/fmt";
+import { fmtCount, fmtUsd } from "@/lib/fmt";
+import { SUPER_CATEGORIES, categoryForParent, type SuperCategory } from "@/lib/ingredients/categories";
+import { IngredientTypeahead } from "./IngredientTypeahead";
 
 // Kept exported so other call sites that import it keep compiling even
 // though ReviewCard no longer passes a memberItems prop.
@@ -19,6 +21,18 @@ export type ReviewMemberItem = {
   id: string;
   name: string;
   confidence: string | null;
+};
+
+// Minimal item shape used by the New-ingredient form to preview the
+// members Kevin is building the new ingredient from. ReviewCard
+// supplies a subset of each ReviewGroupItem.
+export type NewIngredientPreviewItem = {
+  id: string;
+  displayName: string;
+  vendor: string;
+  pack: string | null;
+  billedUnit: string | null;
+  usd12m: number;
 };
 
 type Ingredient = { id: string; name: string; parent: string | null };
@@ -30,6 +44,7 @@ type Props = {
   proposedParent: string | null;
   ingredients: Ingredient[];
   checkedIds: string[];
+  checkedItems: NewIngredientPreviewItem[];
   checkedCount: number;
   memberCount: number;
 };
@@ -61,18 +76,44 @@ export function ReviewActions({
   proposedParent,
   ingredients,
   checkedIds,
+  checkedItems,
   checkedCount,
   memberCount,
 }: Props) {
   const router = useRouter();
   const [op, setOp] = useState<Op>(null);
   const [showRelink, setShowRelink] = useState(false);
-  const [relinkId, setRelinkId] = useState<string>("");
+  const [relinkId, setRelinkId] = useState<string | null>(null);
   const [newName, setNewName] = useState(proposedName ?? "");
-  const [newParent, setNewParent] = useState(proposedParent ?? "");
+  // Pre-fill the super-category + sub-category from the matcher's
+  // proposed parent (if any). Both are REQUIRED on submit - the form's
+  // Create button is disabled until both are set (a sub-category pick
+  // or a new sub-category text), plus a non-empty name.
+  const [newSuper, setNewSuper] = useState<SuperCategory | "">(() => {
+    return (categoryForParent(proposedParent) as SuperCategory | null) ?? "";
+  });
+  const [subMode, setSubMode] = useState<"pick" | "new">(
+    proposedParent ? "pick" : "pick"
+  );
+  const [subPick, setSubPick] = useState<string>(proposedParent ?? "");
+  const [subNew, setSubNew] = useState<string>("");
   const [showNew, setShowNew] = useState(false);
 
+  // Parents available for the sub dropdown: distinct parents from the
+  // active ingredients list. Deduped + sorted.
+  const parentOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const i of ingredients) if (i.parent && i.parent.trim().length > 0) set.add(i.parent);
+    return Array.from(set).sort();
+  }, [ingredients]);
+
   const noneChecked = checkedCount === 0;
+  const effectiveSub =
+    subMode === "new" ? subNew.trim() : subPick;
+  const newFormReady =
+    newName.trim().length >= 2 &&
+    newSuper !== "" &&
+    effectiveSub.length > 0;
 
   async function confirmChecked() {
     if (op || noneChecked) return;
@@ -126,17 +167,31 @@ export function ReviewActions({
     router.refresh();
   }
 
-  async function createAndConfirm() {
+  // Split-to-new-ingredient. The chosen items get reassigned to the
+  // new ingredient and stay link_status='proposed' so Kevin can see the
+  // split in the queue under the new ingredient's own card. Confirm is
+  // a separate step on that new card (fixes the "the one I moved
+  // disappeared" / "still falls under the group I removed it from"
+  // complaints).
+  async function doCreateSplit() {
     if (op || noneChecked) return;
     const name = newName.trim();
-    if (name.length < 2) {
-      toast("Ingredient name is required", { tone: "block" });
+    if (!newFormReady) {
+      toast(
+        name.length < 2
+          ? "Ingredient name is required"
+          : newSuper === ""
+            ? "Pick a category"
+            : "Pick or type a sub-category",
+        { tone: "block" }
+      );
       return;
     }
     setOp("creating");
     const r = await postJson("/api/review/new-ingredient", {
       name,
-      parent: newParent.trim() || null,
+      parent: effectiveSub || null,
+      category: newSuper || null,
       itemIds: checkedIds,
     });
     if (!r.ok) {
@@ -144,16 +199,10 @@ export function ReviewActions({
       setOp(null);
       return;
     }
-    const d = r.data as { confirmed?: number; ingredientId?: string };
-    const confirmedIds = [...checkedIds];
-    toast(`Created "${name}" and confirmed ${fmtCount(d.confirmed ?? checkedCount)} items`, {
-      undo: async () => {
-        for (const id of confirmedIds) {
-          await postJson("/api/review/undo", { itemId: id });
-        }
-        router.refresh();
-      },
-    });
+    const d = r.data as { ingredientId?: string; moved?: number };
+    toast(
+      `Created "${name}" - ${fmtCount(d.moved ?? checkedCount)} items moved; confirm them on the new card.`
+    );
     setShowNew(false);
     setOp(null);
     router.refresh();
@@ -203,7 +252,7 @@ export function ReviewActions({
           onClick={confirmChecked}
         >
           <Check size={14} strokeWidth={1.5} />
-          <span>{kind === "new" ? "Create & confirm" : "Confirm"}</span>
+          <span>{kind === "new" ? "Create ingredient" : "Confirm"}</span>
         </button>
 
         <button
@@ -252,17 +301,15 @@ export function ReviewActions({
 
       {showRelink ? (
         <div className="kf-rvc__panel">
-          <label>
-            <span>Reassign to</span>
-            <select value={relinkId} onChange={(e) => setRelinkId(e.target.value)}>
-              <option value="">Pick an ingredient...</option>
-              {ingredients.map((i) => (
-                <option key={i.id} value={i.id}>
-                  {i.name}{i.parent ? ` - ${i.parent}` : ""}
-                </option>
-              ))}
-            </select>
-          </label>
+          <IngredientTypeahead
+            ingredients={ingredients}
+            excludeId={currentIngredientId ?? undefined}
+            label="Reassign to"
+            placeholder="Type to search ingredients..."
+            pickedId={relinkId}
+            onPick={(id) => setRelinkId(id)}
+            busy={op !== null}
+          />
           <div className="kf-rvc__panel-btns">
             <button
               type="button"
@@ -286,9 +333,14 @@ export function ReviewActions({
       ) : null}
 
       {showNew ? (
-        <div className="kf-rvc__panel">
-          <label>
-            <span>New ingredient name</span>
+        <div className="kf-rvc__panel kf-newing">
+          <div className="kf-newing__intro">
+            Create a new ingredient from the {fmtCount(checkedCount)} selected item{checkedCount === 1 ? "" : "s"}.
+            It&rsquo;ll land in the queue under its own card so you can confirm there.
+          </div>
+
+          <label className="kf-dpn__label">
+            <span>Name</span>
             <input
               type="text"
               value={newName}
@@ -297,23 +349,81 @@ export function ReviewActions({
               autoFocus
             />
           </label>
-          <label>
-            <span>Parent (optional)</span>
-            <input
-              type="text"
-              value={newParent}
-              onChange={(e) => setNewParent(e.target.value)}
-              placeholder={proposedParent ?? "e.g. Spices"}
-            />
-          </label>
+
+          <div className="kf-newing__row">
+            <label className="kf-dpn__label">
+              <span>Category *</span>
+              <select
+                value={newSuper}
+                onChange={(e) => setNewSuper(e.target.value as SuperCategory | "")}
+                required
+              >
+                <option value="">Pick a category...</option>
+                {SUPER_CATEGORIES.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </label>
+            <label className="kf-dpn__label">
+              <span>Sub-category *</span>
+              {subMode === "pick" ? (
+                <select value={subPick} onChange={(e) => setSubPick(e.target.value)} required>
+                  <option value="">Pick a sub-category...</option>
+                  {parentOptions.map((p) => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  value={subNew}
+                  onChange={(e) => setSubNew(e.target.value)}
+                  placeholder="New sub-category name"
+                />
+              )}
+            </label>
+          </div>
+          <button
+            type="button"
+            className="kf-newing__sub-toggle"
+            onClick={() => setSubMode((m) => (m === "pick" ? "new" : "pick"))}
+          >
+            {subMode === "pick" ? "+ add new sub-category" : "pick an existing sub-category"}
+          </button>
+
+          {checkedItems.length > 0 ? (
+            <div className="kf-newing__preview" aria-label="Items being used to create this ingredient">
+              <div className="kf-newing__preview-head">
+                Items being used: <strong>{fmtCount(checkedItems.length)}</strong>
+              </div>
+              <ul>
+                {checkedItems.slice(0, 8).map((it) => (
+                  <li key={it.id}>
+                    <div className="kf-newing__preview-name">{it.displayName}</div>
+                    <div className="kf-newing__preview-meta">
+                      <span>{it.vendor}</span>
+                      <span className="kf-muted">
+                        · {it.pack ?? "-"} / {it.billedUnit ?? "-"}
+                      </span>
+                      <span className="kf-newing__preview-usd">{fmtUsd(it.usd12m)}</span>
+                    </div>
+                  </li>
+                ))}
+                {checkedItems.length > 8 ? (
+                  <li className="kf-newing__preview-more">+ {checkedItems.length - 8} more</li>
+                ) : null}
+              </ul>
+            </div>
+          ) : null}
+
           <div className="kf-rvc__panel-btns">
             <button
               type="button"
               className={`kf-btn kf-btn--primary kf-btn--sm${op === "creating" ? " is-busy" : ""}`}
-              disabled={op !== null || newName.trim().length < 2}
-              onClick={createAndConfirm}
+              disabled={op !== null || !newFormReady}
+              onClick={doCreateSplit}
             >
-              Create and confirm
+              Create ingredient
             </button>
             <button
               type="button"

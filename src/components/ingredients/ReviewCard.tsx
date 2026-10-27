@@ -96,6 +96,23 @@ export function ReviewCard({
     () => group.items.filter((it) => checked[it.id]).map((it) => it.id),
     [checked, group.items]
   );
+  // Minimal item preview rows for the New-ingredient form so Kevin
+  // sees what he's building the new ingredient out of (name, vendor,
+  // pack, annual spend).
+  const checkedItemsPreview = useMemo(
+    () =>
+      group.items
+        .filter((it) => checked[it.id])
+        .map((it) => ({
+          id: it.id,
+          displayName: it.displayName,
+          vendor: it.vendor,
+          pack: it.pack,
+          billedUnit: it.billedUnit,
+          usd12m: it.usd12m,
+        })),
+    [checked, group.items]
+  );
   const checkedCount = checkedIds.length;
   const memberCount = group.items.length;
   const allChecked = memberCount > 0 && checkedCount === memberCount;
@@ -228,22 +245,18 @@ export function ReviewCard({
               </td>
               <td title={it.displayName}>
                 <div className="kf-rvc__desc">
-                  {ingredientRow ? (
-                    <button
-                      type="button"
-                      className="kf-cell-ellipsis kf-rvc__row-btn"
-                      onClick={() => setPanelOpen({ kind: "item", itemId: it.id })}
-                      title={`Open details for ${it.displayName}`}
-                    >
-                      {it.displayName}
-                    </button>
-                  ) : (
-                    // ai-new groups have no ingredient yet; detail panel edits
-                    // ingredient fields, so the row button is hidden here. Confirm
-                    // the group first (creates the ingredient), then this row
-                    // becomes clickable.
-                    <span className="kf-cell-ellipsis">{it.displayName}</span>
-                  )}
+                  {/* Always clickable - item details are viewable even
+                     before the ingredient exists. The DetailPanel handles
+                     the ingredient=null case by hiding the edit block
+                     and showing a "create ingredient first" placeholder. */}
+                  <button
+                    type="button"
+                    className="kf-cell-ellipsis kf-rvc__row-btn"
+                    onClick={() => setPanelOpen({ kind: "item", itemId: it.id })}
+                    title={`Open details for ${it.displayName}`}
+                  >
+                    {it.displayName}
+                  </button>
                   {it.catchWeight ? (
                     <span className="kf-flag kf-flag--warn" title="Priced by actual weight">
                       <Scale size={14} strokeWidth={1.5} />
@@ -306,19 +319,22 @@ export function ReviewCard({
         proposedParent={group.proposedParent}
         ingredients={ingredients}
         checkedIds={checkedIds}
+        checkedItems={checkedItemsPreview}
         checkedCount={checkedCount}
         memberCount={memberCount}
       />
 
       <footer className="kf-rvc__foot">{footerLine}</footer>
 
-      {panelOpen && ingredientRow ? (
+      {panelOpen ? (
         <DetailPanel
           open={panelOpen}
           onClose={() => setPanelOpen(null)}
           ingredient={ingredientRow}
           items={group.items}
           parents={ingredients}
+          proposedName={group.proposedName}
+          proposedParent={group.proposedParent}
         />
       ) : null}
     </article>

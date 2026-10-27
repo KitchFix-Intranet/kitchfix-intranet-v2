@@ -364,7 +364,16 @@ export async function undoConfirm(
 
 export async function createIngredient(
   client: SupabaseClient,
-  args: { name: string; parent: string | null; actorEmail: string }
+  args: {
+    name: string;
+    parent: string | null;
+    actorEmail: string;
+    // When provided, honor the user's chosen super-category exactly
+    // (even if it disagrees with categoryForParent(parent)). When
+    // omitted or undefined, fall back to the parent map default. null
+    // is a valid explicit value - "Needs category".
+    category?: SuperCategory | null;
+  }
 ): Promise<{ id: string }> {
   const trimmed = args.name.trim();
   if (trimmed.length < 2) throw new Error("Ingredient name is required");
@@ -381,11 +390,14 @@ export async function createIngredient(
 
   // base_unit is required by the schema (lb|each|gal|dozen). "each" is the
   // safest default - the ingredient admin surface in a later step lets
-  // the user refine it. category is DERIVED from parent via the
-  // canonical src/lib/ingredients/categories map; null (unmapped parent)
-  // is intentional and surfaces as "Needs category" - never guess.
+  // the user refine it. category is EXPLICIT: use the user's chosen
+  // value when supplied (step 5 new-ingredient form), else derive from
+  // parent. Null is a valid explicit value - the new form prevents it,
+  // but legacy callers (e.g. matcher auto-create) may still produce
+  // null if the parent is unmapped.
   const parent = args.parent?.trim() || null;
-  const category = categoryForParent(parent);
+  const category =
+    args.category !== undefined ? args.category : categoryForParent(parent);
   const insert = {
     name: trimmed,
     name_norm: nameNorm,
@@ -411,6 +423,79 @@ export async function createIngredient(
     actor: args.actorEmail,
   });
   return { id };
+}
+
+// Split-to-new-ingredient: create a new ingredient AND move the selected
+// vendor items onto it, keeping them as link_status='proposed' so they
+// appear under the new ingredient's own card in the review queue. Does
+// NOT auto-confirm (that was the old behavior; it meant moved items
+// vanished out of the queue entirely, which hid the split from Kevin -
+// "it still falls under the group I removed it from" / "the one I moved
+// disappeared"). Confirm is a separate explicit step on the new card.
+//
+// link_reason gets a 'split:<actor>' prefix so the matcher / loader
+// never routes these back into the old ai-new bucket. Pre-existing
+// ai-new link_reason on those items (keyed into the proposed_name
+// group) is deliberately overwritten.
+export async function splitToNewIngredient(
+  client: SupabaseClient,
+  args: {
+    name: string;
+    parent: string | null;
+    category: SuperCategory | null;
+    itemIds: string[];
+    actorEmail: string;
+  }
+): Promise<{ ok: boolean; error?: string; ingredientId: string | null; moved: number }> {
+  const { name, parent, category, itemIds, actorEmail } = args;
+  if (name.trim().length < 2) {
+    return { ok: false, error: "Ingredient name is required", ingredientId: null, moved: 0 };
+  }
+
+  let ingredientId: string;
+  try {
+    const { id } = await createIngredient(client, {
+      name,
+      parent,
+      category,
+      actorEmail,
+    });
+    ingredientId = id;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: msg, ingredientId: null, moved: 0 };
+  }
+
+  if (itemIds.length === 0) {
+    return { ok: true, ingredientId, moved: 0 };
+  }
+
+  // Reassign in one UPDATE guarded on current proposed state so a race
+  // doesn't retouch a row the user already confirmed elsewhere.
+  const { error, data } = await client
+    .from("pr_vendor_items")
+    .update({
+      ingredient_id: ingredientId,
+      link_reason: `split:${actorEmail}`,
+    })
+    .in("id", itemIds)
+    .eq("link_status", "proposed")
+    .select("id");
+  if (error) {
+    return { ok: false, error: error.message, ingredientId, moved: 0 };
+  }
+  const movedIds = ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
+
+  await client.from("pr_events").insert({
+    entity_type: "ingredient",
+    entity_id: ingredientId,
+    kind: "ingredient_split_create",
+    before: { item_ids: itemIds },
+    after: { moved_item_ids: movedIds, name, parent, category },
+    actor: actorEmail,
+  });
+
+  return { ok: true, ingredientId, moved: movedIds.length };
 }
 
 // ---------------------------------------------------------------------------

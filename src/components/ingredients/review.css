@@ -615,3 +615,188 @@
   color: var(--sp-body);
 }
 .kf-facts__note--warn { color: var(--sp-warn); }
+
+/* ---------------------------------------------------------------------
+ * Ingredient typeahead (shared: relink + merge).
+ * The outer <label> comes from the existing kf-dpn__label token (same
+ * uppercase small-caps label style as the rest of the detail panel).
+ * The input + dropdown live here.
+ * --------------------------------------------------------------------- */
+.kf-ingtype { position: relative; }
+.kf-ingtype__field {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  min-height: 44px;
+  padding: 0 var(--sp-sp-2);
+  background: var(--sp-card);
+  color: var(--sp-ink);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+}
+.kf-ingtype__field:focus-within { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
+.kf-ingtype__field .kf-field__icon { color: var(--sp-muted); }
+.kf-ingtype__field input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  font-weight: 400;
+}
+.kf-ingtype__field input:disabled { color: var(--sp-muted); }
+.kf-ingtype__field .kf-field__clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  color: var(--sp-muted);
+  border: none;
+  border-radius: var(--sp-r-sm);
+  cursor: pointer;
+}
+.kf-ingtype__field .kf-field__clear:hover:not([disabled]) { background: var(--sp-sky-tint); color: var(--sp-ink); }
+
+.kf-ingtype__list {
+  position: absolute;
+  z-index: 10;
+  left: 0; right: 0;
+  top: 100%;
+  margin: 2px 0 0;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+  box-shadow: var(--sp-shadow-float);
+  list-style: none;
+  padding: var(--sp-sp-1) 0;
+}
+.kf-ingtype__opt {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--sp-sp-2);
+  padding: var(--sp-sp-2) var(--sp-sp-3);
+  cursor: pointer;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  color: var(--sp-ink);
+}
+.kf-ingtype__opt--on { background: var(--sp-sky-tint); }
+.kf-ingtype__name { font-weight: 700; }
+.kf-ingtype__parent {
+  color: var(--sp-muted);
+  font-size: var(--sp-t-micro);
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  white-space: nowrap;
+}
+.kf-ingtype__empty {
+  padding: var(--sp-sp-3);
+  color: var(--sp-muted);
+  font-size: var(--sp-t-micro);
+}
+
+/* ---------------------------------------------------------------------
+ * New-ingredient split form (ReviewActions showNew). Carries the items
+ * preview under the required category / sub-category pickers so Kevin
+ * sees what the new ingredient will be built from.
+ * --------------------------------------------------------------------- */
+.kf-newing { display: flex; flex-direction: column; gap: var(--sp-sp-3); }
+.kf-newing__intro {
+  color: var(--sp-body);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  padding: var(--sp-sp-2) 0;
+  border-bottom: 1px dashed var(--sp-line-soft);
+}
+.kf-newing__row { display: flex; gap: var(--sp-sp-3); flex-wrap: wrap; }
+.kf-newing__row > .kf-dpn__label { flex: 1 1 220px; min-width: 0; }
+.kf-newing__sub-toggle {
+  align-self: flex-start;
+  background: transparent;
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+  padding: var(--sp-sp-1) var(--sp-sp-3);
+  color: var(--sp-link);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 700;
+  cursor: pointer;
+  min-height: 32px;
+}
+.kf-newing__sub-toggle:hover { background: var(--sp-sky-tint); }
+.kf-newing__sub-toggle:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
+
+.kf-newing__preview {
+  background: var(--sp-ground);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+  padding: var(--sp-sp-3);
+}
+.kf-newing__preview-head {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  margin-bottom: var(--sp-sp-2);
+}
+.kf-newing__preview ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+}
+.kf-newing__preview li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-sp-2) 0;
+  border-bottom: 1px dashed var(--sp-line-soft);
+}
+.kf-newing__preview li:last-child { border-bottom: none; }
+.kf-newing__preview-name {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  color: var(--sp-ink);
+  font-weight: 700;
+}
+.kf-newing__preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-sp-2);
+  align-items: baseline;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-body);
+}
+.kf-newing__preview-usd {
+  margin-left: auto;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.kf-newing__preview-more {
+  color: var(--sp-muted);
+  font-size: var(--sp-t-micro);
+  font-style: italic;
+}
+
+/* ---------------------------------------------------------------------
+ * Detail-panel "pending ingredient" block for ai-new rows.
+ * --------------------------------------------------------------------- */
+.kf-dpn__pending-body {
+  margin: 0;
+  color: var(--sp-body);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  line-height: 1.5;
+}
