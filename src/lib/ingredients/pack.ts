@@ -83,7 +83,9 @@ function normUom(raw: string | null | undefined): string | null {
   if (u === "L" || u === "LTR" || u === "LT" || u === "LITER" || u === "LITRE") return "L";
   if (u === "ML") return "ML";
   if (u === "FLOZ" || u === "FO" || u === "FL OZ" || u === "FLUID OZ") return "FLOZ";
-  if (u === "GAL" || u === "GALLON" || u === "GALLONS") return "GAL";
+  // GL is a common vendor shorthand for GAL (gallon). Added for the
+  // Phase 1.5 slash-before-unit family (`4/1/GL`, `6/1/GL`).
+  if (u === "GAL" || u === "GALLON" || u === "GALLONS" || u === "GL") return "GAL";
   if (u === "QT" || u === "QUART" || u === "QUARTS") return "QT";
   if (u === "DZ" || u === "DOZ" || u === "DZN" || u === "DOZEN") return "DZ";
   if (u === "CT" || u === "CNT" || u === "COUNT") return "CT";
@@ -168,6 +170,73 @@ export function parsePack(raw: string | null | undefined): ParsedPack {
     };
   }
 
+  // 2b. Triple-slash slash-before-unit pattern: "2/5/LB", "4/1/GL",
+  // "6/10/CN". Same semantics as the standard N/size UNIT but with an
+  // explicit third segment. CN (can) is treated like a #10 can - the
+  // inner "size" is ignored and the qty is the count of eaches.
+  const tripleSlashM = s.match(
+    /^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\s*\/\s*([A-Z#]+)/
+  );
+  if (tripleSlashM) {
+    const qty = parseFloat(tripleSlashM[1]);
+    const size = parseFloat(tripleSlashM[2]);
+    const uomRaw = tripleSlashM[3];
+    if (uomRaw === "CN" || uomRaw === "CAN" || uomRaw === "CANS") {
+      return {
+        qty,
+        size: 1,
+        uom: "CT",
+        dim: "count",
+        base_uom: "EA",
+        total_base: qty,
+        confidence: "high",
+        note: `${uomRaw} treated as count (inner size ${size} ignored)`,
+      };
+    }
+    const uom = normUom(uomRaw);
+    if (uom != null) {
+      const conv = toBase(size, uom);
+      if (conv) {
+        return {
+          qty,
+          size,
+          uom,
+          dim: conv.dim,
+          base_uom: conv.base_uom,
+          total_base: qty * conv.total,
+          confidence: hasVaries ? "low" : "high",
+          note: hasVaries ? "contains VARIES/AVERAGE wording" : null,
+        };
+      }
+    }
+  }
+
+  // 2c. GFS-style "Units/Case" pattern: "4 Units/Case 5.0 LB",
+  // "4 Units/Case 1.0 GAL". qty before "Units/Case", size+unit after.
+  const unitsCaseM = s.match(
+    /^(\d+)\s+UNITS?\/CASE\s+(\d+(?:\.\d+)?)\s*([A-Z#]+)/
+  );
+  if (unitsCaseM) {
+    const qty = parseInt(unitsCaseM[1], 10);
+    const size = parseFloat(unitsCaseM[2]);
+    const uom = normUom(unitsCaseM[3]);
+    if (uom != null) {
+      const conv = toBase(size, uom);
+      if (conv) {
+        return {
+          qty,
+          size,
+          uom,
+          dim: conv.dim,
+          base_uom: conv.base_uom,
+          total_base: qty * conv.total,
+          confidence: hasVaries ? "low" : "high",
+          note: hasVaries ? "contains VARIES/AVERAGE wording" : null,
+        };
+      }
+    }
+  }
+
   // 3. Standard qty/size UNIT pattern: "6/1 LB", "024/12OZ",
   // "48/2.60 OZ", "4/3 L", "12/5.3 OZ".
   const slashM = s.match(/^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\s*([A-Z#]+)/);
@@ -242,7 +311,40 @@ export function parsePack(raw: string | null | undefined): ParsedPack {
     }
   }
 
-  // 6. Fallback: garbled input the parser can't reduce.
+  // 7. Space-separated with a doubled trailing unit:
+  //     "2 5 LB LB", "6 32 OZ OZ", "4 1 GAL GAL", "2 5LB LB".
+  // The structure is: qty (int)  size (number, possibly glued to its
+  // unit)  unit  unit, strictly end-anchored so garbled "4 3 L L"
+  // kinds of inputs don't accidentally land here. Both units must be
+  // >=2 chars - single-letter `L L` is intentionally rejected because
+  // Phase 1 required `4 3 L L` to stay `none`. Confidence is 'low'
+  // (space-separated pack is inferred, not explicit).
+  const spaceDoubleM = s.match(
+    /^(\d+)\s+(\d+(?:\.\d+)?)\s*([A-Z#]{2,})\s+([A-Z#]{2,})\s*$/
+  );
+  if (spaceDoubleM) {
+    const uomA = normUom(spaceDoubleM[3]);
+    const uomB = normUom(spaceDoubleM[4]);
+    if (uomA != null && uomB != null && uomA === uomB) {
+      const qty = parseInt(spaceDoubleM[1], 10);
+      const size = parseFloat(spaceDoubleM[2]);
+      const conv = toBase(size, uomA);
+      if (conv) {
+        return {
+          qty,
+          size,
+          uom: uomA,
+          dim: conv.dim,
+          base_uom: conv.base_uom,
+          total_base: qty * conv.total,
+          confidence: "low",
+          note: `space-separated pack; qty ${qty} x ${size} ${uomA} inferred`,
+        };
+      }
+    }
+  }
+
+  // 8. Fallback: garbled input the parser can't reduce.
   return { ...EMPTY, confidence: "none", note: `could not parse: "${raw}"` };
 }
 
