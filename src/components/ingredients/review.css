@@ -46,6 +46,55 @@
   margin: 0;
 }
 
+/* Sticky search bar - stays visible under the topbar while the groups
+   list scrolls. Sits above the groups so Kevin can keep typing while
+   results pour past. The input reuses the shared .kf-field--search
+   token set from table.css; this block owns only the sticky wrapper
+   and the live count row. */
+.kf-review__search {
+  position: sticky;
+  top: var(--sp-topbar);
+  z-index: var(--sp-z-topbar);
+  background: var(--sp-ground);
+  padding: var(--sp-sp-3) 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sp-4);
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--sp-line-soft);
+  margin: 0 0 var(--sp-sp-3);
+}
+.kf-review__search-field {
+  flex: 1;
+  min-width: 280px;
+}
+.kf-review__search-count {
+  color: var(--sp-muted);
+  font-size: var(--sp-t-micro);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.kf-review__search-count strong {
+  color: var(--sp-ink);
+  font-weight: 800;
+}
+.kf-review__search-empty {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--sp-sp-3);
+  flex-wrap: wrap;
+}
+@media (max-width: 860px) {
+  .kf-review__search {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--sp-sp-2);
+  }
+  .kf-review__search-field { min-width: 0; }
+  .kf-review__search-count { align-self: flex-end; }
+}
+
 /* ---------- Review card ---------- */
 .kf-rvc {
   background: var(--sp-card);

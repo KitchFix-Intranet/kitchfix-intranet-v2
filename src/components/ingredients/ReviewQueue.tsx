@@ -5,12 +5,17 @@
 // (ReviewActions).
 
 import { serviceClient } from "@/lib/supabase/service";
-import { fmtCount, fmtUsd, fmtUsdLong, fmtDate } from "@/lib/fmt";
+import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { Tabs } from "./Tabs";
 import { ReviewCard, type ReviewCardGroup } from "./ReviewCard";
 import { ReviewLedger } from "./ReviewLedger";
+import { ReviewFilter, type ReviewFilterGroup } from "./ReviewFilter";
 import "./ingredients.css";
 import "./review.css";
+// Pulled in so the search field inherits the shared .kf-field--search
+// token set from Vendor-items / Ingredients (magnifier, Enter / clear
+// pill). Keeps the input visually native across tabs.
+import "./table.css";
 
 type ProposedItem = {
   id: string;
@@ -230,21 +235,47 @@ export async function ReviewQueue() {
           </div>
         </div>
       ) : (
-        <ul className="kf-review__groups" aria-label="Groups">
-          {groups.map((g) => (
-            <li key={g.key}>
-              <ReviewCard group={g} ingredients={ingredients} />
-            </li>
-          ))}
-        </ul>
+        <ReviewFilter
+          groups={groups.map(toFilterGroup)}
+          cards={groups.map((g) => ({
+            key: g.key,
+            node: <ReviewCard group={g} ingredients={ingredients} />,
+          }))}
+          totals={{
+            items: totals.items,
+            usd: totals.usd,
+            groups: totals.groups,
+            notFood: totals.notFood,
+            groupedUsd: totals.groupedUsd,
+          }}
+        />
       )}
-
-      <p className="kf-review__hint">
-        {fmtUsdLong(totals.groupedUsd)} across {fmtCount(groups.length)} groups.
-        Confirmed last seen on each row {groups.length > 0 && groups[0].items.length > 0 && groups[0].items[0].lastSeen ? fmtDate(groups[0].items[0].lastSeen) : "-"}.
-      </p>
 
       <ReviewLedger ingredients={ingredients} />
     </div>
   );
+}
+
+// Project the richer server-side group into the narrow shape the client
+// filter needs. Only serializable fields; no React elements or
+// functions.
+function toFilterGroup(g: ReviewCardGroup): ReviewFilterGroup {
+  const latestLastSeen = g.items.reduce<string | null>((acc, it) => {
+    if (!it.lastSeen) return acc;
+    if (!acc) return it.lastSeen;
+    return it.lastSeen > acc ? it.lastSeen : acc;
+  }, null);
+  return {
+    key: g.key,
+    kind: g.kind,
+    ingredientName: g.ingredient?.name ?? null,
+    ingredientParent: g.ingredient?.parent ?? null,
+    proposedName: g.proposedName,
+    proposedParent: g.proposedParent,
+    totalUsd12m: g.totalUsd12m,
+    totalLines12m: g.totalLines12m,
+    memberCount: g.items.length,
+    members: g.items.map((it) => ({ name: it.name, vendor: it.vendor })),
+    lastSeen: latestLastSeen,
+  };
 }
