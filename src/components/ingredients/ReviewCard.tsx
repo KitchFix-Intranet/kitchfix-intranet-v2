@@ -16,9 +16,10 @@
 // docs/GOTCHAS.md.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Scale } from "lucide-react";
+import { Pencil, Scale } from "lucide-react";
 import { fmtCount, fmtDate, fmtUsd, fmtUsdLong } from "@/lib/fmt";
 import { ReviewActions } from "./ReviewActions";
+import { DetailPanel, type DetailPanelOpen } from "./DetailPanel";
 
 export type ReviewGroupItem = {
   id: string;
@@ -26,6 +27,8 @@ export type ReviewGroupItem = {
   vendor: string;
   itemNumber: string | null;
   pack: string | null;
+  packState: string;
+  packManualOverride: boolean;
   billedUnit: string | null;
   usd12m: number;
   lines12m: number;
@@ -34,12 +37,22 @@ export type ReviewGroupItem = {
   confidence: string | null;
   reason: string;
   catchWeight: boolean;
+  unitPrice: number | null;
+  unitPriceUnit: string | null;
+};
+
+export type ReviewCardIngredient = {
+  id: string;
+  name: string;
+  parent: string | null;
+  category: string | null;
+  resale: boolean;
 };
 
 export type ReviewCardGroup = {
   key: string;
   kind: "existing" | "new";
-  ingredient: { id: string; name: string; parent: string | null } | null;
+  ingredient: ReviewCardIngredient | null;
   proposedName: string | null;
   proposedParent: string | null;
   totalUsd12m: number;
@@ -52,7 +65,7 @@ export function ReviewCard({
   ingredients,
 }: {
   group: ReviewCardGroup;
-  ingredients: Array<{ id: string; name: string; parent: string | null }>;
+  ingredients: ReviewCardIngredient[];
 }) {
   const title = group.kind === "existing" ? group.ingredient?.name ?? "Unknown" : group.proposedName ?? "New ingredient";
   const parent = group.kind === "existing" ? group.ingredient?.parent ?? null : group.proposedParent;
@@ -100,6 +113,16 @@ export function ReviewCard({
     setChecked((prev) => ({ ...prev, [id]: v }));
   }
 
+  // Detail-panel state. One panel per card (if Kevin opens a panel in
+  // another card, this card's panel stays open until explicitly closed;
+  // minor UX trade for simpler state). Opens via the item-name button on
+  // a row (kind: "item") or the group-title button in the header (kind:
+  // "ingredient"). Only existing-match groups have an ingredient to edit;
+  // ai-new groups show the ingredient panel disabled (can't rename a
+  // not-yet-created ingredient).
+  const [panelOpen, setPanelOpen] = useState<DetailPanelOpen>(null);
+  const ingredientRow = group.ingredient; // null for ai-new groups
+
   const footerLine =
     checkedCount === 0
       ? "Select items to confirm."
@@ -128,8 +151,28 @@ export function ReviewCard({
             {group.kind === "new" ? "New ingredient" : "Existing match"}
           </span>
           {hasLow ? <span className="kf-pill kf-pill--muted">Low confidence inside</span> : null}
-          <h3 className="kf-rvc__title">{title}</h3>
+          {ingredientRow ? (
+            <button
+              type="button"
+              className="kf-rvc__title kf-rvc__title-btn"
+              onClick={() => setPanelOpen({ kind: "ingredient" })}
+              aria-label={`Edit ingredient ${title}`}
+            >
+              <span>{title}</span>
+              <Pencil size={14} strokeWidth={1.5} aria-hidden />
+            </button>
+          ) : (
+            <h3 className="kf-rvc__title">{title}</h3>
+          )}
           {parent ? <span className="kf-rvc__parent">{parent}</span> : null}
+          {ingredientRow?.category ? (
+            <span className="kf-pill kf-pill--muted">{ingredientRow.category}</span>
+          ) : ingredientRow && !ingredientRow.category ? (
+            <span className="kf-pill kf-pill--warn">Needs category</span>
+          ) : null}
+          {ingredientRow?.resale ? (
+            <span className="kf-pill kf-pill--muted">Resale</span>
+          ) : null}
         </div>
         <div className="kf-rvc__totals">
           <strong>{fmtUsdLong(group.totalUsd12m)}</strong>
@@ -147,6 +190,7 @@ export function ReviewCard({
             <th>Item</th>
             <th>Vendor / #</th>
             <th>Pack / unit</th>
+            <th className="kf-table__num">Unit price</th>
             <th className="kf-table__num">12m $</th>
             <th className="kf-table__num">Lines</th>
             <th>Sites</th>
@@ -171,7 +215,22 @@ export function ReviewCard({
               </td>
               <td title={it.name}>
                 <div className="kf-rvc__desc">
-                  <span className="kf-cell-ellipsis">{it.name}</span>
+                  {ingredientRow ? (
+                    <button
+                      type="button"
+                      className="kf-cell-ellipsis kf-rvc__row-btn"
+                      onClick={() => setPanelOpen({ kind: "item", itemId: it.id })}
+                      title={`Open details for ${it.name}`}
+                    >
+                      {it.name}
+                    </button>
+                  ) : (
+                    // ai-new groups have no ingredient yet; detail panel edits
+                    // ingredient fields, so the row button is hidden here. Confirm
+                    // the group first (creates the ingredient), then this row
+                    // becomes clickable.
+                    <span className="kf-cell-ellipsis">{it.name}</span>
+                  )}
                   {it.catchWeight ? (
                     <span className="kf-flag kf-flag--warn" title="Priced by actual weight">
                       <Scale size={14} strokeWidth={1.5} />
@@ -189,6 +248,12 @@ export function ReviewCard({
                   {it.pack ?? "-"}
                   <span className="kf-muted"> / {it.billedUnit ?? "-"}</span>
                 </div>
+                {it.packManualOverride ? (
+                  <div className="kf-cell-sub kf-cell-sub--note">manually entered</div>
+                ) : null}
+              </td>
+              <td className="kf-table__num">
+                <UnitPriceCell price={it.unitPrice} unit={it.unitPriceUnit} />
               </td>
               <td className="kf-table__num"><strong>${fmtUsdLong(it.usd12m).replace(/^\$/, "")}</strong></td>
               <td className="kf-table__num">{fmtCount(it.lines12m)}</td>
@@ -212,6 +277,16 @@ export function ReviewCard({
       />
 
       <footer className="kf-rvc__foot">{footerLine}</footer>
+
+      {panelOpen && ingredientRow ? (
+        <DetailPanel
+          open={panelOpen}
+          onClose={() => setPanelOpen(null)}
+          ingredient={ingredientRow}
+          items={group.items}
+          parents={ingredients}
+        />
+      ) : null}
     </article>
   );
 }
@@ -221,4 +296,20 @@ function ConfidenceChip({ c }: { c: string | null }) {
   if (c === "med") return <span className="kf-pill kf-pill--info">Med</span>;
   if (c === "low") return <span className="kf-pill kf-pill--muted">Low</span>;
   return <span className="kf-pill kf-pill--muted">-</span>;
+}
+
+// Billed unit price from pr_price_observations (latest valid). The label
+// makes clear this is the raw billed unit, not a normalized $/lb across
+// pack sizes - that's step 3's job (pack parsing). "-" when no valid
+// observation exists; never a fabricated number.
+function UnitPriceCell({ price, unit }: { price: number | null; unit: string | null }) {
+  if (price == null) return <span className="kf-muted">-</span>;
+  return (
+    <span title="Latest invoiced unit price - billed unit, not normalized">
+      <strong>{fmtUsd(price)}</strong>
+      <span className="kf-muted"> /{unit ?? "unit"}</span>
+      <br />
+      <span className="kf-cell-sub">billed</span>
+    </span>
+  );
 }

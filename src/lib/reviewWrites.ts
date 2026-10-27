@@ -6,7 +6,7 @@
 // pr_v_overview_totals.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { categoryForParent } from "@/lib/ingredients/categories";
+import { categoryForParent, type SuperCategory } from "@/lib/ingredients/categories";
 
 export type ConfirmResult = {
   confirmed: number;
@@ -411,4 +411,262 @@ export async function createIngredient(
     actor: args.actorEmail,
   });
   return { id };
+}
+
+// ---------------------------------------------------------------------------
+// Detail-panel edits (step 5): rename, category/sub, resale, pack override.
+// ---------------------------------------------------------------------------
+
+function normName(s: string): string {
+  return s.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+// Rename an ingredient. The old name is preserved as a `kind='rename'`
+// alias so that any future vendor-item whose description_key matches the
+// old name_norm auto-routes to the renamed ingredient (same ingredient_id;
+// no un-link). The alias insert is an upsert on the schema's
+// unique (alias_norm, kind) index - if the old norm was already a
+// rename-alias for some other ingredient, the latest decision wins.
+export async function renameIngredient(
+  client: SupabaseClient,
+  args: { ingredientId: string; newName: string; actorEmail: string }
+): Promise<{ ok: boolean; error?: string; aliasWritten: boolean }> {
+  const { ingredientId, newName, actorEmail } = args;
+  const trimmed = newName.trim();
+  if (trimmed.length < 2) return { ok: false, error: "Name is too short", aliasWritten: false };
+  const newNorm = normName(trimmed);
+
+  // Load current for the before/after + the old-name alias.
+  const { data: cur, error: curErr } = await client
+    .from("pr_ingredients")
+    .select("id,name,name_norm,status")
+    .eq("id", ingredientId)
+    .maybeSingle();
+  if (curErr) return { ok: false, error: curErr.message, aliasWritten: false };
+  if (!cur) return { ok: false, error: "Ingredient not found", aliasWritten: false };
+  const row = cur as { id: string; name: string; name_norm: string; status: string };
+  if (row.status === "merged") return { ok: false, error: "Ingredient is merged", aliasWritten: false };
+  if (row.name_norm === newNorm) {
+    // Same name after normalization - no-op success, no event, no alias.
+    return { ok: true, aliasWritten: false };
+  }
+
+  // Collision guard: live unique index pr_ingredients_name_norm_live_uq
+  // where status <> 'merged' would reject anyway, but surface a friendly
+  // error before the write.
+  const { data: collision } = await client
+    .from("pr_ingredients")
+    .select("id")
+    .eq("name_norm", newNorm)
+    .neq("status", "merged")
+    .neq("id", ingredientId)
+    .maybeSingle();
+  if (collision) {
+    return { ok: false, error: "Another active ingredient already uses that name", aliasWritten: false };
+  }
+
+  const { error: upErr } = await client
+    .from("pr_ingredients")
+    .update({ name: trimmed, name_norm: newNorm, updated_at: new Date().toISOString() })
+    .eq("id", ingredientId);
+  if (upErr) return { ok: false, error: upErr.message, aliasWritten: false };
+
+  // Preserve the old name as a rename-alias so matcher auto-handles the
+  // same description_key on future intakes. kind='rename' is already in
+  // the pr_ingredient_aliases CHECK; the upsert on (alias_norm, kind)
+  // repoints the alias to this ingredient if the old norm was previously
+  // claimed by someone else.
+  let aliasWritten = false;
+  const { error: aErr } = await client
+    .from("pr_ingredient_aliases")
+    .upsert(
+      {
+        ingredient_id: ingredientId,
+        alias_text: row.name,
+        alias_norm: row.name_norm,
+        kind: "rename",
+      },
+      { onConflict: "alias_norm,kind" }
+    );
+  if (aErr) {
+    // Non-fatal - the rename landed. Log the detail in pr_events so we
+    // know the auto-relink magic may not pick up the old name.
+    // eslint-disable-next-line no-console
+    console.error(`rename alias upsert failed: ${aErr.message}`);
+  } else {
+    aliasWritten = true;
+  }
+
+  await client.from("pr_events").insert({
+    entity_type: "ingredient",
+    entity_id: ingredientId,
+    kind: "ingredient_renamed",
+    before: { name: row.name, name_norm: row.name_norm },
+    after: { name: trimmed, name_norm: newNorm, alias_written: aliasWritten },
+    actor: actorEmail,
+  });
+
+  return { ok: true, aliasWritten };
+}
+
+// Set an ingredient's super-category + parent (sub-category). Both are
+// nullable - null category = "Needs category". Parent is a free text
+// bucket (new parents allowed; the categoryForParent map in
+// src/lib/ingredients/categories.ts stays in sync with the SQL migration
+// map, but a parent not in the map just means category stays null unless
+// the user picked one explicitly).
+export async function setIngredientCategory(
+  client: SupabaseClient,
+  args: {
+    ingredientId: string;
+    category: SuperCategory | null;
+    parent: string | null;
+    actorEmail: string;
+  }
+): Promise<{ ok: boolean; error?: string }> {
+  const { ingredientId, category, parent, actorEmail } = args;
+  const parentTrim = parent?.trim() || null;
+
+  const { data: cur, error: curErr } = await client
+    .from("pr_ingredients")
+    .select("id,category,parent,status")
+    .eq("id", ingredientId)
+    .maybeSingle();
+  if (curErr) return { ok: false, error: curErr.message };
+  if (!cur) return { ok: false, error: "Ingredient not found" };
+  const row = cur as { id: string; category: string | null; parent: string | null; status: string };
+  if (row.status === "merged") return { ok: false, error: "Ingredient is merged" };
+
+  const { error: upErr } = await client
+    .from("pr_ingredients")
+    .update({ category, parent: parentTrim, updated_at: new Date().toISOString() })
+    .eq("id", ingredientId);
+  if (upErr) return { ok: false, error: upErr.message };
+
+  await client.from("pr_events").insert({
+    entity_type: "ingredient",
+    entity_id: ingredientId,
+    kind: "ingredient_category_set",
+    before: { category: row.category, parent: row.parent },
+    after: { category, parent: parentTrim },
+    actor: actorEmail,
+  });
+
+  return { ok: true };
+}
+
+// Toggle an ingredient between the recipe-coverage bucket and the resale
+// bucket. Every confirmed vendor item that points to this ingredient
+// moves with it; the pr_v_overview_* views do the resale split by
+// joining on this flag.
+export async function setIngredientResale(
+  client: SupabaseClient,
+  args: { ingredientId: string; resale: boolean; actorEmail: string }
+): Promise<{ ok: boolean; error?: string }> {
+  const { ingredientId, resale, actorEmail } = args;
+
+  const { data: cur, error: curErr } = await client
+    .from("pr_ingredients")
+    .select("id,resale,status")
+    .eq("id", ingredientId)
+    .maybeSingle();
+  if (curErr) return { ok: false, error: curErr.message };
+  if (!cur) return { ok: false, error: "Ingredient not found" };
+  const row = cur as { id: string; resale: boolean; status: string };
+  if (row.status === "merged") return { ok: false, error: "Ingredient is merged" };
+  if (row.resale === resale) return { ok: true };
+
+  const { error: upErr } = await client
+    .from("pr_ingredients")
+    .update({ resale, updated_at: new Date().toISOString() })
+    .eq("id", ingredientId);
+  if (upErr) return { ok: false, error: upErr.message };
+
+  await client.from("pr_events").insert({
+    entity_type: "ingredient",
+    entity_id: ingredientId,
+    kind: "ingredient_resale_set",
+    before: { resale: row.resale },
+    after: { resale },
+    actor: actorEmail,
+  });
+
+  return { ok: true };
+}
+
+// Manual pack-size entry for an "-/case" item. We stamp the user's text
+// into pack_text + billed_unit (where previously null), snapshot the full
+// payload + actor + timestamp into pack_override jsonb (so the override
+// is auditable + queryable), and leave pack_qty/pack_size/pack_uom null
+// (true parsing is step 3's job). pack_state flips to 'ok' - the human
+// attests the value is known. The jsonb presence of pack_override is the
+// "manually entered" flag that renders a badge on the row.
+export async function setVendorItemPackOverride(
+  client: SupabaseClient,
+  args: {
+    itemId: string;
+    packText: string;
+    billedUnit: string | null;
+    note: string | null;
+    actorEmail: string;
+  }
+): Promise<{ ok: boolean; error?: string }> {
+  const { itemId, packText, billedUnit, note, actorEmail } = args;
+  const packTrim = packText.trim();
+  if (packTrim.length < 1) return { ok: false, error: "Pack text is required" };
+
+  const { data: cur, error: curErr } = await client
+    .from("pr_vendor_items")
+    .select("id,pack_text,billed_unit,pack_state,pack_override,status")
+    .eq("id", itemId)
+    .maybeSingle();
+  if (curErr) return { ok: false, error: curErr.message };
+  if (!cur) return { ok: false, error: "Item not found" };
+  const row = cur as {
+    id: string;
+    pack_text: string | null;
+    billed_unit: string | null;
+    pack_state: string;
+    pack_override: unknown;
+    status: string;
+  };
+
+  const nowIso = new Date().toISOString();
+  const unitTrim = billedUnit?.trim() || null;
+  const noteTrim = note?.trim() || null;
+  const override = {
+    pack_text: packTrim,
+    billed_unit: unitTrim,
+    note: noteTrim,
+    by: actorEmail,
+    at: nowIso,
+  };
+
+  const { error: upErr } = await client
+    .from("pr_vendor_items")
+    .update({
+      pack_text: packTrim,
+      billed_unit: unitTrim ?? row.billed_unit,
+      pack_state: "ok",
+      pack_override: override,
+      updated_at: nowIso,
+    })
+    .eq("id", itemId);
+  if (upErr) return { ok: false, error: upErr.message };
+
+  await client.from("pr_events").insert({
+    entity_type: "vendor_item",
+    entity_id: itemId,
+    kind: "pack_override_set",
+    before: {
+      pack_text: row.pack_text,
+      billed_unit: row.billed_unit,
+      pack_state: row.pack_state,
+      had_override: row.pack_override !== null,
+    },
+    after: override,
+    actor: actorEmail,
+  });
+
+  return { ok: true };
 }

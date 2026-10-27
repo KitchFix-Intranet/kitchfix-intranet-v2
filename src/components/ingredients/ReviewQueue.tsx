@@ -25,6 +25,8 @@ type ProposedItem = {
   name: string;
   description_key: string;
   pack_text: string | null;
+  pack_state: string;
+  pack_override: unknown;
   billed_unit: string | null;
   catch_weight: boolean;
   ingredient_id: string | null;
@@ -36,7 +38,13 @@ type ProposedItem = {
   last_seen: string | null;
 };
 
-type Ingredient = { id: string; name: string; parent: string | null };
+type Ingredient = {
+  id: string;
+  name: string;
+  parent: string | null;
+  category: string | null;
+  resale: boolean;
+};
 type Vendor = { id: string; name: string };
 
 type AiNewPayload = { proposed_name?: string; proposed_parent?: string | null; reason?: string };
@@ -66,7 +74,7 @@ async function loadReview() {
     const { data, error } = await client
       .from("pr_vendor_items")
       .select(
-        "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen"
+        "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_state,pack_override,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen"
       )
       .eq("link_status", "proposed")
       .in("status", ["active", "resale"])
@@ -79,10 +87,16 @@ async function loadReview() {
     from += page;
   }
 
-  // Vendors + ingredients (both small, read once).
+  // Vendors + ingredients (both small, read once). category + resale on
+  // the ingredient feed the detail panel's category dropdown + resale
+  // toggle.
   const [vendorsRes, ingredientsRes, notFoodCountRes] = await Promise.all([
     client.from("pr_vendors").select("id,name"),
-    client.from("pr_ingredients").select("id,name,parent").eq("status", "active").order("name"),
+    client
+      .from("pr_ingredients")
+      .select("id,name,parent,category,resale")
+      .eq("status", "active")
+      .order("name"),
     client
       .from("pr_vendor_items")
       .select("id", { count: "exact", head: true })
@@ -91,6 +105,50 @@ async function loadReview() {
   ]);
   if (vendorsRes.error) throw vendorsRes.error;
   if (ingredientsRes.error) throw ingredientsRes.error;
+
+  // Latest unit_price per vendor_item for the "Unit price" column. We
+  // narrow to the vendor_item_ids actually on the queue, then paginate
+  // ordered by invoice_date desc and take the first observation per
+  // item. Items with no valid observation show "-" in the UI (never a
+  // fabricated number). The label makes clear this is the *billed* unit
+  // price, not a normalized $/lb across pack sizes (true normalization
+  // needs pack parsing, which is step 3).
+  const itemIds = items.map((it) => it.id);
+  const unitPriceByItem = new Map<string, { unitPrice: number; billedUnit: string | null }>();
+  if (itemIds.length > 0) {
+    const chunk = 400; // keep the .in list small; PostgREST limits URL length
+    for (let i = 0; i < itemIds.length; i += chunk) {
+      const slice = itemIds.slice(i, i + chunk);
+      let obsFrom = 0;
+      for (;;) {
+        const { data: obsData, error: obsErr } = await client
+          .from("pr_price_observations")
+          .select("vendor_item_id,unit_price,billed_unit,invoice_date")
+          .in("vendor_item_id", slice)
+          .is("excluded_reason", null)
+          .not("unit_price", "is", null)
+          .order("invoice_date", { ascending: false, nullsFirst: false })
+          .range(obsFrom, obsFrom + 999);
+        if (obsErr) throw obsErr;
+        const page = (obsData ?? []) as Array<{
+          vendor_item_id: string;
+          unit_price: number | null;
+          billed_unit: string | null;
+          invoice_date: string | null;
+        }>;
+        for (const o of page) {
+          if (unitPriceByItem.has(o.vendor_item_id)) continue;
+          if (o.unit_price == null) continue;
+          unitPriceByItem.set(o.vendor_item_id, {
+            unitPrice: Number(o.unit_price),
+            billedUnit: o.billed_unit,
+          });
+        }
+        if (page.length < 1000) break;
+        obsFrom += 1000;
+      }
+    }
+  }
 
   const vendors = (vendorsRes.data ?? []) as Vendor[];
   const ingredients = (ingredientsRes.data ?? []) as Ingredient[];
@@ -121,21 +179,28 @@ async function loadReview() {
       };
       g.totalUsd12m += u12;
       g.totalLines12m += Number(it.lines_12m ?? 0);
-      g.items.push({
-        id: it.id,
-        name: it.name,
-        vendor: vendorNameById.get(it.vendor_id) ?? it.vendor_id,
-        itemNumber: it.item_number,
-        pack: it.pack_text,
-        billedUnit: it.billed_unit,
-        usd12m: u12,
-        lines12m: Number(it.lines_12m ?? 0),
-        accountsCount: (it.accounts ?? []).length,
-        lastSeen: it.last_seen,
-        confidence: it.link_confidence,
-        reason: parsed.body,
-        catchWeight: it.catch_weight,
-      });
+      {
+        const up = unitPriceByItem.get(it.id) ?? null;
+        g.items.push({
+          id: it.id,
+          name: it.name,
+          vendor: vendorNameById.get(it.vendor_id) ?? it.vendor_id,
+          itemNumber: it.item_number,
+          pack: it.pack_text,
+          packState: it.pack_state,
+          packManualOverride: it.pack_override !== null,
+          billedUnit: it.billed_unit,
+          usd12m: u12,
+          lines12m: Number(it.lines_12m ?? 0),
+          accountsCount: (it.accounts ?? []).length,
+          lastSeen: it.last_seen,
+          confidence: it.link_confidence,
+          reason: parsed.body,
+          catchWeight: it.catch_weight,
+          unitPrice: up ? up.unitPrice : null,
+          unitPriceUnit: up ? up.billedUnit ?? it.billed_unit : null,
+        });
+      }
       groups.set(key, g);
     } else if (parsed.prefix === "ai-new" && parsed.aiNew?.proposed_name) {
       const nameKey = parsed.aiNew.proposed_name.trim().toLowerCase();
@@ -152,21 +217,28 @@ async function loadReview() {
       };
       g.totalUsd12m += u12;
       g.totalLines12m += Number(it.lines_12m ?? 0);
-      g.items.push({
-        id: it.id,
-        name: it.name,
-        vendor: vendorNameById.get(it.vendor_id) ?? it.vendor_id,
-        itemNumber: it.item_number,
-        pack: it.pack_text,
-        billedUnit: it.billed_unit,
-        usd12m: u12,
-        lines12m: Number(it.lines_12m ?? 0),
-        accountsCount: (it.accounts ?? []).length,
-        lastSeen: it.last_seen,
-        confidence: it.link_confidence,
-        reason: parsed.body,
-        catchWeight: it.catch_weight,
-      });
+      {
+        const up = unitPriceByItem.get(it.id) ?? null;
+        g.items.push({
+          id: it.id,
+          name: it.name,
+          vendor: vendorNameById.get(it.vendor_id) ?? it.vendor_id,
+          itemNumber: it.item_number,
+          pack: it.pack_text,
+          packState: it.pack_state,
+          packManualOverride: it.pack_override !== null,
+          billedUnit: it.billed_unit,
+          usd12m: u12,
+          lines12m: Number(it.lines_12m ?? 0),
+          accountsCount: (it.accounts ?? []).length,
+          lastSeen: it.last_seen,
+          confidence: it.link_confidence,
+          reason: parsed.body,
+          catchWeight: it.catch_weight,
+          unitPrice: up ? up.unitPrice : null,
+          unitPriceUnit: up ? up.billedUnit ?? it.billed_unit : null,
+        });
+      }
       groups.set(key, g);
     }
     // Items with link_status='proposed' but no ingredient_id and no ai-new

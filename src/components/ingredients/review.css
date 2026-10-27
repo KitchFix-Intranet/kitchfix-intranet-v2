@@ -382,3 +382,108 @@
 .kf-review__ledger-when { color: var(--sp-muted); font-size: var(--sp-t-micro); }
 .kf-review__ledger-actor { color: var(--sp-muted); font-size: var(--sp-t-micro); font-family: var(--sp-ui); }
 .kf-review__ledger-done { color: var(--sp-muted); font-size: var(--sp-t-micro); font-style: italic; }
+
+/* ---------------------------------------------------------------------
+ * Detail side panel (step 5) + unit-price column + clickable
+ * row/header affordances.
+ * --------------------------------------------------------------------- */
+
+/* Ingredient title button in the card header. Looks like the plain h3
+ * title but is a <button> so keyboard users can tab to it and press
+ * Enter to open the detail panel. Pencil icon on hover makes the
+ * "editable" affordance visible. */
+.kf-rvc__title-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-1);
+  text-align: left;
+}
+.kf-rvc__title-btn svg { opacity: 0; transition: opacity var(--sp-fast) var(--sp-ease); }
+.kf-rvc__title-btn:hover svg,
+.kf-rvc__title-btn:focus-visible svg { opacity: 1; }
+.kf-rvc__title-btn:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; border-radius: var(--sp-r-sm); }
+
+/* Per-row item-name button. Looks like the plain cell text but is a
+ * <button> so keyboard users can tab to it. The ellipsis + title tooltip
+ * still work; width is constrained by the cell. */
+.kf-rvc__row-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kf-rvc__row-btn:hover { color: var(--sp-link); text-decoration: underline; }
+.kf-rvc__row-btn:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; border-radius: var(--sp-r-sm); }
+
+/* Pack-cell "manually entered" note. Small italic under the pack text. */
+.kf-cell-sub--note { font-style: italic; color: var(--sp-warn); }
+
+/* ---------------------------------------------------------------------
+ * Detail panel internal form styles (kf-dpn__*). The outer slide-in
+ * mechanics come from drawer.css (kf-drawer* classes) which DetailPanel
+ * imports. These rules style the form sections only.
+ * --------------------------------------------------------------------- */
+.kf-dpn__block { background: var(--sp-card); }
+.kf-dpn__row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+  padding: var(--sp-sp-3) 0;
+}
+.kf-dpn__row + .kf-dpn__row { border-top: 1px dashed var(--sp-line-soft); }
+.kf-dpn__label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 700;
+  color: var(--sp-body);
+}
+.kf-dpn__label span { color: var(--sp-muted); font-weight: 700; letter-spacing: .5px; text-transform: uppercase; font-size: var(--sp-t-label); }
+.kf-dpn__label input,
+.kf-dpn__label select {
+  min-height: 44px;
+  padding: var(--sp-sp-2) var(--sp-sp-3);
+  background: var(--sp-card);
+  color: var(--sp-ink);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  font-weight: 400;
+}
+.kf-dpn__label input:focus-visible,
+.kf-dpn__label select:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
+.kf-dpn__hint { color: var(--sp-muted); font-size: var(--sp-t-micro); line-height: 1.4; }
+.kf-dpn__btns { display: flex; gap: var(--sp-sp-2); flex-wrap: wrap; }
+.kf-dpn__toggle { display: flex; flex-direction: column; gap: var(--sp-sp-1); }
+.kf-dpn__toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  min-height: 44px;
+  cursor: pointer;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  font-weight: 700;
+  color: var(--sp-ink);
+}
+.kf-dpn__toggle-label input { width: 18px; height: 18px; cursor: pointer; }
+.kf-facts__note { color: var(--sp-warn); font-style: italic; font-size: var(--sp-t-micro); margin-left: var(--sp-sp-2); }
