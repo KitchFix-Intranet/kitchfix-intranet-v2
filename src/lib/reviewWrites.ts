@@ -264,6 +264,58 @@ export async function markResale(
   return { marked, usd: Math.round(totalUsd), errors };
 }
 
+// Mirror of markResale for the Archive disposition. Archive = an IS-food
+// item that's a one-off or irrelevant purchase - not a recipe ingredient,
+// not retail, not "not food." The overview views only count status in
+// ('active','resale'), so flipping to 'archived' pulls the item out of
+// recipe coverage AND retail automatically; the matcher only reads
+// link_status='none' so link_status='rejected' keeps it from being
+// re-proposed. No is_food flip (same reasoning as the other dispositions).
+// Per-item event carries the full batch aggregate in after.
+export async function markArchived(
+  client: SupabaseClient,
+  args: { itemIds: string[]; actorEmail: string }
+): Promise<{ marked: number; usd: number; errors: string[] }> {
+  const { itemIds, actorEmail } = args;
+  const errors: string[] = [];
+  if (itemIds.length === 0) return { marked: 0, usd: 0, errors };
+
+  const rows = await readItems(client, itemIds);
+  const eligible = rows.filter((r) => r.link_status === "proposed" || r.link_status === "none");
+  const eligibleIds = eligible.map((r) => r.id);
+  const totalUsd = eligible.reduce((s, r) => s + Number(r.usd_12m ?? 0), 0);
+
+  let marked = 0;
+  for (const r of eligible) {
+    const { error } = await client
+      .from("pr_vendor_items")
+      .update({
+        status: "archived",
+        link_status: "rejected",
+        link_reason: `archived:${actorEmail}`,
+      })
+      .eq("id", r.id)
+      .in("link_status", ["proposed", "none"]);
+    if (error) {
+      errors.push(`${r.id}: ${error.message}`);
+      continue;
+    }
+    marked += 1;
+    await client.from("pr_events").insert({
+      entity_type: "vendor_item",
+      entity_id: r.id,
+      kind: "review_archive",
+      after: {
+        item_ids: eligibleIds,
+        count: eligibleIds.length,
+        usd: Math.round(totalUsd),
+      },
+      actor: actorEmail,
+    });
+  }
+  return { marked, usd: Math.round(totalUsd), errors };
+}
+
 export async function keepSeparate(
   client: SupabaseClient,
   args: { itemIds: string[]; actorEmail: string }

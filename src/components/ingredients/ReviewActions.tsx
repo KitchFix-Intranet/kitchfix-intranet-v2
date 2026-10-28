@@ -9,7 +9,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, X as XIcon, Plus, Scissors, Ban, Search, ShoppingBag } from "lucide-react";
+import { Check, X as XIcon, Plus, Scissors, Ban, Search, ShoppingBag, Archive } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { SUPER_CATEGORIES, categoryForParent, type SuperCategory } from "@/lib/ingredients/categories";
@@ -54,7 +54,7 @@ type Props = {
   onLeaveStart?: (itemIds: string[]) => void;
 };
 
-type Op = null | "confirming" | "relinking" | "creating" | "notfood" | "resale" | "keepsep";
+type Op = null | "confirming" | "relinking" | "creating" | "notfood" | "resale" | "archived" | "keepsep";
 
 async function postJson(url: string, body: unknown): Promise<{ ok: boolean; status: number; data: unknown }> {
   const res = await fetch(url, {
@@ -255,6 +255,25 @@ export function ReviewActions({
     router.refresh();
   }
 
+  // Archive disposition. IS-food items that are one-offs / irrelevant
+  // purchases - not recipe ingredients, not retail. The overview views
+  // only count status in ('active','resale'), so status='archived'
+  // drops the item from both recipe coverage AND retail totals;
+  // link_status='rejected' keeps the matcher away.
+  async function markArchived() {
+    if (op || noneChecked) return;
+    setOp("archived");
+    const r = await postJson("/api/review/archive", { itemIds: checkedIds });
+    if (!r.ok) {
+      toast(errMsg(r.data, `Mark failed (${r.status})`), { tone: "block" });
+      setOp(null);
+      return;
+    }
+    toast(`Archived ${fmtCount(checkedCount)} item${checkedCount === 1 ? "" : "s"}`);
+    setOp(null);
+    router.refresh();
+  }
+
   async function keepSeparate() {
     if (op || noneChecked) return;
     setOp("keepsep");
@@ -334,6 +353,17 @@ export function ReviewActions({
 
         <button
           type="button"
+          className={`kf-btn kf-btn--ghost kf-btn--sm${op === "archived" ? " is-busy" : ""}`}
+          disabled={op !== null || noneChecked}
+          onClick={markArchived}
+          title="One-off / irrelevant food purchase; parked and not tracked in recipe coverage or retail"
+        >
+          <Archive size={14} strokeWidth={1.5} />
+          <span>Archive</span>
+        </button>
+
+        <button
+          type="button"
           className={`kf-btn kf-btn--ghost kf-btn--sm${op === "notfood" ? " is-busy" : ""}`}
           disabled={op !== null || noneChecked}
           onClick={markNotFood}
@@ -346,8 +376,8 @@ export function ReviewActions({
 
       <div className="kf-rvc__dispo-help" role="note">
         <strong>Confirm</strong> = recipe ingredient &middot; <strong>Retail</strong> = sold as-is
-        (water, snacks, sandwiches), tracked as retail spend &middot; <strong>Not food</strong> =
-        not a consumable (fees, freight, supplies).
+        (water, snacks, sandwiches) &middot; <strong>Archive</strong> = one-off / not tracked
+        &middot; <strong>Not food</strong> = not a consumable (fees, freight).
       </div>
 
       {showRelink ? (
