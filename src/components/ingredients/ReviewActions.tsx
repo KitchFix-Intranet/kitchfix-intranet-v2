@@ -9,7 +9,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, X as XIcon, Plus, Scissors, Ban, Search } from "lucide-react";
+import { Check, X as XIcon, Plus, Scissors, Ban, Search, ShoppingBag } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { SUPER_CATEGORIES, categoryForParent, type SuperCategory } from "@/lib/ingredients/categories";
@@ -54,7 +54,7 @@ type Props = {
   onLeaveStart?: (itemIds: string[]) => void;
 };
 
-type Op = null | "confirming" | "relinking" | "creating" | "notfood" | "keepsep";
+type Op = null | "confirming" | "relinking" | "creating" | "notfood" | "resale" | "keepsep";
 
 async function postJson(url: string, body: unknown): Promise<{ ok: boolean; status: number; data: unknown }> {
   const res = await fetch(url, {
@@ -236,6 +236,25 @@ export function ReviewActions({
     router.refresh();
   }
 
+  // Retail disposition. Items sold as-is to players (bottled water,
+  // snacks, pre-made sandwiches): real spend but not a recipe
+  // ingredient. The overview views already read status='resale' to
+  // bucket these as retail; this action writes that + rejects the
+  // link so the item drops out of the queue.
+  async function markResale() {
+    if (op || noneChecked) return;
+    setOp("resale");
+    const r = await postJson("/api/review/resale", { itemIds: checkedIds });
+    if (!r.ok) {
+      toast(errMsg(r.data, `Mark failed (${r.status})`), { tone: "block" });
+      setOp(null);
+      return;
+    }
+    toast(`Marked ${fmtCount(checkedCount)} as retail`);
+    setOp(null);
+    router.refresh();
+  }
+
   async function keepSeparate() {
     if (op || noneChecked) return;
     setOp("keepsep");
@@ -304,13 +323,31 @@ export function ReviewActions({
 
         <button
           type="button"
+          className={`kf-btn kf-btn--ghost kf-btn--sm${op === "resale" ? " is-busy" : ""}`}
+          disabled={op !== null || noneChecked}
+          onClick={markResale}
+          title="Sold as-is to players (water, snacks, sandwiches); tracked as retail spend, not a recipe ingredient"
+        >
+          <ShoppingBag size={14} strokeWidth={1.5} />
+          <span>Retail</span>
+        </button>
+
+        <button
+          type="button"
           className={`kf-btn kf-btn--ghost kf-btn--sm${op === "notfood" ? " is-busy" : ""}`}
           disabled={op !== null || noneChecked}
           onClick={markNotFood}
+          title="Not a consumable product (fees, freight, supplies)"
         >
           <Ban size={14} strokeWidth={1.5} />
           <span>Not food</span>
         </button>
+      </div>
+
+      <div className="kf-rvc__dispo-help" role="note">
+        <strong>Confirm</strong> = recipe ingredient &middot; <strong>Retail</strong> = sold as-is
+        (water, snacks, sandwiches), tracked as retail spend &middot; <strong>Not food</strong> =
+        not a consumable (fees, freight, supplies).
       </div>
 
       {showRelink ? (

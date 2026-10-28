@@ -290,6 +290,18 @@
   font-size: var(--sp-t-micro);
   color: var(--sp-body);
 }
+/* Three-way disposition helper line under the action buttons.
+ * Confirm / Retail / Not food - distinct wordings so Kevin can tell
+ * them apart at a glance; prevents the retail-vs-not-food mix-up that
+ * cost us 12 water/PB&J items. */
+.kf-rvc__dispo-help {
+  color: var(--sp-muted);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  line-height: 1.4;
+  padding-top: var(--sp-sp-1);
+}
+.kf-rvc__dispo-help strong { color: var(--sp-ink); font-weight: 700; }
 .kf-rvc__actions-summary strong {
   color: var(--sp-ink);
   font-weight: 800;

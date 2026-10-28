@@ -201,6 +201,69 @@ export async function markNotFood(
   return { marked, errors };
 }
 
+// Mirror of markNotFood for the Retail disposition. Retail = sold as-is
+// to players (bottled water, snacks, pre-made sandwiches) - real spend
+// but not a recipe ingredient. The two writes together are:
+//   - status='resale'       -> the overview views already read this and
+//                              bucket the dollars as retail spend
+//                              (excluded from recipe coverage).
+//   - link_status='rejected', link_reason='resale:<email>'
+//                              keeps the matcher (which only reads
+//                              link_status='none') from re-proposing
+//                              these on the next run, AND the item
+//                              visibly drops out of the proposed queue.
+// We deliberately do NOT flip is_food - a human disposition doesn't
+// retro-rewrite intake's classification (same reasoning as markNotFood).
+// Each per-item pr_events row carries the full aggregate (item_ids,
+// count, usd, actor) in the after jsonb so a single-event lookup gives
+// the complete batch context.
+export async function markResale(
+  client: SupabaseClient,
+  args: { itemIds: string[]; actorEmail: string }
+): Promise<{ marked: number; usd: number; errors: string[] }> {
+  const { itemIds, actorEmail } = args;
+  const errors: string[] = [];
+  if (itemIds.length === 0) return { marked: 0, usd: 0, errors };
+
+  // Preload usd_12m for the aggregate `after.usd` field (same pattern
+  // confirmItems uses). readItems also surfaces the current link_status
+  // so we skip rows that aren't in the queue anymore.
+  const rows = await readItems(client, itemIds);
+  const eligible = rows.filter((r) => r.link_status === "proposed" || r.link_status === "none");
+  const eligibleIds = eligible.map((r) => r.id);
+  const totalUsd = eligible.reduce((s, r) => s + Number(r.usd_12m ?? 0), 0);
+
+  let marked = 0;
+  for (const r of eligible) {
+    const { error } = await client
+      .from("pr_vendor_items")
+      .update({
+        status: "resale",
+        link_status: "rejected",
+        link_reason: `resale:${actorEmail}`,
+      })
+      .eq("id", r.id)
+      .in("link_status", ["proposed", "none"]);
+    if (error) {
+      errors.push(`${r.id}: ${error.message}`);
+      continue;
+    }
+    marked += 1;
+    await client.from("pr_events").insert({
+      entity_type: "vendor_item",
+      entity_id: r.id,
+      kind: "review_resale",
+      after: {
+        item_ids: eligibleIds,
+        count: eligibleIds.length,
+        usd: Math.round(totalUsd),
+      },
+      actor: actorEmail,
+    });
+  }
+  return { marked, usd: Math.round(totalUsd), errors };
+}
+
 export async function keepSeparate(
   client: SupabaseClient,
   args: { itemIds: string[]; actorEmail: string }
