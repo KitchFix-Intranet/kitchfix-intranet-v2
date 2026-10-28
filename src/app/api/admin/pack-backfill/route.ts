@@ -26,6 +26,7 @@ type Item = {
   id: string;
   vendor_id: string;
   item_number_norm: string | null;
+  name: string;
   pack_text: string | null;
   catch_weight: boolean;
   pack_override: unknown;
@@ -37,6 +38,28 @@ type CatalogRow = {
   pack_text: string | null;
   catalog_price: number | null;
 };
+
+// Phase 1.9 name-match catalog row shape. Keyed on normalized clean_name
+// within a single vendor; only accepted when the (vendor, name) tuple
+// maps to a SINGLE distinct normalized pack across the catalog.
+type NameCatalogRow = {
+  clean_name: string | null;
+  pack_text: string | null;
+  catalog_price: number | null;
+};
+
+// Normalize a pack string for the ambiguous-name guard. Collapses the
+// `#`-as-LB alias + strips non-alphanumerics so `"6/1 LB"` and `"6/1#"`
+// land identical. Mirrors the SQL regex Kevin spec'd.
+function normalizePackText(raw: string | null | undefined): string {
+  if (!raw) return "";
+  return raw.toUpperCase().replace(/#/g, "LB").replace(/[^0-9A-Z]/g, "");
+}
+
+function normalizeName(raw: string | null | undefined): string {
+  if (!raw) return "";
+  return raw.trim().toUpperCase().replace(/\s+/g, " ");
+}
 
 export async function POST(req: NextRequest) {
   const gate = await requireOwnerApi();
@@ -56,7 +79,7 @@ export async function POST(req: NextRequest) {
   // Ordered by id so paging is stable across invocations.
   const { data: itemsData, error: itemsErr } = await client
     .from("pr_vendor_items")
-    .select("id,vendor_id,item_number_norm,pack_text,catch_weight,pack_override")
+    .select("id,vendor_id,item_number_norm,name,pack_text,catch_weight,pack_override")
     .eq("is_food", true)
     .in("status", ["active", "resale"])
     .is("pack_override", null)
@@ -108,6 +131,70 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Phase 1.9 name-match fallback catalog load. Fires only for items
+  // whose SKU match returned nothing (either because item_number_norm
+  // is null or the vendor's catalog has no row for that SKU). We pull
+  // every catalog row for the vendors that still need help, group by
+  // (vendor, normalized clean_name), and build an unambiguous-single-
+  // pack map. Set-based: at most one query per vendor-with-gaps,
+  // paginated at 1000. Not N+1.
+  const nameMap = new Map<
+    string,
+    { packSet: Set<string>; best: NameCatalogRow | null }
+  >();
+  {
+    const vendorsNeeding = new Set<string>();
+    for (const it of items) {
+      if (it.pack_override !== null) continue;
+      const skuKey = it.item_number_norm ? `${it.vendor_id}#${it.item_number_norm}` : null;
+      if (skuKey && catalogByKey.has(skuKey)) continue;
+      vendorsNeeding.add(it.vendor_id);
+    }
+    for (const vendorId of vendorsNeeding) {
+      let from = 0;
+      const page = 1000;
+      for (;;) {
+        const { data: cData, error: cErr } = await client
+          .from("pr_vendor_catalog")
+          .select("clean_name,pack_text,catalog_price")
+          .eq("vendor_id", vendorId)
+          .not("clean_name", "is", null)
+          .order("clean_name", { ascending: true })
+          .range(from, from + page - 1);
+        if (cErr) return NextResponse.json({ error: cErr.message }, { status: 500 });
+        const rows = (cData ?? []) as NameCatalogRow[];
+        for (const r of rows) {
+          const nn = normalizeName(r.clean_name);
+          if (!nn) continue;
+          const packN = normalizePackText(r.pack_text);
+          const key = `${vendorId}#${nn}`;
+          let entry = nameMap.get(key);
+          if (!entry) {
+            entry = { packSet: new Set<string>(), best: null };
+            nameMap.set(key, entry);
+          }
+          entry.packSet.add(packN);
+          // Prefer a row with a positive catalog_price so the estimator
+          // has a case/$/lb number to work with; otherwise keep the
+          // first seen so pack_text is still available.
+          const price =
+            r.catalog_price != null ? Number(r.catalog_price) : NaN;
+          const hasPrice = Number.isFinite(price) && price > 0;
+          if (!entry.best) {
+            entry.best = r;
+          } else {
+            const bestPrice =
+              entry.best.catalog_price != null ? Number(entry.best.catalog_price) : NaN;
+            const bestHasPrice = Number.isFinite(bestPrice) && bestPrice > 0;
+            if (hasPrice && !bestHasPrice) entry.best = r;
+          }
+        }
+        if (rows.length < page) break;
+        from += page;
+      }
+    }
+  }
+
   // Latest valid unit_price per item (for billed fallback + catch-weight).
   const latestByItem = new Map<string, number>();
   {
@@ -144,14 +231,36 @@ export async function POST(req: NextRequest) {
   // Process + write per item. The guard `.is("pack_override", null)` on
   // the UPDATE is defensive; a parallel human override during the loop
   // would be respected.
-  const counts = { ok: 0, check: 0, none: 0, skipped: 0 };
+  const counts = { ok: 0, check: 0, none: 0, skipped: 0, nameMatched: 0 };
   for (const it of items) {
     if (it.pack_override !== null) {
       counts.skipped += 1;
       continue;
     }
-    const key = it.item_number_norm ? `${it.vendor_id}#${it.item_number_norm}` : null;
-    const cat = key ? catalogByKey.get(key) ?? null : null;
+    const skuKey = it.item_number_norm ? `${it.vendor_id}#${it.item_number_norm}` : null;
+    let cat: { pack_text: string | null; catalog_price: number | null } | null =
+      skuKey ? catalogByKey.get(skuKey) ?? null : null;
+    let matchSource: "sku" | "catalog_name" | null = cat ? "sku" : null;
+
+    // Phase 1.9 name fallback: fires only when SKU match is absent.
+    // Exact normalized name within same vendor + unambiguous single-
+    // pack guard. Never overrides an existing SKU hit.
+    if (!cat) {
+      const nn = normalizeName(it.name);
+      if (nn.length > 0) {
+        const nameKey = `${it.vendor_id}#${nn}`;
+        const entry = nameMap.get(nameKey);
+        if (entry && entry.packSet.size === 1 && entry.best) {
+          cat = {
+            pack_text: entry.best.pack_text,
+            catalog_price: entry.best.catalog_price,
+          };
+          matchSource = "catalog_name";
+        }
+        // Ambiguous (packSet.size > 1) OR no match -> cat stays null.
+      }
+    }
+
     const result = estimatePerUnit({
       pack_text: it.pack_text,
       catch_weight: it.catch_weight,
@@ -161,13 +270,31 @@ export async function POST(req: NextRequest) {
     });
 
     const parsed = result.parsed;
-    const estimate = result.estimate;
-    // Map confidence -> pack_state. Existing CHECK constraint only
-    // allows ('ok','check','none'); we stay within those three. The
-    // "override" discriminator is pack_override IS NOT NULL, which
-    // this backfill never produces.
+    const baseEstimate = result.estimate;
+
+    // Phase 1.9 stamping: carry match_source into the jsonb for every
+    // row with a catalog hit (sku or catalog_name). Name-matched rows
+    // also get an extra note so Kevin sees why they're in 'check'.
+    const estimate = { ...baseEstimate } as typeof baseEstimate & { match_source?: "sku" | "catalog_name" };
+    if (matchSource) {
+      estimate.match_source = matchSource;
+      if (matchSource === "catalog_name") {
+        const nameNote = "matched to catalog by name (invoice SKU/pack missing); verify";
+        estimate.note = baseEstimate.note ? `${baseEstimate.note}; ${nameNote}` : nameNote;
+      }
+    }
+
+    // pack_state: name-matched rows always land 'check' regardless of
+    // the parse confidence - the match itself needs human eyes.
+    // Otherwise the usual high->ok, low->check, none->none mapping.
     const packState =
-      estimate.confidence === "high" ? "ok" : estimate.confidence === "low" ? "check" : "none";
+      matchSource === "catalog_name"
+        ? "check"
+        : estimate.confidence === "high"
+          ? "ok"
+          : estimate.confidence === "low"
+            ? "check"
+            : "none";
 
     const { error: upErr } = await client
       .from("pr_vendor_items")
@@ -189,6 +316,7 @@ export async function POST(req: NextRequest) {
     if (packState === "ok") counts.ok += 1;
     else if (packState === "check") counts.check += 1;
     else counts.none += 1;
+    if (matchSource === "catalog_name") counts.nameMatched += 1;
   }
 
   const done = items.length < BATCH;
@@ -198,5 +326,8 @@ export async function POST(req: NextRequest) {
     processed: items.length,
     nextOffset: offset + items.length,
     counts,
+    // Phase 1.9 top-level echo so the client can sum across batches
+    // without widening its canonical Counts shape.
+    nameMatched: counts.nameMatched,
   });
 }

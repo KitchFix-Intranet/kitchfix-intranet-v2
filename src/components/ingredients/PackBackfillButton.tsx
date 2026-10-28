@@ -12,7 +12,7 @@ import { Play, Check, AlertTriangle } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount } from "@/lib/fmt";
 
-type Counts = { ok: number; check: number; none: number; skipped: number };
+type Counts = { ok: number; check: number; none: number; skipped: number; nameMatched?: number };
 
 type RunState =
   | { kind: "idle" }
@@ -20,7 +20,7 @@ type RunState =
   | { kind: "done"; processed: number; counts: Counts }
   | { kind: "error"; message: string; processed: number; counts: Counts };
 
-const ZERO: Counts = { ok: 0, check: 0, none: 0, skipped: 0 };
+const ZERO: Counts = { ok: 0, check: 0, none: 0, skipped: 0, nameMatched: 0 };
 
 export function PackBackfillButton() {
   const router = useRouter();
@@ -70,6 +70,7 @@ export function PackBackfillButton() {
       sum.check += c.check;
       sum.none += c.none;
       sum.skipped += c.skipped;
+      sum.nameMatched = (sum.nameMatched ?? 0) + (c.nameMatched ?? 0);
       setState({ kind: "running", processed: total, counts: { ...sum } });
       if (data?.done) break;
       offset = data?.nextOffset ?? offset + processed;
@@ -141,6 +142,14 @@ export function PackBackfillButton() {
             <strong>{fmtCount(counts.skipped)}</strong>
             <span className="kf-admin-run__sub">
               pack_override present (human-attested) - left untouched
+            </span>
+          </li>
+          <li>
+            <span className="kf-admin-run__k">Name-matched (of the above)</span>
+            <strong>{fmtCount(counts.nameMatched ?? 0)}</strong>
+            <span className="kf-admin-run__sub">
+              Phase 1.9: SKU/pack missing, name hit catalog with a single unambiguous pack
+              - stamped as <code>check</code> for human verification
             </span>
           </li>
         </ul>

@@ -72,6 +72,12 @@ export type PriceEstimate = {
   pack_source: "catalog" | "invoice" | "override" | null;
   confidence: EstimateConfidence;
   note: string | null;
+  // How the catalog row (if any) was looked up:
+  //   'sku'          - matched on (vendor_id, item_number_norm) [primary]
+  //   'catalog_name' - name fallback on (vendor_id, exact normalized clean_name)
+  //                    with an unambiguous single-pack guard (Phase 1.9).
+  // Absent on pre-1.9 rows and on rows with no catalog hit at all.
+  match_source?: "sku" | "catalog_name";
 };
 
 // Also expose the pack parse result so the backfill can write
