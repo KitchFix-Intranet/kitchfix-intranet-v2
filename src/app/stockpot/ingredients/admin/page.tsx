@@ -3,6 +3,7 @@
 
 import { requireOwnerPage } from "@/lib/gate";
 import { Tabs } from "@/components/ingredients/Tabs";
+import { MatchRunButton } from "@/components/ingredients/MatchRunButton";
 import { PackBackfillButton } from "@/components/ingredients/PackBackfillButton";
 import { PackOverrideMigrateButton } from "@/components/ingredients/PackOverrideMigrateButton";
 import "@/components/ingredients/ingredients.css";
@@ -23,6 +24,21 @@ export default async function IngredientAdminPage() {
       </header>
 
       <Tabs active="overview" />
+
+      <section className="kf-admin-section" aria-labelledby="run-matcher-head">
+        <header className="kf-admin-section__head">
+          <h3 id="run-matcher-head">Run matcher</h3>
+          <p>
+            Runs the AI matcher over unlinked food items (dollar-ordered) and writes proposals
+            to the review queue. Confirms nothing - every result lands as
+            <code> link_status=&apos;proposed&apos;</code> for a human pass. Safe to re-run; a wave
+            of a few hundred items can take a few minutes. Leave the limit blank to process
+            every unlinked food item; set e.g. <code>500</code> for a controlled first wave.
+          </p>
+        </header>
+
+        <MatchRunButton />
+      </section>
 
       <section className="kf-admin-section" aria-labelledby="pack-backfill-head">
         <header className="kf-admin-section__head">

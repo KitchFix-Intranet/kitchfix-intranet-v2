@@ -1069,6 +1069,54 @@
   font-size: var(--sp-t-micro);
   margin: 0;
 }
+
+/* Row that pairs an input (limit) with the primary run button. Wraps
+ * on narrow widths so the button stays reachable. */
+.kf-admin-run__inputs {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-sp-3);
+  flex-wrap: wrap;
+}
+.kf-admin-run__limit {
+  flex: 0 0 220px;
+  min-width: 180px;
+}
+.kf-admin-run__limit input {
+  min-height: 44px;
+  padding: var(--sp-sp-2) var(--sp-sp-3);
+  background: var(--sp-card);
+  color: var(--sp-ink);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  font-weight: 400;
+  width: 100%;
+}
+.kf-admin-run__limit input:focus-visible {
+  outline: 2px solid var(--sp-navy);
+  outline-offset: 2px;
+}
+
+/* "Note:" return-value paragraph under the counts panel. */
+.kf-admin-run__note {
+  margin: var(--sp-sp-3) 0 0;
+  display: flex;
+  gap: var(--sp-sp-2);
+  align-items: flex-start;
+  padding: var(--sp-sp-3);
+  background: var(--sp-ground);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+  color: var(--sp-ink);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  line-height: 1.4;
+}
+.kf-admin-run__note .kf-admin-run__k {
+  flex: 0 0 auto;
+}
 .kf-admin-run__samples {
   background: var(--sp-ground);
   border: 1px solid var(--sp-line);
