@@ -289,6 +289,35 @@
   font-family: var(--sp-ui);
   font-size: var(--sp-t-micro);
   color: var(--sp-body);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sp-3);
+  flex-wrap: wrap;
+}
+/* Shared save-status strip sits next to the "N of M selected" line.
+ * "Saving..." while an op is in flight; "Done" with a check for 2.5s
+ * after the write returns. Matches the DetailPanel SaveFlash pattern
+ * so every save point in the review surface has a consistent in-flight
+ * + success indicator. */
+.kf-rvc__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+  letter-spacing: .3px;
+}
+.kf-rvc__status--busy { background: var(--sp-sky-tint); color: var(--sp-navy); }
+.kf-rvc__status--done { background: var(--sp-good-bg); color: var(--sp-good); }
+.kf-rvc__spin { animation: kf-rvc-spin 900ms linear infinite; }
+@keyframes kf-rvc-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kf-rvc__spin { animation: none; }
 }
 /* Three-way disposition helper line under the action buttons.
  * Confirm / Retail / Not food - distinct wordings so Kevin can tell
@@ -809,7 +838,20 @@
   padding: var(--sp-sp-2) 0;
   border-bottom: 1px dashed var(--sp-line-soft);
 }
-.kf-newing__row { display: flex; gap: var(--sp-sp-3); flex-wrap: wrap; }
+/* `.kf-newing__row` is applied alongside `.kf-dpn__row`, which sets
+ * flex-direction: column. Without an explicit row direction here the
+ * three fields (Qty / Size / UOM in the override editor; Name / Super
+ * / Sub in the create form) stack vertically with the parent's gap,
+ * which looked like large empty vertical gaps between the inputs.
+ * Force row direction so they sit side-by-side (wrapping on narrow
+ * widths). */
+.kf-newing__row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: var(--sp-sp-3);
+  align-items: flex-end;
+}
 .kf-newing__row > .kf-dpn__label { flex: 1 1 220px; min-width: 0; }
 .kf-newing__sub-toggle {
   align-self: flex-start;

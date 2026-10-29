@@ -7,9 +7,9 @@
 // every item row carries a visible checkbox now (ReviewCard owns the
 // per-row rendering).
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, X as XIcon, Plus, Scissors, Ban, Search, ShoppingBag, Archive } from "lucide-react";
+import { Check, X as XIcon, Plus, Scissors, Ban, Search, ShoppingBag, Archive, Loader2 } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { SUPER_CATEGORIES, categoryForParent, type SuperCategory } from "@/lib/ingredients/categories";
@@ -88,6 +88,23 @@ export function ReviewActions({
 }: Props) {
   const router = useRouter();
   const [op, setOp] = useState<Op>(null);
+  // Shared save-status strip. `lastDone` is the clock stamp of the
+  // most recent successful action; a 2.5s window after that renders
+  // the inline "Done" chip. The strip renders "Saving..." any time
+  // an op is in flight, so every save point here has a consistent
+  // in-flight + success indicator (matches the DetailPanel SaveFlash
+  // pattern per the Oct 29 Britt review).
+  const [lastDone, setLastDone] = useState<number | null>(null);
+  const [showDone, setShowDone] = useState(false);
+  useEffect(() => {
+    if (!lastDone) {
+      setShowDone(false);
+      return;
+    }
+    setShowDone(true);
+    const t = window.setTimeout(() => setShowDone(false), 2500);
+    return () => window.clearTimeout(t);
+  }, [lastDone]);
   const [showRelink, setShowRelink] = useState(false);
   const [relinkId, setRelinkId] = useState<string | null>(null);
   const [newName, setNewName] = useState(proposedName ?? "");
@@ -152,6 +169,7 @@ export function ReviewActions({
       },
     });
     setOp(null);
+    setLastDone(Date.now());
     // Hand off to the parent card for the leaving-animation + the
     // deferred router.refresh() (so the card unmounts AFTER the
     // animation plays). If no handler is wired, refresh immediately
@@ -178,6 +196,7 @@ export function ReviewActions({
     toast("Relinked");
     setShowRelink(false);
     setOp(null);
+    setLastDone(Date.now());
     router.refresh();
   }
 
@@ -219,6 +238,7 @@ export function ReviewActions({
     );
     setShowNew(false);
     setOp(null);
+    setLastDone(Date.now());
     router.refresh();
   }
 
@@ -233,6 +253,7 @@ export function ReviewActions({
     }
     toast(`Marked ${fmtCount(checkedCount)} as not food`);
     setOp(null);
+    setLastDone(Date.now());
     router.refresh();
   }
 
@@ -252,6 +273,7 @@ export function ReviewActions({
     }
     toast(`Marked ${fmtCount(checkedCount)} as retail`);
     setOp(null);
+    setLastDone(Date.now());
     router.refresh();
   }
 
@@ -271,6 +293,7 @@ export function ReviewActions({
     }
     toast(`Archived ${fmtCount(checkedCount)} item${checkedCount === 1 ? "" : "s"}`);
     setOp(null);
+    setLastDone(Date.now());
     router.refresh();
   }
 
@@ -285,6 +308,7 @@ export function ReviewActions({
     }
     toast(`${fmtCount(checkedCount)} items held out of this group`);
     setOp(null);
+    setLastDone(Date.now());
     router.refresh();
   }
 
@@ -294,6 +318,17 @@ export function ReviewActions({
         <span>
           <strong>{fmtCount(checkedCount)}</strong> of {fmtCount(memberCount)} selected
         </span>
+        {op !== null ? (
+          <span className="kf-rvc__status kf-rvc__status--busy" aria-live="polite">
+            <Loader2 size={12} strokeWidth={2.5} className="kf-rvc__spin" aria-hidden />
+            Saving...
+          </span>
+        ) : showDone ? (
+          <span className="kf-rvc__status kf-rvc__status--done" aria-live="polite">
+            <Check size={12} strokeWidth={2.5} aria-hidden />
+            Done
+          </span>
+        ) : null}
       </div>
 
       <div className="kf-rvc__btns">
@@ -304,7 +339,13 @@ export function ReviewActions({
           onClick={confirmChecked}
         >
           <Check size={14} strokeWidth={1.5} />
-          <span>{kind === "new" ? "Create ingredient" : "Confirm"}</span>
+          <span>
+            {op === "confirming"
+              ? "Saving..."
+              : kind === "new"
+                ? "Create ingredient"
+                : "Confirm"}
+          </span>
         </button>
 
         <button
@@ -337,7 +378,7 @@ export function ReviewActions({
           title="Hold these items out of this group permanently"
         >
           <Scissors size={14} strokeWidth={1.5} />
-          <span>Keep separate</span>
+          <span>{op === "keepsep" ? "Saving..." : "Keep separate"}</span>
         </button>
 
         <button
@@ -348,7 +389,7 @@ export function ReviewActions({
           title="Sold as-is to players (water, snacks, sandwiches); tracked as retail spend, not a recipe ingredient"
         >
           <ShoppingBag size={14} strokeWidth={1.5} />
-          <span>Retail</span>
+          <span>{op === "resale" ? "Saving..." : "Retail"}</span>
         </button>
 
         <button
@@ -359,7 +400,7 @@ export function ReviewActions({
           title="One-off / irrelevant food purchase; parked and not tracked in recipe coverage or retail"
         >
           <Archive size={14} strokeWidth={1.5} />
-          <span>Archive</span>
+          <span>{op === "archived" ? "Saving..." : "Archive"}</span>
         </button>
 
         <button
@@ -370,7 +411,7 @@ export function ReviewActions({
           title="Not a consumable product (fees, freight, supplies)"
         >
           <Ban size={14} strokeWidth={1.5} />
-          <span>Not food</span>
+          <span>{op === "notfood" ? "Saving..." : "Not food"}</span>
         </button>
       </div>
 

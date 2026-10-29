@@ -403,78 +403,76 @@ function ConfidenceChip({ c }: { c: string | null }) {
   return <span className="kf-pill kf-pill--muted">-</span>;
 }
 
-// Unit price. Precedence:
-//   1. Backfilled per-base ($/lb, $/fl oz, $/each) when confidence is
-//      high or low. High renders a quiet check chip; low renders an
-//      amber "est." chip + the parse note on hover.
-//   2. Catalog case price (list) when a catalog match exists.
-//   3. Latest billed case price from pr_price_observations.
-//   4. "- needs pack" when neither pack nor price is available.
-// Never fabricates a per-unit; "none" confidence falls back to case
-// price with a muted "per-unit: needs pack" sub-line.
+// Unit price. The HEADLINE is always the normalized per-base-unit
+// value (per_base + base_uom) - $/lb, $/fl oz, $/each, $/gal - or a
+// clear "- needs pack" placeholder when per_base is missing. The raw
+// catalog / billed case price moves to a secondary sub-line as
+// context, so a bad pack reads as an absurd $/unit at a glance (the
+// Knorr-soup-base lesson). Never fabricates a per-unit.
 function UnitPriceCell({ item }: { item: ReviewGroupItem }) {
-  if (item.perBase != null && item.perBaseUom && item.perBaseConfidence) {
-    const uomLower =
-      item.perBaseUom === "LB" ? "lb" :
-      item.perBaseUom === "FLOZ" ? "fl oz" :
-      item.perBaseUom === "EA" ? "each" :
-      item.perBaseUom.toLowerCase();
-    const title =
-      (item.perBaseConfidence === "override"
+  const perUnitAvailable =
+    item.perBase != null && item.perBaseUom != null && item.perBaseConfidence != null;
+  const uomLower = item.perBaseUom
+    ? item.perBaseUom === "LB" ? "lb"
+      : item.perBaseUom === "FLOZ" ? "fl oz"
+      : item.perBaseUom === "EA" ? "each"
+      : item.perBaseUom.toLowerCase()
+    : null;
+
+  // Secondary line (always below the headline when a case figure
+  // exists): catalog case price if available, else billed-latest.
+  const secondary = item.catalogPrice != null
+    ? { amount: item.catalogPrice, label: "case (catalog)", unit: null as string | null }
+    : item.unitPrice != null
+      ? { amount: item.unitPrice, label: "case (billed, latest)", unit: item.unitPriceUnit }
+      : null;
+
+  const title = perUnitAvailable
+    ? (item.perBaseConfidence === "override"
         ? "Human-attested override (structured)"
         : item.perBaseConfidence === "high"
           ? "Per-unit estimate from pack size + case price"
           : "Low-confidence estimate (range / catch-weight / soft parse)") +
-      (item.perBaseNote ? ` - ${item.perBaseNote}` : "");
-    return (
-      <span title={title}>
-        <strong>{fmtUsd(item.perBase)}</strong>
-        <span className="kf-muted"> / {uomLower}</span>
-        <br />
-        {item.perBaseConfidence === "override" ? (
-          <span className="kf-conf-chip kf-conf-chip--override">
-            <Check size={10} strokeWidth={2.5} aria-hidden />
-            override
-          </span>
-        ) : item.perBaseConfidence === "high" ? (
-          <span className="kf-conf-chip kf-conf-chip--ok">
-            <Check size={10} strokeWidth={2.5} aria-hidden />
-            per-unit
-          </span>
-        ) : (
-          <span className="kf-conf-chip kf-conf-chip--low">est.</span>
-        )}
-      </span>
-    );
-  }
-  if (item.catalogPrice != null) {
-    return (
-      <span title="Catalog case price - per-unit needs pack normalization">
-        <strong>{fmtUsd(item.catalogPrice)}</strong>
-        <br />
-        <span className="kf-cell-sub">catalog case</span>
-        <br />
-        <span className="kf-cell-sub kf-cell-sub--dim">per-unit: needs pack</span>
-      </span>
-    );
-  }
-  if (item.unitPrice != null) {
-    return (
-      <span title="Latest billed case price - per-unit needs pack normalization">
-        <strong>{fmtUsd(item.unitPrice)}</strong>
-        <span className="kf-muted"> /{item.unitPriceUnit ?? "unit"}</span>
-        <br />
-        <span className="kf-cell-sub kf-cell-sub--dim">billed, latest</span>
-        <br />
-        <span className="kf-cell-sub kf-cell-sub--dim">per-unit: needs pack</span>
-      </span>
-    );
-  }
+      (item.perBaseNote ? ` - ${item.perBaseNote}` : "")
+    : "Per-unit needs pack normalization - edit the pack in the detail panel";
+
   return (
-    <span className="kf-muted">
-      -
-      <br />
-      <span className="kf-cell-sub kf-cell-sub--dim">needs pack</span>
+    <span title={title}>
+      {perUnitAvailable ? (
+        <>
+          <strong>{fmtUsd(item.perBase as number)}</strong>
+          <span className="kf-muted"> / {uomLower}</span>
+          <br />
+          {item.perBaseConfidence === "override" ? (
+            <span className="kf-conf-chip kf-conf-chip--override">
+              <Check size={10} strokeWidth={2.5} aria-hidden />
+              override
+            </span>
+          ) : item.perBaseConfidence === "high" ? (
+            <span className="kf-conf-chip kf-conf-chip--ok">
+              <Check size={10} strokeWidth={2.5} aria-hidden />
+              per-unit
+            </span>
+          ) : (
+            <span className="kf-conf-chip kf-conf-chip--low">est.</span>
+          )}
+        </>
+      ) : (
+        <>
+          <strong className="kf-muted">- / unit</strong>
+          <br />
+          <span className="kf-conf-chip kf-conf-chip--low">needs pack</span>
+        </>
+      )}
+      {secondary ? (
+        <>
+          <br />
+          <span className="kf-cell-sub kf-cell-sub--dim">
+            {fmtUsd(secondary.amount)}
+            {secondary.unit ? ` /${secondary.unit}` : ""} {secondary.label}
+          </span>
+        </>
+      ) : null}
     </span>
   );
 }

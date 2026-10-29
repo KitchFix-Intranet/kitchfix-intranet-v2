@@ -507,16 +507,19 @@ function ItemFacts({ item }: { item: ReviewGroupItem }) {
         <div>
           <dt>Unit price</dt>
           <dd>
+            {/* Headline = per-unit (always). Secondary = case price. */}
             {item.perBase != null && item.perBaseUom && item.perBaseConfidence ? (
               <>
-                {fmtUsd(item.perBase)}
+                <strong>{fmtUsd(item.perBase)}</strong>
                 <span className="kf-muted">
                   {" "}/ {item.perBaseUom === "LB" ? "lb"
                       : item.perBaseUom === "FLOZ" ? "fl oz"
                       : item.perBaseUom === "EA" ? "each"
                       : item.perBaseUom.toLowerCase()}
                 </span>
-                {item.perBaseConfidence === "high" ? (
+                {item.perBaseConfidence === "override" ? (
+                  <span className="kf-facts__note">override</span>
+                ) : item.perBaseConfidence === "high" ? (
                   <span className="kf-facts__note">per-unit (high)</span>
                 ) : (
                   <span className="kf-facts__note kf-facts__note--warn">est. (low)</span>
@@ -525,22 +528,22 @@ function ItemFacts({ item }: { item: ReviewGroupItem }) {
                   <div className="kf-cell-sub kf-cell-sub--dim">{item.perBaseNote}</div>
                 ) : null}
               </>
-            ) : item.catalogPrice != null ? (
-              <>
-                {fmtUsd(item.catalogPrice)}
-                <span className="kf-cell-sub"> catalog case</span>
-                <div className="kf-cell-sub kf-cell-sub--dim">per-unit: needs pack</div>
-              </>
-            ) : item.unitPrice != null ? (
-              <>
-                {fmtUsd(item.unitPrice)}
-                <span className="kf-muted"> /{item.unitPriceUnit ?? "unit"}</span>
-                <span className="kf-cell-sub"> billed, latest</span>
-                <div className="kf-cell-sub kf-cell-sub--dim">per-unit: needs pack</div>
-              </>
             ) : (
-              <span className="kf-muted">- needs pack</span>
+              <>
+                <strong className="kf-muted">- / unit</strong>
+                <span className="kf-facts__note kf-facts__note--warn">needs pack</span>
+              </>
             )}
+            {item.catalogPrice != null ? (
+              <div className="kf-cell-sub kf-cell-sub--dim">
+                {fmtUsd(item.catalogPrice)} case (catalog)
+              </div>
+            ) : item.unitPrice != null ? (
+              <div className="kf-cell-sub kf-cell-sub--dim">
+                {fmtUsd(item.unitPrice)}
+                {item.unitPriceUnit ? ` /${item.unitPriceUnit}` : ""} case (billed, latest)
+              </div>
+            ) : null}
           </dd>
         </div>
         <div>
@@ -782,7 +785,7 @@ function IngredientBlock({
             disabled={renameBusy || renameDraft.trim().length < 2 || renameDraft.trim() === ingredient.name}
             onClick={doRename}
           >
-            Save name
+            {renameBusy ? "Saving..." : "Save name"}
           </button>
           <SaveFlash savedAt={renameSavedAt} error={renameError} />
         </div>
@@ -831,7 +834,7 @@ function IngredientBlock({
             disabled={catBusy}
             onClick={doCategory}
           >
-            Save category
+            {catBusy ? "Saving..." : "Save category"}
           </button>
           <SaveFlash savedAt={catSavedAt} error={catError} />
         </div>
@@ -881,7 +884,7 @@ function IngredientBlock({
             disabled={mergeBusy || !mergeTarget}
             onClick={doMerge}
           >
-            Merge into chosen
+            {mergeBusy ? "Saving..." : "Merge into chosen"}
           </button>
         </div>
       </div>
@@ -1175,7 +1178,7 @@ function PackOverrideBlock({
             disabled={busy || !readyToSave}
             onClick={save}
           >
-            Save override
+            {busy ? "Saving..." : "Save override"}
           </button>
           <SaveFlash savedAt={savedAt} error={error} />
         </div>
