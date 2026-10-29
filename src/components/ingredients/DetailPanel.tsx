@@ -519,6 +519,8 @@ function ItemFacts({ item }: { item: ReviewGroupItem }) {
                 </span>
                 {item.perBaseConfidence === "override" ? (
                   <span className="kf-facts__note">override</span>
+                ) : item.perBaseConfidence === "derived" ? (
+                  <span className="kf-facts__note">from spend</span>
                 ) : item.perBaseConfidence === "high" ? (
                   <span className="kf-facts__note">per-unit (high)</span>
                 ) : (

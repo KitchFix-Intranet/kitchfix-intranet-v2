@@ -282,8 +282,8 @@ async function loadReview() {
             ? Number(pe.per_base)
             : null;
         const perBaseConfidence =
-          pe && (pe.confidence === "high" || pe.confidence === "low" || pe.confidence === "override")
-            ? (pe.confidence as "high" | "low" | "override")
+          pe && (pe.confidence === "high" || pe.confidence === "low" || pe.confidence === "override" || pe.confidence === "derived")
+            ? (pe.confidence as "high" | "low" | "override" | "derived")
             : null;
         g.items.push({
           id: it.id,
@@ -315,7 +315,7 @@ async function loadReview() {
           perBaseUom: pe?.base_uom ?? null,
           perBaseConfidence,
           perBaseNote: pe?.note ?? null,
-          caseSource: (pe?.case_price_source as "catalog" | "billed" | "catch_weight" | "catalog_lb" | "override" | null) ?? null,
+          caseSource: (pe?.case_price_source as "catalog" | "billed" | "catch_weight" | "catalog_lb" | "override" | "actuals_base_unit" | "actuals_weight" | "actuals_case" | null) ?? null,
           flagged: it.flagged === true,
           flagNote: it.flag_note ?? null,
           flaggedBy: it.flagged_by ?? null,
@@ -375,8 +375,8 @@ async function loadReview() {
             ? Number(pe.per_base)
             : null;
         const perBaseConfidence =
-          pe && (pe.confidence === "high" || pe.confidence === "low" || pe.confidence === "override")
-            ? (pe.confidence as "high" | "low" | "override")
+          pe && (pe.confidence === "high" || pe.confidence === "low" || pe.confidence === "override" || pe.confidence === "derived")
+            ? (pe.confidence as "high" | "low" | "override" | "derived")
             : null;
         g.items.push({
           id: it.id,
@@ -408,7 +408,7 @@ async function loadReview() {
           perBaseUom: pe?.base_uom ?? null,
           perBaseConfidence,
           perBaseNote: pe?.note ?? null,
-          caseSource: (pe?.case_price_source as "catalog" | "billed" | "catch_weight" | "catalog_lb" | "override" | null) ?? null,
+          caseSource: (pe?.case_price_source as "catalog" | "billed" | "catch_weight" | "catalog_lb" | "override" | "actuals_base_unit" | "actuals_weight" | "actuals_case" | null) ?? null,
           flagged: it.flagged === true,
           flagNote: it.flag_note ?? null,
           flaggedBy: it.flagged_by ?? null,

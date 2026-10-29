@@ -12,47 +12,59 @@
 //
 // Confidence on the estimate = min(parse confidence, price availability).
 
-import { parsePack, type ParsedPack, type BaseUom, type Confidence } from "./pack";
+import {
+  parsePack,
+  BASE_BY_DIM,
+  DIM_BY_UOM,
+  TO_BASE,
+  normUom,
+  type ParsedPack,
+  type BaseUom,
+  type Confidence,
+  type Dim,
+} from "./pack";
 
 // Confidence tier used by the PriceEstimate output. Widens the parser's
-// 'high'|'low'|'none' with an 'override' tier reserved for human-
-// attested packs (Phase 1.8 structured override). Treat 'override' as
-// trusted - more authoritative than 'high'. Parser never emits
-// 'override'.
-export type EstimateConfidence = Confidence | "override";
+// 'high'|'low'|'none' with:
+//   'override' - human-attested pack (Phase 1.8). More trusted than 'high'.
+//   'derived'  - computed from real invoice spend (Prompt B). Sits
+//                between 'low' and 'override' in trust: it's not a
+//                guess, but no human has signed it either.
+// Parser never emits 'override' or 'derived'.
+export type EstimateConfidence = Confidence | "override" | "derived";
 
-// Dimension lookup for the structured-override path. Mirrors pack.ts
-// internals (which aren't exported); kept narrow to the four base
-// conversions this helper needs.
-const OVERRIDE_TO_BASE: Record<string, { base_uom: BaseUom; factor: number; dim: "weight" | "volume" | "count" }> = {
-  // weight -> LB
-  LB: { base_uom: "LB", factor: 1, dim: "weight" },
-  OZ: { base_uom: "LB", factor: 1 / 16, dim: "weight" },
-  G: { base_uom: "LB", factor: 1 / 453.592, dim: "weight" },
-  KG: { base_uom: "LB", factor: 2.20462, dim: "weight" },
-  // volume -> FLOZ
-  FLOZ: { base_uom: "FLOZ", factor: 1, dim: "volume" },
-  L: { base_uom: "FLOZ", factor: 33.814, dim: "volume" },
-  ML: { base_uom: "FLOZ", factor: 0.033814, dim: "volume" },
-  GAL: { base_uom: "FLOZ", factor: 128, dim: "volume" },
-  QT: { base_uom: "FLOZ", factor: 32, dim: "volume" },
-  PT: { base_uom: "FLOZ", factor: 16, dim: "volume" },
-  // count -> EA
-  EA: { base_uom: "EA", factor: 1, dim: "count" },
-  DZ: { base_uom: "EA", factor: 12, dim: "count" },
-  CT: { base_uom: "EA", factor: 1, dim: "count" },
-  PC: { base_uom: "EA", factor: 1, dim: "count" },
-};
+// Local helper that mirrors the shape the override path used to carry
+// (base_uom + factor + dim per uom), now sourced from the shared tables
+// in pack.ts. The three factor tables in the codebase were verified
+// byte-identical before this collapse (Prompt B, 2026-10-29).
+function uomFactor(uom: string): { base_uom: BaseUom; factor: number; dim: Dim } | null {
+  const dim = DIM_BY_UOM[uom];
+  const factor = TO_BASE[uom];
+  if (!dim || factor == null) return null;
+  return { base_uom: BASE_BY_DIM[dim], factor, dim };
+}
 
 export type EstimateInputs = {
   // vendor item fields
   pack_text: string | null;
   catch_weight: boolean;
-  // supplied latest billed stats
+  // supplied latest billed stats (newest invoice_date wins; kept as a
+  // fallback when the aggregated actuals below aren't usable).
   latest_unit_price: number | null;
   // catalog match (either side may be null if no match)
   catalog_pack_text: string | null;
   catalog_price: number | null;
+  // Blended invoice actuals for this item (Prompt B). Null/zero fields
+  // mean "no usable actuals" and every actuals tier is skipped - the
+  // engine falls through to today's catalog/billed/pack behavior.
+  actuals?: {
+    sum_extended: number;
+    sum_quantity: number;
+    sum_weight: number;
+    billed_unit: string | null;
+    unit_consistent: boolean;
+    n_lines: number;
+  } | null;
 };
 
 export type PriceEstimate = {
@@ -68,7 +80,24 @@ export type PriceEstimate = {
   //                    always 'low' confidence - the shipped weight varies).
   //   'override'    - Phase 1.8 structured override; the human attested
   //                   the pack and (for catch) the $/lb directly.
-  case_price_source: "catalog" | "billed" | "catch_weight" | "catalog_lb" | "override" | null;
+  //   'actuals_base_unit' - Prompt B: invoice is already priced per
+  //                   base unit (billed as $/lb, $/each, $/gal, etc.);
+  //                   per_base = Σ extended / Σ base_units. No pack math.
+  //   'actuals_weight' - Prompt B: catch-weight item with real billed
+  //                   weight; per_base = Σ extended / Σ weight_line_value.
+  //   'actuals_case' - Prompt B: non-catch; case price = Σ extended /
+  //                   Σ quantity (preferred over catalog list / billed
+  //                   latest), still divided by pack total_base.
+  case_price_source:
+    | "catalog"
+    | "billed"
+    | "catch_weight"
+    | "catalog_lb"
+    | "override"
+    | "actuals_base_unit"
+    | "actuals_weight"
+    | "actuals_case"
+    | null;
   pack_source: "catalog" | "invoice" | "override" | null;
   confidence: EstimateConfidence;
   note: string | null;
@@ -169,8 +198,12 @@ export function estimateFromOverride(input: StructuredOverrideInput): Structured
 
   const qty = input.qty != null && input.qty > 0 ? input.qty : null;
   const size = input.size != null && input.size > 0 ? input.size : null;
-  const uom = input.uom && OVERRIDE_TO_BASE[input.uom] ? input.uom : null;
-  if (qty == null || size == null || uom == null) {
+  // Look up the shared factor table (pack.ts); null means the uom
+  // isn't one we can convert, same semantics as the former local
+  // OVERRIDE_TO_BASE guard.
+  const conv = input.uom ? uomFactor(input.uom) : null;
+  const uom = conv ? input.uom : null;
+  if (qty == null || size == null || uom == null || conv == null) {
     return {
       per_base: null,
       base_uom: null,
@@ -186,7 +219,6 @@ export function estimateFromOverride(input: StructuredOverrideInput): Structured
     };
   }
 
-  const conv = OVERRIDE_TO_BASE[uom];
   const total_base = qty * size * conv.factor;
 
   const catalogPrice =
@@ -238,20 +270,74 @@ export function estimatePerUnit(input: EstimateInputs): EstimateResult {
   const chosenPack = input.catalog_pack_text ?? input.pack_text;
   const parsed = parsePack(chosenPack);
 
-  // Catch-weight short-circuit: billed by actual weight means the
-  // invoice unit_price IS $/lb. We never trust the pack formula here
-  // (even if it parsed cleanly, the per-case weight is only an average).
-  //
-  // Precedence:
-  //   1. Billed $/lb from the latest invoice - most accurate; it's
-  //      the actual shipped weight.
-  //   2. Phase 1.7 fallback: catalog_price interpreted as $/lb when
-  //      no billed data exists. Verified in real data that
-  //      pr_vendor_catalog.catalog_price for catch-weight items is a
-  //      per-pound rate (not a case total). Flagged `low` so Kevin
-  //      verifies in review; the shipped weight still varies.
-  //   3. Neither: `none` with a note.
+  const a = input.actuals ?? null;
+  const actualsUsable =
+    a != null &&
+    a.unit_consistent &&
+    a.n_lines >= 1 &&
+    a.sum_extended > 0;
+
+  // ---------------------------------------------------------------
+  // TIER A - base-unit short-circuit (Prompt B).
+  // When the invoice is already priced per base unit (unit=lb, each,
+  // gal, etc.) AND the item's lines are unit-consistent, there's no
+  // pack math to do: Σ extended / Σ base_units IS the $/base. This
+  // fires BEFORE the catch-weight branch - a lb-billed case is a
+  // better signal than any catch-weight fallback.
+  // ---------------------------------------------------------------
+  if (actualsUsable && a!.sum_quantity > 0) {
+    const billedUomNorm = normUom(a!.billed_unit);
+    const conv = billedUomNorm ? uomFactor(billedUomNorm) : null;
+    if (conv && billedUomNorm) {
+      const sumBaseUnits = a!.sum_quantity * conv.factor;
+      if (sumBaseUnits > 0) {
+        const perBase = a!.sum_extended / sumBaseUnits;
+        if (Number.isFinite(perBase) && perBase > 0) {
+          const baseLabel = conv.base_uom === "FLOZ" ? "fl oz" : conv.base_uom.toLowerCase();
+          const billedLabel = billedUomNorm === "FLOZ" ? "fl oz" : billedUomNorm.toLowerCase();
+          return {
+            parsed,
+            estimate: {
+              per_base: perBase,
+              base_uom: conv.base_uom,
+              case_price: null,
+              case_price_source: "actuals_base_unit",
+              pack_source: packSource,
+              confidence: "derived",
+              note: `blended $/${baseLabel} from ${a!.n_lines} invoice line${a!.n_lines === 1 ? "" : "s"} billed per ${billedLabel}`,
+            },
+          };
+        }
+      }
+    }
+  }
+
+  // Catch-weight branch. The invoice unit_price IS $/lb when a case
+  // ships by actual weight. Precedence here (Prompt B inserts the
+  // actuals_weight tier at the top):
+  //   1. Σ extended / Σ weight_line_value - the blended $/lb from
+  //      actual billed weight ("derived" confidence).
+  //   2. Latest billed unit_price interpreted as $/lb.
+  //   3. Catalog price interpreted as $/lb (Phase 1.7).
+  //   4. Neither: `none`.
   if (input.catch_weight) {
+    if (actualsUsable && a!.sum_weight > 0) {
+      const perLb = a!.sum_extended / a!.sum_weight;
+      if (Number.isFinite(perLb) && perLb > 0) {
+        return {
+          parsed,
+          estimate: {
+            per_base: perLb,
+            base_uom: "LB",
+            case_price: null,
+            case_price_source: "actuals_weight",
+            pack_source: packSource,
+            confidence: "derived",
+            note: `catch-weight: blended $/lb from actual billed weight (${a!.n_lines} line${a!.n_lines === 1 ? "" : "s"})`,
+          },
+        };
+      }
+    }
     const perLb = input.latest_unit_price;
     if (perLb != null && perLb > 0) {
       return {
@@ -298,14 +384,48 @@ export function estimatePerUnit(input: EstimateInputs): EstimateResult {
     };
   }
 
-  // Case price with provenance.
+  // Case price with provenance. Prompt B: Σ extended / Σ quantity
+  // beats both catalog list and billed latest - it's what we actually
+  // paid, not what the sheet said.
+  const actualsCase =
+    actualsUsable && a!.sum_quantity > 0
+      ? a!.sum_extended / a!.sum_quantity
+      : null;
   const catalogPrice =
     input.catalog_price != null && input.catalog_price > 0 ? input.catalog_price : null;
   const billedPrice =
     input.latest_unit_price != null && input.latest_unit_price > 0 ? input.latest_unit_price : null;
-  const casePrice = catalogPrice ?? billedPrice ?? null;
-  const priceSource: "catalog" | "billed" | null =
-    catalogPrice != null ? "catalog" : billedPrice != null ? "billed" : null;
+
+  let casePrice: number | null = null;
+  let priceSource:
+    | "actuals_case"
+    | "catalog"
+    | "billed"
+    | null = null;
+  if (actualsCase != null && Number.isFinite(actualsCase) && actualsCase > 0) {
+    casePrice = actualsCase;
+    priceSource = "actuals_case";
+  } else if (catalogPrice != null) {
+    casePrice = catalogPrice;
+    priceSource = "catalog";
+  } else if (billedPrice != null) {
+    casePrice = billedPrice;
+    priceSource = "billed";
+  }
+
+  // Catalog-vs-actuals disagreement flag. When actuals_case wins AND a
+  // catalog list price exists AND they differ > 3x in either direction,
+  // keep the actuals number (we paid it) but surface the disagreement
+  // in the note so review knows.
+  let disagreementNote: string | null = null;
+  if (
+    priceSource === "actuals_case" &&
+    catalogPrice != null &&
+    casePrice != null &&
+    (casePrice / catalogPrice > 3 || catalogPrice / casePrice > 3)
+  ) {
+    disagreementNote = `actuals $${casePrice.toFixed(2)} vs catalog $${catalogPrice.toFixed(2)}; using actuals`;
+  }
 
   if (parsed.confidence === "none" || parsed.total_base == null || parsed.total_base <= 0) {
     return {
@@ -337,6 +457,18 @@ export function estimatePerUnit(input: EstimateInputs): EstimateResult {
     };
   }
 
+  // Final confidence: min(parsed, "derived") when actuals_case wins
+  // (we trust the real spend as much as the pack lets us, never more).
+  // Otherwise defer to the parser.
+  const finalConfidence: EstimateConfidence =
+    priceSource === "actuals_case"
+      ? parsed.confidence === "high"
+        ? "derived"
+        : parsed.confidence // 'low' or 'none' (none already returned above)
+      : parsed.confidence;
+
+  const combinedNote = [parsed.note, disagreementNote].filter(Boolean).join("; ") || null;
+
   return {
     parsed,
     estimate: {
@@ -345,8 +477,8 @@ export function estimatePerUnit(input: EstimateInputs): EstimateResult {
       case_price: casePrice,
       case_price_source: priceSource,
       pack_source: packSource,
-      confidence: parsed.confidence, // 'high' or 'low'
-      note: parsed.note,
+      confidence: finalConfidence,
+      note: combinedNote,
     },
   };
 }

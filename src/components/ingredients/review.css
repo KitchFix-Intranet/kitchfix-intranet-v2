@@ -1081,6 +1081,17 @@
   border: 1px solid color-mix(in srgb, var(--sp-navy) 25%, transparent);
   padding: 0 5px;
 }
+/* Derived = Prompt B, blended from real invoice spend. Visually
+ * separate from "per-unit" (which is a confident pack-math result)
+ * and "est." (which is a soft parse) - amber tone with a check so
+ * it reads as "we trust this number, we just didn't compute it from
+ * a pack". */
+.kf-conf-chip--derived {
+  color: var(--sp-warn-strong, var(--sp-warn));
+  background: color-mix(in srgb, var(--sp-warn) 15%, var(--sp-card));
+  border: 1px solid color-mix(in srgb, var(--sp-warn) 35%, transparent);
+  padding: 0 5px;
+}
 
 /* ---------------------------------------------------------------------
  * Admin surface: /stockpot/ingredients/admin PackBackfillButton.

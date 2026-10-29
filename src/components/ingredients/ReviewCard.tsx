@@ -63,9 +63,18 @@ export type ReviewGroupItem = {
   // falls back to the catalog-or-billed case price display.
   perBase: number | null;
   perBaseUom: string | null;
-  perBaseConfidence: "high" | "low" | "override" | null;
+  perBaseConfidence: "high" | "low" | "override" | "derived" | null;
   perBaseNote: string | null;
-  caseSource: "catalog" | "billed" | "catch_weight" | "catalog_lb" | "override" | null;
+  caseSource:
+    | "catalog"
+    | "billed"
+    | "catch_weight"
+    | "catalog_lb"
+    | "override"
+    | "actuals_base_unit"
+    | "actuals_weight"
+    | "actuals_case"
+    | null;
   // Flag marker (orthogonal to disposition; the item stays in the
   // queue, this just surfaces on the row + the Overview flagged
   // panel). Phase 1 of the Oct 29 Britt review hand-off.
@@ -454,9 +463,11 @@ function UnitPriceCell({ item }: { item: ReviewGroupItem }) {
   const title = perUnitAvailable
     ? (item.perBaseConfidence === "override"
         ? "Human-attested override (structured)"
-        : item.perBaseConfidence === "high"
-          ? "Per-unit estimate from pack size + case price"
-          : "Low-confidence estimate (range / catch-weight / soft parse)") +
+        : item.perBaseConfidence === "derived"
+          ? "Blended from actual invoice spend"
+          : item.perBaseConfidence === "high"
+            ? "Per-unit estimate from pack size + case price"
+            : "Low-confidence estimate (range / catch-weight / soft parse)") +
       (item.perBaseNote ? ` - ${item.perBaseNote}` : "")
     : "Per-unit needs pack normalization - edit the pack in the detail panel";
 
@@ -471,6 +482,11 @@ function UnitPriceCell({ item }: { item: ReviewGroupItem }) {
             <span className="kf-conf-chip kf-conf-chip--override">
               <Check size={10} strokeWidth={2.5} aria-hidden />
               override
+            </span>
+          ) : item.perBaseConfidence === "derived" ? (
+            <span className="kf-conf-chip kf-conf-chip--derived">
+              <Check size={10} strokeWidth={2.5} aria-hidden />
+              from spend
             </span>
           ) : item.perBaseConfidence === "high" ? (
             <span className="kf-conf-chip kf-conf-chip--ok">
