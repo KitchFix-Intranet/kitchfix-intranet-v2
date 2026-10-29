@@ -1353,3 +1353,143 @@
   font-size: var(--sp-t-micro);
   line-height: 1.4;
 }
+
+/* ---------------------------------------------------------------------
+ * Master-ingredient list (Ingredients tab). Each row is a <details>
+ * so the inline drill-in uses the browser's native disclosure, no
+ * extra client state. Flagged rows carry an amber inset left-edge
+ * (same signal as the review card's flagged row).
+ * --------------------------------------------------------------------- */
+.kf-masters__list {
+  list-style: none;
+  margin: var(--sp-sp-3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+}
+.kf-master {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  overflow: hidden;
+}
+.kf-master--flagged {
+  border-color: color-mix(in srgb, var(--sp-warn) 40%, var(--sp-line));
+}
+.kf-master--flagged > .kf-master__row {
+  box-shadow: inset 3px 0 0 0 var(--sp-warn);
+}
+
+.kf-master__row {
+  display: grid;
+  grid-template-columns: minmax(260px, 2.5fr) minmax(140px, 1fr) minmax(160px, 1fr) 70px minmax(100px, 1fr);
+  gap: var(--sp-sp-3);
+  align-items: center;
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  cursor: pointer;
+  list-style: none;
+}
+.kf-master__row::-webkit-details-marker { display: none; }
+.kf-master[open] > .kf-master__row { border-bottom: 1px solid var(--sp-line-soft); }
+.kf-master__row:hover { background: var(--sp-sky-tint); }
+
+.kf-master__name-col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.kf-master__name {
+  color: var(--sp-ink);
+  font-family: var(--sp-ui);
+  font-weight: 700;
+  font-size: var(--sp-t-body);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kf-master__sub {
+  color: var(--sp-muted);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kf-master__price-col,
+.kf-master__spread-col,
+.kf-master__links-col,
+.kf-master__spend-col {
+  font-family: var(--sp-ui);
+  font-variant-numeric: tabular-nums;
+}
+.kf-master__price-col strong { font-weight: 700; }
+.kf-master__spread-col {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kf-master__links-col {
+  text-align: center;
+  color: var(--sp-body);
+}
+.kf-master__spend-col {
+  text-align: right;
+  font-weight: 700;
+  color: var(--sp-ink);
+}
+.kf-master__flag {
+  margin-left: var(--sp-sp-2);
+}
+
+.kf-master__empty {
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  font-size: var(--sp-t-micro);
+  font-style: italic;
+}
+
+.kf-master__inner {
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  background: var(--sp-ground);
+}
+.kf-master__inner-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+}
+.kf-master__inner-table thead th {
+  text-align: left;
+  padding: 6px var(--sp-sp-2);
+  color: var(--sp-muted);
+  font-size: var(--sp-t-label);
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  font-weight: 700;
+  border-bottom: 1px solid var(--sp-line-soft);
+  white-space: nowrap;
+}
+.kf-master__inner-table tbody td {
+  padding: 8px var(--sp-sp-2);
+  border-bottom: 1px solid var(--sp-line-soft);
+  vertical-align: middle;
+  color: var(--sp-ink);
+}
+.kf-master__inner-table tbody tr:last-child td { border-bottom: none; }
+.kf-master__inner-table .kf-table__num { text-align: right; }
+.kf-master__inner-row--outlier td { background: color-mix(in srgb, var(--sp-warn) 6%, transparent); }
+
+@media (max-width: 860px) {
+  .kf-master__row {
+    grid-template-columns: 1fr auto;
+    row-gap: var(--sp-sp-1);
+  }
+  .kf-master__price-col,
+  .kf-master__spread-col,
+  .kf-master__links-col,
+  .kf-master__spend-col {
+    text-align: left;
+  }
+}
