@@ -63,6 +63,14 @@ type Actuals = {
   sum_extended: number;
   sum_quantity: number;
   sum_weight: number;
+  // Prompt B1: paired aggregates for Tier A. sum_billed_units is
+  // Σ(extended / unit_price) over lines with both > 0;
+  // sum_extended_priced is the Σ extended over those SAME lines.
+  // Pairing matters - a line with no unit_price contributes to
+  // sum_extended but cannot contribute to sum_billed_units; using an
+  // unpaired numerator would silently inflate the result.
+  sum_billed_units: number;
+  sum_extended_priced: number;
   billed_unit: string | null;
   unit_consistent: boolean;
   n_lines: number;
@@ -275,6 +283,8 @@ export async function POST(req: NextRequest) {
         sum_extended: number;
         sum_quantity: number;
         sum_weight: number;
+        sum_billed_units: number;
+        sum_extended_priced: number;
         unitCounts: Map<string, number>;
         n_lines: number;
       }
@@ -310,6 +320,8 @@ export async function POST(req: NextRequest) {
             sum_extended: 0,
             sum_quantity: 0,
             sum_weight: 0,
+            sum_billed_units: 0,
+            sum_extended_priced: 0,
             unitCounts: new Map(),
             n_lines: 0,
           };
@@ -330,9 +342,21 @@ export async function POST(req: NextRequest) {
         const ext = Number(o.extended_price ?? 0);
         const qty = Number(o.quantity ?? 0);
         const wt = Number(o.weight_line_value ?? 0);
+        const up = Number(o.unit_price ?? 0);
         if (Number.isFinite(ext) && ext > 0) entry.sum_extended += ext;
         if (Number.isFinite(qty) && qty > 0) entry.sum_quantity += qty;
         if (Number.isFinite(wt) && wt > 0) entry.sum_weight += wt;
+        // Prompt B1 paired aggregates: only count a line's ext into
+        // sum_extended_priced when it ALSO contributes to
+        // sum_billed_units (unit_price > 0 AND ext > 0). Keeps the
+        // Tier A numerator and denominator over the same line set.
+        if (
+          Number.isFinite(ext) && ext > 0 &&
+          Number.isFinite(up) && up > 0
+        ) {
+          entry.sum_billed_units += ext / up;
+          entry.sum_extended_priced += ext;
+        }
         // Count units for modal + consistency.
         const bu = o.billed_unit?.trim() ?? null;
         if (bu) entry.unitCounts.set(bu, (entry.unitCounts.get(bu) ?? 0) + 1);
@@ -359,6 +383,8 @@ export async function POST(req: NextRequest) {
         sum_extended: e.sum_extended,
         sum_quantity: e.sum_quantity,
         sum_weight: e.sum_weight,
+        sum_billed_units: e.sum_billed_units,
+        sum_extended_priced: e.sum_extended_priced,
         billed_unit: modal,
         unit_consistent: unitConsistent,
         n_lines: e.n_lines,

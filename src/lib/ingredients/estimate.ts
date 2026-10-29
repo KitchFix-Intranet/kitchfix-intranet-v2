@@ -57,10 +57,20 @@ export type EstimateInputs = {
   // Blended invoice actuals for this item (Prompt B). Null/zero fields
   // mean "no usable actuals" and every actuals tier is skipped - the
   // engine falls through to today's catalog/billed/pack behavior.
+  //
+  // Prompt B1 paired aggregates (sum_billed_units + sum_extended_priced):
+  // true billed units come from Σ(extended / unit_price) on lines where
+  // both are > 0, not from `quantity`. On catch-weight lines `billed_unit`
+  // is the pricing unit while `quantity` is cases - different denominations.
+  // The two fields MUST stay paired so a line with a null/zero unit_price
+  // can't inflate the numerator (extended counted) without contributing
+  // to the denominator (billed units).
   actuals?: {
     sum_extended: number;
     sum_quantity: number;
     sum_weight: number;
+    sum_billed_units: number;
+    sum_extended_priced: number;
     billed_unit: string | null;
     unit_consistent: boolean;
     n_lines: number;
@@ -285,13 +295,19 @@ export function estimatePerUnit(input: EstimateInputs): EstimateResult {
   // fires BEFORE the catch-weight branch - a lb-billed case is a
   // better signal than any catch-weight fallback.
   // ---------------------------------------------------------------
-  if (actualsUsable && a!.sum_quantity > 0) {
+  if (actualsUsable && a!.sum_billed_units > 0 && a!.sum_extended_priced > 0) {
     const billedUomNorm = normUom(a!.billed_unit);
     const conv = billedUomNorm ? uomFactor(billedUomNorm) : null;
     if (conv && billedUomNorm) {
-      const sumBaseUnits = a!.sum_quantity * conv.factor;
+      // True billed units come from Σ(extended / unit_price), NOT from
+      // `quantity`: on catch-weight lines `billed_unit` is the pricing
+      // unit while `quantity` is cases, so quantity is the wrong
+      // denomination and produces a confidently-wrong $/lb. Numerator
+      // and denominator both come from the same priced-line set so a
+      // line without a unit_price can't inflate the result.
+      const sumBaseUnits = a!.sum_billed_units * conv.factor;
       if (sumBaseUnits > 0) {
-        const perBase = a!.sum_extended / sumBaseUnits;
+        const perBase = a!.sum_extended_priced / sumBaseUnits;
         if (Number.isFinite(perBase) && perBase > 0) {
           const baseLabel = conv.base_uom === "FLOZ" ? "fl oz" : conv.base_uom.toLowerCase();
           const billedLabel = billedUomNorm === "FLOZ" ? "fl oz" : billedUomNorm.toLowerCase();

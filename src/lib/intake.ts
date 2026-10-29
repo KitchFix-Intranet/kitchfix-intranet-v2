@@ -46,7 +46,35 @@ type Line = {
   weight_line_value: number | null;
   catch_weight_marker: string | null;
   needs_review: boolean;
+  // Prompt B1: upstream review classifier reason. Used to release
+  // lines that fail the quantity-based reconcile but reconcile by
+  // weight (catch-weight lines where ext = weight * unit_price). The
+  // column is on pr_v_invoice_lines; previously never read.
+  review_reason: string | null;
 };
+
+// A line flagged `needs_review` upstream is still usable for pricing when
+// its own arithmetic reconciles. The upstream check tests
+// `extended = quantity * unit_price`, which is the WRONG equation for a
+// catch-weight line, where `extended = weight * unit_price`. Measured on
+// live data: 912 of 1,645 ep_qty_up_mismatch lines reconcile exactly by
+// weight. Releasing them is not overriding review - it is applying the
+// right formula. Scoped deliberately to the weight case; the
+// `invoice_over_extracted` reason stays quarantined (it is a
+// document-level flag and overlaps the open duplicate-invoice work).
+function lineSelfReconciles(line: {
+  extended_price: number | null;
+  unit_price: number | null;
+  weight_line_value: number | null;
+  review_reason?: string | null;
+}): boolean {
+  if (line.review_reason !== "ep_qty_up_mismatch") return false;
+  const ext = Number(line.extended_price ?? 0);
+  const up = Number(line.unit_price ?? 0);
+  const wt = Number(line.weight_line_value ?? 0);
+  if (!(ext > 0) || !(up > 0) || !(wt > 0)) return false;
+  return Math.abs(ext - wt * up) <= 0.05;
+}
 
 type VendorItemAgg = {
   vendor_id: string;
@@ -130,7 +158,7 @@ async function pagedLines(
     const { data, error } = await client
       .from("pr_v_invoice_lines")
       .select(
-        "id,account_key,vendor_name,invoice_date,description,quantity,unit,unit_price,extended_price,category,item_number,pack_size,weight_line_value,catch_weight_marker,needs_review"
+        "id,account_key,vendor_name,invoice_date,description,quantity,unit,unit_price,extended_price,category,item_number,pack_size,weight_line_value,catch_weight_marker,needs_review,review_reason"
       )
       .gte("invoice_date", startDate)
       .lte("invoice_date", endDate)
@@ -317,7 +345,7 @@ export async function runIntake(
 
       let excluded_reason: string | null = null;
       if (!verdict.isFood) excluded_reason = "not_food";
-      else if (line.needs_review) excluded_reason = "needs_review";
+      else if (line.needs_review && !lineSelfReconciles(line)) excluded_reason = "needs_review";
 
       item.lineRows.push({
         line_id: line.id,
