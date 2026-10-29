@@ -71,30 +71,12 @@ const BANDS: Record<string, { low: number; high: number }> = {
 // dimensions (unit mismatch - a strong "bad pack" signal). The master
 // is the source of truth; the stored base_uom came out of a pack
 // parse that doesn't know about the ingredient's natural unit.
-const FACTORS: Record<string, number> = {
-  // weight (base LB)
-  LB: 1,
-  OZ: 1 / 16,
-  G: 1 / 453.592,
-  KG: 2.20462,
-  // volume (base FLOZ)
-  FLOZ: 1,
-  L: 33.814,
-  ML: 0.033814,
-  GAL: 128,
-  QT: 32,
-  PT: 16,
-  // count (base EA)
-  EA: 1,
-  DZ: 12,
-  CT: 1,
-  PC: 1,
-};
-const DIM: Record<string, "weight" | "volume" | "count"> = {
-  LB: "weight", OZ: "weight", G: "weight", KG: "weight",
-  FLOZ: "volume", L: "volume", ML: "volume", GAL: "volume", QT: "volume", PT: "volume",
-  EA: "count", DZ: "count", CT: "count", PC: "count",
-};
+// Factor + dimension lookups live in src/lib/ingredients/pack.ts as of
+// Prompt A - one source of truth across the backfill, the estimator,
+// and this display. convertPer uses them with the same (tf / sf)
+// math that was here before the swap; result values are unchanged
+// (verified against the Bacon / Milk / Bottled-water baselines).
+import { DIM_BY_UOM, TO_BASE, normUom } from "@/lib/ingredients/pack";
 
 function convertPer(
   value: number,
@@ -106,10 +88,10 @@ function convertPer(
   const su = storedUom.toUpperCase();
   const tu = targetUom.toUpperCase();
   if (su === tu) return value;
-  const sf = FACTORS[su];
-  const tf = FACTORS[tu];
+  const sf = TO_BASE[su];
+  const tf = TO_BASE[tu];
   if (sf == null || tf == null) return null;
-  if (DIM[su] !== DIM[tu]) return null; // different dimensions - mismatch
+  if (DIM_BY_UOM[su] !== DIM_BY_UOM[tu]) return null; // different dimensions - mismatch
   // $/A = value; convert so we're expressing $/target.
   //   per-$-per-target = value * (tf / sf)
   return value * (tf / sf);
@@ -117,24 +99,23 @@ function convertPer(
 
 // Normalize the master's base_unit text ('lb', 'each', 'gal', 'dozen',
 // anything the schema allows) to one of our canonical uoms so BANDS +
-// convertPer can key by it.
+// convertPer can key by it. Delegates to the shared normUom() for the
+// unit vocabulary; falls back to the few long-form spellings normUom
+// doesn't yet carry ("POUND"/"POUNDS"/"EACH"/"GALLON" etc.).
 function canonicalFromBaseUnit(baseUnit: string | null): string | null {
   if (!baseUnit) return null;
   const u = baseUnit.toUpperCase().trim();
-  if (u === "LB" || u === "LBS" || u === "POUND" || u === "POUNDS") return "LB";
-  if (u === "OZ") return "OZ";
-  if (u === "G" || u === "GRAM") return "G";
-  if (u === "KG") return "KG";
-  if (u === "FLOZ" || u === "FL OZ") return "FLOZ";
-  if (u === "L" || u === "LITER" || u === "LTR") return "L";
-  if (u === "ML") return "ML";
-  if (u === "GAL" || u === "GALLON") return "GAL";
-  if (u === "QT" || u === "QUART") return "QT";
-  if (u === "PT" || u === "PINT") return "PT";
-  if (u === "EA" || u === "EACH") return "EA";
-  if (u === "DZ" || u === "DOZ" || u === "DZN" || u === "DOZEN") return "DZ";
-  if (u === "CT" || u === "COUNT") return "CT";
-  if (u === "PC" || u === "PIECE") return "PC";
+  const n = normUom(u);
+  if (n) return n;
+  if (u === "POUND" || u === "POUNDS") return "LB";
+  if (u === "EACH") return "EA";
+  if (u === "DOZEN") return "DZ";
+  if (u === "GALLON") return "GAL";
+  if (u === "LITER") return "L";
+  if (u === "QUART") return "QT";
+  if (u === "PINT") return "PT";
+  if (u === "COUNT") return "CT";
+  if (u === "PIECE") return "PC";
   return null;
 }
 

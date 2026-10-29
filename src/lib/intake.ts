@@ -79,6 +79,7 @@ type VendorItemAgg = {
     pack_text: string | null;
     needs_review: boolean;
     catch_weight: boolean;
+    weight_line_value: number | null;
     excluded_reason: string | null;
   }[];
 };
@@ -329,6 +330,10 @@ export async function runIntake(
         pack_text: line.pack_size,
         needs_review: line.needs_review,
         catch_weight: isCatchWeight,
+        // Actual billed weight for the line - the ground truth for
+        // catch-weight pricing. Previously collapsed into the
+        // catch_weight boolean and discarded.
+        weight_line_value: line.weight_line_value ?? null,
         excluded_reason,
       });
 
@@ -381,7 +386,11 @@ export async function runIntake(
         description_key: it.description_key,
         name: pickName ?? "",
         pack_text: pickPack,
-        pack_state: "none" as const,
+        // pack_state intentionally NOT written here. The column defaults to
+        // 'none' for new rows; re-writing it on every re-ingest reset
+        // human-overridden rows to 'none', and the pack backfill skips any
+        // row with a non-null pack_override, so those rows could never be
+        // repaired automatically. (Data audit 2026-10-29.)
         billed_unit: pickUnit,
         catch_weight: it.catch_weight,
         is_food: it.is_food ?? false,
@@ -400,6 +409,34 @@ export async function runIntake(
     await batchUpsert(client, "pr_vendor_items", vItemRows, {
       onConflict: "vendor_id,dedup_key",
     });
+
+    // The upsert above refreshes billed_unit from the modal invoice unit,
+    // which would overwrite a value a reviewer set during a pack override.
+    // pack_override carries the human's billed_unit, so restore it for
+    // those rows only. Small set (tens of rows), one read + targeted writes.
+    {
+      const { data: ovr, error: ovrErr } = await client
+        .from("pr_vendor_items")
+        .select("id,billed_unit,pack_override")
+        .not("pack_override", "is", null);
+      if (ovrErr) throw ovrErr;
+      let restored = 0;
+      for (const r of (ovr ?? []) as {
+        id: string;
+        billed_unit: string | null;
+        pack_override: { billed_unit?: string | null } | null;
+      }[]) {
+        const human = r.pack_override?.billed_unit ?? null;
+        if (!human || human === r.billed_unit) continue;
+        const { error: resErr } = await client
+          .from("pr_vendor_items")
+          .update({ billed_unit: human })
+          .eq("id", r.id);
+        if (resErr) throw resErr;
+        restored += 1;
+      }
+      if (restored > 0) logger(`Restored human billed_unit on ${restored} overridden rows`);
+    }
 
     logger("Reading back vendor_item ids...");
     const idByKey = new Map<string, string>();
@@ -447,6 +484,7 @@ export async function runIntake(
       pack_text: string | null;
       needs_review: boolean;
       catch_weight: boolean;
+      weight_line_value: number | null;
       excluded_reason: string | null;
     };
 
@@ -513,6 +551,10 @@ export async function runIntake(
       if (curErr) throw curErr;
       const row = cur as { status: string; duplicate_of_id: string | null };
       if (row.status === "duplicate" && row.duplicate_of_id === u.duplicate_of_id) continue;
+      // Never overwrite a deliberate human disposition. Twin detection is a
+      // heuristic; a reviewer who archived / retailed / marked an item
+      // not-food has already judged it. (Data audit 2026-10-29.)
+      if (["archived", "resale", "not_food", "one_off"].includes(row.status)) continue;
 
       const { error } = await client
         .from("pr_vendor_items")

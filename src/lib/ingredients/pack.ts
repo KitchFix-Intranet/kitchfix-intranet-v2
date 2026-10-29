@@ -39,18 +39,18 @@ const EMPTY: ParsedPack = {
 
 // Dimension and base-unit lookup for every canonical uom this parser
 // may emit. "CT" and "PC" fall through to count/EA (treated as units).
-const DIM_BY_UOM: Record<string, Dim> = {
+export const DIM_BY_UOM: Record<string, Dim> = {
   LB: "weight", OZ: "weight", G: "weight", KG: "weight",
   FLOZ: "volume", L: "volume", ML: "volume", GAL: "volume", QT: "volume", PT: "volume",
   CT: "count", DZ: "count", PC: "count", EA: "count",
 };
-const BASE_BY_DIM: Record<Dim, BaseUom> = {
+export const BASE_BY_DIM: Record<Dim, BaseUom> = {
   weight: "LB",
   volume: "FLOZ",
   count: "EA",
 };
 // Multiply source-unit value by this to get the base unit.
-const TO_BASE: Record<string, number> = {
+export const TO_BASE: Record<string, number> = {
   // weight -> LB
   LB: 1,
   OZ: 1 / 16,
@@ -72,7 +72,7 @@ const TO_BASE: Record<string, number> = {
 
 // Normalize a raw uom token into one of the canonical uoms above, or
 // null if we don't recognize it. Case-insensitive; strips periods.
-function normUom(raw: string | null | undefined): string | null {
+export function normUom(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const u = raw.toUpperCase().replace(/\./g, "").trim();
   if (!u) return null;
