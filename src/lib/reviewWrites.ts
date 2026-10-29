@@ -264,6 +264,68 @@ export async function markResale(
   return { marked, usd: Math.round(totalUsd), errors };
 }
 
+// Flag toggle. Flag is an ORTHOGONAL marker to disposition - a flagged
+// item stays in the queue with its current link_status / status /
+// ingredient_id untouched; it's just marked for a second reviewer's
+// pass (Britt's #1 ask from the Oct 29 review: a hand-off between two
+// reviewers).
+// Writes: flagged + flag_note + flagged_by + flagged_at on each item.
+// Unflag clears flag_note / flagged_by / flagged_at too. Logs
+// pr_events kind='review_flag' or 'review_unflag' per item with the
+// batch aggregate in after.
+export async function setFlag(
+  client: SupabaseClient,
+  args: {
+    itemIds: string[];
+    flagged: boolean;
+    note: string | null;
+    actorEmail: string;
+  }
+): Promise<{ marked: number; errors: string[] }> {
+  const { itemIds, flagged, note, actorEmail } = args;
+  const errors: string[] = [];
+  if (itemIds.length === 0) return { marked: 0, errors };
+
+  const noteTrim = note?.trim() || null;
+  const nowIso = new Date().toISOString();
+  const payload = flagged
+    ? {
+        flagged: true,
+        flag_note: noteTrim,
+        flagged_by: actorEmail,
+        flagged_at: nowIso,
+      }
+    : {
+        flagged: false,
+        flag_note: null,
+        flagged_by: null,
+        flagged_at: null,
+      };
+
+  let marked = 0;
+  for (const id of itemIds) {
+    const { error } = await client
+      .from("pr_vendor_items")
+      .update(payload)
+      .eq("id", id);
+    if (error) {
+      errors.push(`${id}: ${error.message}`);
+      continue;
+    }
+    marked += 1;
+    await client.from("pr_events").insert({
+      entity_type: "vendor_item",
+      entity_id: id,
+      kind: flagged ? "review_flag" : "review_unflag",
+      after: flagged
+        ? { item_ids: itemIds, count: itemIds.length, note: noteTrim }
+        : { item_ids: itemIds, count: itemIds.length },
+      actor: actorEmail,
+    });
+  }
+  return { marked, errors };
+}
+
 // Mirror of markResale for the Archive disposition. Archive = an IS-food
 // item that's a one-off or irrelevant purchase - not a recipe ingredient,
 // not retail, not "not food." The overview views only count status in

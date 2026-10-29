@@ -7,14 +7,16 @@
 // no PostgREST truncation ever hits this page.
 
 import Link from "next/link";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Flag } from "lucide-react";
 import { serviceClient } from "@/lib/supabase/service";
-import { fmtCount, fmtDate, fmtDuration, fmtStatus, fmtUsd, fmtUsdLong } from "@/lib/fmt";
+import { fmtCount, fmtDate, fmtDuration, fmtStatus, fmtUsd, fmtUsdLong, timeAgo } from "@/lib/fmt";
 import { IdentBand } from "@/components/ui/IdentBand";
 import { CountUp } from "@/components/ui/CountUp";
 import { Tabs } from "./Tabs";
 import { CoverageMeters } from "./CoverageMeters";
+import { UnflagButton } from "./UnflagButton";
 import "./ingredients.css";
+import "./review.css";
 
 type IntakeRun = {
   id: string;
@@ -42,15 +44,26 @@ type Totals = {
 
 type MeterRow = { name: string; food: number; linked: number };
 
+type FlaggedItem = {
+  id: string;
+  name: string;
+  vendor: string;
+  usd12m: number;
+  flagNote: string | null;
+  flaggedBy: string | null;
+  flaggedAt: string | null;
+};
+
 async function loadOverview(): Promise<{
   totals: Totals;
   lastRun: IntakeRun | null;
   ingredientsNamed: number;
   bySite: MeterRow[];
   topVendors: MeterRow[];
+  flagged: FlaggedItem[];
 }> {
   const client = serviceClient();
-  const [totalsRes, byAcctRes, byVendorRes, runsRes, ingredientsRes, needsReviewLinesRes] =
+  const [totalsRes, byAcctRes, byVendorRes, runsRes, ingredientsRes, needsReviewLinesRes, flaggedRes, vendorsRes] =
     await Promise.all([
       client.from("pr_v_overview_totals").select("*").single(),
       client
@@ -69,6 +82,15 @@ async function loadOverview(): Promise<{
         .limit(1),
       client.from("pr_ingredients").select("id", { count: "exact", head: true }).eq("status", "active"),
       client.from("pr_price_observations").select("id", { count: "exact", head: true }).eq("needs_review", true),
+      // Flagged items (uses the partial index idx_pr_vendor_items_flagged).
+      // Dollar-ordered so the biggest ones surface first.
+      client
+        .from("pr_vendor_items")
+        .select("id,vendor_id,name,usd_12m,flag_note,flagged_by,flagged_at")
+        .eq("flagged", true)
+        .order("usd_12m", { ascending: false, nullsFirst: false })
+        .limit(200),
+      client.from("pr_vendors").select("id,name"),
     ]);
   if (totalsRes.error) throw totalsRes.error;
   if (byAcctRes.error) throw byAcctRes.error;
@@ -100,12 +122,34 @@ async function loadOverview(): Promise<{
     return { name: row.vendor_name, food: Number(row.food ?? 0), linked: Number(row.linked ?? 0) };
   });
 
+  const vendorNameById = new Map(
+    ((vendorsRes.data ?? []) as Array<{ id: string; name: string }>).map((v) => [v.id, v.name])
+  );
+  const flagged: FlaggedItem[] = ((flaggedRes.data ?? []) as Array<{
+    id: string;
+    vendor_id: string;
+    name: string;
+    usd_12m: number | null;
+    flag_note: string | null;
+    flagged_by: string | null;
+    flagged_at: string | null;
+  }>).map((r) => ({
+    id: r.id,
+    name: r.name,
+    vendor: vendorNameById.get(r.vendor_id) ?? r.vendor_id,
+    usd12m: Number(r.usd_12m ?? 0),
+    flagNote: r.flag_note,
+    flaggedBy: r.flagged_by,
+    flaggedAt: r.flagged_at,
+  }));
+
   return {
     totals,
     lastRun: ((runsRes.data ?? [])[0] ?? null) as IntakeRun | null,
     ingredientsNamed: ingredientsRes.count ?? 0,
     bySite,
     topVendors,
+    flagged,
   };
 }
 
@@ -135,7 +179,7 @@ export async function Overview() {
       </div>
     );
   }
-  const { totals, lastRun, ingredientsNamed, bySite, topVendors } = overview;
+  const { totals, lastRun, ingredientsNamed, bySite, topVendors, flagged } = overview;
   if (lastRun?.status === "running") bandStatus = "running";
   else if (lastRun?.status === "failed") bandStatus = "failed";
 
@@ -189,6 +233,59 @@ export async function Overview() {
       </section>
 
       <Tabs active="overview" />
+
+      {flagged.length > 0 ? (
+        <section className="kf-flagged" aria-labelledby="flagged-head">
+          <header className="kf-flagged__head">
+            <h3 id="flagged-head">
+              <Flag size={16} strokeWidth={1.75} aria-hidden /> Flagged for review
+            </h3>
+            <span className="kf-flagged__count">
+              <strong>{fmtCount(flagged.length)}</strong> item{flagged.length === 1 ? "" : "s"}
+              {" "}&middot;{" "}
+              <strong>{fmtUsd(flagged.reduce((s, f) => s + f.usd12m, 0))}</strong>
+              {" "}annual spend
+            </span>
+          </header>
+          <ul className="kf-flagged__list">
+            {flagged.map((f) => (
+              <li key={f.id} className="kf-flagged__row">
+                <div className="kf-flagged__primary">
+                  <strong className="kf-flagged__name">{f.name}</strong>
+                  <span className="kf-flagged__vendor">{f.vendor}</span>
+                  {f.flagNote ? (
+                    <span className="kf-flagged__note">&ldquo;{f.flagNote}&rdquo;</span>
+                  ) : null}
+                </div>
+                <div className="kf-flagged__meta">
+                  <span className="kf-flagged__usd">{fmtUsd(f.usd12m)}</span>
+                  <span className="kf-flagged__by">
+                    {f.flaggedBy ?? "-"}
+                    {f.flaggedAt ? (
+                      <span className="kf-flagged__when" title={fmtDate(f.flaggedAt, "time")}>
+                        {" "}&middot; {timeAgo(f.flaggedAt)}
+                      </span>
+                    ) : null}
+                  </span>
+                  <Link
+                    href={`/stockpot/ingredients/vendor-items?drawer=${f.id}`}
+                    className="kf-btn kf-btn--line kf-btn--sm"
+                    title="Open the item in the vendor-items drawer"
+                  >
+                    Open
+                  </Link>
+                  <UnflagButton itemId={f.id} />
+                </div>
+              </li>
+            ))}
+          </ul>
+          <p className="kf-flagged__hint">
+            Resolve by unflagging. Flagging is orthogonal to disposition - these items
+            keep their current state (proposed / confirmed / resale / archive) until you
+            act on them separately.
+          </p>
+        </section>
+      ) : null}
 
       <section className="kf-tiles kf-reveal" aria-label="Headline numbers" style={{ ["--i" as never]: 2 }}>
         <article className="kf-tile kf-tile--lead">

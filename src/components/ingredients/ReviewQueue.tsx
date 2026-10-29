@@ -39,6 +39,10 @@ type ProposedItem = {
   lines_12m: number | null;
   accounts: string[] | null;
   last_seen: string | null;
+  flagged: boolean | null;
+  flag_note: string | null;
+  flagged_by: string | null;
+  flagged_at: string | null;
   price_estimate: {
     per_base?: number | null;
     base_uom?: string | null;
@@ -100,7 +104,7 @@ async function loadReview() {
     const { data, error } = await client
       .from("pr_vendor_items")
       .select(
-        "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_qty,pack_size,pack_uom,pack_state,pack_override,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen,price_estimate"
+        "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_qty,pack_size,pack_uom,pack_state,pack_override,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen,flagged,flag_note,flagged_by,flagged_at,price_estimate"
       )
       .eq("link_status", "proposed")
       .in("status", ["active", "resale"])
@@ -312,6 +316,10 @@ async function loadReview() {
           perBaseConfidence,
           perBaseNote: pe?.note ?? null,
           caseSource: (pe?.case_price_source as "catalog" | "billed" | "catch_weight" | "catalog_lb" | "override" | null) ?? null,
+          flagged: it.flagged === true,
+          flagNote: it.flag_note ?? null,
+          flaggedBy: it.flagged_by ?? null,
+          flaggedAt: it.flagged_at ?? null,
         });
       }
       groups.set(key, g);
@@ -401,6 +409,10 @@ async function loadReview() {
           perBaseConfidence,
           perBaseNote: pe?.note ?? null,
           caseSource: (pe?.case_price_source as "catalog" | "billed" | "catch_weight" | "catalog_lb" | "override" | null) ?? null,
+          flagged: it.flagged === true,
+          flagNote: it.flag_note ?? null,
+          flaggedBy: it.flagged_by ?? null,
+          flaggedAt: it.flagged_at ?? null,
         });
       }
       groups.set(key, g);

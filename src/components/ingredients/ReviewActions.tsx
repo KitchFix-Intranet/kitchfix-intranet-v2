@@ -9,7 +9,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, X as XIcon, Plus, Scissors, Ban, Search, ShoppingBag, Archive, Loader2 } from "lucide-react";
+import { Check, X as XIcon, Plus, Scissors, Ban, Search, ShoppingBag, Archive, Loader2, Flag } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { SUPER_CATEGORIES, categoryForParent, type SuperCategory } from "@/lib/ingredients/categories";
@@ -54,7 +54,7 @@ type Props = {
   onLeaveStart?: (itemIds: string[]) => void;
 };
 
-type Op = null | "confirming" | "relinking" | "creating" | "notfood" | "resale" | "archived" | "keepsep";
+type Op = null | "confirming" | "relinking" | "creating" | "notfood" | "resale" | "archived" | "keepsep" | "flag";
 
 async function postJson(url: string, body: unknown): Promise<{ ok: boolean; status: number; data: unknown }> {
   const res = await fetch(url, {
@@ -297,6 +297,35 @@ export function ReviewActions({
     router.refresh();
   }
 
+  // Flag. Orthogonal to disposition - doesn't move anything, just
+  // stamps flagged/flag_note/flagged_by/flagged_at. A follow-up
+  // reviewer sees these on the Overview flagged panel. Unflag/resolve
+  // happens from that panel. Prompts for an optional short note.
+  async function flagChecked() {
+    if (op || noneChecked) return;
+    // eslint-disable-next-line no-alert
+    const note = window.prompt(
+      `Flag ${checkedCount} item${checkedCount === 1 ? "" : "s"} for a second look. Optional note:`,
+      ""
+    );
+    if (note === null) return; // user cancelled
+    setOp("flag");
+    const r = await postJson("/api/review/flag", {
+      itemIds: checkedIds,
+      flagged: true,
+      note: note.trim() || null,
+    });
+    if (!r.ok) {
+      toast(errMsg(r.data, `Flag failed (${r.status})`), { tone: "block" });
+      setOp(null);
+      return;
+    }
+    toast(`Flagged ${fmtCount(checkedCount)} item${checkedCount === 1 ? "" : "s"} for review`);
+    setOp(null);
+    setLastDone(Date.now());
+    router.refresh();
+  }
+
   async function keepSeparate() {
     if (op || noneChecked) return;
     setOp("keepsep");
@@ -379,6 +408,17 @@ export function ReviewActions({
         >
           <Scissors size={14} strokeWidth={1.5} />
           <span>{op === "keepsep" ? "Saving..." : "Keep separate"}</span>
+        </button>
+
+        <button
+          type="button"
+          className={`kf-btn kf-btn--ghost kf-btn--sm${op === "flag" ? " is-busy" : ""}`}
+          disabled={op !== null || noneChecked}
+          onClick={flagChecked}
+          title="Mark for a second look (optional note); stays in the queue, shows on the Overview flagged panel"
+        >
+          <Flag size={14} strokeWidth={1.5} />
+          <span>{op === "flag" ? "Saving..." : "Flag"}</span>
         </button>
 
         <button

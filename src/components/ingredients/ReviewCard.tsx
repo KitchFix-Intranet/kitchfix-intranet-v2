@@ -17,7 +17,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, Pencil, Scale } from "lucide-react";
+import { Check, Flag, Pencil, Scale } from "lucide-react";
 import { fmtCount, fmtDate, fmtUsd, fmtUsdLong } from "@/lib/fmt";
 import { ReviewActions } from "./ReviewActions";
 import { DetailPanel, type DetailPanelOpen } from "./DetailPanel";
@@ -65,6 +65,13 @@ export type ReviewGroupItem = {
   perBaseConfidence: "high" | "low" | "override" | null;
   perBaseNote: string | null;
   caseSource: "catalog" | "billed" | "catch_weight" | "catalog_lb" | "override" | null;
+  // Flag marker (orthogonal to disposition; the item stays in the
+  // queue, this just surfaces on the row + the Overview flagged
+  // panel). Phase 1 of the Oct 29 Britt review hand-off.
+  flagged: boolean;
+  flagNote: string | null;
+  flaggedBy: string | null;
+  flaggedAt: string | null;
 };
 
 export type ReviewCardIngredient = {
@@ -279,7 +286,8 @@ export function ReviewCard({
               key={it.id}
               className={
                 (checked[it.id] ? "kf-rvc__row kf-rvc__row--on" : "kf-rvc__row") +
-                (leaving && !leavingAll && leaving.ids.has(it.id) ? " kf-rvc__row--leaving" : "")
+                (leaving && !leavingAll && leaving.ids.has(it.id) ? " kf-rvc__row--leaving" : "") +
+                (it.flagged ? " kf-rvc__row--flagged" : "")
               }
             >
               <td className="kf-rvc__check-col">
@@ -313,7 +321,27 @@ export function ReviewCard({
                       <Scale size={14} strokeWidth={1.5} />
                     </span>
                   ) : null}
+                  {it.flagged ? (
+                    <span
+                      className="kf-flag kf-flag--warn kf-flag--flagged"
+                      title={
+                        (it.flagNote ? `Flagged: ${it.flagNote}` : "Flagged for review") +
+                        (it.flaggedBy ? ` - ${it.flaggedBy}` : "")
+                      }
+                    >
+                      <Flag size={14} strokeWidth={1.5} />
+                    </span>
+                  ) : null}
                 </div>
+                {it.flagged && it.flagNote ? (
+                  <div className="kf-rvc__flag-note" title={it.flaggedBy ?? ""}>
+                    Flagged{it.flaggedBy ? ` by ${it.flaggedBy}` : ""}: &ldquo;{it.flagNote}&rdquo;
+                  </div>
+                ) : it.flagged ? (
+                  <div className="kf-rvc__flag-note">
+                    Flagged{it.flaggedBy ? ` by ${it.flaggedBy}` : ""}
+                  </div>
+                ) : null}
                 {it.displayNameSource === "catalog" && it.vendorOcrName !== it.displayName ? (
                   // Verbatim OCR identifier below the clean name - never
                   // Title-cased, always de-emphasized.
