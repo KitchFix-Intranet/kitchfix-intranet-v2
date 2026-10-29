@@ -380,6 +380,33 @@
 }
 .kf-flag--flagged { color: var(--sp-warn); }
 
+/* Per-row inline flag/unflag toggle (one per item row in the review
+   queue). Quiet + muted when the item is unflagged so a 24-row group
+   doesn't read as noisy; amber when flagged. Click flags (optional
+   note) or clears. Same /api/review/flag route as the group Flag
+   button. */
+.kf-rvc__flagbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  margin-left: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--sp-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  line-height: 0;
+  opacity: 0.45;
+  vertical-align: middle;
+  transition: opacity 120ms ease, color 120ms ease, background 120ms ease;
+}
+.kf-rvc__flagbtn:hover { opacity: 1; color: var(--sp-warn); background: var(--sp-warn-bg); }
+.kf-rvc__flagbtn:focus-visible { outline: 2px solid var(--sp-warn-strong); outline-offset: 1px; opacity: 1; }
+.kf-rvc__flagbtn--on { color: var(--sp-warn); opacity: 1; }
+.kf-rvc__flagbtn--on:hover { color: var(--sp-warn-strong); }
+.kf-rvc__flagbtn.is-busy { opacity: 0.4; cursor: default; }
+
 .kf-rvc__btns {
   display: flex;
   gap: var(--sp-sp-2);

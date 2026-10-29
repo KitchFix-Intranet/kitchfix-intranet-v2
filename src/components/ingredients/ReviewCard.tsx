@@ -17,10 +17,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, Flag, Pencil, Scale } from "lucide-react";
+import { Check, Pencil, Scale } from "lucide-react";
 import { fmtCount, fmtDate, fmtUsd, fmtUsdLong } from "@/lib/fmt";
 import { ReviewActions } from "./ReviewActions";
 import { DetailPanel, type DetailPanelOpen } from "./DetailPanel";
+import { RowFlagToggle } from "./RowFlagToggle";
 
 export type ReviewGroupItem = {
   id: string;
@@ -321,17 +322,12 @@ export function ReviewCard({
                       <Scale size={14} strokeWidth={1.5} />
                     </span>
                   ) : null}
-                  {it.flagged ? (
-                    <span
-                      className="kf-flag kf-flag--warn kf-flag--flagged"
-                      title={
-                        (it.flagNote ? `Flagged: ${it.flagNote}` : "Flagged for review") +
-                        (it.flaggedBy ? ` - ${it.flaggedBy}` : "")
-                      }
-                    >
-                      <Flag size={14} strokeWidth={1.5} />
-                    </span>
-                  ) : null}
+                  <RowFlagToggle
+                    itemId={it.id}
+                    flagged={it.flagged}
+                    flagNote={it.flagNote}
+                    flaggedBy={it.flaggedBy}
+                  />
                 </div>
                 {it.flagged && it.flagNote ? (
                   <div className="kf-rvc__flag-note" title={it.flaggedBy ?? ""}>
