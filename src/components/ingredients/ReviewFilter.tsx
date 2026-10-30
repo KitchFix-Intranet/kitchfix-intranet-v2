@@ -26,8 +26,8 @@ export type ReviewFilterGroup = {
   kind: "existing" | "new";
   ingredientName: string | null;
   ingredientParent: string | null;
-  // Super-category (null = "Needs category") and resale flag feed the
-  // category chips + the resale / needs-category quick filters.
+  // Super-category (null = "Uncategorized") and resale flag feed the
+  // category chips + the resale / uncategorized quick filters.
   category: string | null;
   resale: boolean;
   proposedName: string | null;
@@ -94,7 +94,7 @@ export function ReviewFilter({
 
   // Per-super counts over the FULL group list (not the search-filtered
   // one), so the chip label always shows the total available under that
-  // super. "All" matches every group; "Needs category" counts groups
+  // super. "All" matches every group; "Uncategorized" counts groups
   // with category=null (regardless of resale); "Resale" counts groups
   // with resale=true.
   const perSuperCount = useMemo(() => {
@@ -291,9 +291,9 @@ export function ReviewFilter({
             aria-pressed={kindFilter === "needs"}
             className={`kf-chip kf-chip--warn${kindFilter === "needs" ? " kf-chip--on" : ""}`}
             onClick={() => setKindFilter((v) => (v === "needs" ? "all" : "needs"))}
-            title="Groups whose ingredient has no super-category yet"
+            title="Groups with no committed category yet - mostly new proposals. Creating the ingredient assigns its category automatically; it then drops out of this filter."
           >
-            Needs category <span className="kf-chip__count">{fmtCount(needsCount)}</span>
+            Uncategorized <span className="kf-chip__count">{fmtCount(needsCount)}</span>
           </button>
           <button
             type="button"
