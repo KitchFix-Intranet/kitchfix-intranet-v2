@@ -312,10 +312,14 @@
 }
 
 /* Actions */
+/* Deliberately NOT sticky. `position: sticky; bottom: 0` clamps to the
+ * top of the containing block whenever the card's natural bar position
+ * is below the fold, which rendered the action bar ABOVE its own rows
+ * on 169 of 171 cards. Reverted 2026-10-30. If "Confirm stays in reach
+ * on a long group" is wanted again, it needs a different mechanism -
+ * a viewport-fixed bar bound to the card in view, not card-scoped
+ * sticky. */
 .kf-rvc__actions {
-  position: sticky;
-  bottom: 0;
-  z-index: 1;
   padding: var(--sp-sp-3) var(--sp-sp-4);
   border-top: 1px solid var(--sp-line-soft);
   background: var(--sp-sky-soft);
