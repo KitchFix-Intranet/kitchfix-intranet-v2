@@ -5,7 +5,7 @@
 // and step-boundary logic.
 
 import { NextResponse } from "next/server";
-import { requireOwnerApi } from "@/lib/gate";
+import { requireAppAccessApi } from "@/lib/gate";
 import { loadModule } from "@/lib/academy/module";
 
 export const dynamic = "force-dynamic";
@@ -14,7 +14,7 @@ export async function GET(
   _request: Request,
   ctx: { params: Promise<{ requirementId: string }> }
 ) {
-  const g = await requireOwnerApi();
+  const g = await requireAppAccessApi("/academy/read");
   if (g instanceof Response) return g;
 
   const params = await ctx.params;

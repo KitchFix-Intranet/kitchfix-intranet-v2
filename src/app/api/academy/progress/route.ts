@@ -13,7 +13,7 @@
 //   - last_seen_at set to NOW on every request.
 
 import { NextRequest, NextResponse } from "next/server";
-import { requireOwnerApi } from "@/lib/gate";
+import { requireAppAccessApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
 import { resolveAcademyIdentity } from "@/lib/academy/identity";
 import { UUID_RE } from "@/lib/academy/module";
@@ -27,7 +27,7 @@ interface ProgressBody {
 }
 
 export async function POST(request: NextRequest) {
-  const g = await requireOwnerApi();
+  const g = await requireAppAccessApi("/academy/read");
   if (g instanceof Response) return g;
 
   let body: ProgressBody;

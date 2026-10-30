@@ -3,13 +3,13 @@
 // Thin wrapper over loadRecords(email). See src/lib/academy/records.ts.
 
 import { NextResponse } from "next/server";
-import { requireOwnerApi } from "@/lib/gate";
+import { requireAppAccessApi } from "@/lib/gate";
 import { loadRecords } from "@/lib/academy/records";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const g = await requireOwnerApi();
+  const g = await requireAppAccessApi("/academy");
   if (g instanceof Response) return g;
 
   const result = await loadRecords(g.email);

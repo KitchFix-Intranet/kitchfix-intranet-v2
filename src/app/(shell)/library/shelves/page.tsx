@@ -10,7 +10,7 @@
 //
 // READ-ONLY. No write path is reachable from here.
 
-import { requireOwnerPage } from "@/lib/gate";
+import { requireAppAccess } from "@/lib/gate";
 import { loadRoom } from "@/lib/academy/room"; // only to carry the viewer's name on the band
 import { loadLibrary } from "@/lib/academy/library";
 import { IdentBand } from "@/components/ui/IdentBand";
@@ -24,7 +24,7 @@ function firstName(n: string | null | undefined): string | null {
 }
 
 export default async function Page() {
-  const { email } = await requireOwnerPage();
+  const { email } = await requireAppAccess("/library/shelves");
   const result = await loadLibrary(email);
 
   if (!result.ok) {
