@@ -11,6 +11,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownAZ, ArrowDownWideNarrow, DollarSign, Flame, Search, X } from "lucide-react";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { SUPER_CATEGORIES } from "@/lib/ingredients/categories";
+import { RowSendBackButton } from "./RowSendBackButton";
 
 export type MasterLinkedItem = {
   id: string;
@@ -447,12 +448,21 @@ function MasterCard({ row }: { row: MasterRow }) {
                     </td>
                     <td className="kf-table__num">{fmtUsd(li.usd12m)}</td>
                     <td className="kf-table__num">
-                      <a
-                        href={`/stockpot/ingredients/vendor-items?drawer=${li.id}`}
-                        className="kf-btn kf-btn--line kf-btn--sm"
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          gap: "var(--sp-sp-2)",
+                          justifyContent: "flex-end",
+                        }}
                       >
-                        Open
-                      </a>
+                        <RowSendBackButton itemId={li.id} itemName={li.name} />
+                        <a
+                          href={`/stockpot/ingredients/vendor-items?drawer=${li.id}`}
+                          className="kf-btn kf-btn--line kf-btn--sm"
+                        >
+                          Open
+                        </a>
+                      </span>
                     </td>
                   </tr>
                 );
