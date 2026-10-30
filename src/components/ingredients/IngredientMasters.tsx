@@ -295,8 +295,8 @@ export async function IngredientMasters() {
         <h2>Ingredients</h2>
         <p className="kf-ing__kicker">
           The master list, building as the review progresses. Each row is one named
-          ingredient; the per-unit column blends every linked vendor item&rsquo;s
-          <code>price_estimate.per_base</code>. Rows with a wide spread or an out-of-band
+          ingredient; the per-unit column blends the per-unit price of every linked vendor
+          item. Rows with a wide spread or an out-of-band
           average are flagged - that&rsquo;s usually a bad pack hiding on one of the linked
           items.
         </p>

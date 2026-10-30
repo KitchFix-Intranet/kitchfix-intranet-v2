@@ -26,6 +26,9 @@
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+  overscroll-behavior: contain;   /* wheel at the end of the panel must not scroll the page */
+  scrollbar-width: thin;
+  scrollbar-color: var(--sp-line) transparent;
   animation: kf-slide-in var(--sp-slow) var(--sp-ease) both;
 }
 .kf-drawer.is-closing { animation: kf-slide-out var(--sp-base) var(--sp-ease-io) both; }
@@ -48,10 +51,11 @@
 
 /* Head */
 .kf-drawer__head {
-  padding: var(--sp-sp-5) var(--sp-sp-5) var(--sp-sp-3);
+  padding: var(--sp-sp-5) calc(44px + var(--sp-sp-5)) var(--sp-sp-3) var(--sp-sp-5);  /* right: clear the pinned X */
   border-bottom: 1px solid var(--sp-line);
   position: sticky;
   top: 0;
+  z-index: 1;
   background: var(--sp-card);
 }
 .kf-drawer__name {
@@ -72,16 +76,24 @@
   flex-wrap: wrap;
   gap: var(--sp-sp-1);
 }
+/* Sticky inside the scrolling <aside>, not absolute to it: the aside IS
+ * the scroll container, so an absolute X scrolls off with the content
+ * (measured y = -688 at the pack-override section). The negative bottom
+ * margin lets the sticky head still start at the top. z-index wins over
+ * the sticky head, which paints later in DOM order. Fixes DrawerFrame
+ * and DetailPanel in one rule - both render this class first. */
 .kf-drawer__close {
-  position: absolute;
+  position: sticky;
   top: var(--sp-sp-3);
-  right: var(--sp-sp-3);
+  align-self: flex-end;
+  margin: var(--sp-sp-3) var(--sp-sp-3) calc(-44px - var(--sp-sp-3)) 0;
+  z-index: 2;
   width: 44px;
   height: 44px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: transparent;
+  background: var(--sp-card);
   color: var(--sp-ink);
   border: 1px solid var(--sp-line);
   border-radius: var(--sp-r-sm);

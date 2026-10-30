@@ -111,6 +111,9 @@ export function DetailPanel({
 
   useEffect(() => {
     closeBtnRef.current?.focus();
+    // Lock the page behind the modal panel; restore whatever it was.
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -134,7 +137,10 @@ export function DetailPanel({
       }
     };
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      document.removeEventListener("keydown", onKey);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -778,7 +784,7 @@ function IngredientBlock({
           />
         </label>
         <div className="kf-dpn__hint">
-          Old name is kept as an alias (<code>kind=&apos;rename&apos;</code>) so linked items stay linked.
+          The old name is kept as an alias, so linked items stay linked.
         </div>
         <div className="kf-dpn__btns">
           <button
@@ -875,14 +881,14 @@ function IngredientBlock({
           busy={mergeBusy}
         />
         <div className="kf-dpn__hint">
-          Items + active golden links move to the survivor. &ldquo;{ingredient.name}&rdquo; stays queryable
-          with <code>status=&apos;merged&apos;</code> and its name becomes an alias so matcher runs
-          auto-route the old name. Undoable from Recent decisions.
+          Its items and confirmed links move to the ingredient you choose. &ldquo;{ingredient.name}&rdquo;
+          is kept as a merged record and its name becomes an alias, so the matcher routes the old
+          name here automatically. Undoable from Recent decisions.
         </div>
         <div className="kf-dpn__btns">
           <button
             type="button"
-            className={`kf-btn kf-btn--line kf-btn--sm${mergeBusy ? " is-busy" : ""}`}
+            className={`kf-btn kf-btn--primary kf-btn--sm${mergeBusy ? " is-busy" : ""}`}
             disabled={mergeBusy || !mergeTarget}
             onClick={doMerge}
           >
@@ -955,8 +961,10 @@ function PackOverrideBlock({
   const [qtyStr, setQtyStr] = useState<string>("");
   const [sizeStr, setSizeStr] = useState<string>("");
   const [uom, setUom] = useState<string>("LB");
+  // Display seed only: two decimals, like every other money field. What
+  // the user types is what saves - this does not touch the write.
   const [perLbStr, setPerLbStr] = useState<string>(
-    item.perBase != null && item.catchWeight ? String(item.perBase) : ""
+    item.perBase != null && item.catchWeight ? Number(item.perBase).toFixed(2) : ""
   );
   const [billedUnit, setBilledUnit] = useState<string>(item.billedUnit ?? "");
   const [note, setNote] = useState<string>("");
@@ -1061,8 +1069,8 @@ function PackOverrideBlock({
       <header className="kf-drawer__block-head">
         <h4>Pack size (override)</h4>
         <small>
-          structured override: qty + size + uom OR $/lb for catch-weight. Writes
-          <code> pack_state=&apos;override&apos;</code> and propagates to same-SKU twins.
+          Set the pack by hand: count, size and unit - or $/lb for catch-weight. Marks the pack as
+          human-set and copies it to twins with the same item number.
         </small>
       </header>
 

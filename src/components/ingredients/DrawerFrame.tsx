@@ -41,6 +41,9 @@ export function DrawerFrame({ closeHref, labelledBy, children }: Props) {
 
   useEffect(() => {
     closeBtnRef.current?.focus();
+    // Lock the page behind the modal panel; restore whatever it was.
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -64,7 +67,10 @@ export function DrawerFrame({ closeHref, labelledBy, children }: Props) {
       }
     };
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      document.removeEventListener("keydown", onKey);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

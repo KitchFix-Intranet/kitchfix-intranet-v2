@@ -287,7 +287,7 @@ export function ReviewCard({
           {/* Unit price: 190 so the value and its confidence chip sit on
               ONE line. Measured - at 150 the chip wrapped and every row
               cost a third line (75px instead of 57-65px). */}
-          <col style={{ width: 190 }} />
+          <col style={{ width: 200 }} />
           <col style={{ width: 96 }} />
           <col style={{ width: 60 }} />
           <col style={{ width: 120 }} />

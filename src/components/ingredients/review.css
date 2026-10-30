@@ -1494,9 +1494,12 @@
   box-shadow: inset 3px 0 0 0 var(--sp-warn);
 }
 
+/* Shared column template for the header legend and every row, so the
+ * labels sit over their values. First track is the chevron. */
+.kf-masters__head,
 .kf-master__row {
   display: grid;
-  grid-template-columns: minmax(260px, 2.5fr) minmax(140px, 1fr) minmax(160px, 1fr) 70px minmax(100px, 1fr);
+  grid-template-columns: 20px minmax(240px, 2.5fr) minmax(140px, 1fr) minmax(160px, 1fr) 70px minmax(100px, 1fr);
   gap: var(--sp-sp-3);
   align-items: center;
   padding: var(--sp-sp-3) var(--sp-sp-4);
@@ -1506,6 +1509,32 @@
 .kf-master__row::-webkit-details-marker { display: none; }
 .kf-master[open] > .kf-master__row { border-bottom: 1px solid var(--sp-line-soft); }
 .kf-master__row:hover { background: var(--sp-sky-tint); }
+
+.kf-masters__head {
+  padding-top: 0;
+  padding-bottom: var(--sp-sp-1);
+  cursor: default;
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: 12.5px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--sp-muted);
+}
+.kf-masters__head-num { text-align: right; }
+.kf-master__chev {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--sp-muted);
+  transition: transform var(--sp-fast) var(--sp-ease);
+}
+.kf-master[open] > .kf-master__row .kf-master__chev { transform: rotate(180deg); }
+/* Open motion: the drill-in fades and settles instead of popping. */
+.kf-master[open] > .kf-master__inner { animation: kf-rvc-fade var(--sp-base) var(--sp-ease) both; }
+@media (prefers-reduced-motion: reduce) {
+  .kf-master[open] > .kf-master__inner { animation: none; }
+}
 
 .kf-master__name-col {
   display: flex;
@@ -1539,13 +1568,16 @@
   font-variant-numeric: tabular-nums;
 }
 .kf-master__price-col strong { font-weight: 700; }
+.kf-master__price-col { text-align: right; }
 .kf-master__spread-col {
   display: inline-flex;
   flex-direction: column;
+  align-items: flex-end;
   gap: 2px;
+  text-align: right;
 }
 .kf-master__links-col {
-  text-align: center;
+  text-align: right;
   color: var(--sp-body);
 }
 .kf-master__spend-col {
@@ -1595,8 +1627,9 @@
 .kf-master__inner-row--outlier td { background: color-mix(in srgb, var(--sp-warn) 6%, transparent); }
 
 @media (max-width: 860px) {
+  .kf-masters__head { display: none; }
   .kf-master__row {
-    grid-template-columns: 1fr auto;
+    grid-template-columns: 20px 1fr auto;
     row-gap: var(--sp-sp-1);
   }
   .kf-master__price-col,
@@ -1605,4 +1638,5 @@
   .kf-master__spend-col {
     text-align: left;
   }
+  .kf-master__spread-col { align-items: flex-start; }
 }

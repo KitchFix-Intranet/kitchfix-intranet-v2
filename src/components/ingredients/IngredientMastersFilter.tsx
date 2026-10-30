@@ -8,7 +8,7 @@
 // vendor-items drawer so he can jump to the bad one.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownAZ, ArrowDownWideNarrow, DollarSign, Flame, Search, X } from "lucide-react";
+import { ArrowDownAZ, ArrowDownWideNarrow, ChevronDown, DollarSign, Flame, Search, X } from "lucide-react";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { SUPER_CATEGORIES } from "@/lib/ingredients/categories";
 import { RowSendBackButton } from "./RowSendBackButton";
@@ -256,6 +256,8 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
           </button>
         </div>
 
+        <span className="kf-chips__sep" aria-hidden />
+
         <div className="kf-review__toolbar-group kf-review__cats" role="radiogroup" aria-label="Category filter">
           <button
             type="button"
@@ -339,13 +341,23 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
           </button>
         </div>
       ) : (
-        <ul className="kf-masters__list" aria-label="Masters">
-          {filtered.map((row) => (
-            <li key={row.id}>
-              <MasterCard row={row} />
-            </li>
-          ))}
-        </ul>
+        <>
+          <div className="kf-masters__head" aria-hidden>
+            <span className="kf-masters__head-chev" />
+            <span>Ingredient</span>
+            <span className="kf-masters__head-num">Per-unit</span>
+            <span className="kf-masters__head-num">Spread</span>
+            <span className="kf-masters__head-num">Links</span>
+            <span className="kf-masters__head-num">12-mo spend</span>
+          </div>
+          <ul className="kf-masters__list" aria-label="Masters">
+            {filtered.map((row) => (
+              <li key={row.id}>
+                <MasterCard row={row} />
+              </li>
+            ))}
+          </ul>
+        </>
       )}
     </>
   );
@@ -356,6 +368,9 @@ function MasterCard({ row }: { row: MasterRow }) {
   return (
     <details className={`kf-master${row.flagged ? " kf-master--flagged" : ""}`}>
       <summary className="kf-master__row">
+        <span className="kf-master__chev" aria-hidden>
+          <ChevronDown size={16} strokeWidth={1.75} />
+        </span>
         <span className="kf-master__name-col">
           <strong className="kf-master__name">{row.name}</strong>
           <span className="kf-master__sub">
