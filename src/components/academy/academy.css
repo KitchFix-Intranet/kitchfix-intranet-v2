@@ -678,3 +678,697 @@
 /* ---------- All set celebration (closes train B deferral) ---------- */
 /* Reuses kf-allset from train B; nothing new needed here. */
 
+/* ===================================================================
+ * F1: V7 layout surface.
+ *
+ * These rules are academy-scoped (every selector starts with .kf-academy
+ * or is a child inside it). They lay out the V7 structure: a full-canvas
+ * identity band + a two-column content frame with a primary 792 column
+ * and a 288 record rail that stacks under the primary at 1180.
+ *
+ * Head wash (R-AC21): a 232px wash from #E8F0F4 to --sp-ground anchors
+ * the sheet under the topbar. Scoped to Academy for F1; the shared
+ * promotion to the shell lands in a later train (same wash will cover
+ * every page). Do not duplicate the rule up into shared CSS yet.
+ *
+ * Learner type ramp (R-AC22): exactly five sizes - 13 label /
+ * 14.5 table / 16 body / 18 item + prose / 24 title + key number.
+ * The band title is 24 here (not --sp-t-h1 = 30). All set is the
+ * single exception: three 34px numbers.
+ * ================================================================= */
+
+/* -- Wrapper + head wash (R-AC21) -- */
+.kf-academy {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-5);
+}
+.kf-academy__wash {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(-1 * var(--sp-sp-5));
+  height: 232px;
+  background: linear-gradient(180deg, #E8F0F4 0%, var(--sp-ground) 100%);
+  pointer-events: none;
+  z-index: 0;
+}
+.kf-academy > * { position: relative; z-index: 1; }
+@media (max-width: 860px) {
+  .kf-academy__wash { display: none; }
+}
+
+/* -- F1 band: full-canvas, carries a facts strip. Built standalone so
+ * it does not thrash the IdentBand widget other pages rely on. The
+ * band spans the Academy wrapper (which itself has no max-width); the
+ * content below is width-capped by .kf-academy__frame. --
+ */
+.kf-aband {
+  position: relative;
+  background: var(--sp-navy-deep);
+  color: var(--sp-on-navy);
+  border-radius: var(--sp-r-lg);
+  overflow: hidden;
+  padding: 14px var(--sp-sp-6);
+  min-height: var(--sp-band);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-sp-5);
+  align-items: center;
+  box-sizing: border-box;
+}
+.kf-aband__sheen {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    125deg,
+    var(--sp-navy-mid) 0%,
+    var(--sp-navy-mid) 42%,
+    transparent 72%
+  );
+  opacity: 0.55;
+  transform: skewX(-30deg) translateX(-20%);
+  pointer-events: none;
+}
+.kf-aband__left {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+  min-width: 0;
+}
+.kf-aband__title {
+  color: var(--sp-on-navy);
+  font-family: var(--sp-disp);
+  font-weight: 800;
+  /* R-AC22: title size is 24 on learner surfaces. The band title
+   * belongs to the ramp. */
+  font-size: var(--sp-t-title);
+  line-height: 1.05;
+  letter-spacing: .2px;
+  text-transform: uppercase;
+  margin: 4px 0 0;
+  /* R-AC24: chrome never wraps. Headlines under 34 chars. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kf-aband__kick {
+  color: var(--sp-on-navy-text);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+.kf-aband__right {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  gap: var(--sp-sp-6);
+}
+.kf-aband-fact {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  border-right: 1px solid var(--sp-navy-line);
+  padding-right: var(--sp-sp-6);
+}
+.kf-aband__right > .kf-aband-fact:last-of-type { border-right: none; padding-right: 0; }
+.kf-aband-fact__label {
+  font-family: var(--sp-disp);
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--sp-on-navy-dim);
+}
+.kf-aband-fact__value {
+  font-family: var(--sp-disp);
+  font-weight: 800;
+  /* 24 for the band's "one key number" per R-AC22. Not --sp-t-num (28)
+   * or --sp-t-value (34). The number is a title-weight fact, not a
+   * KPI value. */
+  font-size: var(--sp-t-title);
+  color: var(--sp-on-navy);
+  line-height: 1;
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-sp-2);
+  font-variant-numeric: tabular-nums;
+}
+.kf-aband-fact__unit {
+  font-size: var(--sp-t-table);
+  color: var(--sp-on-navy-dim);
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.kf-aband__cta { display: inline-flex; align-items: center; }
+.kf-aband__cta .kf-btn { min-height: 44px; }
+
+/* Compact-desktop: facts hide at 1280 to match the shared band rule;
+ * CTA stays. */
+@media (max-width: 1280px) {
+  .kf-aband__right > .kf-aband-fact { display: none; }
+}
+/* Phone: hide the band entirely; the PhoneStatus below the band is
+ * the phone's identity line. */
+@media (max-width: 860px) {
+  .kf-aband { display: none; }
+}
+
+/* -- Two-column frame (primary 792 + rail 288 at a 32 gap).
+ * The frame max-width is primary + gap + rail = 1112; add the natural
+ * canvas padding and we land near 1180 before the rail stacks. --
+ */
+.kf-academy__frame {
+  display: grid;
+  grid-template-columns: minmax(0, var(--sp-sheet-max)) 288px;
+  gap: var(--sp-sp-6);
+  width: 100%;
+  max-width: calc(var(--sp-sheet-max) + 288px + var(--sp-sp-6));
+  margin: 0 auto;
+  align-items: start;
+}
+.kf-academy__main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-5);
+}
+.kf-academy__rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-4);
+  position: sticky;
+  top: calc(var(--sp-topbar) + var(--sp-sp-3));
+  align-self: start;
+}
+/* R-AC25: at <=1180 the rail stacks UNDER the primary (never hidden -
+ * it carries content). The 1180 breakpoint is the Academy's own one;
+ * everything else keeps today's rules. */
+@media (max-width: 1180px) {
+  .kf-academy__frame {
+    grid-template-columns: minmax(0, 1fr);
+    max-width: var(--sp-sheet-max);
+  }
+  .kf-academy__rail {
+    position: static;
+  }
+}
+
+/* Single-column variant (All set): same wrapper + wash, no rail. */
+.kf-academy__single {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-5);
+  max-width: var(--sp-sheet-max);
+  margin: 0 auto;
+  width: 100%;
+}
+
+/* -- Hero "pick up where you left off" / "start next" card -- */
+.kf-hero-card {
+  position: relative;
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  box-shadow: var(--sp-shadow);
+  padding: var(--sp-sp-5);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-sp-5);
+  align-items: center;
+  transition: transform var(--sp-fast) var(--sp-ease), box-shadow var(--sp-fast) var(--sp-ease);
+  text-decoration: none;
+  color: inherit;
+}
+.kf-hero-card:hover,
+.kf-hero-card:focus-visible {
+  transform: translateY(-1px);
+  box-shadow: var(--sp-shadow-lift);
+  text-decoration: none;
+  outline: none;
+}
+.kf-hero-card__text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+}
+.kf-hero-card__eyebrow {
+  font-family: var(--sp-disp);
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--sp-navy);
+}
+.kf-hero-card__title {
+  font-family: var(--sp-disp);
+  font-weight: 800;
+  color: var(--sp-ink);
+  font-size: var(--sp-t-title);
+  text-transform: uppercase;
+  letter-spacing: .2px;
+  line-height: 1.1;
+  margin: 0;
+}
+.kf-hero-card__sub {
+  color: var(--sp-muted);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+}
+.kf-hero-card__progress {
+  margin-top: var(--sp-sp-2);
+  color: var(--sp-body);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.kf-hero-card__bar {
+  position: relative;
+  height: 3px;
+  width: 100%;
+  background: var(--sp-sky-tint);
+  border-radius: var(--sp-r-pill);
+  overflow: hidden;
+}
+.kf-hero-card__bar::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--kf-hero-fill, 20%);
+  background: var(--sp-sky);
+  border-radius: var(--sp-r-pill);
+}
+.kf-hero-card__cta .kf-btn {
+  min-height: 56px;
+  padding: 0 var(--sp-sp-6);
+  font-size: var(--sp-t-body);
+}
+@media (max-width: 860px) {
+  .kf-hero-card { grid-template-columns: minmax(0, 1fr); gap: var(--sp-sp-3); }
+}
+
+/* -- "Then" rows card above the row list -- */
+.kf-then-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0 var(--sp-sp-2);
+}
+.kf-then-head__title {
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-label);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--sp-navy);
+}
+.kf-then-head__hint {
+  color: var(--sp-muted);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+}
+
+/* -- "N signed - See Done" quiet line below the list -- */
+.kf-signed-below {
+  color: var(--sp-muted);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  padding: 0 var(--sp-sp-2);
+}
+.kf-signed-below a {
+  color: var(--sp-link);
+  text-decoration: none;
+  font-weight: 700;
+}
+.kf-signed-below a:hover { text-decoration: underline; }
+
+/* -- Rail cards -- */
+.kf-rail-card {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  box-shadow: var(--sp-shadow);
+  padding: var(--sp-sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+}
+.kf-rail-card__title {
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-label);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--sp-navy);
+}
+.kf-rail-card__body {
+  color: var(--sp-body);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  line-height: 1.5;
+}
+.kf-rail-cert {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-sp-2);
+  padding: var(--sp-sp-2) 0;
+  border-top: 1px solid var(--sp-line-soft);
+  text-decoration: none;
+  color: inherit;
+}
+.kf-rail-cert:first-of-type { border-top: 0; padding-top: 0; }
+.kf-rail-cert__text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.kf-rail-cert__title {
+  color: var(--sp-ink);
+  font-weight: 700;
+  font-size: var(--sp-t-table);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kf-rail-cert__ref {
+  color: var(--sp-muted);
+  font-size: var(--sp-t-micro);
+  font-variant-numeric: tabular-nums;
+}
+.kf-rail-cert__pdf {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px; height: 44px;
+  border-radius: var(--sp-r-sm);
+  color: var(--sp-navy);
+  background: var(--sp-sky-tint);
+  text-decoration: none;
+}
+.kf-rail-cert__pdf:hover { background: var(--sp-sky); color: var(--sp-navy-deep); }
+
+/* -- Reader: sections rail on the left (R-AC25) --
+ * Three-column grid: 252px rail | 1px gap | content. Rail hides at
+ * 1180 and the existing in-pane Sections button comes back.
+ */
+.kf-reader-layout {
+  display: grid;
+  grid-template-columns: 252px minmax(0, 1fr);
+  gap: var(--sp-sp-5);
+  align-items: start;
+}
+/* V7 .contents--read: sticky-top panel, 8px padding, rows carry a
+ * left border that paints navy on active. Numbers are ring circles;
+ * "done" fills green, "locked" uses a dashed border and muted ink.
+ * Meta text sits on grid row 2 (under the title). Iteration 1 #5. */
+.kf-reader-rail {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  box-shadow: var(--sp-shadow);
+  padding: var(--sp-sp-2);
+  position: sticky;
+  top: calc(var(--sp-topbar) + var(--sp-sp-3));
+  align-self: start;
+  max-height: calc(100vh - var(--sp-topbar) - var(--sp-sp-5));
+  overflow-y: auto;
+}
+.kf-reader-rail__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: var(--sp-sp-2) var(--sp-sp-3) var(--sp-sp-3);
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-label);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--sp-muted);
+}
+.kf-reader-rail__title { color: var(--sp-muted); }
+.kf-reader-rail__count {
+  color: var(--sp-muted);
+  font-variant-numeric: tabular-nums;
+}
+.kf-reader-rail__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.kf-reader-rail__row {
+  display: grid;
+  /* 26px number + title/meta column, meta slots on row 2. */
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 4px var(--sp-sp-3);
+  align-items: center;
+  width: 100%;
+  min-height: 48px;
+  padding: 6px var(--sp-sp-3);
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: var(--sp-body);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  border-left: 2px solid var(--sp-line-soft);
+  transition: background var(--sp-fast) var(--sp-ease);
+}
+.kf-reader-rail__row:hover { background: var(--sp-raise); }
+.kf-reader-rail__row--active {
+  border-left-color: var(--sp-navy);
+  background: var(--sp-sky-soft);
+}
+.kf-reader-rail__row--active .kf-reader-rail__row-title { color: var(--sp-navy); font-weight: 700; }
+.kf-reader-rail__num {
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  border: 1.5px solid var(--sp-line);
+  background: transparent;
+  color: var(--sp-body);
+  font-weight: 800;
+  font-size: 13px;
+  display: grid;
+  place-items: center;
+  font-variant-numeric: tabular-nums;
+  grid-row: span 2;
+  box-sizing: border-box;
+}
+.kf-reader-rail__row--done .kf-reader-rail__num {
+  background: var(--sp-good);
+  border-color: var(--sp-good);
+  color: var(--sp-on-navy);
+}
+.kf-reader-rail__row-title {
+  color: var(--sp-body);
+  font-weight: 600;
+  font-size: var(--sp-t-table);
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kf-reader-rail__row-meta {
+  grid-column: 2;
+  color: var(--sp-muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+/* Sign row is the last row - dashed number ring until reachable; a
+ * filled green pen-tick when ready. Matches V7's .n.lock + .n.ok. */
+.kf-reader-rail__row--sign { margin-top: var(--sp-sp-2); }
+.kf-reader-rail__row--sign[aria-disabled="true"] {
+  color: var(--sp-muted);
+  cursor: not-allowed;
+}
+.kf-reader-rail__row--sign[aria-disabled="true"] .kf-reader-rail__num {
+  border-style: dashed;
+  color: var(--sp-muted);
+}
+.kf-reader-rail__row--sign[aria-disabled="false"] .kf-reader-rail__num {
+  background: var(--sp-good);
+  border-color: var(--sp-good);
+  color: var(--sp-on-navy);
+}
+
+/* At 1180 the rail hides and the pane's existing "Sections" button
+ * (the one legitimate hide per R-AC25 - a control that stays does
+ * the same job) does the work. */
+@media (max-width: 1180px) {
+  .kf-reader-layout { grid-template-columns: minmax(0, 1fr); }
+  .kf-reader-rail { display: none; }
+}
+/* At >1180 the pane's own Sections button hides because the rail is
+ * doing the job. */
+@media (min-width: 1181px) {
+  .kf-reader__head-right .kf-reader-sections-btn { display: none; }
+}
+
+/* -- Document heading rule + anchor callout (reader + library parity) --
+ * The rule is a 2px #7DB9D5 border under the first H1 of a section;
+ * the anchor callout is a sky block with a navy left bar. */
+.kf-reader__prose h1,
+.kf-reader__prose h2 {
+  font-family: var(--sp-disp);
+  font-weight: 800;
+  color: var(--sp-ink);
+  text-transform: uppercase;
+  letter-spacing: .2px;
+  line-height: 1.1;
+  margin: 0 0 var(--sp-sp-3);
+}
+.kf-reader__prose h1 {
+  font-size: var(--sp-t-title);
+  padding-bottom: var(--sp-sp-2);
+  border-bottom: 2px solid #7DB9D5;
+}
+.kf-reader__prose h2 { font-size: var(--sp-t-item); margin-top: var(--sp-sp-5); }
+.kf-reader__prose h3 { font-size: var(--sp-t-item); margin-top: var(--sp-sp-4); color: var(--sp-navy); }
+.kf-reader__prose p,
+.kf-reader__prose ul,
+.kf-reader__prose ol {
+  color: var(--sp-body);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-item);
+  line-height: 1.55;
+  margin: 0 0 var(--sp-sp-3);
+}
+.kf-reader__prose blockquote,
+.kf-reader__prose aside,
+.kf-reader__prose .anchor {
+  background: #C4E3E8;
+  border-left: 3px solid var(--sp-navy);
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  border-radius: 0 var(--sp-r-sm) var(--sp-r-sm) 0;
+  margin: 0 0 var(--sp-sp-4);
+  color: var(--sp-ink);
+  font-size: var(--sp-t-item);
+  line-height: 1.5;
+}
+.kf-reader__prose blockquote b:first-child,
+.kf-reader__prose aside b:first-child,
+.kf-reader__prose .anchor b:first-child {
+  display: block;
+  font-size: var(--sp-t-micro);
+  font-weight: 800;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--sp-navy);
+  margin-bottom: 4px;
+}
+
+/* -- Done: Your year + What a certificate proves rail cards -- */
+.kf-year-card {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  box-shadow: var(--sp-shadow);
+  padding: var(--sp-sp-4);
+}
+.kf-year-card__title {
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-label);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--sp-navy);
+  margin-bottom: var(--sp-sp-3);
+}
+.kf-year-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-sp-3);
+  padding: var(--sp-sp-2) 0;
+  border-top: 1px solid var(--sp-line-soft);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  color: var(--sp-body);
+}
+.kf-year-row:first-of-type { border-top: 0; padding-top: 0; }
+.kf-year-row__value { color: var(--sp-ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* -- All set: three big 34px numbers (R-AC22 single exception) -- */
+.kf-allset-center {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  box-shadow: var(--sp-shadow);
+  padding: var(--sp-sp-6) var(--sp-sp-5);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-5);
+}
+.kf-allset-center__title {
+  font-family: var(--sp-disp);
+  font-weight: 800;
+  color: var(--sp-ink);
+  font-size: var(--sp-t-title);
+  text-transform: uppercase;
+  letter-spacing: .2px;
+  line-height: 1;
+  margin: 0;
+}
+.kf-allset-center__kick {
+  color: var(--sp-muted);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+}
+.kf-allset-nums {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-sp-5);
+}
+.kf-allset-num {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+  align-items: center;
+}
+.kf-allset-num__value {
+  /* R-AC22 single exception: 34px for the three All-set numbers. */
+  font-family: var(--sp-disp);
+  font-weight: 800;
+  font-size: var(--sp-t-value);
+  color: var(--sp-navy);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.kf-allset-num__label {
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-label);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--sp-navy);
+}
+.kf-allset-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+  text-align: left;
+}
+.kf-allset-rows .kf-receipt { padding-left: var(--sp-sp-5); }
+.kf-allset-footer {
+  color: var(--sp-muted);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  text-align: center;
+  padding-top: var(--sp-sp-3);
+}
+
+/* -- R-AC22 ramp lock: anything inside .kf-academy that uses a larger
+ * learner-ramp size should be sized through these tokens. We adjust
+ * only the pieces governed by Academy today (the title + row title +
+ * sub). */
+.kf-academy .kf-todo-row__title { font-size: var(--sp-t-item); }
+.kf-academy .kf-todo-row__sub { font-size: var(--sp-t-table); }
+.kf-academy .kf-receipt__title { font-size: var(--sp-t-item); }

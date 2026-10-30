@@ -8,3 +8,8 @@ node_modules
 .DS_Store
 next-env.d.ts
 tsconfig.tsbuildinfo
+
+# Render handoffs (academy-vN-render.html + shots). Kevin drops them
+# into renders/ for a train; the branch builds against them but we
+# keep them out of the repo so the main tree stays product-only.
+/renders

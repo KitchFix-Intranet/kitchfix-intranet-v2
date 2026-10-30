@@ -163,6 +163,19 @@ export function Reader({ body }: Props) {
     return body.questions.every((q) => correctIds.has(q.question_id));
   }, [body.questions, correctIds]);
 
+  // R-AC23: Sign is unreachable until every section has been displayed
+  // (user navigated to it at least once in any session) AND every
+  // check is right. Reading stays free; Next stays free; only Sign
+  // waits. "Seen" is tracked server-side in academy_module_progress
+  // and seeded here from body.progress.sections_seen; new steps in
+  // this session land into seenKeysRef on step change.
+  // Track seen-keys as a size count so useMemo invalidates on change.
+  const [seenCount, setSeenCount] = useState<number>(() => seenKeysRef.current.size);
+  const allSectionsSeen = useMemo(() => {
+    if (steps.length === 0) return false;
+    return steps.every((s) => seenKeysRef.current.has(s.key));
+  }, [steps, seenCount]);
+
   // Progress POST on step change (debounced-ish: fire-and-forget,
   // skipping until values actually change).
   const sendProgress = useCallback(
@@ -199,6 +212,7 @@ export function Reader({ body }: Props) {
     if (!step) return;
     if (seenKeysRef.current.has(step.key)) return;
     seenKeysRef.current.add(step.key);
+    setSeenCount(seenKeysRef.current.size);
     void sendProgress(Array.from(seenKeysRef.current));
   }, [index, signIndex, steps, sendProgress]);
 
@@ -208,6 +222,7 @@ export function Reader({ body }: Props) {
     const step = steps[initialIndex];
     if (step && !seenKeysRef.current.has(step.key)) {
       seenKeysRef.current.add(step.key);
+      setSeenCount(seenKeysRef.current.size);
     }
     void sendProgress(Array.from(seenKeysRef.current));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -329,6 +344,10 @@ export function Reader({ body }: Props) {
     if (!attestationIdRef.current) return;
     if (normName(typedName) !== normName(body.viewer.displayName ?? "")) return;
     if (!allChecksPassed) return;
+    // R-AC23: Sign is unreachable until every section has been
+    // displayed. The server's Gate 6 is the authoritative check,
+    // but we never submit a sign that we know will refuse.
+    if (!allSectionsSeen) return;
     setSignState({ kind: "submitting" });
     try {
       const res = await fetch("/api/academy/sign", {
@@ -362,7 +381,7 @@ export function Reader({ body }: Props) {
     }
     // Note: on retry the SAME attestationIdRef is reused per the
     // idempotency contract. Do not generate a new one here.
-  }, [signState.kind, typedName, body.viewer.displayName, allChecksPassed, requirementId]);
+  }, [signState.kind, typedName, body.viewer.displayName, allChecksPassed, allSectionsSeen, requirementId]);
 
   const firstOpenQuestion = useMemo(
     () => body.questions.find((q) => !correctIds.has(q.question_id)),
@@ -374,6 +393,45 @@ export function Reader({ body }: Props) {
     const targetIndex = steps.findIndex((s) => s.anchor === anchor);
     if (targetIndex >= 0) setIndex(targetIndex);
   }, [firstOpenQuestion, steps]);
+
+  // R-AC23: no readable content -> guard state. No Sign anywhere.
+  // The server's Gate 6 is authoritative, but the Reader never
+  // offers Sign on a module whose doc body never rendered. The
+  // guard names the document, explains the pause in plain words,
+  // and sends the learner back to To do. No inline acknowledgement.
+  const hasReadableContent = steps.length > 0 && body.content_html != null && body.content_html.replace(/<[^>]*>/g, "").replace(/\s+/g, "").length >= 20;
+  if (!hasReadableContent && !postSignAttestation) {
+    return (
+      <div className="kf-sheet">
+        <section className="kf-reader kf-reader--guard" aria-label="Reader paused">
+          <header className="kf-reader__head">
+            <div className="kf-reader__head-text">
+              <h2 className="kf-reader__title">{body.doc.title}</h2>
+              <p className="kf-reader__sub">{docContextSub}</p>
+            </div>
+          </header>
+          <div className="kf-reader__body">
+            <section className="kf-sign-open" aria-label="No readable content">
+              <p className="kf-write-failed__title" style={{ color: "var(--sp-navy)" }}>
+                This document is not ready to read yet
+              </p>
+              <p className="kf-write-failed__body">
+                <strong>{body.doc.title}</strong> has nothing to display,
+                so there is nothing to sign. Your record is unchanged.
+                Try again later, or go back to your list.
+              </p>
+              <div style={{ display: "flex", justifyContent: "center", gap: "var(--sp-sp-2)" }}>
+                <Link href="/academy" className="kf-btn kf-btn--primary">
+                  <ArrowLeft size={16} strokeWidth={1.5} />
+                  <span>Back to To do</span>
+                </Link>
+              </div>
+            </section>
+          </div>
+        </section>
+      </div>
+    );
+  }
 
   // After a successful sign (this instance) we swap the pane for the
   // Receipt. For a previously-signed requirement we also show the
@@ -425,11 +483,92 @@ export function Reader({ body }: Props) {
   const signDisabled =
     signState.kind === "submitting" ||
     !allChecksPassed ||
+    !allSectionsSeen ||
     !typedNameMatches ||
     attestationIdRef.current === null;
+  const unseenSections = steps.filter((s) => !seenKeysRef.current.has(s.key)).length;
+
+  // Sections rail row model, shared with the dropdown menu. Rail is
+  // the primary surface at >1180; the dropdown is its one legitimate
+  // fallback at <=1180 (R-AC25). Numbers show section state - ring
+  // (unopened), green-filled (seen), dashed ring (Sign while locked),
+  // green-filled check (Sign when reachable). V7 .contents--read.
+  const sectionsRead = steps.filter((s) => seenKeysRef.current.has(s.key)).length;
+  const signReady = allSectionsSeen && allChecksPassed;
 
   return (
-    <div className="kf-sheet">
+    <div className="kf-sheet kf-reader-layout">
+      <aside className="kf-reader-rail" aria-label="Sections">
+        <div className="kf-reader-rail__head">
+          <span className="kf-reader-rail__title">Sections</span>
+          <span className="kf-reader-rail__count">
+            {sectionsRead} of {steps.length} read
+          </span>
+        </div>
+        <ul className="kf-reader-rail__list" role="menu">
+          {steps.map((s, i) => {
+            const seen = seenKeysRef.current.has(s.key);
+            const isActive = i === index;
+            const classes = ["kf-reader-rail__row"];
+            if (isActive) classes.push("kf-reader-rail__row--active");
+            if (seen) classes.push("kf-reader-rail__row--done");
+            const checkCount = s.questionIds.length;
+            // Per-section meta. V7 shows "N min" or "N min · check done".
+            // We know the step's checks are passed when every question
+            // anchored to this step has been correctly answered.
+            const stepChecksPassed =
+              checkCount > 0 &&
+              body.questions
+                .filter((q) =>
+                  s.anchors.includes(q.section_anchor ?? "") ||
+                  q.section_anchor === s.anchor,
+                )
+                .every((q) => correctIds.has(q.question_id));
+            const metaBits: string[] = [`${s.estMinutes} min`];
+            if (checkCount > 0) {
+              metaBits.push(stepChecksPassed ? "check done" : "check open");
+            }
+            return (
+              <li key={s.key} role="none">
+                <button
+                  type="button"
+                  className={classes.join(" ")}
+                  onClick={() => setIndex(i)}
+                  role="menuitem"
+                  title={s.anchor}
+                >
+                  <span className="kf-reader-rail__num" aria-hidden>
+                    {seen ? "✓" : i + 1}
+                  </span>
+                  <span className="kf-reader-rail__row-title">{s.anchor}</span>
+                  <span className="kf-reader-rail__row-meta">{metaBits.join(" · ")}</span>
+                </button>
+              </li>
+            );
+          })}
+          <li role="none">
+            <button
+              type="button"
+              className={`kf-reader-rail__row kf-reader-rail__row--sign${index === signIndex ? " kf-reader-rail__row--active" : ""}`}
+              onClick={() => setIndex(signIndex)}
+              aria-disabled={signReady ? "false" : "true"}
+              role="menuitem"
+            >
+              <span className="kf-reader-rail__num" aria-hidden>
+                {signReady ? "✓" : "·"}
+              </span>
+              <span className="kf-reader-rail__row-title">Sign</span>
+              <span className="kf-reader-rail__row-meta">
+                {signReady
+                  ? "ready to sign"
+                  : !allSectionsSeen
+                    ? "sections open"
+                    : "checks open"}
+              </span>
+            </button>
+          </li>
+        </ul>
+      </aside>
       <section
         className="kf-reader"
         aria-label="Reader"
@@ -450,7 +589,7 @@ export function Reader({ body }: Props) {
             </span>
             <button
               type="button"
-              className="kf-btn kf-btn--soft"
+              className="kf-btn kf-btn--soft kf-reader-sections-btn"
               onClick={() => setMenuOpen((v) => !v)}
               aria-expanded={menuOpen}
               aria-haspopup="menu"
@@ -459,6 +598,15 @@ export function Reader({ body }: Props) {
               <span>Sections</span>
               <ChevronDown size={14} strokeWidth={1.5} />
             </button>
+            {/* Save and exit. Progress is written as the learner moves
+             * between sections (see /api/academy/progress), so there
+             * is nothing to POST here - a plain Link back to the
+             * To do list keeps the discipline that the Reader never
+             * invents an endpoint for state the engine already saves.
+             * 44px floor via the shared .kf-btn baseline. */}
+            <Link href="/academy" className="kf-btn kf-btn--line kf-reader__save-exit">
+              <span>Save and exit</span>
+            </Link>
           </div>
         </header>
 
@@ -468,6 +616,7 @@ export function Reader({ body }: Props) {
             currentIndex={index}
             seenKeys={seenKeysRef.current}
             allChecksPassed={allChecksPassed}
+            allSectionsSeen={allSectionsSeen}
             onPick={(i) => {
               setIndex(i);
               setMenuOpen(false);
@@ -506,6 +655,12 @@ export function Reader({ body }: Props) {
               typedNameMatches={typedNameMatches}
               allChecksPassed={allChecksPassed}
               openQuestionsCount={body.questions.length - correctIds.size}
+              allSectionsSeen={allSectionsSeen}
+              unseenSections={unseenSections}
+              onBackToFirstUnseen={() => {
+                const i = steps.findIndex((s) => !seenKeysRef.current.has(s.key));
+                if (i >= 0) setIndex(i);
+              }}
               signState={signState}
               signDisabled={signDisabled}
               onSign={handleSign}
@@ -667,6 +822,7 @@ function SectionsMenu({
   currentIndex,
   seenKeys,
   allChecksPassed,
+  allSectionsSeen,
   onPick,
   onClose,
 }: {
@@ -674,10 +830,17 @@ function SectionsMenu({
   currentIndex: number;
   seenKeys: Set<string>;
   allChecksPassed: boolean;
+  allSectionsSeen: boolean;
   onPick: (index: number) => void;
   onClose: () => void;
 }) {
   const signIndex = steps.length;
+  const signReady = allSectionsSeen && allChecksPassed;
+  const signMeta = signReady
+    ? "Ready"
+    : !allSectionsSeen
+      ? "Sections open"
+      : "Checks open";
   return (
     <ul className="kf-sections" aria-label="Sections menu" role="menu">
       {steps.map((s, i) => {
@@ -712,7 +875,7 @@ function SectionsMenu({
         >
           <span className="kf-sections__dot" aria-hidden />
           <span className="kf-sections__label">Sign</span>
-          <span className="kf-sections__meta">{allChecksPassed ? "Ready" : "Checks open"}</span>
+          <span className="kf-sections__meta">{signMeta}</span>
         </button>
       </li>
       <li role="none" style={{ marginTop: "var(--sp-sp-1)" }}>
@@ -742,6 +905,9 @@ function SignBlock({
   typedNameMatches,
   allChecksPassed,
   openQuestionsCount,
+  allSectionsSeen,
+  unseenSections,
+  onBackToFirstUnseen,
   signState,
   signDisabled,
   onSign,
@@ -754,12 +920,37 @@ function SignBlock({
   typedNameMatches: boolean;
   allChecksPassed: boolean;
   openQuestionsCount: number;
+  allSectionsSeen: boolean;
+  unseenSections: number;
+  onBackToFirstUnseen: () => void;
   signState: SignState;
   signDisabled: boolean;
   onSign: () => void;
   onBackToOpen: () => void;
 }) {
   const displayName = body.viewer.displayName ?? "";
+
+  // R-AC23: sections first, checks second. If the learner hasn't
+  // navigated to every section yet, that is what blocks Sign - and
+  // the message names it plainly.
+  if (!allSectionsSeen) {
+    return (
+      <div className="kf-sign-open" aria-label="Sections open">
+        <p className="kf-write-failed__title" style={{ color: "var(--sp-navy)" }}>
+          You have {unseenSections} section{unseenSections === 1 ? "" : "s"} left to read
+        </p>
+        <p className="kf-write-failed__body">
+          Signing waits until every section has been displayed. Reading is free - go back to the first one you have not opened.
+        </p>
+        <div style={{ display: "flex", justifyContent: "center" }}>
+          <button type="button" className="kf-btn kf-btn--primary" onClick={onBackToFirstUnseen}>
+            <ArrowLeft size={16} strokeWidth={1.5} />
+            <span>Open first unread section</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (!allChecksPassed) {
     return (
