@@ -61,7 +61,11 @@ export default async function ShellLayout({
   // once the release switch is on - it must know which route the
   // viewer is trying to reach to apply isOpenedPath.
   const h = await headers();
-  const pathname = h.get("x-invoke-path") ?? h.get("x-pathname") ?? "/";
+  // Read our middleware-set x-pathname first. x-invoke-path is a
+  // Next internal that is not populated for App Router RSCs in Next
+  // 16 production; the "/"-fallback leaks "Home" into every shell
+  // route and feeds "/" to the access gate's path allowlist.
+  const pathname = h.get("x-pathname") ?? h.get("x-invoke-path") ?? "/";
   const { email, role } = await requireAppAccess(pathname);
 
   // Pull the user's display name once at the layout boundary so Shell can
