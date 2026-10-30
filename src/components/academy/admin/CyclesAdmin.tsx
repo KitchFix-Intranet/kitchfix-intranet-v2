@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import type { CycleRowWithCounts, ObligationPickRow } from "@/lib/academy/cycles";
 import { fmtDate } from "@/lib/fmt";
+import { AcademyBand, type AcademyBandFact } from "@/components/academy/AcademyBand";
 
 type Props = {
   cycles: CycleRowWithCounts[];
@@ -214,27 +215,70 @@ export function CyclesAdmin({ cycles, obligations }: Props) {
     }
   }, [router]);
 
+  // Band facts, computed from the loaded cycles only. A "draft" leads
+  // the band ("<label> is a draft"); if there is no draft, the band
+  // says so honestly against the most recent cycle. No Questions
+  // fact: that data (E2) is not loaded on this page.
+  const draft = useMemo(
+    () => cycles.find((c) => c.status === "draft") ?? null,
+    [cycles],
+  );
+  const newest = cycles[0] ?? null;
+  // statusLabel maps "published" -> "Live". Use the raw status for
+  // the band's "no draft yet" sentence so it reads as "<label> is
+  // published - no draft yet" instead of "is live", which is a UI
+  // chip label not an English state.
+  const rawStatus = newest
+    ? newest.status === "published" ? "published"
+      : newest.status === "closed" ? "closed"
+      : newest.status
+    : "";
+  const bandTitle = draft
+    ? `${draft.label} is a draft`
+    : newest
+      ? `${newest.label} is ${rawStatus} - no draft yet`
+      : "No cycles yet";
+  const bandKick = draft
+    ? `Preview, then publish when the plan is clean.`
+    : newest
+      ? "Start a new cycle to assign the next window."
+      : "Click New cycle to assign a training window.";
+  const bandFacts: AcademyBandFact[] = [
+    { label: "Cycles", value: cycles.length },
+    { label: "Draft", value: draft ? "Yes" : "None" },
+    { label: "Documents", value: draft ? draft.moduleCount : 0 },
+  ];
+  const docWord = (n: number) => `${n} document${n === 1 ? "" : "s"}`;
+  const phoneStatus = draft
+    ? `${draft.label} is a draft - ${docWord(draft.moduleCount)}`
+    : newest
+      ? `${newest.label} is ${rawStatus} - no draft yet`
+      : "No cycles yet";
+
   return (
     <div className="kf-admin">
-      <header className="kf-admin__head">
-        <div>
-          <span className="kf-admin__eyebrow">Admin</span>
-          <h2 className="kf-admin__title">Cycles</h2>
-          <p className="kf-admin__sub">
-            Create a cycle, preview who it assigns, then publish. Publishing writes requirements through the engine.
-          </p>
-        </div>
-        <div className="kf-admin__actions">
+      <AcademyBand
+        eyebrow="Admin"
+        title={bandTitle}
+        kick={bandKick}
+        facts={bandFacts}
+        actionSlot={
           <button
             type="button"
-            className="kf-cycle__btn kf-cycle__btn--primary"
+            className="kf-btn kf-btn--on-navy"
             onClick={openCreate}
+            aria-label="New cycle"
           >
             <Plus size={14} strokeWidth={1.5} />
             <span>New cycle</span>
           </button>
-        </div>
-      </header>
+        }
+      />
+      <p className="kf-pstatus" aria-label="Status">{phoneStatus}</p>
+      <p className="kf-admin__sub kf-admin__sub--standalone">
+        Create a cycle, preview who it assigns, then publish. Publishing writes
+        requirements through the engine.
+      </p>
 
       <section className="kf-cycles" aria-label="Cycles">
         {cycles.length === 0 ? (

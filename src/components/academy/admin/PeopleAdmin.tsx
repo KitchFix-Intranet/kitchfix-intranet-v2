@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { fmtDate } from "@/lib/fmt";
 import type { AdminPeopleView, PersonRow, RegionLead } from "@/lib/academy/admin/people";
+import { AcademyBand, type AcademyBandFact } from "@/components/academy/AcademyBand";
 
 // Date-only formatter for stored `date` columns (due_date, waived
 // day). Parsing a bare "YYYY-MM-DD" through Date.parse makes it UTC
@@ -195,19 +196,74 @@ export function PeopleAdmin({ view }: Props) {
     [router],
   );
 
+  // Band facts, computed from the loaded roster + leads only. All
+  // three fact values count distinct PEOPLE (never a sum of items),
+  // so the band's chips align with the render's intent and never
+  // over-count against the roster size. loadAdminPeople's per-row
+  // `outstanding` is a per-person item count (1 person can own
+  // several outstanding items); summing it would quietly over-report.
+  //   N = roster.length
+  //   K = people with nothing assigned           (signed+outstanding+waived === 0)
+  //   X = people with >= 1 outstanding item      (outstanding > 0)
+  //   Y = people whose earliest outstanding is already past today
+  //       (outstanding > 0 && next_due_at < today, UTC-safe date-only compare)
+  const todayYmd = new Date().toISOString().slice(0, 10);
+  const { N, K, X, Y } = useMemo(() => {
+    let n = view.roster.length;
+    let k = 0;
+    let x = 0;
+    let y = 0;
+    for (const p of view.roster) {
+      if (p.signed + p.outstanding + p.waived === 0) k += 1;
+      if (p.outstanding > 0) x += 1;
+      if (p.outstanding > 0 && p.next_due_at && p.next_due_at.slice(0, 10) < todayYmd) {
+        y += 1;
+      }
+    }
+    return { N: n, K: k, X: x, Y: y };
+  }, [view.roster, todayYmd]);
+
+  // Short "S. Lynch" label from "Sierra Lynch" (first initial + last
+  // word). Falls back to email local-part when no display_name.
+  const leadShort = useCallback((l: RegionLead): string => {
+    const name = (l.display_name || "").trim();
+    if (name) {
+      const parts = name.split(/\s+/);
+      if (parts.length >= 2) {
+        return `${parts[0][0]}. ${parts[parts.length - 1]}`;
+      }
+      return name;
+    }
+    const local = (l.email || "").split("@")[0];
+    return local || l.email;
+  }, []);
+  const leadsClause = view.leads.length === 0
+    ? ""
+    : ` Region leads: ${view.leads.map((l) => `${leadShort(l)} (${l.region})`).join(", ")}.`;
+
+  const bandTitle = `${N} people - ${K} have nothing assigned`;
+  const bandKick = `${X} outstanding, ${Y} overdue.${leadsClause}`;
+  const bandFacts: AcademyBandFact[] = [
+    { label: "People", value: N },
+    { label: "Outstanding", value: X },
+    { label: "Overdue", value: Y },
+  ];
+  const phoneStatus = `${N} people - ${X} outstanding, ${Y} overdue`;
+
   return (
     <div className="kf-admin">
-      <header className="kf-admin__head">
-        <div>
-          <span className="kf-admin__eyebrow">Admin</span>
-          <h2 className="kf-admin__title">People</h2>
-          <p className="kf-admin__sub">
-            {view.roster.length} active {view.roster.length === 1 ? "person" : "people"} on the
-            roster. Compliance here reads the same engine Records uses. Grants and eligibility
-            exceptions are managed in Studio for this train.
-          </p>
-        </div>
-      </header>
+      <AcademyBand
+        eyebrow="Admin"
+        title={bandTitle}
+        kick={bandKick}
+        facts={bandFacts}
+      />
+      <p className="kf-pstatus" aria-label="Status">{phoneStatus}</p>
+      <p className="kf-admin__sub kf-admin__sub--standalone">
+        {view.roster.length} active {view.roster.length === 1 ? "person" : "people"} on the
+        roster. Compliance here reads the same engine Records uses. Grants and eligibility
+        exceptions are managed in Studio for this train.
+      </p>
 
       <section className="kf-ppl-leads" aria-label="Region leads">
         <header className="kf-ppl-leads__head">

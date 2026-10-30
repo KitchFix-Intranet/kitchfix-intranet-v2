@@ -7,6 +7,7 @@
 import { requireOwnerPage } from "@/lib/gate";
 import { loadCycles, loadObligationsCatalog } from "@/lib/academy/cycles";
 import { CyclesAdmin } from "@/components/academy/admin/CyclesAdmin";
+import "@/components/academy/academy.css";
 import "@/components/academy/admin/admin.css";
 
 export default async function Page() {

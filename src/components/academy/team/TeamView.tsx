@@ -17,9 +17,10 @@
 
 import { useCallback, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown, ChevronRight, Search as SearchIcon, Users as UsersIcon } from "lucide-react";
+import { ChevronDown, ChevronRight, Search as SearchIcon, Users as UsersIcon, Copy as CopyIcon, Check as CheckIcon } from "lucide-react";
 import { fmtDate } from "@/lib/fmt";
 import type { TeamView as TeamViewData, TeamPersonRow } from "@/lib/academy/team";
+import { AcademyBand, type AcademyBandFact } from "@/components/academy/AcademyBand";
 
 // Date-only formatter mirrors the one in PeopleAdmin so a stored
 // YYYY-MM-DD column renders the day you stored, not a TZ-shifted
@@ -116,19 +117,75 @@ export function TeamView({ view }: Props) {
   const subtitle = view.header.subtitle;
   const headerCount = view.roster.length;
 
+  // Band facts, computed from the loaded roster only. No placeholders
+  // from the render. M = people in scope with anything assigned
+  // (signed + outstanding + waived > 0). done = those with
+  // outstanding===0 && signed>0. Behind = those with outstanding>0.
+  // Earliest next_due_at seeds the kick + the Due fact.
+  const { done, assignedM, behindCount, earliestDue } = useMemo(() => {
+    let m = 0;
+    let d = 0;
+    let behind = 0;
+    let earliest: string | null = null;
+    for (const p of view.roster) {
+      const anyAssigned = (p.signed + p.outstanding + p.waived) > 0;
+      if (!anyAssigned) continue;
+      m += 1;
+      if (p.outstanding === 0 && p.signed > 0) d += 1;
+      if (p.outstanding > 0) behind += 1;
+      if (p.next_due_at) {
+        const ymd = p.next_due_at.slice(0, 10);
+        if (!earliest || ymd < earliest) earliest = ymd;
+      }
+    }
+    return { done: d, assignedM: m, behindCount: behind, earliestDue: earliest };
+  }, [view.roster]);
+
+  const dueLabel = fmtDateOnly(earliestDue);
+  // Title disambiguates the fraction's denominator from the People
+  // fact. "0 of 1 done" sitting next to "People 67" reads like a
+  // contradiction; "0 of 1 with training done" names the right unit.
+  const bandTitle = assignedM === 0
+    ? "Nothing assigned yet"
+    : `${done} of ${assignedM} with training done`;
+  const bandKick = earliestDue
+    ? `Earliest due ${dueLabel}.${subtitle ? ` ${subtitle}.` : ""}`
+    : (subtitle ? `${subtitle}.` : undefined);
+  const bandFacts: AcademyBandFact[] = [
+    { label: "Due", value: dueLabel },
+    { label: "People", value: headerCount },
+    { label: "Behind", value: behindCount },
+  ];
+  const phoneStatus = assignedM === 0
+    ? `Nothing assigned yet - ${headerCount} ${headerCount === 1 ? "person" : "people"} on team`
+    : `${done} of ${assignedM} with training done - ${behindCount} behind`;
+
   return (
     <div className="kf-admin">
-      <header className="kf-admin__head">
-        <div>
-          <span className="kf-admin__eyebrow">Academy</span>
-          <h2 className="kf-admin__title">{view.header.title}</h2>
-          <p className="kf-admin__sub">
-            {headerCount} {headerCount === 1 ? "person" : "people"} on this team.
-            {subtitle ? ` ${subtitle}.` : ""} Review their training compliance - this
-            page is read-only; a lead sees but does not assign or sign.
-          </p>
-        </div>
-        {view.header.viewerIsOwner && view.scopeOptions.length > 0 ? (
+      <AcademyBand
+        eyebrow="Your team"
+        title={bandTitle}
+        kick={bandKick}
+        facts={bandFacts}
+        actionSlot={
+          <TeamCopyReminder
+            summary={bandTitle}
+            behindCount={behindCount}
+            dueLabel={dueLabel}
+            scopeLabel={view.header.title}
+          />
+        }
+      />
+      <p className="kf-pstatus" aria-label="Status">{phoneStatus}</p>
+      {view.header.viewerIsOwner && view.scopeOptions.length > 0 ? (
+        <header className="kf-admin__head">
+          <div>
+            <p className="kf-admin__sub">
+              {headerCount} {headerCount === 1 ? "person" : "people"} on this team.
+              {subtitle ? ` ${subtitle}.` : ""} Read-only - a lead sees but does not
+              assign or sign.
+            </p>
+          </div>
           <div className="kf-admin__actions">
             <label className="kf-ppl__toggle" style={{ gap: "var(--sp-sp-2)" }}>
               <span style={{ color: "var(--sp-muted)", fontSize: "var(--sp-t-micro)" }}>Scope</span>
@@ -150,8 +207,14 @@ export function TeamView({ view }: Props) {
               </select>
             </label>
           </div>
-        ) : null}
-      </header>
+        </header>
+      ) : (
+        <p className="kf-admin__sub kf-admin__sub--standalone">
+          {headerCount} {headerCount === 1 ? "person" : "people"} on this team.
+          {subtitle ? ` ${subtitle}.` : ""} Read-only - a lead sees but does not
+          assign or sign.
+        </p>
+      )}
 
       <section className="kf-ppl" aria-label="Team roster">
         <header className="kf-ppl__head">
@@ -272,5 +335,50 @@ export function TeamView({ view }: Props) {
         )}
       </section>
     </div>
+  );
+}
+
+function TeamCopyReminder({
+  summary,
+  behindCount,
+  dueLabel,
+  scopeLabel,
+}: {
+  summary: string;
+  behindCount: number;
+  dueLabel: string;
+  scopeLabel: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  const onCopy = useCallback(async () => {
+    const text = `${scopeLabel} - ${summary}. ${behindCount} behind. Due ${dueLabel}.`;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // Clipboard refused (iframe permissions, etc). Leave the button
+      // in its idle state; nothing to recover.
+    }
+  }, [summary, behindCount, dueLabel, scopeLabel]);
+  return (
+    <button
+      type="button"
+      className="kf-btn kf-btn--on-navy"
+      onClick={onCopy}
+      aria-label="Copy a reminder to clipboard"
+    >
+      {copied ? (
+        <>
+          <CheckIcon size={16} strokeWidth={1.5} aria-hidden />
+          <span>Copied</span>
+        </>
+      ) : (
+        <>
+          <CopyIcon size={16} strokeWidth={1.5} aria-hidden />
+          <span>Copy a reminder</span>
+        </>
+      )}
+    </button>
   );
 }
