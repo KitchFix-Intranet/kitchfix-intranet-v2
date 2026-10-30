@@ -251,6 +251,8 @@ export function ReviewFilter({
           </button>
         </div>
 
+        <span className="kf-chips__sep" aria-hidden />
+
         <div className="kf-review__toolbar-group kf-review__cats" role="radiogroup" aria-label="Category filter">
           <button
             type="button"

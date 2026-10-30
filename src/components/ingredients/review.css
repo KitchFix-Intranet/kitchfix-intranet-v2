@@ -101,7 +101,15 @@
   border: 1px solid var(--sp-line);
   border-radius: var(--sp-r-card);
   box-shadow: var(--sp-shadow);
-  overflow: hidden;
+  /* clip, not hidden: clips to the radius without creating a scroll
+   * container, so sticky children (actions bar, thead) still stick to
+   * the page. */
+  overflow: clip;
+}
+/* Below ~1100px the fixed table's min-width exceeds the card; scroll
+ * inside the card (DESIGN.md section 3), never the page. */
+@media (max-width: 1100px) {
+  .kf-rvc { overflow-x: auto; overflow-y: hidden; }
 }
 .kf-rvc--new { border-left: 4px solid var(--sp-warn-strong); }
 
@@ -151,11 +159,10 @@
 
 /* Items table inside the card.
  *
- * table-layout: auto lets the browser size each column to its content
- * so headers sit directly over their cells at 1440 (replaces the old
- * fixed layout that split 10 columns evenly and misaligned long/short
- * content). Shared padding + text-align on the th / td pairs; cells
- * line up by native table rules.
+ * Fixed layout with an explicit <colgroup> (DESIGN.md section 4). The
+ * item column is the only flexible one, so long names ellipsize
+ * instead of pushing the Conf column off the card. Numbers right-
+ * aligned on paired th / td. Shared padding + line-height.
  *
  * Phone layout: at <= 760px, the Vendor / Lines / Sites / Last
  * purchase / Conf columns hide so the essentials (checkbox, Item,
@@ -164,8 +171,9 @@
  */
 .kf-rvc__items {
   width: 100%;
+  min-width: 980px;            /* below this the card scrolls, see .kf-rvc media rule */
   border-collapse: collapse;
-  table-layout: auto;
+  table-layout: fixed;         /* widths from the <colgroup>; the item column absorbs the rest */
   font-family: var(--sp-ui);
   font-size: var(--sp-t-table);
 }
@@ -184,10 +192,11 @@
   vertical-align: middle;
 }
 .kf-rvc__items tbody td {
-  padding: 10px var(--sp-sp-3);
+  padding: var(--sp-sp-2) var(--sp-sp-3);
   border-bottom: 1px solid var(--sp-line-soft);
   color: var(--sp-ink);
   vertical-align: middle;
+  line-height: 1.3;
 }
 .kf-rvc__items tbody tr:last-child td { border-bottom: none; }
 /* Right-aligned numeric columns: force both header + cell. */
@@ -264,15 +273,40 @@
   gap: var(--sp-sp-1);
   min-width: 0;
 }
+/* Lets the item-name button ellipsize inside the flex row; without
+ * min-width:0 the button overflows and pushes the row wider than its
+ * fixed column, defeating the colgroup. */
+.kf-rvc__desc > .kf-rvc__row-btn { flex: 1 1 auto; min-width: 0; max-width: 100%; }
+.kf-rvc__desc > .kf-flag,
+.kf-rvc__desc > .kf-rvc__flagbtn { flex: 0 0 auto; }
+/* One muted meta line (OCR identifier + matcher reason) under the
+ * item name. Both children inline so the row stays two lines; title
+ * on the wrapper carries the full text when the line ellipsizes. */
+.kf-rvc__meta {
+  margin-top: 2px;
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  line-height: 1.3;
+}
+.kf-rvc__meta .kf-rvc__ocrname,
+.kf-rvc__meta .kf-rvc__reason { display: inline; margin: 0; white-space: nowrap; }
+.kf-rvc__meta-dot { color: var(--sp-line); }
 .kf-rvc__reason {
   color: var(--sp-muted);
   font-size: var(--sp-t-micro);
   margin-top: 2px;
   font-style: italic;
 }
+/* Price + chip share a line in UnitPriceCell: the gap uses an inline
+ * spacer instead of margin so the baseline stays with the number. */
+.kf-rvc__chip-gap { display: inline-block; width: var(--sp-sp-2); }
+.kf-rvc__items td.kf-table__num .kf-conf-chip { vertical-align: 1px; }
 
 /* Actions */
 .kf-rvc__actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
   padding: var(--sp-sp-3) var(--sp-sp-4);
   border-top: 1px solid var(--sp-line-soft);
   background: var(--sp-sky-soft);
@@ -1110,15 +1144,15 @@
   border: 1px solid color-mix(in srgb, var(--sp-navy) 25%, transparent);
   padding: 0 5px;
 }
-/* Derived = Prompt B, blended from real invoice spend. Visually
- * separate from "per-unit" (which is a confident pack-math result)
- * and "est." (which is a soft parse) - amber tone with a check so
- * it reads as "we trust this number, we just didn't compute it from
- * a pack". */
+/* Derived = blended from real invoice spend (Prompt B, PR35). It is the
+ * most trusted machine tier and sits on most priced rows, so it must
+ * NOT wear the warn hue - amber is for est. and needs-pack only.
+ * Sky-tint / navy reads as "system fact"; override keeps its navy
+ * outline so "set by hand" still stands apart. */
 .kf-conf-chip--derived {
-  color: var(--sp-warn-strong, var(--sp-warn));
-  background: color-mix(in srgb, var(--sp-warn) 15%, var(--sp-card));
-  border: 1px solid color-mix(in srgb, var(--sp-warn) 35%, transparent);
+  color: var(--sp-navy);
+  background: var(--sp-sky-tint);
+  border: 1px solid transparent;
   padding: 0 5px;
 }
 

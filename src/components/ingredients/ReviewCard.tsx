@@ -276,6 +276,21 @@ export function ReviewCard({
       </header>
 
       <table className="kf-rvc__items">
+        {/* Explicit column widths (docs/DESIGN.md section 4). The item
+            column takes whatever is left, so long names ellipsize
+            instead of pushing the Conf column off the card. */}
+        <colgroup>
+          <col className="kf-rvc__check-col" />
+          <col />
+          <col style={{ width: 160 }} />
+          <col style={{ width: 136 }} />
+          <col style={{ width: 150 }} />
+          <col style={{ width: 96 }} />
+          <col style={{ width: 60 }} />
+          <col style={{ width: 120 }} />
+          <col style={{ width: 96 }} />
+          <col style={{ width: 72 }} />
+        </colgroup>
         <thead>
           <tr>
             <th className="kf-rvc__check-col" aria-label="Select"></th>
@@ -347,14 +362,25 @@ export function ReviewCard({
                     Flagged{it.flaggedBy ? ` by ${it.flaggedBy}` : ""}
                   </div>
                 ) : null}
-                {it.displayNameSource === "catalog" && it.vendorOcrName !== it.displayName ? (
-                  // Verbatim OCR identifier below the clean name - never
-                  // Title-cased, always de-emphasized.
-                  <div className="kf-rvc__ocrname" title="Vendor's invoice description (verbatim)">
-                    {it.vendorOcrName}
-                  </div>
-                ) : null}
-                {it.reason ? <div className="kf-rvc__reason">{it.reason}</div> : null}
+                {(() => {
+                  // One muted meta line: verbatim OCR identifier (never
+                  // Title-cased) and the matcher's reason, separated by a
+                  // middle dot. Both stay complete in the title; the line
+                  // ellipsizes. Keeps the row at two lines.
+                  const showOcr =
+                    it.displayNameSource === "catalog" && it.vendorOcrName !== it.displayName;
+                  if (!showOcr && !it.reason) return null;
+                  const full = [showOcr ? it.vendorOcrName : null, it.reason]
+                    .filter(Boolean)
+                    .join(" · ");
+                  return (
+                    <div className="kf-rvc__meta kf-cell-ellipsis" title={full}>
+                      {showOcr ? <span className="kf-rvc__ocrname">{it.vendorOcrName}</span> : null}
+                      {showOcr && it.reason ? <span className="kf-rvc__meta-dot" aria-hidden> · </span> : null}
+                      {it.reason ? <span className="kf-rvc__reason">{it.reason}</span> : null}
+                    </div>
+                  );
+                })()}
               </td>
               <td>
                 <div className="kf-cell-strong kf-cell-ellipsis">{it.vendor}</div>
@@ -477,7 +503,7 @@ function UnitPriceCell({ item }: { item: ReviewGroupItem }) {
         <>
           <strong>{fmtUsd(item.perBase as number)}</strong>
           <span className="kf-muted"> / {uomLower}</span>
-          <br />
+          <span className="kf-rvc__chip-gap" aria-hidden> </span>
           {item.perBaseConfidence === "override" ? (
             <span className="kf-conf-chip kf-conf-chip--override">
               <Check size={10} strokeWidth={2.5} aria-hidden />
@@ -500,7 +526,7 @@ function UnitPriceCell({ item }: { item: ReviewGroupItem }) {
       ) : (
         <>
           <strong className="kf-muted">- / unit</strong>
-          <br />
+          <span className="kf-rvc__chip-gap" aria-hidden> </span>
           <span className="kf-conf-chip kf-conf-chip--low">needs pack</span>
         </>
       )}
