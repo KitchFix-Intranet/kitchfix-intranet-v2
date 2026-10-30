@@ -1555,13 +1555,16 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Wraps, never clips. The issue badges sit at the end of this line and
+ * `text-overflow: ellipsis` cuts from the end, so clipping here hides
+ * the badges on precisely the busiest rows. A second line on a crowded
+ * row is the correct trade. */
 .kf-master__sub {
   color: var(--sp-muted);
   font-family: var(--sp-ui);
   font-size: var(--sp-t-micro);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow: visible;
 }
 
 .kf-master__price-col,
