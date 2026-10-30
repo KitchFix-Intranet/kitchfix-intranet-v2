@@ -1,0 +1,21 @@
+/*
+ * Team page CSS. The roster list + per-person detail reuse the
+ * `.kf-ppl*` classes from `admin.css` (E3's People view, loaded by
+ * the Team page too). This file carries only the thin additions
+ * specific to Team: the scope-picker spacing and the empty-state
+ * copy tone.
+ */
+
+/* The scope picker lives in the admin head's actions slot. The
+ * admin.css base gives it room; this just forces the label + select
+ * to align baseline at 44px corp floor. */
+.kf-ppl__filters select,
+.kf-admin__actions select {
+  min-height: var(--sp-floor-corp);
+}
+
+/* Team empty-state italic for the "no one reports to you yet"
+ * copy - distinct from the admin "no roster" plain. */
+.kf-ppl__empty--italic {
+  font-style: italic;
+}

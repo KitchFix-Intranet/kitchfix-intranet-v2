@@ -22,6 +22,7 @@ function titleFor(pathname: string, dateLong: string, periodTag: string | null):
     { test: (p) => p.startsWith("/academy/read/"), v: { title: "Reading", crumb: "Academy / To do" } },
     { test: (p) => p === "/academy/admin",          v: { title: "Admin",      crumb: "Cycles" } },
     { test: (p) => p === "/academy/admin/people",   v: { title: "Admin",      crumb: "People" } },
+    { test: (p) => p === "/academy/team",            v: { title: "Team",       crumb: "Your team's compliance" } },
     { test: (p) => p === "/library",                v: { title: "Library",  crumb: "Find any document" } },
     { test: (p) => p === "/library/shelves",        v: { title: "Library",  crumb: "Every operating document, current" } },
     { test: (p) => p.startsWith("/library/"),       v: { title: "Document", crumb: "Library" } },
@@ -126,6 +127,7 @@ export default async function ShellLayout({
       topbar={topbar}
       todoCount={todoCount}
       isOwner={isOwner}
+      role={role}
     >
       <RevealGate />
       {children}

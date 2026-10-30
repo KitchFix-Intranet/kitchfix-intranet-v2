@@ -76,6 +76,15 @@ const ADMIN_ACADEMY_ENTRY: NavItem = {
   label: "Admin",
   Icon: SlidersHorizontal,
 };
+// Team entry - visible when the viewer `role` is owner OR lead
+// (learners never see this door; the access gate also 404s them if
+// they type the URL). Appended to ACADEMY_NAV_BASE at render time.
+// Lucide `Users` reads as "a group of people" cleanly.
+const TEAM_ACADEMY_ENTRY: NavItem = {
+  href: "/academy/team",
+  label: "Team",
+  Icon: Users,
+};
 
 // Admin-level nav. Train E1 shipped Cycles. Train E3 adds People -
 // the roster + compliance read with the one write that unblocks
@@ -140,12 +149,18 @@ type Props = {
   // layout computes this only on academy routes (one extra query);
   // elsewhere it is null and the badge never renders.
   todoCount?: number | null;
-  // Owner flag. Today the shell layout only lets owners load any
-  // page (`requireOwnerPage` 404s non-owners), so this is always
-  // true at runtime. Threaded as a prop so when the app opens to
-  // learners, the Admin rail entry still correctly stays hidden
-  // for non-owners without touching Shell internals.
+  // Owner flag. Threaded from the gated layout. With the release
+  // switch OFF only the owner reaches the shell at all; with it ON,
+  // leads + learners also reach - the Admin door stays hidden for
+  // them because this flag is false.
   isOwner?: boolean;
+  // Viewer role from the access gate. Owner + lead see the Team
+  // rail entry; a learner never sees it. The access gate still 404s
+  // a learner if they type /academy/team, so the Team door is a
+  // discoverability hint, not a security surface. "denied" is
+  // typed-reachable but never reaches the shell (the gate notFound()s
+  // first); the Shell treats it the same as learner (no Team door).
+  role?: "owner" | "lead" | "learner" | "denied";
 };
 
 export function Shell({
@@ -157,13 +172,21 @@ export function Shell({
   crumb,
   todoCount = null,
   isOwner = false,
+  role = "learner",
 }: Props) {
   const pathname = usePathname();
   const inStockpot = isStockpotRoute(pathname);
   const inAcademy = isAcademyRoute(pathname);
   const inAdmin = isAdminRoute(pathname);
   const inLibrary = isLibraryRoute(pathname);
-  const academyNav = isOwner ? [...ACADEMY_NAV_BASE, ADMIN_ACADEMY_ENTRY] : ACADEMY_NAV_BASE;
+  // Academy rail composition. Base entries for everyone who reaches
+  // the Academy. Owners also see the Admin door; owners + leads see
+  // the Team door. Learners see only the base entries. The access
+  // gate separately 404s a learner who deep-links /academy/team.
+  const canSeeTeam = isOwner || role === "lead";
+  const academyNav: NavItem[] = [...ACADEMY_NAV_BASE];
+  if (canSeeTeam) academyNav.push(TEAM_ACADEMY_ENTRY);
+  if (isOwner) academyNav.push(ADMIN_ACADEMY_ENTRY);
   // Admin is nested inside Academy; the admin check runs first so
   // the rail swaps to Cycles/etc. when the owner is in /academy/
   // admin, and shows the Academy items (incl. Admin link) elsewhere
@@ -305,9 +328,13 @@ export function Shell({
                 active = pathname === "/library/shelves" || pathname.startsWith("/library/shelves/");
               } else if (inAdmin && href === "/academy/admin") {
                 // Cycles is the admin index; must NOT light up when a
-                // sub-page (/academy/admin/people, future /questions,
-                // /team) is active. Same shape as the Library split.
+                // sub-page (/academy/admin/people, future /questions)
+                // is active. Same shape as the Library split.
                 active = pathname === "/academy/admin";
+              } else if (inAcademy && href === "/academy") {
+                // "To do" is the Academy index; the Done, Team, Admin
+                // and read sub-pages must not also light this item.
+                active = pathname === "/academy";
               } else {
                 active = isActive(pathname, href);
               }
