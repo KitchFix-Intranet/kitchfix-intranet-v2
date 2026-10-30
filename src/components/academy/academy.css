@@ -714,7 +714,12 @@
   pointer-events: none;
   z-index: 0;
 }
-.kf-academy > * { position: relative; z-index: 1; }
+/* Lift non-wash direct children above the wash. The :not() exclusion
+ * is load-bearing: without it, .kf-academy__wash itself picks up
+ * position:relative + z-index:1 and lands in the flex flow, which
+ * pushes the band 232px below the topbar (exact post-F1 regression
+ * Kevin flagged). Scoped to .kf-academy only. */
+.kf-academy > :not(.kf-academy__wash) { position: relative; z-index: 1; }
 @media (max-width: 860px) {
   .kf-academy__wash { display: none; }
 }
