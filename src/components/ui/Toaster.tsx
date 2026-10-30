@@ -1,13 +1,15 @@
 "use client";
 
 import { useEffect, useState, useSyncExternalStore } from "react";
+import { Check } from "lucide-react";
 
-type ToastTone = "ink" | "block";
+type ToastTone = "ink" | "block" | "good";
 type Toast = {
   id: number;
   message: string;
   tone: ToastTone;
   undo?: () => void | Promise<void>;
+  leaving?: boolean;
 };
 
 type Store = {
@@ -34,10 +36,16 @@ function push(t: Toast) {
   store.toasts = [...store.toasts, t];
   emit();
   const id = t.id;
+  // Mark leaving first so the exit keyframe plays, then remove.
+  const EXIT_MS = 200;
   window.setTimeout(() => {
-    store.toasts = store.toasts.filter((x) => x.id !== id);
+    store.toasts = store.toasts.map((x) => (x.id === id ? { ...x, leaving: true } : x));
     emit();
-  }, 6000);
+    window.setTimeout(() => {
+      store.toasts = store.toasts.filter((x) => x.id !== id);
+      emit();
+    }, EXIT_MS);
+  }, 6000 - EXIT_MS);
 }
 
 export function toast(
@@ -74,8 +82,11 @@ export function Toaster() {
 
 function ToastView({ toast: t, onDismiss }: { toast: Toast; onDismiss: () => void }) {
   const [busy, setBusy] = useState(false);
+  const toneClass =
+    t.tone === "block" ? " kf-toast--block" : t.tone === "good" ? " kf-toast--good" : "";
   return (
-    <div className={`kf-toast${t.tone === "block" ? " kf-toast--block" : ""}`}>
+    <div className={`kf-toast${toneClass}${t.leaving ? " is-leaving" : ""}`}>
+      {t.tone === "good" ? <Check size={16} strokeWidth={2.5} aria-hidden /> : null}
       <span>{t.message}</span>
       {t.undo ? (
         <button

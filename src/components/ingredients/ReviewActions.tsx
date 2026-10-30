@@ -161,6 +161,7 @@ export function ReviewActions({
     const d = r.data as { confirmed?: number };
     const confirmedIds = [...checkedIds];
     toast(`Confirmed ${fmtCount(d.confirmed ?? checkedCount)} items`, {
+      tone: "good",
       undo: async () => {
         for (const id of confirmedIds) {
           await postJson("/api/review/undo", { itemId: id });

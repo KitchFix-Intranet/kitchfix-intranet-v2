@@ -211,6 +211,7 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
             type="button"
             role="radio"
             aria-checked={sort === "spend"}
+            aria-pressed={sort === "spend"}
             className={`kf-chip${sort === "spend" ? " kf-chip--on" : ""}`}
             onClick={() => setSort("spend")}
             title="Highest annual spend first"
@@ -222,6 +223,7 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
             type="button"
             role="radio"
             aria-checked={sort === "name"}
+            aria-pressed={sort === "name"}
             className={`kf-chip${sort === "name" ? " kf-chip--on" : ""}`}
             onClick={() => setSort("name")}
           >
@@ -232,6 +234,7 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
             type="button"
             role="radio"
             aria-checked={sort === "links"}
+            aria-pressed={sort === "links"}
             className={`kf-chip${sort === "links" ? " kf-chip--on" : ""}`}
             onClick={() => setSort("links")}
             title="Most linked vendor items first"
@@ -243,6 +246,7 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
             type="button"
             role="radio"
             aria-checked={sort === "spread"}
+            aria-pressed={sort === "spread"}
             className={`kf-chip${sort === "spread" ? " kf-chip--on" : ""}`}
             onClick={() => setSort("spread")}
             title="Widest price spread first (bad-pack radar)"
@@ -257,6 +261,7 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
             type="button"
             role="radio"
             aria-checked={superCat === "all"}
+            aria-pressed={superCat === "all"}
             className={`kf-chip${superCat === "all" ? " kf-chip--on" : ""}`}
             onClick={() => setSuperCat("all")}
           >
@@ -270,6 +275,7 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
                 type="button"
                 role="radio"
                 aria-checked={superCat === c}
+                aria-pressed={superCat === c}
                 className={`kf-chip${superCat === c ? " kf-chip--on" : ""}${n === 0 ? " kf-chip--empty" : ""}`}
                 onClick={() => setSuperCat(c)}
                 disabled={n === 0}
@@ -285,6 +291,7 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
             type="button"
             role="radio"
             aria-checked={resaleFilter === "recipe"}
+            aria-pressed={resaleFilter === "recipe"}
             className={`kf-chip${resaleFilter === "recipe" ? " kf-chip--on" : ""}`}
             onClick={() => setResaleFilter((v) => (v === "recipe" ? "all" : "recipe"))}
           >
@@ -294,6 +301,7 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
             type="button"
             role="radio"
             aria-checked={resaleFilter === "resale"}
+            aria-pressed={resaleFilter === "resale"}
             className={`kf-chip${resaleFilter === "resale" ? " kf-chip--on" : ""}`}
             onClick={() => setResaleFilter((v) => (v === "resale" ? "all" : "resale"))}
           >
@@ -303,6 +311,7 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
             type="button"
             role="radio"
             aria-checked={onlyFlagged}
+            aria-pressed={onlyFlagged}
             className={`kf-chip kf-chip--warn${onlyFlagged ? " kf-chip--on" : ""}`}
             onClick={() => setOnlyFlagged((v) => !v)}
             title="Only masters flagged by the bad-pack radar"

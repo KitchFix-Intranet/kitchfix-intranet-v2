@@ -229,6 +229,7 @@ export function ReviewFilter({
             type="button"
             role="radio"
             aria-checked={sort === "dollars"}
+            aria-pressed={sort === "dollars"}
             className={`kf-chip${sort === "dollars" ? " kf-chip--on" : ""}`}
             onClick={() => setSort("dollars")}
             title="Highest dollars first"
@@ -240,6 +241,7 @@ export function ReviewFilter({
             type="button"
             role="radio"
             aria-checked={sort === "alpha"}
+            aria-pressed={sort === "alpha"}
             className={`kf-chip${sort === "alpha" ? " kf-chip--on" : ""}`}
             onClick={() => setSort("alpha")}
             title="Alphabetical by ingredient / proposed name"
@@ -254,6 +256,7 @@ export function ReviewFilter({
             type="button"
             role="radio"
             aria-checked={superCat === "all"}
+            aria-pressed={superCat === "all"}
             className={`kf-chip${superCat === "all" ? " kf-chip--on" : ""}`}
             onClick={() => setSuperCat("all")}
           >
@@ -267,6 +270,7 @@ export function ReviewFilter({
                 type="button"
                 role="radio"
                 aria-checked={superCat === c}
+                aria-pressed={superCat === c}
                 className={`kf-chip${superCat === c ? " kf-chip--on" : ""}${n === 0 ? " kf-chip--empty" : ""}`}
                 onClick={() => setSuperCat(c)}
                 disabled={n === 0}
@@ -282,6 +286,7 @@ export function ReviewFilter({
             type="button"
             role="radio"
             aria-checked={kindFilter === "needs"}
+            aria-pressed={kindFilter === "needs"}
             className={`kf-chip kf-chip--warn${kindFilter === "needs" ? " kf-chip--on" : ""}`}
             onClick={() => setKindFilter((v) => (v === "needs" ? "all" : "needs"))}
             title="Groups whose ingredient has no super-category yet"
@@ -292,6 +297,7 @@ export function ReviewFilter({
             type="button"
             role="radio"
             aria-checked={kindFilter === "resale"}
+            aria-pressed={kindFilter === "resale"}
             className={`kf-chip${kindFilter === "resale" ? " kf-chip--on" : ""}`}
             onClick={() => setKindFilter((v) => (v === "resale" ? "all" : "resale"))}
             title="Groups whose ingredient is flagged resale"

@@ -114,7 +114,7 @@
   color: var(--sp-body);
   background: var(--sp-warn-bg);
   border-left: 3px solid var(--sp-warn-strong);
-  border-radius: 2px;
+  border-radius: var(--sp-r-hair);
   padding: var(--sp-sp-3) var(--sp-sp-4);
   font-size: var(--sp-t-body);
   margin: 0;

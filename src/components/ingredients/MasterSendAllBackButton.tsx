@@ -56,7 +56,7 @@ export function MasterSendAllBackButton({
         failed > 0
           ? `Sent ${undone} back; ${failed} failed`
           : `Sent ${undone} back to review`,
-        failed > 0 ? { tone: "block" } : undefined
+        failed > 0 ? { tone: "block" } : { tone: "good" }
       );
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e), { tone: "block" });

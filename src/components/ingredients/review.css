@@ -219,7 +219,7 @@
  * collapse their font-weight. Reduced-motion falls back to a brief
  * opacity fade with no transform.
  * ----------------------------------------------------------------- */
-.kf-rvc { position: relative; transition: opacity 260ms var(--sp-ease), transform 260ms var(--sp-ease); }
+.kf-rvc { position: relative; transition: opacity var(--sp-slow) var(--sp-ease), transform var(--sp-slow) var(--sp-ease); }
 .kf-rvc--leaving {
   opacity: 0.35;
   transform: translateY(-6px);
@@ -228,7 +228,7 @@
 .kf-rvc__row--leaving td {
   color: var(--sp-muted);
   text-decoration: line-through;
-  transition: color 220ms var(--sp-ease), opacity 220ms var(--sp-ease);
+  transition: color var(--sp-base) var(--sp-ease), opacity var(--sp-base) var(--sp-ease);
   opacity: 0.5;
 }
 .kf-rvc__leaving-overlay {
@@ -246,16 +246,16 @@
   font-size: var(--sp-t-h4);
   letter-spacing: .5px;
   border-radius: inherit;
-  animation: kf-rvc-fade 180ms var(--sp-ease) both;
+  animation: kf-rvc-fade var(--sp-base) var(--sp-ease) both;
 }
 @keyframes kf-rvc-fade {
   from { opacity: 0; }
   to { opacity: 1; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .kf-rvc { transition: opacity 150ms linear; }
+  .kf-rvc { transition: opacity var(--sp-fast) linear; }
   .kf-rvc--leaving { transform: none; }
-  .kf-rvc__row--leaving td { transition: opacity 150ms linear; }
+  .kf-rvc__row--leaving td { transition: opacity var(--sp-fast) linear; }
   .kf-rvc__leaving-overlay { animation: none; }
 }
 .kf-rvc__desc {
@@ -304,7 +304,7 @@
   align-items: center;
   gap: 4px;
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--sp-r-pill);
   font-family: var(--sp-ui);
   font-size: var(--sp-t-label);
   font-weight: 700;
@@ -312,7 +312,7 @@
 }
 .kf-rvc__status--busy { background: var(--sp-sky-tint); color: var(--sp-navy); }
 .kf-rvc__status--done { background: var(--sp-good-bg); color: var(--sp-good); }
-.kf-rvc__spin { animation: kf-rvc-spin 900ms linear infinite; }
+.kf-rvc__spin { animation: kf-rvc-spin var(--sp-spin) linear infinite; }
 @keyframes kf-rvc-spin {
   to { transform: rotate(360deg); }
 }
@@ -367,6 +367,12 @@
 .kf-rvc__row:not(.kf-rvc__row--on) td { opacity: 0.6; }
 .kf-rvc__row:not(.kf-rvc__row--on) .kf-rvc__check-col { opacity: 1; }
 
+/* Row hover - the same --sp-raise the vendor-items table and the master
+ * list already use. Transition on the cells, not the row, so the
+ * leaving-animation rules on td keep their own timing. */
+.kf-rvc__row td { transition: background var(--sp-fast) var(--sp-ease); }
+.kf-rvc__row:hover td { background: var(--sp-raise); }
+
 /* Flagged row: subtle amber left-edge so Kevin can scan a card for
  * flags at a glance. The in-cell flag chip + note sit inside the item
  * cell; they already carry the amber hue via kf-flag--warn. */
@@ -389,17 +395,24 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 2px;
-  margin-left: 4px;
+  /* 28px box on a 14px icon: clears WCAG 2.5.8 (24 minimum) without
+   * widening the row. Negative vertical margin keeps the line box the
+   * height it was. */
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  margin: -7px 0 -7px var(--sp-sp-1);
   border: 0;
   background: transparent;
   color: var(--sp-muted);
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--sp-r-xs);
   line-height: 0;
-  opacity: 0.45;
+  opacity: 0.6;
   vertical-align: middle;
-  transition: opacity 120ms ease, color 120ms ease, background 120ms ease;
+  transition: opacity var(--sp-fast) var(--sp-ease),
+              color var(--sp-fast) var(--sp-ease),
+              background var(--sp-fast) var(--sp-ease);
 }
 .kf-rvc__flagbtn:hover { opacity: 1; color: var(--sp-warn); background: var(--sp-warn-bg); }
 .kf-rvc__flagbtn:focus-visible { outline: 2px solid var(--sp-warn-strong); outline-offset: 1px; opacity: 1; }
@@ -672,6 +685,7 @@
 .kf-review__cats { flex: 1 1 auto; min-width: 0; }
 
 .kf-chip {
+  position: relative;            /* anchors the ::before hit area */
   display: inline-flex;
   align-items: center;
   gap: var(--sp-sp-1);
@@ -680,21 +694,36 @@
   background: var(--sp-card);
   color: var(--sp-body);
   border: 1px solid var(--sp-line);
-  border-radius: 999px;
+  border-radius: var(--sp-r-pill);
   font-family: var(--sp-ui);
   font-size: var(--sp-t-micro);
   font-weight: 700;
   cursor: pointer;
   white-space: nowrap;
+  transition: background var(--sp-fast) var(--sp-ease),
+              color var(--sp-fast) var(--sp-ease),
+              border-color var(--sp-fast) var(--sp-ease),
+              transform var(--sp-fast) var(--sp-ease);
 }
+/* 32px visual, 44px hit area - the notch-toggle precedent from
+ * docs/DESIGN.md section 2. Keeps the rail light while meeting the
+ * corp control floor. */
+.kf-chip::before { content: ""; position: absolute; inset: -6px -2px; }  /* 32 + 12 = 44 tall; 2px sideways so neighbours barely overlap */
 .kf-chip:hover:not([disabled]) { background: var(--sp-sky-tint); }
+.kf-chip:active:not([disabled]) { transform: translateY(1px); }
 .kf-chip:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
 .kf-chip--on {
   background: var(--sp-navy);
   color: var(--sp-card);
   border-color: var(--sp-navy);
 }
-.kf-chip--on:hover { background: var(--sp-navy); }
+/* Must out-rank `.kf-chip:hover:not([disabled])` (0,3,0) or the hover
+ * paints sky-tint under white text. Measured live before the fix. */
+.kf-chip.kf-chip--on:hover:not([disabled]) { background: var(--sp-navy-deep); border-color: var(--sp-navy-deep); }
+.kf-chip--warn.kf-chip--on:hover:not([disabled]) { background: var(--sp-warn); border-color: var(--sp-warn); }
+/* Hairline between the sort chips and the filter chips so two filled
+ * chips on one rail do not read as two active filters. */
+.kf-chips__sep { width: 1px; align-self: stretch; margin: var(--sp-sp-1) var(--sp-sp-1); background: var(--sp-line); }
 .kf-chip--warn { color: var(--sp-warn); border-color: color-mix(in srgb, var(--sp-warn) 40%, var(--sp-line)); }
 .kf-chip--warn.kf-chip--on { background: var(--sp-warn); color: var(--sp-card); border-color: var(--sp-warn); }
 .kf-chip--empty { color: var(--sp-muted); background: var(--sp-ground); cursor: not-allowed; opacity: 0.6; }
@@ -749,7 +778,7 @@
   background: var(--sp-sky-tint);
   color: var(--sp-ink);
   border: 1px solid var(--sp-line);
-  border-radius: 999px;
+  border-radius: var(--sp-r-pill);
   font-family: var(--sp-ui);
   font-size: var(--sp-t-micro);
   font-weight: 700;
@@ -826,7 +855,7 @@
 
 .kf-ingtype__list {
   position: absolute;
-  z-index: 10;
+  z-index: var(--sp-z-topbar);
   left: 0; right: 0;
   top: 100%;
   margin: 2px 0 0;
@@ -1063,7 +1092,7 @@
   align-items: center;
   gap: 2px;
   padding: 1px 6px;
-  border-radius: 999px;
+  border-radius: var(--sp-r-pill);
   font-family: var(--sp-ui);
   font-size: var(--sp-t-label);
   font-weight: 700;

@@ -7,8 +7,8 @@
 /* ---------- Eyebrow ---------- */
 /*
  * The eyebrow's red bar animates scaleX from the left over --sp-slow with a
- * 120ms delay, transform-origin at left, keeping the -30deg skew in both
- * keyframes. Pin so no one re-centers the origin and the sheen stays crisp.
+ * var(--sp-fast) delay, transform-origin at left, keeping the -30deg skew in
+ * both keyframes. Pin so no one re-centers the origin and the sheen stays crisp.
  */
 .kf-eyebrow {
   display: inline-block;
@@ -49,7 +49,7 @@
   text-transform: uppercase;
   letter-spacing: 1px;
   transform: skewX(-12deg);
-  border-radius: 2px;
+  border-radius: var(--sp-r-hair);
 }
 .kf-skew-tag > span { display: inline-block; transform: skewX(12deg); }
 
@@ -103,8 +103,11 @@
 }
 .kf-btn--sm { min-height: var(--sp-floor-corp); padding: 0 14px; border-radius: var(--sp-r-sm); font-size: var(--sp-t-label); }
 
-.kf-btn.is-busy svg { animation: kf-spin 1s linear infinite; }
+.kf-btn.is-busy svg { animation: kf-spin var(--sp-spin) linear infinite; }
 .kf-btn.is-busy { pointer-events: none; }
+
+/* Brand the native checkbox / radio without rebuilding them. */
+input[type="checkbox"], input[type="radio"] { accent-color: var(--sp-navy); }
 /* <Link> can't carry a disabled attribute, so pager uses .is-disabled. */
 .kf-btn.is-disabled { opacity: 0.4; pointer-events: none; }
 @keyframes kf-spin { to { transform: rotate(360deg); } }
@@ -272,6 +275,13 @@
   max-width: min(560px, calc(100vw - var(--sp-sp-5) * 2));
 }
 .kf-toast--block { background: var(--sp-block); }
+.kf-toast--good { background: var(--sp-navy); }
+.kf-toast--good > svg { flex: 0 0 auto; color: var(--sp-good-on-navy); }
+.kf-toast.is-leaving { animation: kf-toast-out var(--sp-base) var(--sp-ease) both; }
+@keyframes kf-toast-out {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(8px); }
+}
 .kf-toast__undo {
   min-height: var(--sp-floor-corp);
   padding: 0 14px;
@@ -290,6 +300,7 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .kf-toast { animation: none; }
+  .kf-toast.is-leaving { animation: none; }
 }
 
 /* ---------- KV (definition rows) ---------- */

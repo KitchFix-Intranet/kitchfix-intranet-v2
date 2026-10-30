@@ -48,7 +48,7 @@ export function RowSendBackButton({
         setBusy(false);
         return;
       }
-      toast("Sent back to review");
+      toast("Sent back to review", { tone: "good" });
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e), { tone: "block" });
       setBusy(false);

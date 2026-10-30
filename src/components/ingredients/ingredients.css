@@ -178,7 +178,7 @@
   align-items: center;
 }
 .kf-coverage__legend li { display: inline-flex; align-items: center; gap: var(--sp-sp-1); }
-.kf-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.kf-swatch { display: inline-block; width: 10px; height: 10px; border-radius: var(--sp-r-hair); }
 .kf-swatch--share { background: var(--sp-sky-line); }
 .kf-swatch--linked { background: var(--sp-navy); }
 

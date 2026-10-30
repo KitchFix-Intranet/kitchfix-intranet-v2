@@ -15,12 +15,12 @@
   --sp-t-micro:12px; --sp-t-label:13px; --sp-t-table:14.5px; --sp-t-body:16px;
   --sp-t-item:18px; --sp-t-h3:20px; --sp-t-title:24px; --sp-t-num:28px;
   --sp-t-h1:30px; --sp-t-value:34px;
-  --sp-r-sm:10px; --sp-r-ctl:12px; --sp-r-card:14px; --sp-r-lg:16px; --sp-r-chip:22px; --sp-r-pill:999px;
+  --sp-r-hair:2px; --sp-r-xs:4px; --sp-r-sm:10px; --sp-r-ctl:12px; --sp-r-card:14px; --sp-r-lg:16px; --sp-r-chip:22px; --sp-r-pill:999px;
   --sp-shadow:0 1px 2px rgba(14,42,78,.06),0 4px 14px rgba(14,42,78,.06);
   --sp-shadow-lift:0 2px 4px rgba(14,42,78,.08),0 10px 22px rgba(14,42,78,.12);
   --sp-rail:236px; --sp-rail-slim:76px; --sp-topbar:64px; --sp-tabbar:64px; --sp-canvas-max:1520px;
   --sp-sheet-max:792px;
-  --sp-fast:120ms; --sp-base:200ms; --sp-slow:320ms; --sp-rise:480ms; --sp-stagger:40ms;
+  --sp-fast:120ms; --sp-base:200ms; --sp-slow:320ms; --sp-rise:480ms; --sp-stagger:40ms; --sp-spin:900ms;
   --sp-ease:cubic-bezier(.2,.8,.2,1); --sp-ease-io:cubic-bezier(.65,0,.35,1);
   --sp-shadow-float:0 8px 24px rgba(14,42,78,.14),0 24px 48px rgba(14,42,78,.10);
   --sp-band:128px; --sp-row:48px;
