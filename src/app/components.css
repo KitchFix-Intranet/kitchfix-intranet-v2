@@ -17,9 +17,15 @@
   font-size: var(--sp-t-label);
   letter-spacing: 2px;
   text-transform: uppercase;
-  color: var(--sp-red);
+  /* R-AC20: the bar carries brand red; the word does not. Red on white is
+   * 4.30:1 and red on navy-deep is 3.35:1 - both under AA at 13px, and law
+   * 12 reserves red for things that block. */
+  color: var(--sp-navy);
   position: relative;
 }
+/* On a navy ground (every IdentBand) the eyebrow word is sky (10.6:1 on
+ * --sp-navy-deep); the ::after bar stays red. */
+.kf-band .kf-eyebrow { color: var(--sp-sky); }
 .kf-eyebrow::after {
   content: "";
   display: block;

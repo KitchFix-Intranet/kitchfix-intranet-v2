@@ -20,11 +20,43 @@ function parts(iso: string): { y: number; m: number; d: number } | null {
   return { y, m, d };
 }
 
+// GOTCHA #4 companion: a date-only string ("2026-11-30") parses as UTC
+// midnight and then formats in Chicago as the previous day. Any input
+// without a time component (no "T") is formatted directly from its
+// y/m/d parts and never round-tripped through a Date, so stored dates
+// render the day they were stored. Timestamps (with "T" or a tz
+// suffix) keep today's behaviour.
+const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const MONTHS_LONG  = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+function isDateOnly(iso: string): boolean { return !iso.includes("T"); }
+
 export function fmtDate(
   iso: string | null,
   style: "short" | "long" | "time" = "short"
 ): string {
   if (!iso) return "-";
+  // Date-only path: build the y/m/d directly from the string so the
+  // Chicago TZ never shifts us back a day.
+  if (isDateOnly(iso)) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+    if (!m) return iso;
+    const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    if (!y || !mo || !d) return iso;
+    const todayY = Number(
+      new Intl.DateTimeFormat("en-US", { timeZone: TZ, year: "numeric" }).format(new Date()),
+    );
+    if (style === "long") {
+      // Degrade gracefully: no weekday on a date-only input (we would
+      // need to parse-and-shift to know it, which is the exact bug we
+      // are avoiding). Month + day + year is honest.
+      return `${MONTHS_LONG[mo - 1]} ${d}, ${y}`;
+    }
+    if (style === "time") {
+      // No time to show on a date-only input; render short.
+      return y === todayY ? `${MONTHS_SHORT[mo - 1]} ${d}` : `${MONTHS_SHORT[mo - 1]} ${d}, ${y}`;
+    }
+    return y === todayY ? `${MONTHS_SHORT[mo - 1]} ${d}` : `${MONTHS_SHORT[mo - 1]} ${d}, ${y}`;
+  }
   const p = parts(iso);
   if (!p) return iso;
   const t = Date.parse(iso);

@@ -98,6 +98,13 @@ export interface QueueItem {
   signed_at: string | null;
   certificate_serial: string | null;
   attestation_id: string | number | null;
+  // Progress signals read from academy_module_progress. Drive the hero
+  // card's "Pick up where you left off" vs "Start next" without needing
+  // a per-doc step total (which would require loading document_content
+  // per row and does not belong in loadRoom). F1 shows coarse state
+  // only; a precise "Section N of M" lands in a later train.
+  started: boolean;
+  sections_seen_count: number;
 }
 
 export interface YearCell {
@@ -307,7 +314,7 @@ export async function loadRoom(email: string, supaIn?: SupabaseClient): Promise<
       .eq("worker_id", identity.workerId),
     supa
       .from("academy_module_progress")
-      .select("requirement_id, time_spent_seconds")
+      .select("requirement_id, time_spent_seconds, sections_seen, started_at")
       .eq("worker_id", identity.workerId),
   ]);
   const errorChecks: Array<[{ error: { message: string } | null }, string]> = [
@@ -418,12 +425,31 @@ export async function loadRoom(email: string, supaIn?: SupabaseClient): Promise<
     });
   }
 
+  // Per-requirement progress for the hero's started-vs-not-started
+  // signal. Keyed on requirement_id so the queue mapper is a point
+  // lookup, no per-row DB round-trip. started_at and sections_seen
+  // are both honest signals - either indicates the learner opened
+  // the module at least once.
+  type ProgressRow = {
+    requirement_id: string | number | null;
+    time_spent_seconds: number | null;
+    sections_seen: string[] | null;
+    started_at: string | null;
+  };
+  const progressByReq = new Map<string | number, ProgressRow>();
+  for (const row of (viewerProgressQ.data as ProgressRow[]) || []) {
+    if (row.requirement_id != null) progressByReq.set(row.requirement_id, row);
+  }
+
   const queue: QueueItem[] = reqs.map((r) => {
     const doc = docsById.get(r.doc_id) || null;
     const ob = obligationsByKey.get(`${r.doc_id}|${r.obligation_key}`) || null;
     const cyc = r.cycle_id != null ? cyclesById.get(r.cycle_id) || null : null;
     const att = attestationsByReq.get(r.requirement_id) || null;
     const part = partIndex.get(r.requirement_id) || { partNumber: 1, totalParts: 1 };
+    const prog = progressByReq.get(r.requirement_id) || null;
+    const sectionsSeen = Array.isArray(prog?.sections_seen) ? prog!.sections_seen : [];
+    const started = !!prog && (!!prog.started_at || sectionsSeen.length > 0);
     return {
       requirement_id: r.requirement_id,
       doc_id: r.doc_id,
@@ -448,6 +474,8 @@ export async function loadRoom(email: string, supaIn?: SupabaseClient): Promise<
       signed_at: att?.signed_at || null,
       certificate_serial: att?.certificate_serial || null,
       attestation_id: att?.attestation_id ?? null,
+      started,
+      sections_seen_count: sectionsSeen.length,
     };
   });
   const signedCount = queue.filter((q) => q.signed).length;

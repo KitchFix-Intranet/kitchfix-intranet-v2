@@ -7,7 +7,7 @@
 // the requirement's document and obligation. Any client-supplied
 // attestationText in the body is ignored.)
 //
-// The one route that lands a signature. Five server-side gates, all
+// The one route that lands a signature. Six server-side gates, all
 // of which must pass, then an INSERT into academy_attestations that
 // is idempotent by the client-supplied attestationId.
 //
@@ -19,6 +19,11 @@
 //   4. typedName matches the authenticated person's display_name
 //      (case-insensitive, whitespace-trimmed).
 //   5. The requirement is not waived.
+//   6. R-AC23: the document has readable content (document_content.html
+//      exists and is non-empty for the viewer's language, English
+//      default). A document with no body text cannot be attested to.
+//      No inline acknowledgement path is accepted - the guard state
+//      is the only honest UI.
 //
 // IDEMPOTENCY - attestationId is client-generated. On PK conflict,
 // return the existing row with 200 (person signed, response was lost).
@@ -158,6 +163,40 @@ export async function POST(request: NextRequest) {
         error: "gate_failed",
         gate: 5,
         detail: "requirement is waived; signature is not required",
+      },
+      { status: 409 }
+    );
+  }
+
+  // ─── Gate 6: R-AC23 - the document has readable content ───
+  // A document with no document_content row (or an empty html body)
+  // cannot be attested to; the Reader renders the guard state and
+  // never surfaces a Sign control for it. This gate stands even if
+  // a legacy client somehow POSTs to this route - the server is the
+  // boundary. No inline acknowledgement path is accepted.
+  const contentQ = await supa
+    .from("document_content")
+    .select("html")
+    .eq("doc_id", req.doc_id)
+    .eq("lang", "en")
+    .maybeSingle();
+  if (contentQ.error) {
+    console.error("[api/academy/sign] content lookup:", contentQ.error.message);
+    return NextResponse.json({ error: "server_error", scope: "gate6" }, { status: 500 });
+  }
+  const html = (contentQ.data as { html: string | null } | null)?.html ?? "";
+  // "readable" = non-empty trimmed html with some non-tag text in it.
+  // Strips tags, counts non-whitespace characters. 20 is a generous
+  // floor: the shortest real document section runs well past that.
+  const strippedLen = html.replace(/<[^>]*>/g, "").replace(/\s+/g, "").length;
+  if (strippedLen < 20) {
+    return NextResponse.json(
+      {
+        error: "gate_failed",
+        gate: 6,
+        detail:
+          "document has no readable content; signature is refused per R-AC23. The reader renders the guard state instead.",
+        doc_id: req.doc_id,
       },
       { status: 409 }
     );
