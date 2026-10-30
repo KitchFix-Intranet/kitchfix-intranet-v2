@@ -192,6 +192,7 @@ export async function POST(req: NextRequest) {
               bySource: {},
               derivedPacks: { accepted: 0, rejectedByBounds: 0 },
               tierBRejectedByBounds: 0,
+              quantityCorrectedToOne: 0,
               wouldBeFlags: 0,
               topChanges: [],
             },
@@ -293,6 +294,9 @@ export async function POST(req: NextRequest) {
   // new blended inputs. unit_consistent is false when the lines mix
   // billed units (then quantity-derived tiers are skipped).
   const actualsByItem = new Map<string, Actuals>();
+  // Prompt F counter: observations where unit_price == extended_price
+  // and quantity != 1 (corrected to 1 inside the loop below).
+  let quantityCorrectedToOne = 0;
   {
     const ids = items.map((it) => it.id);
     const perItem = new Map<
@@ -366,9 +370,34 @@ export async function POST(req: NextRequest) {
         }
         // Blended sums (count only strictly positive values).
         const ext = Number(o.extended_price ?? 0);
-        const qty = Number(o.quantity ?? 0);
+        const qtyRaw = Number(o.quantity ?? 0);
         const wt = Number(o.weight_line_value ?? 0);
         const up = Number(o.unit_price ?? 0);
+
+        // Prompt F: extended = quantity * unit_price, so when unit_price
+        // and extended_price are equal the quantity is 1 BY DEFINITION.
+        // Any other value is an OCR mis-read - on BACON SLICED CANADIAN
+        // STYLE it is the pack count (6 x 2 LB) leaking out of the
+        // description into the quantity column, which made Tier C read
+        // 58.85/12 = $4.90 as a CASE price and then divide by the 12 lb
+        // pack again, landing at $0.409/lb.
+        //
+        // This holds whichever column OCR actually corrupted:
+        //   quantity wrong -> 1 case @ $58.85            = $58.85/case
+        //   extended wrong -> 12 cases, true ext 706.20  = $58.85/case
+        // Both give the same case price, so the correction is safe
+        // without deciding which field failed.
+        //
+        // Disjoint from Prompt E's isColumnCopy (measured: 0 overlap).
+        const unitPriceIsLineTotal =
+          Number.isFinite(up) && up > 0 &&
+          Number.isFinite(ext) && ext > 0 &&
+          Math.abs(up - ext) < 0.005 &&
+          Number.isFinite(qtyRaw) &&
+          Math.abs(qtyRaw - 1) > 0.005;
+
+        const qty = unitPriceIsLineTotal ? 1 : qtyRaw;
+        if (unitPriceIsLineTotal) quantityCorrectedToOne += 1;
         if (Number.isFinite(ext) && ext > 0) entry.sum_extended += ext;
 
         // Prompt E: OCR sometimes copies the extended-price column into
@@ -386,11 +415,14 @@ export async function POST(req: NextRequest) {
         // keep contributing. A reconciliation test would also re-break
         // ESSENTIA, which Prompt D released for exactly that reason.
         // Equality of quantity and extended is the only separating signal.
+        // Prompt F: still reads the RAW quantity. Prompt E's fingerprint
+        // is about the raw mis-read column; applying it to the corrected
+        // qty (always 1 when the F path fires) would miss column copies.
         const isColumnCopy =
-          Number.isFinite(qty) &&
+          Number.isFinite(qtyRaw) &&
           Number.isFinite(ext) &&
           ext > 2 &&
-          Math.abs(qty - ext) < 0.01;
+          Math.abs(qtyRaw - ext) < 0.01;
 
         // Paired, like the B1 and B2 aggregates: a line contributes its
         // quantity and its extended together or not at all, so Tier C can
@@ -874,6 +906,7 @@ export async function POST(req: NextRequest) {
       bySource,
       derivedPacks,
       tierBRejectedByBounds,
+      quantityCorrectedToOne,
       wouldBeFlags,
       topChanges,
     };
