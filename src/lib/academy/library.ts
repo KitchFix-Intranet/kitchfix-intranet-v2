@@ -217,6 +217,11 @@ export interface LibraryIndexDoc {
   keywords: string[];
   shelf: string | null;
   doc_class: string | null;
+  // F2 additions. Needed by the V7 hit2 row shape (version + date on
+  // the right). trains_you is retained for backward compat with any
+  // caller that still reads it; the Library UI ignores it (R-AC26).
+  version: string | number | null;
+  updated_at: string | null;
   trains_you: boolean;
 }
 
@@ -255,7 +260,7 @@ export async function loadLibraryIndex(
   const [docsQ, obQ] = await Promise.all([
     supa
       .from("documents")
-      .select("id, title, card_line, summary, keywords, shelf, doc_class")
+      .select("id, title, card_line, summary, keywords, shelf, doc_class, version, updated_at")
       .eq("status", "Live")
       .not("shelf", "is", null)
       .order("shelf", { ascending: true })
@@ -281,6 +286,8 @@ export async function loadLibraryIndex(
     keywords: string[] | null;
     shelf: string | null;
     doc_class: string | null;
+    version: string | number | null;
+    updated_at: string | null;
   };
   type ObRow = { doc_id: string; applies_to: unknown };
 
@@ -305,6 +312,8 @@ export async function loadLibraryIndex(
     keywords: Array.isArray(d.keywords) ? d.keywords : [],
     shelf: d.shelf || null,
     doc_class: d.doc_class || null,
+    version: d.version ?? null,
+    updated_at: d.updated_at ?? null,
     trains_you: trainsYou.has(d.id),
   }));
 
