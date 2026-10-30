@@ -12,6 +12,7 @@ import { requireAppAccess } from "@/lib/gate";
 import { resolveViewerRole } from "@/lib/academy/access";
 import { loadTeam } from "@/lib/academy/team";
 import { TeamView } from "@/components/academy/team/TeamView";
+import "@/components/academy/academy.css";
 import "@/components/academy/admin/admin.css";
 import "@/components/academy/team/team.css";
 

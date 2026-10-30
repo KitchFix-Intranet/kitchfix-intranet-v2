@@ -27,10 +27,17 @@ type Props = {
   kick?: string;
   facts?: AcademyBandFact[];
   cta?: { label: string; href: string };
+  // Optional on-navy action slot for pages whose CTA needs client
+  // interactivity (clipboard copy, dialog trigger) that a Link cannot
+  // express. When provided, it renders inside .kf-aband__cta in place
+  // of the Link; learner pages pass no actionSlot so their rendering
+  // is byte-identical.
+  actionSlot?: React.ReactNode;
 };
 
-export function AcademyBand({ eyebrow, title, kick, facts, cta }: Props) {
+export function AcademyBand({ eyebrow, title, kick, facts, cta, actionSlot }: Props) {
   const trimmedFacts = (facts ?? []).slice(0, 3);
+  const hasAction = !!(actionSlot || cta);
   return (
     <section className="kf-aband kf-band kf-only-desktop kf-reveal" aria-label="Overview">
       <div className="kf-aband__sheen" aria-hidden />
@@ -39,7 +46,7 @@ export function AcademyBand({ eyebrow, title, kick, facts, cta }: Props) {
         <h2 className="kf-aband__title">{title}</h2>
         {kick ? <p className="kf-aband__kick">{kick}</p> : null}
       </div>
-      {trimmedFacts.length > 0 || cta ? (
+      {trimmedFacts.length > 0 || hasAction ? (
         <div className="kf-aband__right">
           {trimmedFacts.map((f, i) => (
             <div key={`${f.label}-${i}`} className="kf-aband-fact">
@@ -52,7 +59,9 @@ export function AcademyBand({ eyebrow, title, kick, facts, cta }: Props) {
               </span>
             </div>
           ))}
-          {cta ? (
+          {actionSlot ? (
+            <div className="kf-aband__cta">{actionSlot}</div>
+          ) : cta ? (
             <div className="kf-aband__cta">
               <Link href={cta.href} className="kf-btn kf-btn--on-navy">
                 {cta.label}

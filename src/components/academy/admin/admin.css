@@ -42,6 +42,12 @@
   font-family: var(--sp-ui);
   font-size: var(--sp-t-table);
 }
+/* F3: when the band replaces the old title header, the lingering
+ * supporting sentence renders on its own line, not inside a two-up
+ * flex head. No wrapping chrome, so it needs its own vertical rhythm. */
+.kf-admin__sub--standalone {
+  margin: 0;
+}
 .kf-admin__actions {
   display: inline-flex;
   gap: var(--sp-sp-2);
