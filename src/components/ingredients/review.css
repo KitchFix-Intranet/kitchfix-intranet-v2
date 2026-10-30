@@ -301,6 +301,15 @@
  * spacer instead of margin so the baseline stays with the number. */
 .kf-rvc__chip-gap { display: inline-block; width: var(--sp-sp-2); }
 .kf-rvc__items td.kf-table__num .kf-conf-chip { vertical-align: 1px; }
+/* The price cell's second line must never wrap - a wrap costs the whole
+ * row a third line. Truncates instead; the cell title carries the full
+ * wording. */
+.kf-rvc__secondary {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* Actions */
 .kf-rvc__actions {
@@ -1125,13 +1134,16 @@
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  padding: 1px 6px;
+  padding: 1px 5px;
   border-radius: var(--sp-r-pill);
   font-family: var(--sp-ui);
-  font-size: var(--sp-t-label);
+  /* Sentence case at micro: "from spend" measured 116px uppercase at
+   * 13px with tracking, which forced the chip onto its own line inside
+   * the price column. 12px, no tracking, no caps is ~87px and reads as
+   * a label rather than a shout. */
+  font-size: var(--sp-t-micro);
   font-weight: 700;
-  letter-spacing: .5px;
-  text-transform: uppercase;
+  letter-spacing: 0;
   white-space: nowrap;
 }
 .kf-conf-chip--ok { color: var(--sp-good); background: var(--sp-good-bg); }

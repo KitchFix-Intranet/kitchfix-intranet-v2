@@ -284,7 +284,10 @@ export function ReviewCard({
           <col />
           <col style={{ width: 160 }} />
           <col style={{ width: 136 }} />
-          <col style={{ width: 150 }} />
+          {/* Unit price: 190 so the value and its confidence chip sit on
+              ONE line. Measured - at 150 the chip wrapped and every row
+              cost a third line (75px instead of 57-65px). */}
+          <col style={{ width: 190 }} />
           <col style={{ width: 96 }} />
           <col style={{ width: 60 }} />
           <col style={{ width: 120 }} />
@@ -480,10 +483,20 @@ function UnitPriceCell({ item }: { item: ReviewGroupItem }) {
 
   // Secondary line (always below the headline when a case figure
   // exists): catalog case price if available, else billed-latest.
+  // `unit` is only printed when it differs from the word already in the
+  // label - item.unitPriceUnit is usually "case", which produced the
+  // visible "case case" on screen.
   const secondary = item.catalogPrice != null
-    ? { amount: item.catalogPrice, label: "case (catalog)", unit: null as string | null }
+    ? { amount: item.catalogPrice, label: "catalog", unit: null as string | null }
     : item.unitPrice != null
-      ? { amount: item.unitPrice, label: "case (billed, latest)", unit: item.unitPriceUnit }
+      ? {
+          amount: item.unitPrice,
+          label: "billed",
+          unit:
+            item.unitPriceUnit && item.unitPriceUnit.toLowerCase() !== "case"
+              ? item.unitPriceUnit
+              : "case",
+        }
       : null;
 
   const title = perUnitAvailable
@@ -533,7 +546,7 @@ function UnitPriceCell({ item }: { item: ReviewGroupItem }) {
       {secondary ? (
         <>
           <br />
-          <span className="kf-cell-sub kf-cell-sub--dim">
+          <span className="kf-cell-sub kf-cell-sub--dim kf-rvc__secondary">
             {fmtUsd(secondary.amount)}
             {secondary.unit ? ` /${secondary.unit}` : ""} {secondary.label}
           </span>
