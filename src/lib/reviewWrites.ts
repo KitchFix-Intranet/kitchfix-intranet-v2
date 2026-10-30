@@ -541,6 +541,37 @@ export async function undoConfirm(
   return { ok: true };
 }
 
+// Bulk form of undoConfirm. Sequential on purpose - NOT Promise.all.
+// undoConfirm decides whether to revoke the learned alias by counting
+// the confirmed items still on the same (description_key,
+// ingredient_id). That count changes as each item flips to 'proposed',
+// so the calls must observe each other's writes. Run in parallel and
+// two items sharing a description_key would each see the other as
+// still-confirmed, and the alias would survive when it should not.
+export async function undoConfirmMany(
+  client: SupabaseClient,
+  args: { itemIds: string[]; actorEmail: string }
+): Promise<{ ok: boolean; undone: number; skipped: number; errors: string[] }> {
+  const { itemIds, actorEmail } = args;
+  let undone = 0;
+  let skipped = 0;
+  const errors: string[] = [];
+
+  for (const itemId of itemIds) {
+    const r = await undoConfirm(client, { itemId, actorEmail });
+    if (r.ok) {
+      undone += 1;
+    } else if (r.error === "Item is not confirmed; nothing to undo") {
+      // Benign: already proposed, or someone else got there first.
+      skipped += 1;
+    } else {
+      errors.push(`${itemId}: ${r.error ?? "unknown error"}`);
+    }
+  }
+
+  return { ok: errors.length === 0, undone, skipped, errors };
+}
+
 export async function createIngredient(
   client: SupabaseClient,
   args: {

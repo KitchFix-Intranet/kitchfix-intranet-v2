@@ -12,6 +12,7 @@ import { ArrowDownAZ, ArrowDownWideNarrow, DollarSign, Flame, Search, X } from "
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { SUPER_CATEGORIES } from "@/lib/ingredients/categories";
 import { RowSendBackButton } from "./RowSendBackButton";
+import { MasterSendAllBackButton } from "./MasterSendAllBackButton";
 
 export type MasterLinkedItem = {
   id: string;
@@ -403,6 +404,18 @@ function MasterCard({ row }: { row: MasterRow }) {
         </div>
       ) : (
         <div className="kf-master__inner">
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              marginBottom: "var(--sp-sp-2)",
+            }}
+          >
+            <MasterSendAllBackButton
+              masterName={row.name}
+              itemIds={row.linkedItems.map((li) => li.id)}
+            />
+          </div>
           <table className="kf-master__inner-table">
             <thead>
               <tr>
