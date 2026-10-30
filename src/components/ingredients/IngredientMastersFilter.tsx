@@ -2,13 +2,24 @@
 
 // Client-side search / sort / filter over the already-loaded master
 // list from IngredientMasters. Mirrors ReviewFilter's shape: sticky
-// search + chip rail. Native <details> on each master row for inline
-// drill-in (saves a round-trip and keeps Kevin on the page); each
-// linked vendor item inside the expand carries an "Open" link to the
-// vendor-items drawer so he can jump to the bad one.
+// search + chip rail. Workbench shape: list on the left, persistent
+// detail pane on the right (Prompt Q1), with each linked vendor item
+// in the pane carrying an "Open" link to the vendor-items drawer so
+// Kevin can jump to the bad one.
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownAZ, ArrowDownWideNarrow, ChevronDown, DollarSign, Flame, Search, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  AlertTriangle,
+  ArrowDownAZ,
+  ArrowDownWideNarrow,
+  ArrowLeft,
+  Check,
+  DollarSign,
+  Flame,
+  Info,
+  Search,
+  X,
+} from "lucide-react";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { SUPER_CATEGORIES } from "@/lib/ingredients/categories";
 import { RowSendBackButton } from "./RowSendBackButton";
@@ -105,6 +116,15 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
   const [superCat, setSuperCat] = useState<string | "all">("all");
   const [resaleFilter, setResaleFilter] = useState<ResaleFilter>("all");
   const [onlyFlagged, setOnlyFlagged] = useState(false);
+  // Workbench selection. `selId` is the user's explicit pick; the row
+  // actually shown falls back to the first row in the current filter, so
+  // the pane is never empty while the list has contents and a filter that
+  // excludes the selection does not strand the pane on a hidden master.
+  // Derived, not an effect - no render loop, no stale selection.
+  const [selId, setSelId] = useState<string | null>(null);
+  // On narrow viewports the index and the pane occupy the same space;
+  // this says which one the user is looking at.
+  const [paneOpen, setPaneOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // "/" focuses the input; Esc clears it.
@@ -156,6 +176,14 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
     return out;
   }, [rows, trimmed, superCat, resaleFilter, onlyFlagged, sort]);
 
+  // The row the pane shows. Explicit pick when there is one, else the
+  // first row of the current filter - so the pane is never empty while
+  // the list has contents, and a filter that hides the selection cannot
+  // strand the pane on an invisible master. Derived, not an effect.
+  const selected = useMemo(
+    () => filtered.find((r) => r.id === selId) ?? filtered[0] ?? null,
+    [filtered, selId]
+  );
   const matchedUsd = useMemo(
     () => filtered.reduce((s, r) => s + r.usd12m, 0),
     [filtered]
@@ -376,143 +404,309 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
           </button>
         </div>
       ) : (
-        <>
-          <div className="kf-masters__head" aria-hidden>
-            <span className="kf-masters__head-chev" />
-            <span>Ingredient</span>
-            <span className="kf-masters__head-num">Per-unit</span>
-            <span className="kf-masters__head-num">Spread</span>
-            <span className="kf-masters__head-num">Links</span>
-            <span className="kf-masters__head-num">12-mo spend</span>
+        <div className={`kf-wb${paneOpen ? " kf-wb--pane" : ""}`}>
+          <div className="kf-wb__index">
+            <div className="kf-masters__head" aria-hidden>
+              <span>Ingredient</span>
+              <span className="kf-masters__head-num">Per-unit</span>
+              <span className="kf-masters__head-num">12-mo</span>
+            </div>
+            <div className="kf-masters__legend">
+              <span className="kf-master__bdg kf-master__bdg--spread">Spread</span>
+              <span>cheapest to dearest over 3x</span>
+              <span className="kf-master__bdg kf-master__bdg--coverage">Coverage</span>
+              <span>some links carry no price</span>
+              <span className="kf-master__bdg kf-master__bdg--mismatch">Unit</span>
+              <span>priced in another dimension</span>
+              <span className="kf-master__bdg kf-master__bdg--outlier">Outlier</span>
+              <span>one item far from the blend</span>
+            </div>
+            <ul className="kf-masters__list" aria-label="Masters">
+              {filtered.map((row) => (
+                <li key={row.id}>
+                  <MasterRowButton
+                    row={row}
+                    selected={selected?.id === row.id}
+                    onSelect={() => {
+                      setSelId(row.id);
+                      setPaneOpen(true);
+                    }}
+                  />
+                </li>
+              ))}
+            </ul>
           </div>
-          <div className="kf-masters__legend">
-            <span className="kf-master__bdg kf-master__bdg--spread">Spread</span>
-            <span>cheapest to dearest over 3x</span>
-            <span className="kf-master__bdg kf-master__bdg--coverage">Coverage</span>
-            <span>some links carry no price</span>
-            <span className="kf-master__bdg kf-master__bdg--mismatch">Unit</span>
-            <span>priced in another dimension</span>
-            <span className="kf-master__bdg kf-master__bdg--outlier">Outlier</span>
-            <span>one item far from the blend</span>
+          <div className="kf-wb__detail">
+            {selected ? (
+              <MasterDetail row={selected} onBack={() => setPaneOpen(false)} />
+            ) : null}
           </div>
-          <ul className="kf-masters__list" aria-label="Masters">
-            {filtered.map((row) => (
-              <li key={row.id}>
-                <MasterCard row={row} />
-              </li>
-            ))}
-          </ul>
-        </>
+        </div>
       )}
     </>
   );
 }
 
-function MasterCard({ row }: { row: MasterRow }) {
+function MasterRowButton({
+  row,
+  selected,
+  onSelect,
+}: {
+  row: MasterRow;
+  selected: boolean;
+  onSelect: () => void;
+}) {
   const uom = uomLabel(row.baseUom);
+  const lv = row.spreadRatio == null ? null : row.spreadRatio > 3 ? "hi" : row.spreadRatio > 2 ? "mid" : "ok";
   return (
-    <details className={`kf-master${row.issues.length > 0 ? " kf-master--flagged" : ""}`}>
-      <summary className="kf-master__row">
-        <span className="kf-master__chev" aria-hidden>
-          <ChevronDown size={16} strokeWidth={1.75} />
-        </span>
-        <span className="kf-master__name-col">
-          <strong className="kf-master__name">{row.name}</strong>
-          <span className="kf-master__sub">
-            {row.category ? row.category : <em className="kf-muted">Needs category</em>}
-            {row.parent ? <> &middot; {row.parent}</> : null}
-            {row.resale ? <> &middot; <span className="kf-pill kf-pill--muted">Resale</span></> : null}
-            {row.issues.map((k) => (
-              <span key={k} className={`kf-master__bdg kf-master__bdg--${k}`}>
-                {ISSUE_LABEL[k] ?? k}
-              </span>
-            ))}
-          </span>
-        </span>
-
-        <span className="kf-master__price-col">
-          {row.avgPerBase != null ? (
-            <>
-              <strong>{fmtUsd(row.avgPerBase)}</strong>
-              <span className="kf-muted"> / {uom}</span>
-            </>
-          ) : (
-            <span className="kf-muted">- / {row.baseUnit?.toLowerCase() ?? "unit"}</span>
-          )}
-          {row.linkedCount > 0 ? (
-            <span
-              className={`kf-master__cov${
-                row.pricedCount < row.linkedCount ? " kf-master__cov--part" : ""
-              }`}
-            >
-              <span className="kf-master__cov-track">
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-current={selected ? "true" : undefined}
+      className={`kf-master__row${row.issues.length > 0 ? " kf-master__row--flagged" : ""}`}
+    >
+      <span className="kf-master__name-col">
+        <strong className="kf-master__name">{row.name}</strong>
+        <span className="kf-master__sub">
+          {row.category ? row.category : <em className="kf-muted">Needs category</em>}
+          {row.parent ? <> &middot; {row.parent}</> : null}
+          {row.resale ? <> &middot; <span className="kf-pill kf-pill--muted">Resale</span></> : null}
+          {row.spreadRatio != null ? (
+            <span className="kf-master__spr" title={`${fmtUsd(row.minPerBase ?? 0)} to ${fmtUsd(row.maxPerBase ?? 0)} per ${uom}`}>
+              <span className="kf-master__spr-track">
                 <span
-                  className="kf-master__cov-fill"
+                  className="kf-master__spr-fill"
+                  data-lv={lv ?? undefined}
                   style={{
-                    width: `${Math.round((row.pricedCount / row.linkedCount) * 100)}%`,
+                    width: `${Math.max(
+                      Math.min(Math.log(row.spreadRatio) / Math.log(20), 1) * 100,
+                      6
+                    )}%`,
                   }}
                 />
               </span>
-              {fmtCount(row.pricedCount)} of {fmtCount(row.linkedCount)} priced
+              <span className={`kf-master__spr-n${row.spreadRatio > 3 ? " kf-master__spr-n--hi" : ""}`}>
+                {row.spreadRatio.toFixed(1)}x
+              </span>
             </span>
           ) : null}
+          {row.issues.map((k) => (
+            <span key={k} className={`kf-master__bdg kf-master__bdg--${k}`}>
+              {ISSUE_LABEL[k] ?? k}
+            </span>
+          ))}
         </span>
+      </span>
 
-        <span className="kf-master__spread-col">
-          {row.minPerBase != null && row.maxPerBase != null ? (
-            <>
-              <span className="kf-cell-sub">
-                {fmtUsd(row.minPerBase)} - {fmtUsd(row.maxPerBase)}
-              </span>
-              {row.spreadRatio != null ? (
-                <span className="kf-master__spr">
-                  <span className="kf-master__spr-track">
-                    <span
-                      className="kf-master__spr-fill"
-                      data-lv={
-                        row.spreadRatio > 3 ? "hi" : row.spreadRatio > 2 ? "mid" : "ok"
-                      }
-                      // Log scale against a 20x ceiling: a 35x row and a
-                      // 3.4x row must look different, and linear would
-                      // flatten everything under 5x to nothing.
-                      style={{
-                        width: `${Math.max(
-                          Math.min(Math.log(row.spreadRatio) / Math.log(20), 1) * 100,
-                          6
-                        )}%`,
-                      }}
-                    />
-                  </span>
-                  <span
-                    className={`kf-cell-sub kf-cell-sub--dim${row.spreadRatio > 3 ? " kf-cell-sub--note" : ""}`}
-                  >
-                    {row.spreadRatio.toFixed(1)}x
-                  </span>
-                </span>
-              ) : null}
-            </>
-          ) : (
-            <span className="kf-muted">-</span>
-          )}
-        </span>
+      <span className="kf-master__price-col">
+        {row.avgPerBase != null ? (
+          <span>
+            <strong>{fmtUsd(row.avgPerBase)}</strong>
+            <span className="kf-muted"> / {uom}</span>
+          </span>
+        ) : (
+          <span className="kf-muted">- / {row.baseUnit?.toLowerCase() ?? "unit"}</span>
+        )}
+        {row.linkedCount > 0 ? (
+          <span
+            className={`kf-master__cov${
+              row.pricedCount < row.linkedCount ? " kf-master__cov--part" : ""
+            }`}
+          >
+            <span className="kf-master__cov-track">
+              <span
+                className="kf-master__cov-fill"
+                style={{ width: `${Math.round((row.pricedCount / row.linkedCount) * 100)}%` }}
+              />
+            </span>
+            {fmtCount(row.pricedCount)} of {fmtCount(row.linkedCount)} priced
+          </span>
+        ) : null}
+      </span>
 
-        <span className="kf-master__links-col">{fmtCount(row.linkedCount)}</span>
-        <span className="kf-master__spend-col">{fmtUsd(row.usd12m)}</span>
-      </summary>
+      <span className="kf-master__spend-col">{fmtUsd(row.usd12m)}</span>
+    </button>
+  );
+}
+
+// Typed, plain-English reasons. The whole point of PR52: the badge names
+// the problem, this names the fix. Nothing here is hover-only.
+function IssueNote({ row }: { row: MasterRow }) {
+  const uom = uomLabel(row.baseUom);
+  const notes: { tone: string; icon: ReactNode; head: string; body: ReactNode }[] = [];
+
+  if (row.issues.includes("spread")) {
+    notes.push({
+      tone: "bad",
+      icon: <Flame size={16} strokeWidth={1.5} aria-hidden />,
+      head: `Spread is ${row.spreadRatio?.toFixed(1)}x`,
+      body: (
+        <>
+          Cheapest linked item is {fmtUsd(row.minPerBase ?? 0)}/{uom}, dearest is{" "}
+          {fmtUsd(row.maxPerBase ?? 0)}/{uom}. Over 3x usually means one item has a bad pack
+          size, not a real price difference.
+        </>
+      ),
+    });
+  }
+  if (row.issues.includes("coverage")) {
+    notes.push({
+      tone: "warn",
+      icon: <AlertTriangle size={16} strokeWidth={1.5} aria-hidden />,
+      head: `${fmtCount(row.linkedCount - row.pricedCount)} of ${fmtCount(row.linkedCount)} linked items are not in this price`,
+      body: (
+        <>
+          <strong>{fmtUsd(row.unpricedUsd)}</strong> of this ingredient&rsquo;s{" "}
+          {fmtUsd(row.usd12m)} sits outside the blend - either no per-unit price at all, or a
+          price in a different unit. The figure above describes {fmtCount(row.pricedCount)}{" "}
+          item{row.pricedCount === 1 ? "" : "s"}, not {fmtCount(row.linkedCount)}.
+        </>
+      ),
+    });
+  }
+  if (row.issues.includes("mismatch")) {
+    const n = row.linkedItems.filter((li) => li.unitMismatch).length;
+    notes.push({
+      tone: "info",
+      icon: <Info size={16} strokeWidth={1.5} aria-hidden />,
+      head: `${fmtCount(n)} item${n === 1 ? "" : "s"} priced in a different unit`,
+      body: (
+        <>
+          This master is costed per <strong>{uom}</strong>, but {n === 1 ? "an item is" : "those items are"}{" "}
+          priced per a different dimension. Those numbers are not comparable and never reach
+          the blend until the unit is fixed.
+        </>
+      ),
+    });
+  }
+  if (row.issues.includes("outlier")) {
+    const o = row.linkedItems.filter((li) => li.outlier);
+    notes.push({
+      tone: "bad",
+      icon: <AlertTriangle size={16} strokeWidth={1.5} aria-hidden />,
+      head: `${fmtCount(o.length)} item${o.length === 1 ? "" : "s"} far from the blend`,
+      body: (
+        <>
+          {o.map((li) => `${li.name} at ${fmtUsd(li.perBase ?? 0)}/${uomLabel(li.perBaseUom)}`).join("; ")}
+          . Blend is {fmtUsd(row.avgPerBase ?? 0)}/{uom}.
+        </>
+      ),
+    });
+  }
+  if (row.issues.includes("band")) {
+    notes.push({
+      tone: "warn",
+      icon: <AlertTriangle size={16} strokeWidth={1.5} aria-hidden />,
+      head: "Average is outside the typical band for this unit",
+      body: <>A soft signal, not an assertion - worth a look at the pack sizes.</>,
+    });
+  }
+
+  if (notes.length === 0) {
+    return (
+      <div className="kf-why kf-why--good">
+        <Check size={16} strokeWidth={1.5} aria-hidden />
+        <div>
+          <b>Nothing flagged</b>
+          <span>
+            All {fmtCount(row.linkedCount)} linked items carry a price, in one unit, inside the
+            expected band.
+          </span>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <>
+      {notes.map((n) => (
+        <div key={n.head} className={`kf-why kf-why--${n.tone}`}>
+          {n.icon}
+          <div>
+            <b>{n.head}</b>
+            <span>{n.body}</span>
+          </div>
+        </div>
+      ))}
+    </>
+  );
+}
+
+function MasterDetail({ row, onBack }: { row: MasterRow; onBack: () => void }) {
+  const uom = uomLabel(row.baseUom);
+  const partial = row.pricedCount < row.linkedCount;
+  return (
+    <div className="kf-dt">
+      <div className="kf-dt__head">
+        <button type="button" className="kf-btn kf-btn--ghost kf-btn--sm kf-dt__back" onClick={onBack}>
+          <ArrowLeft size={14} strokeWidth={1.5} aria-hidden /> All ingredients
+        </button>
+        <div className="kf-dt__eyebrow">
+          {row.category ?? "Needs category"}
+          {row.parent ? ` · ${row.parent}` : ""}
+        </div>
+        <h3 className="kf-dt__title">{row.name}</h3>
+        <div className="kf-dt__meta">
+          {row.issues.map((k) => (
+            <span key={k} className={`kf-master__bdg kf-master__bdg--${k}`}>
+              {ISSUE_LABEL[k] ?? k}
+            </span>
+          ))}
+          {row.resale ? <span className="kf-pill kf-pill--muted">Resale</span> : null}
+          <span className="kf-muted kf-dt__unit">costed per {uom}</span>
+        </div>
+      </div>
+
+      <div className="kf-dt__stats">
+        <div className="kf-dt__stat">
+          <span className="kf-dt__stat-l">Per-unit</span>
+          <strong>{row.avgPerBase != null ? fmtUsd(row.avgPerBase) : "-"}</strong>
+          <span className="kf-dt__stat-n">per {uom}</span>
+        </div>
+        <div className={`kf-dt__stat${row.spreadRatio != null && row.spreadRatio > 3 ? " kf-dt__stat--bad" : ""}`}>
+          <span className="kf-dt__stat-l">Spread</span>
+          <strong>{row.spreadRatio != null ? `${row.spreadRatio.toFixed(1)}x` : "-"}</strong>
+          <span className="kf-dt__stat-n">
+            {row.minPerBase != null && row.maxPerBase != null
+              ? `${fmtUsd(row.minPerBase)} - ${fmtUsd(row.maxPerBase)}`
+              : "no priced items"}
+          </span>
+        </div>
+        <div className={`kf-dt__stat${partial ? " kf-dt__stat--warn" : ""}`}>
+          <span className="kf-dt__stat-l">In this price</span>
+          <strong>
+            {fmtCount(row.pricedCount)} of {fmtCount(row.linkedCount)}
+          </strong>
+          <span className="kf-dt__stat-n">
+            {partial ? `${fmtUsd(row.unpricedUsd)} outside` : "all linked items"}
+          </span>
+        </div>
+        <div className="kf-dt__stat">
+          <span className="kf-dt__stat-l">12-mo spend</span>
+          <strong>{fmtUsd(row.usd12m)}</strong>
+          <span className="kf-dt__stat-n">{fmtCount(row.linkedCount)} linked items</span>
+        </div>
+      </div>
+
+      <div className="kf-dt__sec">
+        <h4 className="kf-dt__sec-h">What needs attention</h4>
+        <IssueNote row={row} />
+      </div>
 
       {row.linkedCount === 0 ? (
-        <div className="kf-master__empty">
-          <span className="kf-muted">No links yet - awaiting confirmation in the review queue.</span>
+        <div className="kf-dt__sec">
+          <div className="kf-empty">
+            <div>
+              <div className="kf-empty__title">No links yet</div>
+              <div className="kf-empty__body">
+                Awaiting confirmation in the review queue.
+              </div>
+            </div>
+          </div>
         </div>
       ) : (
-        <div className="kf-master__inner">
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "flex-end",
-              marginBottom: "var(--sp-sp-2)",
-            }}
-          >
+        <div className="kf-dt__sec">
+          <div className="kf-dt__sec-head">
+            <h4 className="kf-dt__sec-h">Linked vendor items</h4>
             <MasterSendAllBackButton
               masterName={row.name}
               itemIds={row.linkedItems.map((li) => li.id)}
@@ -531,10 +725,6 @@ function MasterCard({ row }: { row: MasterRow }) {
             <tbody>
               {row.linkedItems.map((li) => {
                 const liUom = uomLabel(li.perBaseUom);
-                // Server-computed (Prompt O). The rule that used to live
-                // here compared a unit-mismatched item's RAW cross-
-                // dimension number against the blend - pounds against
-                // each. li.outlier is gated on a clean conversion.
                 const outlier = li.outlier;
                 return (
                   <tr
@@ -564,13 +754,7 @@ function MasterCard({ row }: { row: MasterRow }) {
                     </td>
                     <td className="kf-table__num">{fmtUsd(li.usd12m)}</td>
                     <td className="kf-table__num">
-                      <span
-                        style={{
-                          display: "inline-flex",
-                          gap: "var(--sp-sp-2)",
-                          justifyContent: "flex-end",
-                        }}
-                      >
+                      <span className="kf-dt__rowacts">
                         <RowSendBackButton itemId={li.id} itemName={li.name} />
                         <a
                           href={`/stockpot/ingredients/vendor-items?drawer=${li.id}`}
@@ -587,6 +771,6 @@ function MasterCard({ row }: { row: MasterRow }) {
           </table>
         </div>
       )}
-    </details>
+    </div>
   );
 }
