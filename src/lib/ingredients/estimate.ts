@@ -71,6 +71,16 @@ export type EstimateInputs = {
     sum_weight: number;
     sum_billed_units: number;
     sum_extended_priced: number;
+    // Prompt B2 paired aggregates for Tier B. sum_weight is only
+    // accumulated over lines whose own arithmetic confirms the field
+    // is a weight (|ext - weight * unit_price| <= 0.05); the paired
+    // sum_extended_weight / sum_quantity_weight carry ext + qty for
+    // those SAME lines. Keeping them paired means Tier B's numerator
+    // and the pack-derivation denominator can't drift onto lines
+    // whose "weight" is not a weight (dry-run found a case of
+    // tortillas carrying 459.63 in weight_line_value).
+    sum_extended_weight: number;
+    sum_quantity_weight: number;
     billed_unit: string | null;
     unit_consistent: boolean;
     n_lines: number;
@@ -337,8 +347,12 @@ export function estimatePerUnit(input: EstimateInputs): EstimateResult {
   //   3. Catalog price interpreted as $/lb (Phase 1.7).
   //   4. Neither: `none`.
   if (input.catch_weight) {
-    if (actualsUsable && a!.sum_weight > 0) {
-      const perLb = a!.sum_extended / a!.sum_weight;
+    if (actualsUsable && a!.sum_weight > 0 && a!.sum_extended_weight > 0) {
+      // Paired: numerator and denominator both come from lines whose
+      // weight_line_value reconciled (|ext - wt * up| <= 0.05 in the
+      // route). A $38.85 case carrying weight_line_value=459.63 would
+      // otherwise have given $0.08/lb at 'derived' confidence.
+      const perLb = a!.sum_extended_weight / a!.sum_weight;
       if (Number.isFinite(perLb) && perLb > 0) {
         return {
           parsed,

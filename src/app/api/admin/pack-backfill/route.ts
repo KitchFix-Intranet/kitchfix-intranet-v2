@@ -27,6 +27,12 @@ export const dynamic = "force-dynamic";
 const BATCH = 400;
 const DERIVED_PACK_MIN_LB = 0.25;
 const DERIVED_PACK_MAX_LB = 150;
+// Prompt B2: Tier B belt-and-braces. If matched-weight arithmetic
+// yields a $/lb outside this band, scrub the weight so the estimator
+// falls through to the next catch-weight tier. No real food
+// ingredient prices outside this range.
+const TIER_B_MIN_PER_LB = 0.05;
+const TIER_B_MAX_PER_LB = 200;
 const CROSS_CHECK_THRESHOLD = 3; // 3x deviation flags
 const CROSS_CHECK_MIN_OTHERS = 2; // need 2+ other priced links on the master
 
@@ -71,6 +77,14 @@ type Actuals = {
   // unpaired numerator would silently inflate the result.
   sum_billed_units: number;
   sum_extended_priced: number;
+  // Prompt B2: paired aggregates for Tier B + pack derivation.
+  // sum_weight is only incremented when the line's own arithmetic
+  // confirms weight_line_value is a weight (|ext - wt * up| <= 0.05).
+  // sum_extended_weight + sum_quantity_weight are the ext / qty totals
+  // over those SAME lines so Tier B divides matched spend by matched
+  // weight, and pack derivation uses matched weight / matched qty.
+  sum_extended_weight: number;
+  sum_quantity_weight: number;
   billed_unit: string | null;
   unit_consistent: boolean;
   n_lines: number;
@@ -172,6 +186,7 @@ export async function POST(req: NextRequest) {
               lostPerBase: 0,
               bySource: {},
               derivedPacks: { accepted: 0, rejectedByBounds: 0 },
+              tierBRejectedByBounds: 0,
               wouldBeFlags: 0,
               topChanges: [],
             },
@@ -285,6 +300,8 @@ export async function POST(req: NextRequest) {
         sum_weight: number;
         sum_billed_units: number;
         sum_extended_priced: number;
+        sum_extended_weight: number;
+        sum_quantity_weight: number;
         unitCounts: Map<string, number>;
         n_lines: number;
       }
@@ -322,6 +339,8 @@ export async function POST(req: NextRequest) {
             sum_weight: 0,
             sum_billed_units: 0,
             sum_extended_priced: 0,
+            sum_extended_weight: 0,
+            sum_quantity_weight: 0,
             unitCounts: new Map(),
             n_lines: 0,
           };
@@ -345,7 +364,24 @@ export async function POST(req: NextRequest) {
         const up = Number(o.unit_price ?? 0);
         if (Number.isFinite(ext) && ext > 0) entry.sum_extended += ext;
         if (Number.isFinite(qty) && qty > 0) entry.sum_quantity += qty;
-        if (Number.isFinite(wt) && wt > 0) entry.sum_weight += wt;
+        // Prompt B2: only trust weight_line_value when the line's OWN
+        // arithmetic confirms it is a weight: |ext - wt * up| <= 0.05.
+        // Live data carries lines where this field is not a weight at
+        // all (a single case of tortillas holding 459.63), which fed
+        // Tier B a $0.08/lb price. Paired with its extended + quantity
+        // so Tier B's numerator / denominator and pack derivation both
+        // come from the same reconciled line set.
+        const wtReconciles =
+          Number.isFinite(wt) && wt > 0 &&
+          Number.isFinite(up) && up > 0 &&
+          Number.isFinite(ext) && ext > 0 &&
+          Math.abs(ext - wt * up) <= 0.05;
+        if (wtReconciles) {
+          entry.sum_weight += wt;
+          entry.sum_extended_weight += ext;
+          entry.sum_quantity_weight +=
+            Number.isFinite(qty) && qty > 0 ? qty : 0;
+        }
         // Prompt B1 paired aggregates: only count a line's ext into
         // sum_extended_priced when it ALSO contributes to
         // sum_billed_units (unit_price > 0 AND ext > 0). Keeps the
@@ -385,6 +421,8 @@ export async function POST(req: NextRequest) {
         sum_weight: e.sum_weight,
         sum_billed_units: e.sum_billed_units,
         sum_extended_priced: e.sum_extended_priced,
+        sum_extended_weight: e.sum_extended_weight,
+        sum_quantity_weight: e.sum_quantity_weight,
         billed_unit: modal,
         unit_consistent: unitConsistent,
         n_lines: e.n_lines,
@@ -468,6 +506,7 @@ export async function POST(req: NextRequest) {
   const packStateTransitions: Record<string, number> = {};
   const bySource: Record<string, number> = {};
   const derivedPacks = { accepted: 0, rejectedByBounds: 0 };
+  let tierBRejectedByBounds = 0;
   let gainedPerBase = 0;
   let lostPerBase = 0;
   let wouldBeFlags = 0;
@@ -500,13 +539,39 @@ export async function POST(req: NextRequest) {
 
     const actuals = actualsByItem.get(it.id) ?? null;
 
+    // Prompt B2 belt-and-braces: compute what Tier B would emit (matched
+    // spend / matched weight) and reject if it is outside $0.05-$200/lb.
+    // We can't modify the estimator result directly, so scrub the weight
+    // aggregates on a per-item copy of actuals - the estimator then
+    // naturally falls through to the next catch-weight tier.
+    const actualsForEstimate: typeof actuals = actuals ? { ...actuals } : actuals;
+    if (
+      actuals &&
+      actuals.sum_weight > 0 &&
+      actuals.sum_extended_weight > 0
+    ) {
+      const candidate = actuals.sum_extended_weight / actuals.sum_weight;
+      if (
+        !Number.isFinite(candidate) ||
+        candidate < TIER_B_MIN_PER_LB ||
+        candidate > TIER_B_MAX_PER_LB
+      ) {
+        tierBRejectedByBounds += 1;
+        if (actualsForEstimate) {
+          actualsForEstimate.sum_weight = 0;
+          actualsForEstimate.sum_extended_weight = 0;
+          actualsForEstimate.sum_quantity_weight = 0;
+        }
+      }
+    }
+
     const result = estimatePerUnit({
       pack_text: it.pack_text,
       catch_weight: it.catch_weight,
       latest_unit_price: actuals?.latest_unit_price ?? null,
       catalog_pack_text: cat?.pack_text ?? null,
       catalog_price: cat?.catalog_price != null ? Number(cat.catalog_price) : null,
-      actuals,
+      actuals: actualsForEstimate,
     });
 
     const parsed = result.parsed;
@@ -523,24 +588,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Confidence -> pack_state. Added mapping for 'derived' -> 'check'
-    // (actuals-driven, needs human visibility like 'low'); unchanged
-    // for high/low/none. Name-matched rows stay 'check'.
-    let packState: "ok" | "check" | "none" =
-      matchSource === "catalog_name"
-        ? "check"
-        : estimate.confidence === "high"
-          ? "ok"
-          : estimate.confidence === "low"
-            ? "check"
-            : estimate.confidence === "derived"
-              ? "check"
-              : "none";
-
-    // Prompt B pack derivation: when parsed pack is unusable and we have
-    // actuals weight+quantity (unit-consistent), derive the pack size as
-    // Σ weight / Σ quantity, in LB. Sanity bounds reject outliers like
-    // a single-pallet 459 lb line.
+    // Prompt B pack derivation (Prompt B2 denominator): when parsed
+    // pack is unusable and we have reconciled weight + its paired
+    // quantity, derive the pack size as Σ matched weight / Σ matched
+    // quantity, in LB. Sanity bounds reject outliers.
     let derivedPackLb: number | null = null;
     let packNote: string | null = parsed.note ?? null;
     const parseUnusable =
@@ -552,28 +603,50 @@ export async function POST(req: NextRequest) {
       actuals &&
       actuals.unit_consistent &&
       actuals.sum_weight > 0 &&
-      actuals.sum_quantity > 0
+      actuals.sum_quantity_weight > 0
     ) {
-      const d = actuals.sum_weight / actuals.sum_quantity;
+      const d = actuals.sum_weight / actuals.sum_quantity_weight;
       if (
         Number.isFinite(d) &&
         d >= DERIVED_PACK_MIN_LB &&
         d <= DERIVED_PACK_MAX_LB
       ) {
         derivedPackLb = d;
-        packNote = `pack derived: ${actuals.sum_weight.toFixed(2)} lb / ${actuals.sum_quantity} units = ${d.toFixed(2)} lb`;
+        packNote = `pack derived: ${actuals.sum_weight.toFixed(2)} lb / ${actuals.sum_quantity_weight} units = ${d.toFixed(2)} lb`;
       } else if (Number.isFinite(d)) {
         derivedPacks.rejectedByBounds += 1;
       }
     }
+    const derivedPackUsed = derivedPackLb != null;
 
-    // When derived pack is accepted, override the pack cols and bump
-    // state to 'check' (never 'ok' - inferred, not read).
+    // Prompt B2: pack_state describes the PACK, not the price. A
+    // 'derived' price on a cleanly-parsed pack is still a clean pack -
+    // it must not flip to 'check'. Price confidence stays on
+    // price_estimate.confidence and the "from spend" chip. An inferred
+    // (derived) pack is always 'check' since no human has read it.
+    const effectiveConf =
+      estimate.confidence === "derived"
+        ? parsed.confidence === "high"
+          ? "high"
+          : "low"
+        : estimate.confidence;
+    let packState: "ok" | "check" | "none" =
+      matchSource === "catalog_name"
+        ? "check"
+        : derivedPackUsed
+          ? "check"
+          : effectiveConf === "high"
+            ? "ok"
+            : effectiveConf === "low"
+              ? "check"
+              : "none";
+
+    // When derived pack is accepted, override the pack cols. The
+    // 'check' state is already handled above (derivedPackUsed branch).
     const packQtyOut = derivedPackLb != null ? 1 : parsed.qty;
     const packSizeOut = derivedPackLb != null ? derivedPackLb : parsed.size;
     const packUomOut = derivedPackLb != null ? "LB" : parsed.uom;
     if (derivedPackLb != null) {
-      packState = "check";
       derivedPacks.accepted += 1;
     }
 
@@ -759,6 +832,7 @@ export async function POST(req: NextRequest) {
       lostPerBase,
       bySource,
       derivedPacks,
+      tierBRejectedByBounds,
       wouldBeFlags,
       topChanges,
     };
