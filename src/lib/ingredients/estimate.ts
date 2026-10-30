@@ -68,6 +68,11 @@ export type EstimateInputs = {
   actuals?: {
     sum_extended: number;
     sum_quantity: number;
+    // Prompt E: Σ extended over the lines that also contributed their
+    // quantity to sum_quantity - i.e. excluding OCR column-copy lines.
+    // Tier C must use this, not sum_extended, or it divides the full
+    // spend by a reduced quantity.
+    sum_extended_cased: number;
     sum_weight: number;
     sum_billed_units: number;
     sum_extended_priced: number;
@@ -436,8 +441,8 @@ export function estimatePerUnit(input: EstimateInputs): EstimateResult {
   // beats both catalog list and billed latest - it's what we actually
   // paid, not what the sheet said.
   const actualsCase =
-    actualsUsable && a!.sum_quantity > 0
-      ? a!.sum_extended / a!.sum_quantity
+    actualsUsable && a!.sum_quantity > 0 && a!.sum_extended_cased > 0
+      ? a!.sum_extended_cased / a!.sum_quantity
       : null;
   const catalogPrice =
     input.catalog_price != null && input.catalog_price > 0 ? input.catalog_price : null;

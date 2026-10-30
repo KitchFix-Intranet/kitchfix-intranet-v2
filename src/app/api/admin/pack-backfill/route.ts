@@ -68,6 +68,11 @@ type Actuals = {
   latest_unit_price: number | null;
   sum_extended: number;
   sum_quantity: number;
+  // Prompt E: Σ extended over the lines that ALSO contributed their
+  // quantity to sum_quantity - OCR column-copy lines are gated out of
+  // both. Tier C must divide spend by quantity over the same line set,
+  // or it divides the full spend by a reduced quantity.
+  sum_extended_cased: number;
   sum_weight: number;
   // Prompt B1: paired aggregates for Tier A. sum_billed_units is
   // Σ(extended / unit_price) over lines with both > 0;
@@ -297,6 +302,7 @@ export async function POST(req: NextRequest) {
         latest_unit_price: number | null;
         sum_extended: number;
         sum_quantity: number;
+        sum_extended_cased: number;
         sum_weight: number;
         sum_billed_units: number;
         sum_extended_priced: number;
@@ -336,6 +342,7 @@ export async function POST(req: NextRequest) {
             latest_unit_price: null,
             sum_extended: 0,
             sum_quantity: 0,
+            sum_extended_cased: 0,
             sum_weight: 0,
             sum_billed_units: 0,
             sum_extended_priced: 0,
@@ -363,7 +370,39 @@ export async function POST(req: NextRequest) {
         const wt = Number(o.weight_line_value ?? 0);
         const up = Number(o.unit_price ?? 0);
         if (Number.isFinite(ext) && ext > 0) entry.sum_extended += ext;
-        if (Number.isFinite(qty) && qty > 0) entry.sum_quantity += qty;
+
+        // Prompt E: OCR sometimes copies the extended-price column into
+        // the quantity column. The fingerprint is unmistakable - the two
+        // agree to the cent on a line whose dollar value is real - and the
+        // consequence is a case price of exactly $1.00, because Tier C
+        // computes sum_extended / sum_quantity. Live: TOMATO PASTE
+        // CALIFORNIA qty 64.53 / ext 64.53 -> $1.00/case -> $0.0556/lb;
+        // BISCUIT SS qty 76.49 / ext 76.49 -> $0.0300/lb.
+        //
+        // This test deliberately does NOT consult unit_price. On a
+        // catch-weight line `quantity` legitimately holds POUNDS while
+        // billed_unit still reads "case" - BEEF - TENDERLOIN 6LB AVG bills
+        // qty 38.4 x $22.80 = $875.52 - and 92 such lines ($30,878) must
+        // keep contributing. A reconciliation test would also re-break
+        // ESSENTIA, which Prompt D released for exactly that reason.
+        // Equality of quantity and extended is the only separating signal.
+        const isColumnCopy =
+          Number.isFinite(qty) &&
+          Number.isFinite(ext) &&
+          ext > 2 &&
+          Math.abs(qty - ext) < 0.01;
+
+        // Paired, like the B1 and B2 aggregates: a line contributes its
+        // quantity and its extended together or not at all, so Tier C can
+        // never divide the full spend by a reduced quantity.
+        if (
+          Number.isFinite(qty) && qty > 0 &&
+          Number.isFinite(ext) && ext > 0 &&
+          !isColumnCopy
+        ) {
+          entry.sum_quantity += qty;
+          entry.sum_extended_cased += ext;
+        }
         // Prompt B2: only trust weight_line_value when the line's OWN
         // arithmetic confirms it is a weight: |ext - wt * up| <= 0.05.
         // Live data carries lines where this field is not a weight at
@@ -388,7 +427,8 @@ export async function POST(req: NextRequest) {
         // Tier A numerator and denominator over the same line set.
         if (
           Number.isFinite(ext) && ext > 0 &&
-          Number.isFinite(up) && up > 0
+          Number.isFinite(up) && up > 0 &&
+          !isColumnCopy
         ) {
           entry.sum_billed_units += ext / up;
           entry.sum_extended_priced += ext;
@@ -418,6 +458,7 @@ export async function POST(req: NextRequest) {
         latest_unit_price: e.latest_unit_price,
         sum_extended: e.sum_extended,
         sum_quantity: e.sum_quantity,
+        sum_extended_cased: e.sum_extended_cased,
         sum_weight: e.sum_weight,
         sum_billed_units: e.sum_billed_units,
         sum_extended_priced: e.sum_extended_priced,
