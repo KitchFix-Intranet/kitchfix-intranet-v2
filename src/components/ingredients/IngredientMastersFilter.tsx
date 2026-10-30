@@ -67,6 +67,17 @@ export type MasterRow = {
 type SortMode = "spend" | "name" | "links" | "spread";
 type ResaleFilter = "all" | "recipe" | "resale";
 
+// Badge wording. Short enough to sit inline on the row's sub-line, and
+// each one names the fix: "Coverage" means links are missing a price,
+// "Unit" means a dimension mismatch, not a wrong number.
+const ISSUE_LABEL: Record<string, string> = {
+  spread: "Spread",
+  coverage: "Coverage",
+  mismatch: "Unit",
+  outlier: "Outlier",
+  band: "Out of band",
+};
+
 function uomLabel(uom: string | null): string {
   if (!uom) return "unit";
   if (uom === "LB") return "lb";
@@ -134,7 +145,7 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
     if (superCat !== "all") out = out.filter((r) => r.category === superCat);
     if (resaleFilter === "recipe") out = out.filter((r) => !r.resale);
     else if (resaleFilter === "resale") out = out.filter((r) => r.resale);
-    if (onlyFlagged) out = out.filter((r) => r.flagged);
+    if (onlyFlagged) out = out.filter((r) => r.issues.length > 0);
     if (sort === "name") out = [...out].sort((a, b) => a.name.localeCompare(b.name));
     else if (sort === "links") out = [...out].sort((a, b) => b.linkedCount - a.linkedCount);
     else if (sort === "spread") {
@@ -150,8 +161,14 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
     [filtered]
   );
   const matchedFlagged = useMemo(
-    () => filtered.filter((r) => r.flagged).length,
+    () => filtered.filter((r) => r.issues.length > 0).length,
     [filtered]
+  );
+  // Whole-set count for the chip, so the chip and the "Needs attention"
+  // tile above it can never disagree.
+  const needsCount = useMemo(
+    () => rows.filter((r) => r.issues.length > 0).length,
+    [rows]
   );
   const anyFilterActive =
     trimmed.length > 0 ||
@@ -215,7 +232,7 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
               masters &middot; <strong>{fmtUsd(matchedUsd)}</strong>
               {matchedFlagged > 0 ? (
                 <>
-                  {" "}&middot; <strong>{fmtCount(matchedFlagged)}</strong> flagged
+                  {" "}&middot; <strong>{fmtCount(matchedFlagged)}</strong> need attention
                 </>
               ) : null}
             </>
@@ -334,9 +351,9 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
             aria-pressed={onlyFlagged}
             className={`kf-chip kf-chip--warn${onlyFlagged ? " kf-chip--on" : ""}`}
             onClick={() => setOnlyFlagged((v) => !v)}
-            title="Only masters flagged by the bad-pack radar"
+            title="Masters with a spread, coverage, unit or outlier issue"
           >
-            Flagged only
+            Needs attention <span className="kf-chip__count">{fmtCount(needsCount)}</span>
           </button>
           {anyFilterActive ? (
             <button type="button" className="kf-btn kf-btn--ghost kf-btn--sm" onClick={clearAll}>
@@ -368,6 +385,16 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
             <span className="kf-masters__head-num">Links</span>
             <span className="kf-masters__head-num">12-mo spend</span>
           </div>
+          <div className="kf-masters__legend">
+            <span className="kf-master__bdg kf-master__bdg--spread">Spread</span>
+            <span>cheapest to dearest over 3x</span>
+            <span className="kf-master__bdg kf-master__bdg--coverage">Coverage</span>
+            <span>some links carry no price</span>
+            <span className="kf-master__bdg kf-master__bdg--mismatch">Unit</span>
+            <span>priced in another dimension</span>
+            <span className="kf-master__bdg kf-master__bdg--outlier">Outlier</span>
+            <span>one item far from the blend</span>
+          </div>
           <ul className="kf-masters__list" aria-label="Masters">
             {filtered.map((row) => (
               <li key={row.id}>
@@ -384,7 +411,7 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
 function MasterCard({ row }: { row: MasterRow }) {
   const uom = uomLabel(row.baseUom);
   return (
-    <details className={`kf-master${row.flagged ? " kf-master--flagged" : ""}`}>
+    <details className={`kf-master${row.issues.length > 0 ? " kf-master--flagged" : ""}`}>
       <summary className="kf-master__row">
         <span className="kf-master__chev" aria-hidden>
           <ChevronDown size={16} strokeWidth={1.75} />
@@ -395,6 +422,11 @@ function MasterCard({ row }: { row: MasterRow }) {
             {row.category ? row.category : <em className="kf-muted">Needs category</em>}
             {row.parent ? <> &middot; {row.parent}</> : null}
             {row.resale ? <> &middot; <span className="kf-pill kf-pill--muted">Resale</span></> : null}
+            {row.issues.map((k) => (
+              <span key={k} className={`kf-master__bdg kf-master__bdg--${k}`}>
+                {ISSUE_LABEL[k] ?? k}
+              </span>
+            ))}
           </span>
         </span>
 
@@ -407,12 +439,21 @@ function MasterCard({ row }: { row: MasterRow }) {
           ) : (
             <span className="kf-muted">- / {row.baseUnit?.toLowerCase() ?? "unit"}</span>
           )}
-          {row.flagged ? (
+          {row.linkedCount > 0 ? (
             <span
-              className="kf-conf-chip kf-conf-chip--low kf-master__flag"
-              title={`Bad-pack radar: ${row.flagReason}`}
+              className={`kf-master__cov${
+                row.pricedCount < row.linkedCount ? " kf-master__cov--part" : ""
+              }`}
             >
-              check
+              <span className="kf-master__cov-track">
+                <span
+                  className="kf-master__cov-fill"
+                  style={{
+                    width: `${Math.round((row.pricedCount / row.linkedCount) * 100)}%`,
+                  }}
+                />
+              </span>
+              {fmtCount(row.pricedCount)} of {fmtCount(row.linkedCount)} priced
             </span>
           ) : null}
         </span>
@@ -424,10 +465,29 @@ function MasterCard({ row }: { row: MasterRow }) {
                 {fmtUsd(row.minPerBase)} - {fmtUsd(row.maxPerBase)}
               </span>
               {row.spreadRatio != null ? (
-                <span
-                  className={`kf-cell-sub kf-cell-sub--dim${row.spreadRatio > 3 ? " kf-cell-sub--note" : ""}`}
-                >
-                  {row.spreadRatio.toFixed(1)}x
+                <span className="kf-master__spr">
+                  <span className="kf-master__spr-track">
+                    <span
+                      className="kf-master__spr-fill"
+                      data-lv={
+                        row.spreadRatio > 3 ? "hi" : row.spreadRatio > 2 ? "mid" : "ok"
+                      }
+                      // Log scale against a 20x ceiling: a 35x row and a
+                      // 3.4x row must look different, and linear would
+                      // flatten everything under 5x to nothing.
+                      style={{
+                        width: `${Math.max(
+                          Math.min(Math.log(row.spreadRatio) / Math.log(20), 1) * 100,
+                          6
+                        )}%`,
+                      }}
+                    />
+                  </span>
+                  <span
+                    className={`kf-cell-sub kf-cell-sub--dim${row.spreadRatio > 3 ? " kf-cell-sub--note" : ""}`}
+                  >
+                    {row.spreadRatio.toFixed(1)}x
+                  </span>
                 </span>
               ) : null}
             </>
@@ -471,10 +531,11 @@ function MasterCard({ row }: { row: MasterRow }) {
             <tbody>
               {row.linkedItems.map((li) => {
                 const liUom = uomLabel(li.perBaseUom);
-                const outlier =
-                  row.avgPerBase != null &&
-                  li.perBase != null &&
-                  (li.perBase > row.avgPerBase * 3 || li.perBase < row.avgPerBase / 3);
+                // Server-computed (Prompt O). The rule that used to live
+                // here compared a unit-mismatched item's RAW cross-
+                // dimension number against the blend - pounds against
+                // each. li.outlier is gated on a clean conversion.
+                const outlier = li.outlier;
                 return (
                   <tr
                     key={li.id}

@@ -1589,9 +1589,85 @@
   font-weight: 700;
   color: var(--sp-ink);
 }
-.kf-master__flag {
-  margin-left: var(--sp-sp-2);
+/* Typed issue badges. Replaces the single "check" chip: the word is the
+ * signal, so nothing is hidden behind a hover. Tone pairs with severity,
+ * never alone - the label always reads. */
+.kf-master__bdg {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  margin-left: var(--sp-sp-1);
+  border-radius: var(--sp-r-pill);
+  font-family: var(--sp-ui);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
 }
+.kf-master__bdg--spread,
+.kf-master__bdg--outlier { background: var(--sp-block-bg); color: var(--sp-block); }
+.kf-master__bdg--coverage,
+.kf-master__bdg--band { background: var(--sp-warn-bg); color: var(--sp-warn); }
+.kf-master__bdg--mismatch { background: var(--sp-info-bg); color: var(--sp-link); }
+
+.kf-masters__legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-sp-1) var(--sp-sp-3);
+  padding: var(--sp-sp-2) var(--sp-sp-4);
+  border-bottom: 1px solid var(--sp-line-soft);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+}
+.kf-masters__legend .kf-master__bdg { margin-left: 0; }
+
+/* Coverage meter: how much of the linked set the headline price
+ * actually describes. Amber whenever it is not all of it. */
+.kf-master__cov {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-1);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--sp-muted);
+  white-space: nowrap;
+}
+.kf-master__cov-track {
+  flex: none;
+  width: 30px;
+  height: 4px;
+  border-radius: var(--sp-r-pill);
+  background: var(--sp-line);
+  overflow: hidden;
+}
+.kf-master__cov-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--sp-r-pill);
+  background: var(--sp-good);
+}
+.kf-master__cov--part { color: var(--sp-warn); }
+.kf-master__cov--part .kf-master__cov-fill { background: var(--sp-warn-strong); }
+
+/* Spread bar: log-scaled so 35x and 3.4x are visibly different. */
+.kf-master__spr { display: inline-flex; align-items: center; gap: var(--sp-sp-1); }
+.kf-master__spr-track {
+  flex: none;
+  width: 48px;
+  height: 4px;
+  border-radius: var(--sp-r-pill);
+  background: var(--sp-line-soft);
+  overflow: hidden;
+}
+.kf-master__spr-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--sp-r-pill);
+  background: var(--sp-good);
+}
+.kf-master__spr-fill[data-lv="mid"] { background: var(--sp-warn-strong); }
+.kf-master__spr-fill[data-lv="hi"] { background: var(--sp-red); }
 
 .kf-master__empty {
   padding: var(--sp-sp-3) var(--sp-sp-4);
