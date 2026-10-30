@@ -27,6 +27,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { serviceClient } from "@/lib/supabase/service";
+import { computeComplianceForWorkers } from "@/lib/academy/compliance";
 
 export interface PersonRow {
   // Identity.
@@ -118,37 +119,22 @@ export async function loadAdminPeople(supaIn?: SupabaseClient): Promise<AdminPeo
 
   // Step 2. Fan out the per-worker lookups + the account region map
   // + the region-leads list in parallel. academy_person_stints maps
-  // worker_id -> person_id for dedup; academy_requirements and
-  // academy_attestations power the compliance counts.
+  // worker_id -> person_id for dedup; compliance (requirements +
+  // attestations) comes from the shared helper so E3 and E4 agree
+  // on the signed/waived/outstanding rule.
   const stintChunks: Array<Promise<{ data: Array<{ worker_id: string; person_id: string | null }> | null; error: { message: string } | null }>> =
     chunk(workerIds, CHUNK).map((c) =>
       supa.from("academy_person_stints").select("worker_id, person_id").in("worker_id", c) as unknown as Promise<{ data: Array<{ worker_id: string; person_id: string | null }> | null; error: { message: string } | null }>
     );
-  const reqChunks: Array<Promise<{ data: Array<{ requirement_id: string | number; worker_id: string; waived_at: string | null; due_date: string | null }> | null; error: { message: string } | null }>> =
-    chunk(workerIds, CHUNK).map((c) =>
-      supa
-        .from("academy_requirements")
-        .select("requirement_id, worker_id, waived_at, due_date")
-        .in("worker_id", c) as unknown as Promise<{ data: Array<{ requirement_id: string | number; worker_id: string; waived_at: string | null; due_date: string | null }> | null; error: { message: string } | null }>
-    );
-  const attChunks: Array<Promise<{ data: Array<{ requirement_id: string | number | null; worker_id: string; signed_at: string | null }> | null; error: { message: string } | null }>> =
-    chunk(workerIds, CHUNK).map((c) =>
-      supa
-        .from("academy_attestations")
-        .select("requirement_id, worker_id, signed_at")
-        .in("worker_id", c) as unknown as Promise<{ data: Array<{ requirement_id: string | number | null; worker_id: string; signed_at: string | null }> | null; error: { message: string } | null }>
-    );
   const [
     stintResults,
-    reqResults,
-    attResults,
+    counts,
     accountsQ,
     regionsQ,
     leadsQ,
   ] = await Promise.all([
     Promise.all(stintChunks),
-    Promise.all(reqChunks),
-    Promise.all(attChunks),
+    computeComplianceForWorkers(supa, workerIds),
     accountKeys.length > 0
       ? supa.from("accounts").select("team_key, region").in("team_key", accountKeys)
       : Promise.resolve({ data: [] as Array<{ team_key: string; region: string | null }>, error: null }),
@@ -160,8 +146,6 @@ export async function loadAdminPeople(supaIn?: SupabaseClient): Promise<AdminPeo
       .order("region", { ascending: true }),
   ]);
   for (const r of stintResults) if (r.error) throw new Error(`[admin/people] stints: ${r.error.message}`);
-  for (const r of reqResults)   if (r.error) throw new Error(`[admin/people] requirements: ${r.error.message}`);
-  for (const r of attResults)   if (r.error) throw new Error(`[admin/people] attestations: ${r.error.message}`);
   if (accountsQ.error) throw new Error(`[admin/people] accounts: ${accountsQ.error.message}`);
   if (regionsQ.error) throw new Error(`[admin/people] regions: ${regionsQ.error.message}`);
   if (leadsQ.error) throw new Error(`[admin/people] leads: ${leadsQ.error.message}`);
@@ -173,53 +157,6 @@ export async function loadAdminPeople(supaIn?: SupabaseClient): Promise<AdminPeo
       personIdByWorker.set(row.worker_id, row.person_id ?? null);
     }
   }
-
-  // Compliance aggregates per worker_id. The rule mirrors
-  // src/lib/academy/records.ts: a requirement is SIGNED when any
-  // academy_attestations row references the requirement_id; WAIVED
-  // when waived_at is non-null; else OUTSTANDING.
-  const signedReqIdsByWorker = new Map<string, Set<string>>();
-  const lastSignedByWorker = new Map<string, string>();
-  for (const r of attResults) {
-    for (const row of r.data || []) {
-      if (!signedReqIdsByWorker.has(row.worker_id)) {
-        signedReqIdsByWorker.set(row.worker_id, new Set<string>());
-      }
-      if (row.requirement_id != null) {
-        signedReqIdsByWorker.get(row.worker_id)!.add(String(row.requirement_id));
-      }
-      if (row.signed_at) {
-        const prev = lastSignedByWorker.get(row.worker_id);
-        if (!prev || row.signed_at > prev) lastSignedByWorker.set(row.worker_id, row.signed_at);
-      }
-    }
-  }
-
-  type Counts = { outstanding: number; signed: number; waived: number; nextDue: string | null };
-  const countsByWorker = new Map<string, Counts>();
-  for (const r of reqResults) {
-    for (const row of r.data || []) {
-      const bucket = countsByWorker.get(row.worker_id) ?? { outstanding: 0, signed: 0, waived: 0, nextDue: null };
-      const signedSet = signedReqIdsByWorker.get(row.worker_id);
-      if (row.waived_at != null) {
-        bucket.waived += 1;
-      } else if (signedSet && signedSet.has(String(row.requirement_id))) {
-        bucket.signed += 1;
-      } else {
-        bucket.outstanding += 1;
-        if (row.due_date) {
-          if (!bucket.nextDue || row.due_date < bucket.nextDue) bucket.nextDue = row.due_date;
-        }
-      }
-      countsByWorker.set(row.worker_id, bucket);
-    }
-  }
-  // Attestations whose requirement_id was NOT in academy_requirements
-  // (orphan historical rows) still count as signatures in loadRecords'
-  // signatures list; here we rely on the matched requirement path so
-  // "signed" means "requirement row satisfied". If a worker has
-  // attestations but no requirements, their counts default to zeros
-  // which is correct for the compliance read.
 
   const regionByAccount = new Map<string, string | null>();
   for (const a of (accountsQ.data as Array<{ team_key: string; region: string | null }>) || []) {
@@ -239,7 +176,13 @@ export async function loadAdminPeople(supaIn?: SupabaseClient): Promise<AdminPeo
   const seenPersonIds = new Set<string>();
   const rawRows: PersonRow[] = peopleRows.map((p) => {
     const personId = personIdByWorker.get(p.worker_id) ?? null;
-    const c = countsByWorker.get(p.worker_id) ?? { outstanding: 0, signed: 0, waived: 0, nextDue: null };
+    const c = counts.get(p.worker_id) ?? {
+      outstanding: 0,
+      signed: 0,
+      waived: 0,
+      last_signed_at: null,
+      next_due_at: null,
+    };
     return {
       person_id: personId,
       worker_id: p.worker_id,
@@ -256,8 +199,8 @@ export async function loadAdminPeople(supaIn?: SupabaseClient): Promise<AdminPeo
       outstanding: c.outstanding,
       signed: c.signed,
       waived: c.waived,
-      last_signed_at: lastSignedByWorker.get(p.worker_id) ?? null,
-      next_due_at: c.nextDue,
+      last_signed_at: c.last_signed_at,
+      next_due_at: c.next_due_at,
     };
   });
   const roster: PersonRow[] = [];
