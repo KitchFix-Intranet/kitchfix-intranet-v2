@@ -7,7 +7,7 @@
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { notFound } from "next/navigation";
-import { requireOwnerPage } from "@/lib/gate";
+import { requireAppAccess } from "@/lib/gate";
 import { loadModule } from "@/lib/academy/module";
 import { Reader } from "@/components/academy/Reader";
 import "@/components/academy/academy.css";
@@ -17,8 +17,8 @@ export default async function Page({
 }: {
   params: Promise<{ requirementId: string }>;
 }) {
-  const { email } = await requireOwnerPage();
   const { requirementId } = await params;
+  const { email } = await requireAppAccess(`/academy/read/${requirementId}`);
 
   const result = await loadModule(email, requirementId);
 

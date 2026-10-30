@@ -15,7 +15,7 @@
 import Link from "next/link";
 import { ArrowRight, Check, Download } from "lucide-react";
 import { notFound } from "next/navigation";
-import { requireOwnerPage } from "@/lib/gate";
+import { requireAppAccess } from "@/lib/gate";
 import { loadDocument } from "@/lib/academy/document";
 import { humanizeDocClass } from "@/lib/academy/docClass";
 import { fmtDate } from "@/lib/fmt";
@@ -83,8 +83,8 @@ export default async function Page({
 }: {
   params: Promise<{ docId: string }>;
 }) {
-  const { email } = await requireOwnerPage();
   const { docId } = await params;
+  const { email } = await requireAppAccess(`/library/${docId}`);
 
   const result = await loadDocument(email, docId);
 

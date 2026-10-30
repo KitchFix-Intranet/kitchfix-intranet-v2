@@ -4,11 +4,13 @@
 // signed-in owner, plus the standing-card boolean and the eligible-
 // person count that produced it.
 //
-// Gate (v2): requireOwnerApi() first. A signed-in non-owner gets 404;
-// unauthenticated gets 401 from the proxy.
+// Gate (v2): requireAppAccessApi("/academy"). Flag OFF -> only
+// owner reaches here; flag ON -> owner, lead, learner (the gate's
+// path allowlist opens /academy to all three). Unauth gets 401
+// from the proxy; non-roster gets 404.
 
 import { NextResponse } from "next/server";
-import { requireOwnerApi } from "@/lib/gate";
+import { requireAppAccessApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
 import {
   resolveAcademyIdentity,
@@ -18,7 +20,7 @@ import {
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const g = await requireOwnerApi();
+  const g = await requireAppAccessApi("/academy");
   if (g instanceof Response) return g;
 
   const supa = serviceClient();

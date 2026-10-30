@@ -27,7 +27,7 @@
 // TRUNCATE on the service_role grant surface.
 
 import { NextRequest, NextResponse } from "next/server";
-import { requireOwnerApi } from "@/lib/gate";
+import { requireAppAccessApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
 import { resolveAcademyIdentity } from "@/lib/academy/identity";
 import {
@@ -55,7 +55,7 @@ function normName(s: string): string {
 }
 
 export async function POST(request: NextRequest) {
-  const g = await requireOwnerApi();
+  const g = await requireAppAccessApi("/academy/read");
   if (g instanceof Response) return g;
 
   let body: SignBody;

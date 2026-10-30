@@ -19,7 +19,7 @@
 // APPEND-ONLY - academy_check_attempts refuses UPDATE/DELETE/TRUNCATE.
 
 import { NextRequest, NextResponse } from "next/server";
-import { requireOwnerApi } from "@/lib/gate";
+import { requireAppAccessApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
 import { resolveAcademyIdentity } from "@/lib/academy/identity";
 import { UUID_RE } from "@/lib/academy/module";
@@ -38,7 +38,7 @@ interface OptionShape {
 }
 
 export async function POST(request: NextRequest) {
-  const g = await requireOwnerApi();
+  const g = await requireAppAccessApi("/academy/read");
   if (g instanceof Response) return g;
 
   let body: CheckBody;

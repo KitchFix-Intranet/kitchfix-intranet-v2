@@ -4,13 +4,13 @@
 // the full shape and the design notes.
 
 import { NextResponse } from "next/server";
-import { requireOwnerApi } from "@/lib/gate";
+import { requireAppAccessApi } from "@/lib/gate";
 import { loadRoom } from "@/lib/academy/room";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const g = await requireOwnerApi();
+  const g = await requireAppAccessApi("/academy");
   if (g instanceof Response) return g;
 
   const result = await loadRoom(g.email);

@@ -14,7 +14,7 @@
 
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
-import { requireOwnerPage } from "@/lib/gate";
+import { requireAppAccess } from "@/lib/gate";
 import { loadRoom } from "@/lib/academy/room";
 import type { QueueItem } from "@/lib/academy/room";
 import { IdentBand } from "@/components/ui/IdentBand";
@@ -97,7 +97,7 @@ type PageProps = {
 };
 
 export default async function Page({ searchParams }: PageProps) {
-  const { email } = await requireOwnerPage();
+  const { email } = await requireAppAccess("/academy");
   const sp = await searchParams;
   const justSigned = Array.isArray(sp.signed) ? sp.signed[0] : sp.signed;
   const result = await loadRoom(email);

@@ -3,7 +3,7 @@
 // empty (R-AC25), topbar carries the Download action (see
 // @topbar/academy/done).
 
-import { requireOwnerPage } from "@/lib/gate";
+import { requireAppAccess } from "@/lib/gate";
 import { loadRecords } from "@/lib/academy/records";
 import { IdentBand } from "@/components/ui/IdentBand";
 import { Receipt } from "@/components/academy/Receipt";
@@ -24,7 +24,7 @@ function recordTitle(n: number, name: string | null): string {
 }
 
 export default async function Page() {
-  const { email } = await requireOwnerPage();
+  const { email } = await requireAppAccess("/academy/done");
   const result = await loadRecords(email);
 
   if (!result.ok) {

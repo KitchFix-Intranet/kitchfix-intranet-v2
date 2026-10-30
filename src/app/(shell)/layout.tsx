@@ -1,5 +1,5 @@
 import { headers } from "next/headers";
-import { requireOwnerPage } from "@/lib/gate";
+import { requireAppAccess } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
 import { currentPeriod } from "@/lib/fiscalPeriod";
 import { fmtDate } from "@/lib/fmt";
@@ -55,9 +55,13 @@ export default async function ShellLayout({
   children: React.ReactNode;
   topbar: React.ReactNode;
 }) {
-  const { email } = await requireOwnerPage();
+  // Read the pathname first so the gate can apply its path allowlist.
+  // Order matters: the shell layout cannot gate on the owner alone
+  // once the release switch is on - it must know which route the
+  // viewer is trying to reach to apply isOpenedPath.
   const h = await headers();
   const pathname = h.get("x-invoke-path") ?? h.get("x-pathname") ?? "/";
+  const { email, role } = await requireAppAccess(pathname);
 
   // Pull the user's display name once at the layout boundary so Shell can
   // render it in the account button and Home can read it in its band.
@@ -105,12 +109,13 @@ export default async function ShellLayout({
     }
   }
 
-  // `requireOwnerPage` 404s a non-owner before this returns, so if we
-  // got here the viewer IS an owner. Pass it through so the Admin
-  // rail entry is correctly gated when the layout gate changes to
-  // let learners in (train F+). Keeping the signal explicit means
-  // Shell does not need to know about `requireOwnerPage`.
-  const isOwner = true;
+  // `requireAppAccess` returned the viewer's role. The release flag
+  // is CLOSED by default - with it off, a non-owner would have
+  // already 404'd; only owners reach here. With the flag on, a lead
+  // or learner on an opened path also reaches here. The Shell nav
+  // uses isOwner to gate the Admin rail entry (and in future, every
+  // owner-only door); non-owners never see them.
+  const isOwner = role === "owner";
 
   return (
     <Shell

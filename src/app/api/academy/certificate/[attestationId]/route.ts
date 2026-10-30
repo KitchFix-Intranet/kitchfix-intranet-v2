@@ -11,7 +11,7 @@
 // which attestation ids exist.
 
 import { NextResponse } from "next/server";
-import { requireOwnerApi } from "@/lib/gate";
+import { requireAppAccessApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
 import { resolveAcademyIdentity } from "@/lib/academy/identity";
 import { createCertificatePdf } from "@/lib/academy/certificate";
@@ -41,7 +41,7 @@ export async function GET(
   _request: Request,
   ctx: { params: Promise<{ attestationId: string }> }
 ) {
-  const g = await requireOwnerApi();
+  const g = await requireAppAccessApi("/academy");
   if (g instanceof Response) return g;
 
   const { attestationId } = await ctx.params;
