@@ -489,6 +489,76 @@ export function parsePack(raw: string | null | undefined): ParsedPack {
     }
   }
 
+  // N/MPK S UNIT: "2/12PK 12OZ" = N outer x M inner x S UNIT.
+  const multiPackM = s.match(
+    /^(\d+)\s*\/\s*(\d+)\s*PK\s*(\d+(?:\.\d+)?)\s*([A-Z#]+)/
+  );
+  if (multiPackM) {
+    const outer = parseInt(multiPackM[1], 10);
+    const inner = parseInt(multiPackM[2], 10);
+    const size = parseFloat(multiPackM[3]);
+    const uom = normUom(multiPackM[4]);
+    if (uom != null) {
+      const conv = toBase(size, uom);
+      if (conv) {
+        return {
+          qty: outer * inner,
+          size,
+          uom,
+          dim: conv.dim,
+          base_uom: conv.base_uom,
+          total_base: outer * inner * conv.total,
+          confidence: hasVaries ? "low" : "high",
+          note: `multipack ${outer} x ${inner} x ${size} ${uom}`,
+        };
+      }
+    }
+  }
+
+  // Bare pack count: "12P", "30Pk", "12 PK". No inner size is given,
+  // so this is a count of units, not a weight. 'low' on purpose.
+  // Match against the pre-TRAILING_CONTAINER-strip form because PK is
+  // in the trailing-container list ("12 PK" was being stripped to "12").
+  const sPreStrip = raw.trim().toUpperCase().replace(/\s+/g, " ");
+  const packCountM = sPreStrip.match(/^(\d+)\s*(?:PK|PACK|P)\s*$/);
+  if (packCountM) {
+    const n = parseInt(packCountM[1], 10);
+    if (n > 0 && n <= 500) {
+      return {
+        qty: 1,
+        size: n,
+        uom: "CT",
+        dim: "count",
+        base_uom: "EA",
+        total_base: n,
+        confidence: "low",
+        note: `pack count ${n}; unit size not stated`,
+      };
+    }
+  }
+
+  // Vendor prefix "ONLY" glued to a bare pack: "ONLY1 GAL", "ONLY5 LB".
+  const onlyM = s.match(/^ONLY\s*(\d.*)$/);
+  if (onlyM) {
+    const inner = parsePack(onlyM[1]);
+    if (inner.confidence !== "none") {
+      return { ...inner, note: `"ONLY" prefix stripped; ${inner.note ?? "parsed"}` };
+    }
+  }
+
+  // "Case of 6", "case of 24", "24/cs" - a count of units per case.
+  const caseOfM = s.match(/^CASE\s+OF\s+(\d+)\s*$/) || s.match(/^(\d+)\s*\/\s*CS\s*$/);
+  if (caseOfM) {
+    const n = parseInt(caseOfM[1], 10);
+    if (n > 0 && n <= 1000) {
+      return {
+        qty: 1, size: n, uom: "CT", dim: "count", base_uom: "EA", total_base: n,
+        confidence: "low",
+        note: `case of ${n}; unit size not stated`,
+      };
+    }
+  }
+
   // 8. Fallback: garbled input the parser can't reduce.
   return { ...EMPTY, confidence: "none", note: `could not parse: "${raw}"` };
 }

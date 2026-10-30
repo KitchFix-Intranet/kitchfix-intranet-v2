@@ -281,14 +281,32 @@ export function estimateFromOverride(input: StructuredOverrideInput): Structured
 }
 
 export function estimatePerUnit(input: EstimateInputs): EstimateResult {
-  const packSource: "catalog" | "invoice" | null =
+  // Pack precedence: catalog first, BUT only when it actually parses.
+  // Many catalog rows carry a bare word ("CASE", "BAG") that is not a
+  // pack at all, and blindly preferring it discards a perfectly good
+  // invoice pack ("50 LBS"). Falling back recovers 264 items.
+  const catalogPackText =
     input.catalog_pack_text && input.catalog_pack_text.trim().length > 0
-      ? "catalog"
-      : input.pack_text && input.pack_text.trim().length > 0
-        ? "invoice"
-        : null;
-  const chosenPack = input.catalog_pack_text ?? input.pack_text;
-  const parsed = parsePack(chosenPack);
+      ? input.catalog_pack_text
+      : null;
+  const invoicePackText =
+    input.pack_text && input.pack_text.trim().length > 0 ? input.pack_text : null;
+
+  let parsed = parsePack(catalogPackText ?? invoicePackText);
+  let packSource: "catalog" | "invoice" | null =
+    catalogPackText != null ? "catalog" : invoicePackText != null ? "invoice" : null;
+
+  if (
+    catalogPackText != null &&
+    invoicePackText != null &&
+    (parsed.confidence === "none" || parsed.total_base == null || parsed.total_base <= 0)
+  ) {
+    const fallback = parsePack(invoicePackText);
+    if (fallback.confidence !== "none" && fallback.total_base != null && fallback.total_base > 0) {
+      parsed = fallback;
+      packSource = "invoice";
+    }
+  }
 
   const a = input.actuals ?? null;
   const actualsUsable =
