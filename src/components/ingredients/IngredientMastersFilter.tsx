@@ -14,6 +14,11 @@ import { SUPER_CATEGORIES } from "@/lib/ingredients/categories";
 import { RowSendBackButton } from "./RowSendBackButton";
 import { MasterSendAllBackButton } from "./MasterSendAllBackButton";
 
+// The four problems the bad-pack radar actually finds. They have
+// different fixes, so they are reported separately rather than as one
+// "flagged" boolean. "band" is the pre-existing absolute-range check.
+export type MasterIssue = "spread" | "coverage" | "mismatch" | "outlier" | "band";
+
 export type MasterLinkedItem = {
   id: string;
   name: string;
@@ -24,6 +29,12 @@ export type MasterLinkedItem = {
   // converted to the master's base_unit (different dimension; e.g.
   // the pack parse wrote $/LB but the master is 'each').
   unitMismatch: boolean;
+  // true when this item's converted per-base sits more than 3x above
+  // or below the master's blend. Never set on a unit-mismatched item -
+  // its number is in a different dimension, so the comparison would be
+  // meaningless. Computed server-side so the client and the master-
+  // level flag cannot drift apart.
+  outlier: boolean;
   usd12m: number;
 };
 
@@ -43,6 +54,13 @@ export type MasterRow = {
   baseUom: string | null;
   flagged: boolean;
   flagReason: string | null;
+  // How many of linkedCount actually contributed a per-base value to
+  // the blend above. pricedCount < linkedCount means avgPerBase
+  // describes a subset, and unpricedUsd is the 12-month spend sitting
+  // outside it.
+  pricedCount: number;
+  unpricedUsd: number;
+  issues: MasterIssue[];
   linkedItems: MasterLinkedItem[];
 };
 

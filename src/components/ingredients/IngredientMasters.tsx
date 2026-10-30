@@ -23,6 +23,7 @@ import {
   IngredientMastersFilter,
   type MasterRow,
   type MasterLinkedItem,
+  type MasterIssue,
 } from "./IngredientMastersFilter";
 import "./ingredients.css";
 import "./review.css";
@@ -183,16 +184,26 @@ export async function IngredientMasters() {
     const perBaseValues: number[] = [];
     const mismatchedItemIds = new Set<string>();
     let usd = 0;
+    // Spend on items that contribute NOTHING to perBaseValues - either
+    // no usable per_base at all, or a cross-dimension value we refuse
+    // to average. This is the money the headline $/unit does not
+    // describe, and until now it was invisible.
+    let unpricedUsd = 0;
     for (const it of items) {
-      usd += Number(it.usd_12m ?? 0);
+      const itUsd = Number(it.usd_12m ?? 0);
+      usd += itUsd;
       const rawV = it.price_estimate?.per_base;
       const rawN = rawV != null ? Number(rawV) : NaN;
-      if (!Number.isFinite(rawN) || rawN <= 0) continue;
+      if (!Number.isFinite(rawN) || rawN <= 0) {
+        unpricedUsd += itUsd;
+        continue;
+      }
       const storedUom = it.price_estimate?.base_uom ?? null;
       if (masterUom && storedUom) {
         const converted = convertPer(rawN, storedUom, masterUom);
         if (converted == null) {
           mismatchedItemIds.add(it.id);
+          unpricedUsd += itUsd;
           // Keep the raw number out of the aggregate so the avg isn't
           // polluted by cross-dimension values; the mismatch flag
           // handles the surface.
@@ -255,10 +266,30 @@ export async function IngredientMasters() {
                 : null,
           perBaseUom: normalized != null ? masterUom : storedUom,
           unitMismatch: mismatchedItemIds.has(it.id),
+          // Same 3x rule the client was applying inline; moved here so
+          // there is one definition. Gated on a clean conversion - a
+          // mismatched item's number is in another dimension and must
+          // not be compared against the blend.
+          outlier:
+            avg != null &&
+            normalized != null &&
+            (normalized > avg * 3 || normalized < avg / 3),
           usd12m: Number(it.usd_12m ?? 0),
         };
       })
       .sort((a, b) => b.usd12m - a.usd12m);
+
+    // Typed issues, ordered most-actionable first. `flagged` and
+    // `flagReason` above keep their exact previous meaning for anything
+    // still reading them; this is a parallel, richer signal.
+    const pricedCount = perBaseValues.length;
+    const issues: MasterIssue[] = [
+      spread != null && spread > 3 ? ("spread" as const) : null,
+      pricedCount < items.length ? ("coverage" as const) : null,
+      mismatchedItemIds.size > 0 ? ("mismatch" as const) : null,
+      linkedItems.some((li) => li.outlier) ? ("outlier" as const) : null,
+      bandFlag ? ("band" as const) : null,
+    ].filter((x): x is MasterIssue => x != null);
 
     return {
       id: m.id,
@@ -273,6 +304,9 @@ export async function IngredientMasters() {
       minPerBase: min,
       maxPerBase: max,
       spreadRatio: spread,
+      pricedCount,
+      unpricedUsd,
+      issues,
       // Display + band lookup use the master's canonical uom so Milk
       // reads "$/gal" (not "$/floz"), Bottled water reads "$/each", etc.
       baseUom: masterUom,
@@ -286,7 +320,12 @@ export async function IngredientMasters() {
   const totalMasters = rows.length;
   const totalLinked = rows.reduce((s, r) => s + r.linkedCount, 0);
   const totalUsd = rows.reduce((s, r) => s + r.usd12m, 0);
-  const totalFlagged = rows.filter((r) => r.flagged).length;
+  // Counts any master carrying at least one typed issue. This is a
+  // SUPERSET of the old `flagged` boolean because coverage and outlier
+  // are now counted - masters whose headline price is computed on a
+  // subset of their links were previously invisible here. Expect this
+  // number to rise; that is the point.
+  const totalFlagged = rows.filter((r) => r.issues.length > 0).length;
 
   return (
     <div className="kf-ing">
@@ -321,10 +360,10 @@ export async function IngredientMasters() {
           <span className="kf-review__meta-sub">12 months, from linked items</span>
         </div>
         <div className="kf-review__meta-stat">
-          <span className="kf-review__meta-label">Flagged (bad-pack radar)</span>
+          <span className="kf-review__meta-label">Needs attention</span>
           <strong>{fmtCount(totalFlagged)}</strong>
           <span className="kf-review__meta-sub">
-            spread &gt; 3x OR avg outside typical band
+            spread, coverage, unit or outlier
           </span>
         </div>
       </section>
