@@ -53,27 +53,67 @@ type Line = {
   review_reason: string | null;
 };
 
-// A line flagged `needs_review` upstream is still usable for pricing when
-// its own arithmetic reconciles. The upstream check tests
-// `extended = quantity * unit_price`, which is the WRONG equation for a
-// catch-weight line, where `extended = weight * unit_price`. Measured on
-// live data: 912 of 1,645 ep_qty_up_mismatch lines reconcile exactly by
-// weight. Releasing them is not overriding review - it is applying the
-// right formula. Scoped deliberately to the weight case; the
-// `invoice_over_extracted` reason stays quarantined (it is a
-// document-level flag and overlaps the open duplicate-invoice work).
-function lineSelfReconciles(line: {
+// Which `needs_review` lines are still usable for PRICING.
+//
+// The upstream flag is a single arithmetic test, and it fails for several
+// unrelated reasons. A line stays excluded unless one of these holds.
+//
+// The guiding principle: release a line only when the tier that will
+// actually consume it does not depend on the field the flag is about.
+function lineUsableForPricing(line: {
   extended_price: number | null;
   unit_price: number | null;
+  quantity: number | null;
   weight_line_value: number | null;
+  unit: string | null;
   review_reason?: string | null;
 }): boolean {
-  if (line.review_reason !== "ep_qty_up_mismatch") return false;
   const ext = Number(line.extended_price ?? 0);
   const up = Number(line.unit_price ?? 0);
+  const qty = Number(line.quantity ?? 0);
   const wt = Number(line.weight_line_value ?? 0);
-  if (!(ext > 0) || !(up > 0) || !(wt > 0)) return false;
-  return Math.abs(ext - wt * up) <= 0.05;
+  const unit = String(line.unit ?? "").trim().toLowerCase();
+  const reason = line.review_reason ?? "";
+
+  // Nothing is computable without an extended price.
+  if (!(ext > 0)) return false;
+
+  // A unit that IS a base unit means unit_price feeds the base-unit and
+  // catch-weight tiers directly. A suspect unit_price there would produce
+  // a confident wrong $/lb, so those lines are never released on rule 3.
+  const BASE_BILLED = new Set([
+    "lb", "lbs", "pound", "pounds", "oz", "each", "ea",
+    "gal", "gallon", "gallons", "ct", "count", "dz", "dozen",
+  ]);
+
+  // Rule 1 (from Prompt B1) - catch-weight line whose billed weight
+  // reconciles against unit_price. The upstream check used
+  // `extended = quantity * unit_price`, which is the wrong equation for
+  // catch weight, where it is `extended = weight * unit_price`.
+  if (reason === "ep_qty_up_mismatch" && wt > 0 && up > 0 && Math.abs(ext - wt * up) <= 0.05) {
+    return true;
+  }
+
+  // Rule 2 - the INVOICE total was over-extracted, but this line's own
+  // arithmetic is sound. That flag is document-level, not line-level.
+  if (reason === "invoice_over_extracted" && qty > 0 && up > 0 && Math.abs(ext - qty * up) <= 0.05) {
+    return true;
+  }
+
+  // Rule 3 - quantity mismatch on a CONTAINER-billed line (case, bag,
+  // box...). Only the case-price tier can fire for these, and it computes
+  // sum(extended) / sum(quantity) - it never reads unit_price, which is
+  // the field the mismatch flag is actually about. Live proof: ESSENTIA
+  // bottled water, 8 lines, extended/quantity = $16.50 exactly on every
+  // one while unit_price reads $21.44.
+  //
+  // Deliberately NOT applied to base-unit-billed lines: there a suspect
+  // unit_price would reach Tier A / Tier B. Those stay quarantined.
+  if (reason === "ep_qty_up_mismatch" && qty > 0 && !BASE_BILLED.has(unit)) {
+    return true;
+  }
+
+  return false;
 }
 
 type VendorItemAgg = {
@@ -345,7 +385,7 @@ export async function runIntake(
 
       let excluded_reason: string | null = null;
       if (!verdict.isFood) excluded_reason = "not_food";
-      else if (line.needs_review && !lineSelfReconciles(line)) excluded_reason = "needs_review";
+      else if (line.needs_review && !lineUsableForPricing(line)) excluded_reason = "needs_review";
 
       item.lineRows.push({
         line_id: line.id,
