@@ -975,7 +975,7 @@ export async function setVendorItemPackOverride(
   });
 
   const nowIso = new Date().toISOString();
-  const unitTrim = payload.billed_unit?.trim() || null;
+  const unitTrim = payload.billed_unit?.trim().toLowerCase() || null;
 
   // Human-readable pack_text echo of the structured payload - useful for
   // old UI surfaces + legacy JSON exports.

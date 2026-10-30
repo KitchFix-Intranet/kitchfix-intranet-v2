@@ -11,6 +11,12 @@ const ALLOWED_UOMS = new Set([
   "EA", "CT", "DZ", "PC",
 ]);
 
+// Mirrors BILLED_UNIT_GROUPS in DetailPanel.tsx and BASE_BILLED in intake.ts.
+const ALLOWED_BILLED_UNITS = new Set([
+  "lb", "oz", "each", "gallon", "count", "dozen",
+  "case", "bag", "box", "pack", "jar", "can", "other",
+]);
+
 // Phase 1.8: payload is structured. For non-catch items the client
 // sends qty + size + uom (dropdown). For catch-weight items the client
 // sends per_lb. billed_unit is a display aid for the row; note is
@@ -49,8 +55,19 @@ export async function POST(req: NextRequest) {
   }
   const billedUnit =
     typeof body.billedUnit === "string" && body.billedUnit.trim().length > 0
-      ? body.billedUnit.trim()
+      ? body.billedUnit.trim().toLowerCase()
       : null;
+  // Lower-cased and whitelisted, the way uom already is. Casing drift made
+  // "Case" / "case" / "CASE" three separate values in the database.
+  // A value that is not on the list is rejected, never silently stored:
+  // the price engine would route it to the container branch and divide the
+  // item's price by its pack size with no error.
+  if (billedUnit !== null && !ALLOWED_BILLED_UNITS.has(billedUnit)) {
+    return NextResponse.json(
+      { error: `unknown billed unit: ${billedUnit}` },
+      { status: 400 },
+    );
+  }
   const note = typeof body.note === "string" && body.note.trim().length > 0 ? body.note.trim() : null;
 
   // Lightweight required-field checks: catch-weight needs per_lb; the

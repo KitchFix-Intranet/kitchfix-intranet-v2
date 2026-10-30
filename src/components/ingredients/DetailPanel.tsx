@@ -927,6 +927,19 @@ const UOM_LABEL: Record<"LB" | "FLOZ" | "EA", string> = {
   EA: "each",
 };
 
+// Billed unit = how the VENDOR charged for the line, which decides which
+// price tier fires:
+//   a base unit  -> Tier A / Tier B use the invoice price directly
+//   a container  -> the case-price tier divides by the pack size
+// A value the engine does not recognise falls through to the container
+// branch silently and the item's price ends up divided by its pack.
+// Mirrors BASE_BILLED in src/lib/intake.ts and normUom in pack.ts; the
+// server re-validates against ALLOWED_BILLED_UNITS.
+const BILLED_UNIT_GROUPS: { label: string; options: string[] }[] = [
+  { label: "Priced per unit - price used as-is", options: ["lb", "oz", "each", "gallon", "count", "dozen"] },
+  { label: "Priced per container - price divided by pack", options: ["case", "bag", "box", "pack", "jar", "can", "other"] },
+];
+
 function PackOverrideBlock({
   item,
   onDone,
@@ -1148,12 +1161,24 @@ function PackOverrideBlock({
       <div className="kf-dpn__row">
         <label className="kf-dpn__label">
           <span>Billed unit (optional)</span>
-          <input
-            type="text"
-            value={billedUnit}
-            onChange={(e) => setBilledUnit(e.target.value)}
-            placeholder={item.billedUnit ?? "case / lb / each"}
-          />
+          <select value={billedUnit} onChange={(e) => setBilledUnit(e.target.value)}>
+            <option value="">(not set)</option>
+            {/* An existing value that predates this list stays selectable so
+                opening the panel and saving never silently rewrites it. */}
+            {billedUnit !== "" &&
+              !BILLED_UNIT_GROUPS.some((g) => g.options.includes(billedUnit)) && (
+                <option value={billedUnit}>{billedUnit} (existing)</option>
+              )}
+            {BILLED_UNIT_GROUPS.map((g) => (
+              <optgroup key={g.label} label={g.label}>
+                {g.options.map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
         </label>
         <label className="kf-dpn__label">
           <span>Note (optional)</span>
