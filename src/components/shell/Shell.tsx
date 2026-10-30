@@ -77,10 +77,13 @@ const ADMIN_ACADEMY_ENTRY: NavItem = {
   Icon: SlidersHorizontal,
 };
 
-// Admin-level nav. Train E1 ships Cycles. Questions / People / Team
-// arrive in later trains; do not add dead items here.
+// Admin-level nav. Train E1 shipped Cycles. Train E3 adds People -
+// the roster + compliance read with the one write that unblocks
+// Team (E4) - region-lead assignment. Questions / Team arrive in
+// later trains; do not add dead items here.
 const ADMIN_NAV: NavItem[] = [
   { href: "/academy/admin", label: "Cycles", Icon: CalendarRange },
+  { href: "/academy/admin/people", label: "People", Icon: Users },
 ];
 
 // Library-level nav. Train D1 ships Shelves (browse) only. Find /
@@ -300,6 +303,11 @@ export function Shell({
                 active = pathname === "/library";
               } else if (inLibrary && href === "/library/shelves") {
                 active = pathname === "/library/shelves" || pathname.startsWith("/library/shelves/");
+              } else if (inAdmin && href === "/academy/admin") {
+                // Cycles is the admin index; must NOT light up when a
+                // sub-page (/academy/admin/people, future /questions,
+                // /team) is active. Same shape as the Library split.
+                active = pathname === "/academy/admin";
               } else {
                 active = isActive(pathname, href);
               }
