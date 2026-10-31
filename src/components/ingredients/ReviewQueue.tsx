@@ -8,6 +8,7 @@ import { serviceClient } from "@/lib/supabase/service";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { Tabs } from "./Tabs";
 import { ReviewCard, type ReviewCardGroup } from "./ReviewCard";
+import { isPackManualOverride } from "./itemTypes";
 import { ReviewLedger } from "./ReviewLedger";
 import { ReviewFilter, type ReviewFilterGroup } from "./ReviewFilter";
 import "./ingredients.css";
@@ -254,7 +255,7 @@ async function loadReview() {
         const catalogPack = cat?.pack_text?.trim() || null;
         const catalogPrice = cat && cat.catalog_price != null ? Number(cat.catalog_price) : null;
         const gtin = cat?.gtin?.trim() || null;
-        const hasManualOverride = it.pack_override !== null;
+        const hasManualOverride = isPackManualOverride(it.pack_override);
         // Pack precedence: user manual override > catalog > invoice
         // OCR. Each tier carries a source label so the row is clear
         // about which value Kevin's looking at.
@@ -347,7 +348,7 @@ async function loadReview() {
         const catalogPack = cat?.pack_text?.trim() || null;
         const catalogPrice = cat && cat.catalog_price != null ? Number(cat.catalog_price) : null;
         const gtin = cat?.gtin?.trim() || null;
-        const hasManualOverride = it.pack_override !== null;
+        const hasManualOverride = isPackManualOverride(it.pack_override);
         // Pack precedence: user manual override > catalog > invoice
         // OCR. Each tier carries a source label so the row is clear
         // about which value Kevin's looking at.

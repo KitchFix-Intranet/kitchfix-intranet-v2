@@ -1325,6 +1325,17 @@ function PackOverrideBlock({
             >
               {preview.line}
             </span>
+            {/* A price-only override lives alongside the parser's own
+                pack reading - the pack chain still shows how the parser
+                read the pack, this line notes that the number came
+                from a human. perBaseConfidence='override' with
+                packManualOverride=false is the discriminator (A2.1). */}
+            {item.perBaseConfidence === "override" && !item.packManualOverride && item.perBase != null && item.perBaseUom ? (
+              <span className="kf-chain__sub">
+                Price set by hand - {fmtUsd(item.perBase)} /{" "}
+                {item.perBaseUom === "LB" ? "lb" : item.perBaseUom === "FLOZ" ? "fl oz" : "each"}
+              </span>
+            ) : null}
             {verdict ? (
               <span className={`kf-chain__verdict kf-chain__verdict--${verdict.tone}`}>
                 {verdict.text}

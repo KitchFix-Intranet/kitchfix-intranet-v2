@@ -18,7 +18,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireOwnerApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
-import type { ReviewCardIngredient, ReviewGroupItem } from "@/components/ingredients/itemTypes";
+import {
+  isPackManualOverride,
+  type ReviewCardIngredient,
+  type ReviewGroupItem,
+} from "@/components/ingredients/itemTypes";
 
 export const dynamic = "force-dynamic";
 
@@ -160,7 +164,7 @@ export async function GET(req: NextRequest) {
   const catalogPack = cat?.pack_text?.trim() || null;
   const catalogPrice = cat && cat.catalog_price != null ? Number(cat.catalog_price) : null;
   const gtin = cat?.gtin?.trim() || null;
-  const hasManualOverride = it.pack_override !== null;
+  const hasManualOverride = isPackManualOverride(it.pack_override);
   const packDisplay = hasManualOverride ? it.pack_text : catalogPack ?? it.pack_text;
   const packSource: "override" | "catalog" | "invoice" | null = hasManualOverride
     ? "override"

@@ -1240,6 +1240,13 @@ export async function migrateTextPackOverrides(
     for (const r of rows) {
       const po = r.pack_override ?? {};
       // Skip rows already in the structured shape (idempotent re-run).
+      // price_only first: a price-override payload carries base_uom too,
+      // so without this clause the price-override family is skipped only
+      // by accident. Make it intentional.
+      if (po.price_only === true) {
+        skipped += 1;
+        continue;
+      }
       if (po.qty != null || po.catch_weight != null || po.base_uom != null) {
         skipped += 1;
         continue;
@@ -1678,15 +1685,24 @@ export async function undoMergeIngredient(
 // problem from the pack-override path, which fixes the cause
 // (wrong qty/size/uom) rather than the symptom.
 //
-// IMPORTANT - backfill durability: the pack-override path protects
-// its row by setting pack_override NOT NULL, which the backfill
-// gates on at read, mid-loop, and UPDATE WHERE. We deliberately do
-// NOT set pack_override here, because the UI's hasManualOverride
-// detection (ReviewQueue:256) reads that column and would then
-// misreport the PACK as human-set. Trade-off: a direct price
-// override is NOT durable across the next backfill. Kevin decides
-// whether to accept that or add a dedicated price-only protection
-// flag; see PROMPT A2 "open question".
+// Backfill durability (A2.1 resolution): the backfill gates on
+// `pack_override IS NOT NULL` at four points - batch read, two
+// mid-loop checks, and the UPDATE WHERE. That rule means "a human
+// touched this row, leave it alone" and it is TRUE of a price-only
+// override. So we reuse the mechanism and add a discriminator:
+// pack_override.price_only === true. The row survives the backfill
+// without any carve-out in pack-backfill/route.ts.
+//
+// Every reader of pack_override must call isPackManualOverride()
+// (src/components/ingredients/itemTypes.ts) before reporting the
+// PACK as human-set. The pack path's payload never carries
+// price_only, so the two kinds never collide, and the helper is the
+// single place that reads the discriminator.
+//
+// Freezing the pack on a price-only row is intended, not a side
+// effect - the price override is for "the pack is right and the
+// number is wrong", so there is nothing left for the backfill to
+// improve on that row.
 export async function setVendorItemPriceOverride(
   client: SupabaseClient,
   args: {
@@ -1773,11 +1789,28 @@ export async function setVendorItemPriceOverride(
     }
   }
 
+  // Protection stamp. The backfill's pack_override IS NOT NULL gate
+  // treats this as "touched by a human, leave it alone"; the
+  // price_only discriminator keeps the UI from reporting the pack as
+  // human-set. See the block comment above.
+  const packOverrideStamp = {
+    price_only: true,
+    per_base: perBase,
+    base_uom: baseUom,
+    note: reason,
+    by: actorEmail,
+    at: nowIso,
+  };
+
   let mainWritten = false;
   for (const t of writeTargets) {
     const { error: upErr } = await client
       .from("pr_vendor_items")
-      .update({ price_estimate: newPe, updated_at: nowIso })
+      .update({
+        price_estimate: newPe,
+        pack_override: packOverrideStamp,
+        updated_at: nowIso,
+      })
       .eq("id", t.id);
     if (upErr) {
       if (t.id === item.id) return { ok: false, error: upErr.message, twins: 0 };

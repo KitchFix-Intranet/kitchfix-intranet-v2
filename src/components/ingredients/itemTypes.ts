@@ -71,6 +71,24 @@ export type ReviewGroupItem = {
   flaggedAt: string | null;
 };
 
+// Does this pack_override payload actually represent a human-set
+// PACK, or just a protection stamp around a price-only override?
+//
+// The backfill (src/app/api/admin/pack-backfill/route.ts) gates on
+// `pack_override IS NOT NULL` at four points - batch read, mid-loop
+// twice, UPDATE WHERE - and that is correct: a human touched this
+// row, leave it alone. But the UI must NOT then show "Set by hand"
+// on a pack nobody touched; the discriminator `price_only: true`
+// identifies the price-override family and this helper is the one
+// place that reads it. Every site that used
+// `pack_override !== null` to drive packSource="override" or the
+// packManualOverride flag calls this instead.
+export function isPackManualOverride(packOverride: unknown): boolean {
+  if (packOverride == null || typeof packOverride !== "object") return false;
+  if ((packOverride as { price_only?: unknown }).price_only === true) return false;
+  return true;
+}
+
 export type ReviewCardIngredient = {
   id: string;
   name: string;
