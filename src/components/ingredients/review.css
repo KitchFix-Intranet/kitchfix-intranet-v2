@@ -1601,7 +1601,40 @@
   margin-top: var(--sp-sp-3);
 }
 .kf-dt__meta .kf-master__bdg { margin-left: 0; }
-.kf-dt__unit { font-size: var(--sp-t-micro); }
+
+/* Base-unit control (R1). Reads as metadata until touched - it sits in
+   the pane's meta row beside the badges, not as a form field. The
+   select carries the corp floor so it is a real hit target. */
+.kf-dt__unitctl {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-1);
+  color: var(--sp-muted);
+}
+.kf-dt__unitctl > svg { flex: none; }
+.kf-dt__unitctl-l {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  cursor: pointer;
+}
+.kf-dt__unitsel {
+  min-height: var(--sp-floor-corp);
+  padding: 0 var(--sp-sp-2);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-ctl);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-ink);
+  background: var(--sp-card);
+  cursor: pointer;
+}
+.kf-dt__unitsel:disabled { opacity: 0.6; cursor: progress; }
+
+/* The one-click fix inside a note. .kf-why span is display:block, so
+   this is a button, not a span, and it gets its own top margin rather
+   than inheriting the note's line rhythm. */
+.kf-why__fix { margin-top: var(--sp-sp-2); }
 
 .kf-dt__stats {
   display: grid;
@@ -1662,6 +1695,9 @@
   border: 1px solid #EBDAB4;
 }
 .kf-why + .kf-why { margin-top: var(--sp-sp-2); }
+/* Base .kf-why IS the warn palette; this makes the modifier explicit so
+   the two cannot drift apart. */
+.kf-why--warn { background: var(--sp-warn-bg); border-color: #EBDAB4; }
 .kf-why--bad { background: var(--sp-block-bg); border-color: var(--sp-block-line); }
 .kf-why--info { background: var(--sp-info-bg); border-color: #D4E2F3; }
 .kf-why--good { background: var(--sp-good-bg); border-color: #C6E3D5; }

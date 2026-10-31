@@ -13,8 +13,10 @@
 //
 // The display + search / sort / category / resale toggle filtering
 // is a client island (IngredientMastersFilter) that receives the
-// already-aggregated server data. Native <details> on each row for
-// inline drill-in (saves a round-trip; no new drawer surface).
+// already-aggregated server data. Workbench shape as of Prompt Q1:
+// list on the left, persistent detail pane on the right (the old
+// <details> accordion is gone). The pane can write base_unit back
+// via /api/review/set-base-unit - see Prompt R1.
 
 import { serviceClient } from "@/lib/supabase/service";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
@@ -189,6 +191,10 @@ export async function IngredientMasters() {
     // to average. This is the money the headline $/unit does not
     // describe, and until now it was invisible.
     let unpricedUsd = 0;
+    // How many priced items sit in each dimension, regardless of
+    // whether they converted. Used ONLY to suggest a base_unit when the
+    // master's own unit is the odd one out; it never touches the blend.
+    const dimTally = new Map<string, number>();
     for (const it of items) {
       const itUsd = Number(it.usd_12m ?? 0);
       usd += itUsd;
@@ -199,6 +205,8 @@ export async function IngredientMasters() {
         continue;
       }
       const storedUom = it.price_estimate?.base_uom ?? null;
+      const itemDim = storedUom ? DIM_BY_UOM[normUom(storedUom) ?? ""] : undefined;
+      if (itemDim) dimTally.set(itemDim, (dimTally.get(itemDim) ?? 0) + 1);
       if (masterUom && storedUom) {
         const converted = convertPer(rawN, storedUom, masterUom);
         if (converted == null) {
@@ -279,6 +287,29 @@ export async function IngredientMasters() {
       })
       .sort((a, b) => b.usd12m - a.usd12m);
 
+    // When most of a master's priced items are in a dimension the
+    // master itself is not, the master is the odd one out - almost
+    // always because it was created on the hardcoded 'each' default
+    // while its items are billed by weight. Suggest the unit its own
+    // items agree on. A majority vote, not a fact: the control offers
+    // it, the human applies it. Null when the master already agrees,
+    // when there are no priced items, or when it is a tie.
+    const masterDim = masterUom ? DIM_BY_UOM[masterUom] : undefined;
+    let suggestedBaseUnit: string | null = null;
+    if (masterDim) {
+      let topDim: string | null = null;
+      let topN = 0;
+      let tied = false;
+      for (const [d, n] of dimTally) {
+        if (n > topN) { topDim = d; topN = n; tied = false; }
+        else if (n === topN) { tied = true; }
+      }
+      if (topDim && !tied && topDim !== masterDim && topN > (dimTally.get(masterDim) ?? 0)) {
+        suggestedBaseUnit =
+          topDim === "weight" ? "lb" : topDim === "volume" ? "gal" : topDim === "count" ? "each" : null;
+      }
+    }
+
     // Typed issues, ordered most-actionable first. `flagged` and
     // `flagReason` above keep their exact previous meaning for anything
     // still reading them; this is a parallel, richer signal.
@@ -307,6 +338,7 @@ export async function IngredientMasters() {
       pricedCount,
       unpricedUsd,
       issues,
+      suggestedBaseUnit,
       // Display + band lookup use the master's canonical uom so Milk
       // reads "$/gal" (not "$/floz"), Bottled water reads "$/each", etc.
       baseUom: masterUom,

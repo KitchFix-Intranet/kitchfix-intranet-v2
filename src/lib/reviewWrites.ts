@@ -889,6 +889,59 @@ export async function setIngredientResale(
   return { ok: true };
 }
 
+// The master's unit of account. Every per-unit price on the Ingredients
+// tab is each linked item's stored per_base converted INTO this unit at
+// render time, so changing it re-blends that master on the next load -
+// no backfill, no stored price column, and setting it back restores the
+// previous number exactly. Items whose price is in another dimension
+// are dropped from the blend (the `mismatch` issue), which is why a
+// master left on the created-by-default 'each' while its items are
+// priced per pound shows no price at all.
+//
+// The caller validates against the schema's CHECK constraint
+// (lb|each|gal|dozen); this helper re-checks rather than trusting it,
+// because a bad value here would surface as a 500 from Postgres.
+const BASE_UNIT_VALUES = new Set(["lb", "each", "gal", "dozen"]);
+
+export async function setIngredientBaseUnit(
+  client: SupabaseClient,
+  args: { ingredientId: string; baseUnit: string; actorEmail: string }
+): Promise<{ ok: boolean; error?: string }> {
+  const { ingredientId, actorEmail } = args;
+  const baseUnit = String(args.baseUnit ?? "").trim().toLowerCase();
+  if (!BASE_UNIT_VALUES.has(baseUnit)) {
+    return { ok: false, error: "base unit must be one of lb, each, gal, dozen" };
+  }
+
+  const { data: cur, error: curErr } = await client
+    .from("pr_ingredients")
+    .select("id,base_unit,status")
+    .eq("id", ingredientId)
+    .maybeSingle();
+  if (curErr) return { ok: false, error: curErr.message };
+  if (!cur) return { ok: false, error: "Ingredient not found" };
+  const row = cur as { id: string; base_unit: string; status: string };
+  if (row.status === "merged") return { ok: false, error: "Ingredient is merged" };
+  if (row.base_unit === baseUnit) return { ok: true };
+
+  const { error: upErr } = await client
+    .from("pr_ingredients")
+    .update({ base_unit: baseUnit, updated_at: new Date().toISOString() })
+    .eq("id", ingredientId);
+  if (upErr) return { ok: false, error: upErr.message };
+
+  await client.from("pr_events").insert({
+    entity_type: "ingredient",
+    entity_id: ingredientId,
+    kind: "ingredient_base_unit_set",
+    before: { base_unit: row.base_unit },
+    after: { base_unit: baseUnit },
+    actor: actorEmail,
+  });
+
+  return { ok: true };
+}
+
 // Structured pack-override (Phase 1.8). Replaces the free-text version
 // that only stored `{pack_text, billed_unit}`. The editor now captures
 // qty/size/uom (non-catch) or $/lb (catch) directly from a UI with

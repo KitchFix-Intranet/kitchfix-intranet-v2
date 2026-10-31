@@ -8,6 +8,7 @@
 // Kevin can jump to the bad one.
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   ArrowDownAZ,
@@ -17,9 +18,12 @@ import {
   DollarSign,
   Flame,
   Info,
+  Scale,
   Search,
+  Wand2,
   X,
 } from "lucide-react";
+import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { SUPER_CATEGORIES } from "@/lib/ingredients/categories";
 import { RowSendBackButton } from "./RowSendBackButton";
@@ -72,6 +76,10 @@ export type MasterRow = {
   pricedCount: number;
   unpricedUsd: number;
   issues: MasterIssue[];
+  // The base_unit this master's own priced items agree on, when that
+  // disagrees with the master's current one. Null when they agree or
+  // the vote is inconclusive. A suggestion only - see Prompt R1.
+  suggestedBaseUnit: string | null;
   linkedItems: MasterLinkedItem[];
 };
 
@@ -531,6 +539,122 @@ function MasterRowButton({
 
 // Typed, plain-English reasons. The whole point of PR52: the badge names
 // the problem, this names the fix. Nothing here is hover-only.
+// The schema's CHECK constraint, in the order a chef would scan them.
+// `dozen` is in the constraint and on exactly one master today; it stays
+// available but last.
+const BASE_UNITS: { value: string; label: string }[] = [
+  { value: "lb", label: "pound (lb)" },
+  { value: "each", label: "each" },
+  { value: "gal", label: "gallon (gal)" },
+  { value: "dozen", label: "dozen" },
+];
+
+const BASE_UNIT_WORD: Record<string, string> = {
+  lb: "pounds",
+  each: "each",
+  gal: "gallons",
+  dozen: "dozens",
+};
+
+async function postJson(url: string, body: unknown): Promise<{ ok: boolean; status: number; data: unknown }> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  let data: unknown = null;
+  try { data = await res.json(); } catch { /* ignore */ }
+  return { ok: res.ok, status: res.status, data };
+}
+
+function errText(data: unknown, fallback: string): string {
+  if (data && typeof data === "object" && "error" in data && typeof (data as { error?: unknown }).error === "string") {
+    return (data as { error: string }).error;
+  }
+  return fallback;
+}
+
+// Writes pr_ingredients.base_unit. The blend is computed from this on
+// every render, so a successful save + router.refresh() is the whole
+// story: the pane's per-unit price, spread, coverage and issue badges
+// all re-derive. Reversible by picking the old value back.
+function BaseUnitControl({ row }: { row: MasterRow }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+
+  async function save(next: string) {
+    if (next === row.baseUnit || busy) return;
+    setBusy(true);
+    const r = await postJson("/api/review/set-base-unit", {
+      ingredientId: row.id,
+      baseUnit: next,
+    });
+    if (!r.ok) {
+      toast(errText(r.data, `Save failed (${r.status})`), { tone: "block" });
+      setBusy(false);
+      return;
+    }
+    toast(`${row.name} is now costed per ${next}`);
+    setBusy(false);
+    router.refresh();
+  }
+
+  return (
+    <span className="kf-dt__unitctl">
+      <Scale size={13} strokeWidth={1.5} aria-hidden />
+      <label className="kf-dt__unitctl-l" htmlFor={`bu-${row.id}`}>
+        Costed per
+      </label>
+      <select
+        id={`bu-${row.id}`}
+        className="kf-dt__unitsel"
+        value={row.baseUnit}
+        disabled={busy}
+        onChange={(e) => save(e.target.value)}
+      >
+        {BASE_UNITS.map((u) => (
+          <option key={u.value} value={u.value}>
+            {u.label}
+          </option>
+        ))}
+      </select>
+    </span>
+  );
+}
+
+// The one-click version of the same write, offered inside the mismatch
+// note where the evidence for it is sitting.
+function SuggestBaseUnitButton({ row }: { row: MasterRow }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const next = row.suggestedBaseUnit;
+  if (!next) return null;
+
+  async function apply() {
+    if (busy || !next) return;
+    setBusy(true);
+    const r = await postJson("/api/review/set-base-unit", {
+      ingredientId: row.id,
+      baseUnit: next,
+    });
+    if (!r.ok) {
+      toast(errText(r.data, `Save failed (${r.status})`), { tone: "block" });
+      setBusy(false);
+      return;
+    }
+    toast(`${row.name} is now costed per ${next}`);
+    setBusy(false);
+    router.refresh();
+  }
+
+  return (
+    <button type="button" className="kf-btn kf-btn--sm kf-why__fix" onClick={apply} disabled={busy}>
+      <Wand2 size={13} strokeWidth={1.5} aria-hidden />
+      {busy ? "Switching…" : `Cost this per ${BASE_UNIT_WORD[next] ?? next} instead`}
+    </button>
+  );
+}
+
 function IssueNote({ row }: { row: MasterRow }) {
   const uom = uomLabel(row.baseUom);
   const notes: { tone: string; icon: ReactNode; head: string; body: ReactNode }[] = [];
@@ -575,6 +699,15 @@ function IssueNote({ row }: { row: MasterRow }) {
           This master is costed per <strong>{uom}</strong>, but {n === 1 ? "an item is" : "those items are"}{" "}
           priced per a different dimension. Those numbers are not comparable and never reach
           the blend until the unit is fixed.
+          {row.suggestedBaseUnit ? (
+            <>
+              {" "}
+              Most of its priced items are in{" "}
+              <strong>{BASE_UNIT_WORD[row.suggestedBaseUnit] ?? row.suggestedBaseUnit}</strong>, so
+              the ingredient is probably the one set wrong - it was created on the default.
+              <SuggestBaseUnitButton row={row} />
+            </>
+          ) : null}
         </>
       ),
     });
@@ -652,7 +785,7 @@ function MasterDetail({ row, onBack }: { row: MasterRow; onBack: () => void }) {
             </span>
           ))}
           {row.resale ? <span className="kf-pill kf-pill--muted">Resale</span> : null}
-          <span className="kf-muted kf-dt__unit">costed per {uom}</span>
+          <BaseUnitControl row={row} />
         </div>
       </div>
 
