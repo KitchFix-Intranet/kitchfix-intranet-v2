@@ -26,7 +26,7 @@ import { fmtCount, fmtDate, fmtUsd, fmtUsdLong, timeAgo } from "@/lib/fmt";
 import { SUPER_CATEGORIES, type SuperCategory } from "@/lib/ingredients/categories";
 import { humanizeKind } from "@/lib/humanizeKind";
 import { IngredientTypeahead } from "./IngredientTypeahead";
-import type { ReviewCardIngredient, ReviewGroupItem } from "./ReviewCard";
+import type { ReviewCardIngredient, ReviewGroupItem } from "./itemTypes";
 import "./drawer.css";
 
 // Inline "Saved just now" badge. Pass a `savedAt` timestamp (Date.now())

@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
+import { ItemPanelById } from "./ItemPanelById";
 import { SUPER_CATEGORIES } from "@/lib/ingredients/categories";
 import { RowSendBackButton } from "./RowSendBackButton";
 import { MasterSendAllBackButton } from "./MasterSendAllBackButton";
@@ -133,6 +134,10 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
   // On narrow viewports the index and the pane occupy the same space;
   // this says which one the user is looking at.
   const [paneOpen, setPaneOpen] = useState(false);
+  // Item-panel opened from a linked-items row (Prompt A1). One
+  // <ItemPanelById> is mounted at the island level and switches on
+  // this id, so the panel is never duplicated per row.
+  const [openItemId, setOpenItemId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // "/" focuses the input; Esc clears it.
@@ -446,11 +451,19 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
           </div>
           <div className="kf-wb__detail">
             {selected ? (
-              <MasterDetail row={selected} onBack={() => setPaneOpen(false)} />
+              <MasterDetail
+                row={selected}
+                onBack={() => setPaneOpen(false)}
+                onOpenItem={(id) => setOpenItemId(id)}
+              />
             ) : null}
           </div>
         </div>
       )}
+      {/* One mount, keyed by the open id so the fetch effect reruns on
+          change. Not mounted per-row - a master with 10 linked items
+          still has exactly one <ItemPanelById>. */}
+      <ItemPanelById itemId={openItemId} onClose={() => setOpenItemId(null)} />
     </>
   );
 }
@@ -764,7 +777,15 @@ function IssueNote({ row }: { row: MasterRow }) {
   );
 }
 
-function MasterDetail({ row, onBack }: { row: MasterRow; onBack: () => void }) {
+function MasterDetail({
+  row,
+  onBack,
+  onOpenItem,
+}: {
+  row: MasterRow;
+  onBack: () => void;
+  onOpenItem: (itemId: string) => void;
+}) {
   const uom = uomLabel(row.baseUom);
   const partial = row.pricedCount < row.linkedCount;
   return (
@@ -865,7 +886,14 @@ function MasterDetail({ row, onBack }: { row: MasterRow; onBack: () => void }) {
                     className={outlier || li.unitMismatch ? "kf-master__inner-row--outlier" : undefined}
                   >
                     <td title={li.name}>
-                      <span className="kf-cell-ellipsis">{li.name}</span>
+                      <button
+                        type="button"
+                        className="kf-cell-ellipsis kf-dt__itemopen"
+                        onClick={() => onOpenItem(li.id)}
+                        title={`Open details for ${li.name}`}
+                      >
+                        {li.name}
+                      </button>
                       {li.unitMismatch ? (
                         <span className="kf-cell-sub kf-cell-sub--note">
                           unit mismatch vs master ({li.perBaseUom ?? "?"})
