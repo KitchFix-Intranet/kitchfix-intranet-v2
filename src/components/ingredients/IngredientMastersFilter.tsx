@@ -537,8 +537,6 @@ function MasterRowButton({
   );
 }
 
-// Typed, plain-English reasons. The whole point of PR52: the badge names
-// the problem, this names the fix. Nothing here is hover-only.
 // The schema's CHECK constraint, in the order a chef would scan them.
 // `dozen` is in the constraint and on exactly one master today; it stays
 // available but last.
@@ -655,6 +653,8 @@ function SuggestBaseUnitButton({ row }: { row: MasterRow }) {
   );
 }
 
+// Typed, plain-English reasons. The whole point of PR52: the badge names
+// the problem, this names the fix. Nothing here is hover-only.
 function IssueNote({ row }: { row: MasterRow }) {
   const uom = uomLabel(row.baseUom);
   const notes: { tone: string; icon: ReactNode; head: string; body: ReactNode }[] = [];

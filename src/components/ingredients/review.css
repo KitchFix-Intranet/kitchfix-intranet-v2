@@ -1634,7 +1634,11 @@
 /* The one-click fix inside a note. .kf-why span is display:block, so
    this is a button, not a span, and it gets its own top margin rather
    than inheriting the note's line rhythm. */
-.kf-why__fix { margin-top: var(--sp-sp-2); }
+/* .kf-btn is inline-flex with a 44px floor, so left inline this button
+   shares a line with 11px text and blows out the line box. Block-level
+   flex + fit-content puts it on its own row inside the note body.
+   Two-class selector so it cannot lose to .kf-btn on source order. */
+.kf-why .kf-why__fix { display: flex; width: fit-content; margin-top: var(--sp-sp-2); }
 
 .kf-dt__stats {
   display: grid;
