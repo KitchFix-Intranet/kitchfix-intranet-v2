@@ -1,15 +1,21 @@
-// Live coverage figure used by the matcher cron's dollar cap. Reads
-// pr_v_overview_totals.food_dollars_total for the denominator and sums
-// `usd_12m` over `link_status = 'none'` directly for the numerator -
-// the view carries `food_items_waiting_usd` (none + proposed), which
-// is the wrong split for us: 'proposed' already counts as covered
-// here (Kevin has it in his queue, the matcher doesn't need to touch
-// it again). Covered = total - none.
+// Live coverage figure used by the matcher cron's dollar cap. Computes
+// total, covered (confirmed + proposed) and unlinked (none) directly
+// from pr_vendor_items in a single paginated pass over the same filter
+// set, so numerator and denominator always describe the same
+// population. Never subtracts one filter from another: link_status is
+// not an exhaustive partition (rows carry 'rejected', 'needs_review',
+// etc.) and status='duplicate' / 'archived' rows exist that must not
+// count toward either side.
 //
-// Pagination follows the standard Supabase 1000-row cap. On the
-// current queue (8K items) this is 8 round trips, ~400ms before the
-// cap decision - negligible beside the 90s matcher run that follows,
-// and zero when the cap is already met.
+// The denominator deliberately scopes to status='active' only, not
+// ('active','resale'): the cron proposes vendor-items for review, and
+// resale items are already settled on a different track. Keeps the
+// bookkeeping clean - total, covered and none always sum coherently
+// over the same rows.
+//
+// 8,039 active food rows at the Supabase 1000-row cap = 9 round trips,
+// ~400ms before the cap decision - negligible beside the 90s matcher
+// run that follows, and the whole check is skipped when owner-authed.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -24,13 +30,29 @@ export type Coverage = {
 };
 
 export async function getMatcherCoverage(client: SupabaseClient): Promise<Coverage> {
-  const [{ data: totalsData, error: totalsErr }, noneUsd] = await Promise.all([
-    client.from("pr_v_overview_totals").select("food_dollars_total").single(),
-    sumNoneUsd(client),
-  ]);
-  if (totalsErr) throw totalsErr;
-  const totalUsd = Number((totalsData as { food_dollars_total?: number } | null)?.food_dollars_total ?? 0);
-  const coveredUsd = Math.max(0, totalUsd - noneUsd);
+  const PAGE = 1000;
+  let from = 0;
+  let totalUsd = 0;
+  let coveredUsd = 0;
+  let noneUsd = 0;
+  for (;;) {
+    const { data, error } = await client
+      .from("pr_vendor_items")
+      .select("usd_12m,link_status")
+      .eq("is_food", true)
+      .eq("status", "active")
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    const rows = (data ?? []) as { usd_12m: number | null; link_status: string | null }[];
+    for (const r of rows) {
+      const v = Number(r.usd_12m ?? 0);
+      totalUsd += v;
+      if (r.link_status === "confirmed" || r.link_status === "proposed") coveredUsd += v;
+      else if (r.link_status === "none") noneUsd += v;
+    }
+    if (rows.length < PAGE) break;
+    from += PAGE;
+  }
   const pct = totalUsd > 0 ? (coveredUsd / totalUsd) * 100 : 0;
   return {
     totalUsd,
@@ -39,25 +61,4 @@ export async function getMatcherCoverage(client: SupabaseClient): Promise<Covera
     pct,
     capMet: pct >= MATCH_DOLLAR_TARGET_PCT,
   };
-}
-
-async function sumNoneUsd(client: SupabaseClient): Promise<number> {
-  const PAGE = 1000;
-  let from = 0;
-  let total = 0;
-  for (;;) {
-    const { data, error } = await client
-      .from("pr_vendor_items")
-      .select("usd_12m")
-      .eq("is_food", true)
-      .in("status", ["active", "resale"])
-      .eq("link_status", "none")
-      .range(from, from + PAGE - 1);
-    if (error) throw error;
-    const rows = (data ?? []) as { usd_12m: number | null }[];
-    for (const r of rows) total += Number(r.usd_12m ?? 0);
-    if (rows.length < PAGE) break;
-    from += PAGE;
-  }
-  return total;
 }

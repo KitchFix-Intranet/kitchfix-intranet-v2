@@ -59,31 +59,48 @@ async function handle(req: NextRequest) {
   const client = serviceClient();
 
   // Cron-only cap check. Owner-authed runs bypass this so Kevin can
-  // still drain past the target on purpose. If we are capped, log the
-  // decision and exit before touching Anthropic.
+  // still drain past the target on purpose. If we are capped, exit
+  // before touching Anthropic.
   //
   // pr_events.entity_id is uuid NOT NULL; the matcher's existing
-  // ai_match_run events use this all-zeros sentinel when a run has no
+  // 'matcher' events use this all-zeros sentinel when a run has no
   // row of its own to point at.
   const SENTINEL_UUID = "00000000-0000-0000-0000-000000000000";
   if (cron) {
     const cov = await getMatcherCoverage(client);
     if (cov.capMet) {
-      await client.from("pr_events").insert({
-        entity_type: "match_run",
-        entity_id: SENTINEL_UUID,
-        kind: "matcher_cron_run",
-        actor: "cron",
-        before: null,
-        after: {
-          cap_met: true,
-          target_pct: MATCH_DOLLAR_TARGET_PCT,
-          covered_usd: cov.coveredUsd,
-          total_usd: cov.totalUsd,
-          pct: Number(cov.pct.toFixed(2)),
-          items_proposed: 0,
-        },
-      });
+      // 10-minute cron x 144 runs/day of "nothing happened" would be
+      // ~52K rows/year of ledger noise. Only log the capped run when
+      // the state CHANGES - i.e. the previous matcher_cron_run was
+      // uncapped. items_proposed is 0 on this path by construction, so
+      // the state-transition check is the only gate.
+      const { data: prev } = await client
+        .from("pr_events")
+        .select("after")
+        .eq("entity_type", "matcher")
+        .eq("kind", "matcher_cron_run")
+        .order("at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const prevCapMet =
+        !!(prev?.after && typeof prev.after === "object" && (prev.after as { cap_met?: unknown }).cap_met === true);
+      if (!prevCapMet) {
+        await client.from("pr_events").insert({
+          entity_type: "matcher",
+          entity_id: SENTINEL_UUID,
+          kind: "matcher_cron_run",
+          actor: "cron",
+          before: null,
+          after: {
+            cap_met: true,
+            target_pct: MATCH_DOLLAR_TARGET_PCT,
+            covered_usd: cov.coveredUsd,
+            total_usd: cov.totalUsd,
+            pct: Number(cov.pct.toFixed(2)),
+            items_proposed: 0,
+          },
+        });
+      }
       return NextResponse.json({
         status: "ok",
         note: `cap met: ${cov.pct.toFixed(2)}% covered of ${MATCH_DOLLAR_TARGET_PCT}% target`,
@@ -111,7 +128,7 @@ async function handle(req: NextRequest) {
   if (cron) {
     const after = await getMatcherCoverage(client);
     await client.from("pr_events").insert({
-      entity_type: "match_run",
+      entity_type: "matcher",
       entity_id: result.runId ?? SENTINEL_UUID,
       kind: "matcher_cron_run",
       actor: "cron",
