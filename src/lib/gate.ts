@@ -108,8 +108,18 @@ export async function requireAppAccessApi(
   return { email, role: access.role };
 }
 
+// Accepts either `x-cron-secret: $CRON_SECRET` (manual curl, same
+// shape as /api/intake) or `Authorization: Bearer $CRON_SECRET`
+// (Vercel's own cron scheduler, which sets that header automatically
+// when the CRON_SECRET env var is defined on the project).
 export function isCronAuthorized(req: Request): boolean {
-  const header = req.headers.get("x-cron-secret") ?? "";
   const expected = process.env.CRON_SECRET ?? "";
-  return expected.length > 0 && header === expected;
+  if (!expected) return false;
+  const custom = req.headers.get("x-cron-secret") ?? "";
+  if (custom && custom === expected) return true;
+  const auth = req.headers.get("authorization") ?? "";
+  if (auth.startsWith("Bearer ")) {
+    return auth.slice("Bearer ".length) === expected;
+  }
+  return false;
 }
