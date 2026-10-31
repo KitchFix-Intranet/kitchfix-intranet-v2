@@ -27,6 +27,11 @@ export type ReviewGroupItem = {
   packState: string;
   packSource: "override" | "catalog" | "invoice" | null;
   packManualOverride: boolean;
+  // Set by hand via /api/review/set-price-override. Independent of
+  // packManualOverride: a row can have both at once (A2.2). Keyed off
+  // isPriceManualOverride(pack_override) so the same column drives
+  // both flags without re-reading the db.
+  priceManualOverride: boolean;
   billedUnit: string | null;
   usd12m: number;
   lines12m: number;
@@ -87,6 +92,22 @@ export function isPackManualOverride(packOverride: unknown): boolean {
   if (packOverride == null || typeof packOverride !== "object") return false;
   if ((packOverride as { price_only?: unknown }).price_only === true) return false;
   return true;
+}
+
+// Does this pack_override payload carry a hand-set PRICE?
+//
+// Two shapes qualify:
+//   price_only: true           -- row has only a price override
+//   price: { per_base, ... }   -- row has BOTH a pack override and
+//                                 a price override; the price is
+//                                 nested so the pack stays whole.
+//
+// A row can carry both overrides at once (A2.2) - they are
+// independent facts and the panel must show both labels.
+export function isPriceManualOverride(packOverride: unknown): boolean {
+  if (packOverride == null || typeof packOverride !== "object") return false;
+  const po = packOverride as { price_only?: unknown; price?: unknown };
+  return po.price_only === true || (po.price != null && typeof po.price === "object");
 }
 
 export type ReviewCardIngredient = {

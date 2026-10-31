@@ -9,6 +9,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { categoryForParent, type SuperCategory } from "@/lib/ingredients/categories";
 import { estimateFromOverride } from "@/lib/ingredients/estimate";
 import { parsePack } from "@/lib/ingredients/pack";
+import { isPackManualOverride } from "@/components/ingredients/itemTypes";
 
 export type ConfirmResult = {
   confirmed: number;
@@ -1730,7 +1731,7 @@ export async function setVendorItemPriceOverride(
 
   const { data: itemRow, error: itemErr } = await client
     .from("pr_vendor_items")
-    .select("id,vendor_id,item_number_norm,price_estimate,status")
+    .select("id,vendor_id,item_number_norm,price_estimate,pack_override,status")
     .eq("id", itemId)
     .maybeSingle();
   if (itemErr) return { ok: false, error: itemErr.message, twins: 0 };
@@ -1740,6 +1741,7 @@ export async function setVendorItemPriceOverride(
     vendor_id: string;
     item_number_norm: string | null;
     price_estimate: Record<string, unknown> | null;
+    pack_override: unknown;
     status: string;
   };
   if (item.status === "merged") {
@@ -1765,42 +1767,67 @@ export async function setVendorItemPriceOverride(
 
   const nowIso = new Date().toISOString();
 
-  const writeTargets: Array<{ id: string; before: Record<string, unknown> }> = [
-    { id: item.id, before: { price_estimate: prevPe } },
-  ];
-
-  // Twin propagation on the same (vendor_id, item_number_norm) key the
-  // pack override uses. Skip when the key is incomplete.
-  let twins = 0;
-  if (item.item_number_norm) {
-    const { data: twinRows, error: twinErr } = await client
-      .from("pr_vendor_items")
-      .select("id,price_estimate")
-      .eq("vendor_id", item.vendor_id)
-      .eq("item_number_norm", item.item_number_norm)
-      .neq("id", item.id);
-    if (twinErr) return { ok: false, error: twinErr.message, twins: 0 };
-    for (const t of (twinRows ?? []) as Array<{ id: string; price_estimate: Record<string, unknown> | null }>) {
-      writeTargets.push({
-        id: t.id,
-        before: { price_estimate: t.price_estimate, twin_of: item.id },
-      });
-      twins += 1;
-    }
-  }
-
-  // Protection stamp. The backfill's pack_override IS NOT NULL gate
-  // treats this as "touched by a human, leave it alone"; the
-  // price_only discriminator keeps the UI from reporting the pack as
-  // human-set. See the block comment above.
-  const packOverrideStamp = {
-    price_only: true,
+  // Build the pack_override stamp from each row's OWN prior value, so
+  // a row that already has a pack override keeps its structured
+  // record intact and nests the price alongside. Price-only vs
+  // merged shape:
+  //   null / absent         -> { price_only: true, per_base, ... }
+  //   price-only            -> replace with { price_only: true, ... }
+  //                            (prior price keys get fresh values)
+  //   real pack override    -> { ...prior, price: { per_base, ... } }
+  //                            no price_only key: the pack IS human-set
+  // isPackManualOverride is the one place that decides which family
+  // the prior row belonged to; keep this merge in sync with it.
+  const priceLeaf = {
     per_base: perBase,
     base_uom: baseUom,
     note: reason,
     by: actorEmail,
     at: nowIso,
   };
+  const stampFor = (prevPo: unknown): Record<string, unknown> =>
+    isPackManualOverride(prevPo)
+      ? { ...(prevPo as Record<string, unknown>), price: priceLeaf }
+      : { price_only: true, ...priceLeaf };
+
+  const writeTargets: Array<{
+    id: string;
+    before: Record<string, unknown>;
+    stamp: Record<string, unknown>;
+  }> = [
+    {
+      id: item.id,
+      before: { price_estimate: prevPe, pack_override: item.pack_override },
+      stamp: stampFor(item.pack_override),
+    },
+  ];
+
+  // Twin propagation on the same (vendor_id, item_number_norm) key the
+  // pack override uses. Each twin's stamp is built from its OWN prior
+  // pack_override - a twin with a hand-set pack keeps that record
+  // whether or not the primary had one.
+  let twins = 0;
+  if (item.item_number_norm) {
+    const { data: twinRows, error: twinErr } = await client
+      .from("pr_vendor_items")
+      .select("id,price_estimate,pack_override")
+      .eq("vendor_id", item.vendor_id)
+      .eq("item_number_norm", item.item_number_norm)
+      .neq("id", item.id);
+    if (twinErr) return { ok: false, error: twinErr.message, twins: 0 };
+    for (const t of (twinRows ?? []) as Array<{
+      id: string;
+      price_estimate: Record<string, unknown> | null;
+      pack_override: unknown;
+    }>) {
+      writeTargets.push({
+        id: t.id,
+        before: { price_estimate: t.price_estimate, pack_override: t.pack_override, twin_of: item.id },
+        stamp: stampFor(t.pack_override),
+      });
+      twins += 1;
+    }
+  }
 
   let mainWritten = false;
   for (const t of writeTargets) {
@@ -1808,7 +1835,7 @@ export async function setVendorItemPriceOverride(
       .from("pr_vendor_items")
       .update({
         price_estimate: newPe,
-        pack_override: packOverrideStamp,
+        pack_override: t.stamp,
         updated_at: nowIso,
       })
       .eq("id", t.id);
@@ -1825,7 +1852,7 @@ export async function setVendorItemPriceOverride(
       entity_id: t.id,
       kind: "price_override_set",
       before: t.before,
-      after: newPe,
+      after: { price_estimate: newPe, pack_override: t.stamp },
       actor: actorEmail,
     });
   }

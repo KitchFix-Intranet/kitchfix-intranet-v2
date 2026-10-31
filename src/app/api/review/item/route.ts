@@ -20,6 +20,7 @@ import { requireOwnerApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
 import {
   isPackManualOverride,
+  isPriceManualOverride,
   type ReviewCardIngredient,
   type ReviewGroupItem,
 } from "@/components/ingredients/itemTypes";
@@ -165,6 +166,7 @@ export async function GET(req: NextRequest) {
   const catalogPrice = cat && cat.catalog_price != null ? Number(cat.catalog_price) : null;
   const gtin = cat?.gtin?.trim() || null;
   const hasManualOverride = isPackManualOverride(it.pack_override);
+  const hasPriceOverride = isPriceManualOverride(it.pack_override);
   const packDisplay = hasManualOverride ? it.pack_text : catalogPack ?? it.pack_text;
   const packSource: "override" | "catalog" | "invoice" | null = hasManualOverride
     ? "override"
@@ -202,6 +204,7 @@ export async function GET(req: NextRequest) {
     packState: it.pack_state,
     packSource,
     packManualOverride: hasManualOverride,
+    priceManualOverride: hasPriceOverride,
     billedUnit: it.billed_unit,
     usd12m: u12,
     lines12m: Number(it.lines_12m ?? 0),
