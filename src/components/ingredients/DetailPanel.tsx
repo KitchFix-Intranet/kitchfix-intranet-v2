@@ -217,7 +217,10 @@ export function DetailPanel({
         )}
 
         {open.kind === "item" && item ? (
-          <PackOverrideBlock item={item} onDone={() => router.refresh()} />
+          <>
+            <PackOverrideBlock item={item} ingredient={ingredient} onDone={() => router.refresh()} />
+            <PriceOverrideBlock item={item} ingredient={ingredient} onDone={() => router.refresh()} />
+          </>
         ) : null}
 
         <LedgerBlock
@@ -946,11 +949,38 @@ const BILLED_UNIT_GROUPS: { label: string; options: string[] }[] = [
   { label: "Priced per container - price divided by pack", options: ["case", "bag", "box", "pack", "jar", "can", "other"] },
 ];
 
+// Map an ingredient's base_unit (R1 vocabulary) to the base UOM
+// dimension the pack editor emits. Used by the Result row's verdict
+// to say whether the edit will actually make the item join the blend.
+const INGREDIENT_BASE_TO_UOM: Record<string, "LB" | "FLOZ" | "EA"> = {
+  lb: "LB",
+  each: "EA",
+  gal: "FLOZ",
+  dozen: "EA",
+};
+
+// Parse the server's packNormalized ("50 LB" or "6/1 LB") back into
+// qty/size/uom so the "Read as" row can show the total conversion.
+function parsePackNormalized(
+  s: string | null
+): { qty: number; size: number; uom: string } | null {
+  if (!s) return null;
+  const m = s.match(/^(?:(\d+(?:\.\d+)?)\s*\/\s*)?(\d+(?:\.\d+)?)\s+([A-Z ]+)$/);
+  if (!m) return null;
+  const qty = m[1] ? Number(m[1]) : 1;
+  const size = Number(m[2]);
+  const uom = m[3].trim().toUpperCase().replace(/\s+/g, "");
+  if (!Number.isFinite(qty) || !Number.isFinite(size) || qty <= 0 || size <= 0) return null;
+  return { qty, size, uom };
+}
+
 function PackOverrideBlock({
   item,
+  ingredient,
   onDone,
 }: {
   item: ReviewGroupItem;
+  ingredient: ReviewCardIngredient | null;
   onDone: () => void;
 }) {
   // Prefill: catch-weight toggle takes the item's current flag; $/lb
@@ -1064,164 +1094,390 @@ function PackOverrideBlock({
     onDone();
   }
 
+  // "Read as" row: dynamic label + body.
+  // override         -> "Set by hand"
+  // perBase=null+parse failed -> "Could not read" (with perBaseNote underneath when present)
+  // otherwise        -> "Read as"
+  const parsedBack = parsePackNormalized(item.packNormalized);
+  const readAsLabel =
+    item.packState === "override"
+      ? "Set by hand"
+      : item.perBase == null
+        ? "Could not read"
+        : "Read as";
+  let readAsBody: string;
+  if (parsedBack) {
+    const b = UOM_TO_BASE[parsedBack.uom];
+    const total = b ? parsedBack.qty * parsedBack.size * b.factor : null;
+    readAsBody =
+      total != null && b
+        ? parsedBack.qty === 1
+          ? `${parsedBack.size} ${parsedBack.uom} = ${total.toFixed(2)} ${UOM_LABEL[b.base]}`
+          : `${parsedBack.qty} x ${parsedBack.size} ${parsedBack.uom} = ${total.toFixed(2)} ${UOM_LABEL[b.base]}`
+        : item.packNormalized ?? item.pack ?? "(not available)";
+  } else {
+    readAsBody = item.packNormalized ?? item.pack ?? "(not available)";
+  }
+
+  // Result row: derived $/unit + verdict against the ingredient's base_unit.
+  const ingredientBase = ingredient ? INGREDIENT_BASE_TO_UOM[ingredient.base_unit?.toLowerCase() ?? ""] ?? null : null;
+  const enteredBase = catchWeight ? "LB" : uom && UOM_TO_BASE[uom] ? UOM_TO_BASE[uom].base : null;
+  let verdict: { tone: "good" | "block"; text: string } | null = null;
+  if (ingredient && ingredientBase && enteredBase && readyToSave) {
+    if (enteredBase === ingredientBase) {
+      verdict = {
+        tone: "good",
+        text: `Matches ${ingredient.name} - this item joins the blend.`,
+      };
+    } else {
+      const baseWord =
+        enteredBase === "LB" ? "lb" : enteredBase === "FLOZ" ? "fl oz" : "each";
+      const ingBaseWord = ingredient.base_unit?.toLowerCase() ?? "its unit";
+      verdict = {
+        tone: "block",
+        text: `${ingredient.name} is costed per ${ingBaseWord}. In ${baseWord} it still will not blend.`,
+      };
+    }
+  }
+
   return (
-    <section className="kf-drawer__block kf-dpn__block" aria-label="Pack override">
+    <section className="kf-drawer__block kf-dpn__block" aria-label="Pack size">
       <header className="kf-drawer__block-head">
-        <h4>Pack size (override)</h4>
+        <h4>Pack size</h4>
         <small>
-          Set the pack by hand: count, size and unit - or $/lb for catch-weight. Marks the pack as
-          human-set and copies it to twins with the same item number.
+          How the invoice reads it, what to change it to, and whether the result will join the
+          blend. Copies to twins with the same item number.
         </small>
       </header>
 
-      <div className="kf-dpn__row">
-        <div className="kf-dpn__toggle">
-          <label className="kf-dpn__toggle-label">
-            <input
-              type="checkbox"
-              checked={catchWeight}
-              aria-label="Priced by the pound (catch-weight)"
-              onChange={(e) => {
-                const v = e.currentTarget.checked;
-                setCatchWeight(v);
-              }}
-              disabled={busy}
-            />
-            <span>Priced by the pound (catch-weight)</span>
-          </label>
-          <div className="kf-dpn__hint">
-            Catch-weight items are billed by actual shipped weight. The $/lb below is used
-            directly; qty/size/uom are ignored.
+      {/* Mode switch - decides which `Change to` controls render below.
+          aria-pressed on each button; corp floor via .kf-chain__mode-btn. */}
+      <div className="kf-chain__mode" role="group" aria-label="Pricing mode">
+        <button
+          type="button"
+          className={`kf-chain__mode-btn${!catchWeight ? " is-on" : ""}`}
+          aria-pressed={!catchWeight}
+          onClick={() => setCatchWeight(false)}
+          disabled={busy}
+        >
+          Priced by the case
+        </button>
+        <button
+          type="button"
+          className={`kf-chain__mode-btn${catchWeight ? " is-on" : ""}`}
+          aria-pressed={catchWeight}
+          onClick={() => setCatchWeight(true)}
+          disabled={busy}
+        >
+          Catch weight - priced by actual weight
+        </button>
+      </div>
+
+      <div className="kf-chain">
+        {/* Row 1 - Invoice says: verbatim pack text in a mono chip. */}
+        <div className="kf-chain__row">
+          <div className="kf-chain__label">Invoice says</div>
+          <div className="kf-chain__value">
+            <code className="kf-chain__mono">{item.pack ?? "(none)"}</code>
+          </div>
+        </div>
+
+        {/* Row 2 - Read as / Set by hand / Could not read. */}
+        <div className="kf-chain__row">
+          <div className="kf-chain__label">{readAsLabel}</div>
+          <div className="kf-chain__value">
+            <span>{readAsBody}</span>
+            {readAsLabel === "Could not read" && item.perBaseNote ? (
+              <span className="kf-chain__sub">{item.perBaseNote}</span>
+            ) : null}
+          </div>
+        </div>
+
+        {/* Row 3 - Change to: inputs. Shape depends on mode. */}
+        <div className="kf-chain__row kf-chain__row--input">
+          <div className="kf-chain__label">Change to</div>
+          <div className="kf-chain__value">
+            {catchWeight ? (
+              <div className="kf-dpn__row">
+                <label className="kf-dpn__label">
+                  <span>$ / lb</span>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step="0.01"
+                    min="0"
+                    value={perLbStr}
+                    onChange={(e) => setPerLbStr(e.target.value)}
+                    placeholder="e.g. 5.299"
+                    disabled={busy}
+                  />
+                </label>
+              </div>
+            ) : (
+              <div className="kf-dpn__row kf-newing__row">
+                <label className="kf-dpn__label">
+                  <span>Qty</span>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    step="1"
+                    min="0"
+                    value={qtyStr}
+                    onChange={(e) => setQtyStr(e.target.value)}
+                    placeholder="e.g. 6"
+                    disabled={busy}
+                  />
+                </label>
+                <label className="kf-dpn__label">
+                  <span>Size</span>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step="0.01"
+                    min="0"
+                    value={sizeStr}
+                    onChange={(e) => setSizeStr(e.target.value)}
+                    placeholder="e.g. 5"
+                    disabled={busy}
+                  />
+                </label>
+                <label className="kf-dpn__label">
+                  <span>UOM</span>
+                  <select value={uom} onChange={(e) => setUom(e.target.value)} disabled={busy}>
+                    {UOM_GROUPS.map((g) => (
+                      <optgroup key={g.label} label={g.label}>
+                        {g.options.map((o) => (
+                          <option key={o} value={o}>
+                            {o === "FLOZ" ? "FL OZ" : o}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )}
+            <div className="kf-dpn__row kf-newing__row">
+              <label className="kf-dpn__label">
+                <span>Billed unit (optional)</span>
+                <select
+                  value={billedUnit}
+                  onChange={(e) => setBilledUnit(e.target.value)}
+                  disabled={busy}
+                >
+                  <option value="">(not set)</option>
+                  {billedUnit !== "" &&
+                    !BILLED_UNIT_GROUPS.some((g) => g.options.includes(billedUnit)) && (
+                      <option value={billedUnit}>{billedUnit} (existing)</option>
+                    )}
+                  {BILLED_UNIT_GROUPS.map((g) => (
+                    <optgroup key={g.label} label={g.label}>
+                      {g.options.map((o) => (
+                        <option key={o} value={o}>
+                          {o}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </label>
+              <label className="kf-dpn__label">
+                <span>Note (optional)</span>
+                <input
+                  type="text"
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  placeholder="e.g. confirmed with vendor rep"
+                  disabled={busy}
+                />
+              </label>
+            </div>
+            {!catchWeight ? (
+              <div className="kf-dpn__hint">
+                Case price on file:{" "}
+                {previewCasePrice ? (
+                  <strong>
+                    {fmtUsd(previewCasePrice.v)} ({previewCasePrice.src})
+                  </strong>
+                ) : (
+                  <span className="kf-muted">none - pack will save, per-unit will be blank</span>
+                )}
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        {/* Row 4 - Result: derived $/unit + verdict. */}
+        <div className="kf-chain__row kf-chain__row--result">
+          <div className="kf-chain__label">Result</div>
+          <div className="kf-chain__value">
+            {preview.perBase != null ? (
+              <strong className="kf-chain__big">
+                {fmtUsd(preview.perBase)} / {catchWeight ? "lb" : enteredBase ? UOM_LABEL[enteredBase] : "unit"}
+              </strong>
+            ) : (
+              <strong className="kf-chain__big kf-muted">- / unit</strong>
+            )}
+            <span
+              className={`kf-chain__sub${
+                preview.dim === "no-price" ? " kf-chain__sub--warn" : ""
+              }`}
+            >
+              {preview.line}
+            </span>
+            {verdict ? (
+              <span className={`kf-chain__verdict kf-chain__verdict--${verdict.tone}`}>
+                {verdict.text}
+              </span>
+            ) : null}
+            <div className="kf-dpn__btns">
+              <button
+                type="button"
+                className={`kf-btn kf-btn--primary kf-btn--sm${busy ? " is-busy" : ""}`}
+                disabled={busy || !readyToSave}
+                onClick={save}
+              >
+                {busy ? "Saving..." : "Save pack"}
+              </button>
+              <SaveFlash savedAt={savedAt} error={error} />
+            </div>
+            {lastTwins != null && lastTwins > 0 ? (
+              <div className="kf-dpn__hint">
+                Applied to <strong>{fmtCount(lastTwins + 1)}</strong> matching items (same vendor SKU).
+              </div>
+            ) : null}
           </div>
         </div>
       </div>
+    </section>
+  );
+}
 
-      {catchWeight ? (
-        <div className="kf-dpn__row">
-          <label className="kf-dpn__label">
-            <span>$ / lb</span>
-            <input
-              type="number"
-              inputMode="decimal"
-              step="0.01"
-              min="0"
-              value={perLbStr}
-              onChange={(e) => setPerLbStr(e.target.value)}
-              placeholder="e.g. 5.299"
-            />
-          </label>
-        </div>
-      ) : (
-        <>
-          <div className="kf-dpn__row kf-newing__row">
-            <label className="kf-dpn__label">
-              <span>Qty</span>
-              <input
-                type="number"
-                inputMode="numeric"
-                step="1"
-                min="0"
-                value={qtyStr}
-                onChange={(e) => setQtyStr(e.target.value)}
-                placeholder="e.g. 6"
-              />
-            </label>
-            <label className="kf-dpn__label">
-              <span>Size</span>
-              <input
-                type="number"
-                inputMode="decimal"
-                step="0.01"
-                min="0"
-                value={sizeStr}
-                onChange={(e) => setSizeStr(e.target.value)}
-                placeholder="e.g. 5"
-              />
-            </label>
-            <label className="kf-dpn__label">
-              <span>UOM</span>
-              <select value={uom} onChange={(e) => setUom(e.target.value)}>
-                {UOM_GROUPS.map((g) => (
-                  <optgroup key={g.label} label={g.label}>
-                    {g.options.map((o) => (
-                      <option key={o} value={o}>
-                        {o === "FLOZ" ? "FL OZ" : o}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
-            </label>
-          </div>
+// Direct per-base price override. Sits BELOW the pack chain on
+// purpose - the pack is the cause, this is the symptom, and the
+// ordering nudges toward fixing the cause. See
+// setVendorItemPriceOverride for backfill-durability caveat.
+function PriceOverrideBlock({
+  item,
+  ingredient,
+  onDone,
+}: {
+  item: ReviewGroupItem;
+  ingredient: ReviewCardIngredient | null;
+  onDone: () => void;
+}) {
+  const router = useRouter();
+  // Default baseUom to the ingredient's base_unit when there is one,
+  // else to the item's existing perBaseUom, else LB. All three are
+  // valid first picks; LB is the dominant case.
+  const ingBase = ingredient
+    ? INGREDIENT_BASE_TO_UOM[ingredient.base_unit?.toLowerCase() ?? ""] ?? null
+    : null;
+  const seedBaseUom =
+    ingBase ??
+    (item.perBaseUom === "LB" || item.perBaseUom === "FLOZ" || item.perBaseUom === "EA"
+      ? item.perBaseUom
+      : "LB");
 
-          <div className="kf-dpn__row">
-            <div className="kf-dpn__hint">
-              Case price on file: {previewCasePrice ? (
-                <strong>{fmtUsd(previewCasePrice.v)} ({previewCasePrice.src})</strong>
-              ) : (
-                <span className="kf-muted">none - pack will save, per-unit will be blank</span>
-              )}
-            </div>
-          </div>
-        </>
-      )}
+  const [perBaseStr, setPerBaseStr] = useState<string>(
+    item.perBase != null ? Number(item.perBase).toFixed(4) : ""
+  );
+  const [baseUom, setBaseUom] = useState<"LB" | "FLOZ" | "EA">(seedBaseUom);
+  const [reason, setReason] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const perBaseN = Number(perBaseStr);
+  const perBaseValid = Number.isFinite(perBaseN) && perBaseN > 0;
+  const reasonValid = reason.trim().length > 0;
+  const readyToSave = perBaseValid && reasonValid;
+
+  async function save() {
+    if (busy || !readyToSave) return;
+    setBusy(true);
+    setError(null);
+    const r = await postJson("/api/review/set-price-override", {
+      itemId: item.id,
+      perBase: perBaseN,
+      baseUom,
+      reason: reason.trim(),
+    });
+    if (!r.ok) {
+      const msg = errMsg(r.data, `Save failed (${r.status})`);
+      setError(msg);
+      toast(msg, { tone: "block" });
+      setBusy(false);
+      return;
+    }
+    toast("Saved: price override");
+    setSavedAt(Date.now());
+    setBusy(false);
+    onDone();
+    router.refresh();
+  }
+
+  return (
+    <section className="kf-drawer__block kf-dpn__block" aria-label="Price override">
+      <header className="kf-drawer__block-head">
+        <h4>Price override</h4>
+        <small>
+          Use this when the pack is right and the number is not. Fixing the pack above corrects
+          the cause; this one covers the symptom.
+        </small>
+      </header>
+
+      <div className="kf-dpn__row kf-newing__row">
+        <label className="kf-dpn__label">
+          <span>$ per unit</span>
+          <input
+            type="number"
+            inputMode="decimal"
+            step="0.0001"
+            min="0"
+            value={perBaseStr}
+            onChange={(e) => setPerBaseStr(e.target.value)}
+            placeholder="e.g. 0.73"
+            disabled={busy}
+          />
+        </label>
+        <label className="kf-dpn__label">
+          <span>Unit</span>
+          <select
+            value={baseUom}
+            onChange={(e) => setBaseUom(e.target.value as "LB" | "FLOZ" | "EA")}
+            disabled={busy}
+          >
+            <option value="LB">pound (lb)</option>
+            <option value="FLOZ">fluid ounce (fl oz)</option>
+            <option value="EA">each</option>
+          </select>
+        </label>
+      </div>
 
       <div className="kf-dpn__row">
         <label className="kf-dpn__label">
-          <span>Billed unit (optional)</span>
-          <select value={billedUnit} onChange={(e) => setBilledUnit(e.target.value)}>
-            <option value="">(not set)</option>
-            {/* An existing value that predates this list stays selectable so
-                opening the panel and saving never silently rewrites it. */}
-            {billedUnit !== "" &&
-              !BILLED_UNIT_GROUPS.some((g) => g.options.includes(billedUnit)) && (
-                <option value={billedUnit}>{billedUnit} (existing)</option>
-              )}
-            {BILLED_UNIT_GROUPS.map((g) => (
-              <optgroup key={g.label} label={g.label}>
-                {g.options.map((o) => (
-                  <option key={o} value={o}>
-                    {o}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-        </label>
-        <label className="kf-dpn__label">
-          <span>Note (optional)</span>
+          <span>Reason (required)</span>
           <input
             type="text"
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="e.g. confirmed with vendor rep"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="e.g. vendor-confirmed, invoice pricing error"
+            disabled={busy}
           />
         </label>
       </div>
 
-      <div className="kf-dpn__row kf-dpn__preview-row">
-        <div className="kf-dpn__preview" aria-live="polite">
-          <span className="kf-dpn__preview-label">Preview</span>
-          <span className={`kf-dpn__preview-body${preview.dim === "no-price" ? " kf-dpn__preview-body--warn" : ""}`}>
-            {preview.line}
-          </span>
-        </div>
-        <div className="kf-dpn__btns">
-          <button
-            type="button"
-            className={`kf-btn kf-btn--primary kf-btn--sm${busy ? " is-busy" : ""}`}
-            disabled={busy || !readyToSave}
-            onClick={save}
-          >
-            {busy ? "Saving..." : "Save override"}
-          </button>
-          <SaveFlash savedAt={savedAt} error={error} />
-        </div>
-        {lastTwins != null && lastTwins > 0 ? (
-          <div className="kf-dpn__hint">
-            Applied to <strong>{fmtCount(lastTwins + 1)}</strong> matching items (same vendor SKU).
-          </div>
-        ) : null}
+      <div className="kf-dpn__btns">
+        <button
+          type="button"
+          className={`kf-btn kf-btn--primary kf-btn--sm${busy ? " is-busy" : ""}`}
+          disabled={busy || !readyToSave}
+          onClick={save}
+        >
+          {busy ? "Saving..." : "Save price"}
+        </button>
+        <SaveFlash savedAt={savedAt} error={error} />
       </div>
     </section>
   );

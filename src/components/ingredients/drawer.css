@@ -251,3 +251,100 @@
 
 /* Inline empty variant for ledger */
 .kf-empty--inline { padding: var(--sp-sp-3); gap: var(--sp-sp-2); }
+
+/* ----- Pack chain (A2) --------------------------------------------
+ * Four-row chain: Invoice says / Read as / Change to / Result. Rows
+ * are a two-column grid so the labels line up vertically regardless
+ * of row content. Input + result rows tinted so the chain reads
+ * top-down without needing eyebrow emphasis. Tokens only.
+ */
+.kf-chain__mode {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-sp-2);
+  margin: 0 0 var(--sp-sp-3);
+}
+.kf-chain__mode-btn {
+  min-height: var(--sp-floor-corp);
+  padding: 0 var(--sp-sp-3);
+  background: var(--sp-card);
+  color: var(--sp-ink);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-ctl);
+  font-family: var(--sp-ui);
+  font-weight: 700;
+  font-size: var(--sp-t-label);
+  cursor: pointer;
+  text-align: center;
+}
+.kf-chain__mode-btn:hover:not(:disabled) { background: var(--sp-sky-tint); }
+.kf-chain__mode-btn:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
+.kf-chain__mode-btn.is-on {
+  background: var(--sp-navy);
+  color: var(--sp-on-navy);
+  border-color: var(--sp-navy);
+}
+.kf-chain__mode-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.kf-chain {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-ctl);
+  overflow: hidden;
+  background: var(--sp-card);
+}
+.kf-chain__row {
+  display: grid;
+  grid-template-columns: 128px 1fr;
+  gap: var(--sp-sp-3);
+  align-items: start;
+  padding: var(--sp-sp-3);
+  border-top: 1px solid var(--sp-line-soft);
+}
+.kf-chain__row:first-child { border-top: 0; }
+.kf-chain__row--input { background: var(--sp-sky-soft); }
+.kf-chain__row--result { background: var(--sp-sky-tint); }
+.kf-chain__label {
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-micro);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--sp-muted);
+  padding-top: 2px;
+}
+.kf-chain__value { min-width: 0; display: flex; flex-direction: column; gap: var(--sp-sp-2); }
+.kf-chain__mono {
+  display: inline-block;
+  padding: 2px var(--sp-sp-2);
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-xs);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: var(--sp-t-label);
+  color: var(--sp-ink);
+}
+.kf-chain__sub {
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+}
+.kf-chain__sub--warn { color: var(--sp-warn); }
+.kf-chain__big {
+  font-family: var(--sp-disp);
+  font-weight: 800;
+  font-size: var(--sp-t-num);
+  line-height: 1.15;
+  color: var(--sp-ink);
+}
+.kf-chain__verdict {
+  display: inline-block;
+  padding: var(--sp-sp-1) var(--sp-sp-2);
+  border-radius: var(--sp-r-sm);
+  font-family: var(--sp-ui);
+  font-weight: 700;
+  font-size: var(--sp-t-micro);
+}
+.kf-chain__verdict--good { background: var(--sp-good-bg); color: var(--sp-good); }
+.kf-chain__verdict--block { background: var(--sp-block-bg); color: var(--sp-block); }

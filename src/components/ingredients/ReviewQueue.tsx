@@ -60,6 +60,7 @@ type Ingredient = {
   parent: string | null;
   category: string | null;
   resale: boolean;
+  base_unit: string;
 };
 type Vendor = { id: string; name: string };
 
@@ -124,7 +125,7 @@ async function loadReview() {
     client.from("pr_vendors").select("id,name"),
     client
       .from("pr_ingredients")
-      .select("id,name,parent,category,resale")
+      .select("id,name,parent,category,resale,base_unit")
       .eq("status", "active")
       .order("name"),
     client

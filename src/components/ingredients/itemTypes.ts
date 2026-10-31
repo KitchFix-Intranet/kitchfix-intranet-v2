@@ -77,4 +77,8 @@ export type ReviewCardIngredient = {
   parent: string | null;
   category: string | null;
   resale: boolean;
+  // The master's unit of account (R1 vocabulary: lb | each | gal |
+  // dozen). The pack-override chain in A2 reads this to say whether an
+  // edit will actually make the item join the blend.
+  base_unit: string;
 };

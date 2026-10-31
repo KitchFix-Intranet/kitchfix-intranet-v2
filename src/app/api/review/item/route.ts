@@ -128,13 +128,13 @@ export async function GET(req: NextRequest) {
     it.ingredient_id
       ? client
           .from("pr_ingredients")
-          .select("id,name,parent,category,resale")
+          .select("id,name,parent,category,resale,base_unit")
           .eq("id", it.ingredient_id)
           .maybeSingle()
       : Promise.resolve({ data: null as unknown, error: null }),
     client
       .from("pr_ingredients")
-      .select("id,name,parent,category,resale")
+      .select("id,name,parent,category,resale,base_unit")
       .eq("status", "active")
       .order("name"),
   ]);

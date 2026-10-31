@@ -1672,3 +1672,130 @@ export async function undoMergeIngredient(
 
   return { ok: true, restoredItems, restoredGoldenLinks };
 }
+
+// Direct per-base price override. Used when the pack is parsed
+// correctly but the derived $/unit is still wrong - a different
+// problem from the pack-override path, which fixes the cause
+// (wrong qty/size/uom) rather than the symptom.
+//
+// IMPORTANT - backfill durability: the pack-override path protects
+// its row by setting pack_override NOT NULL, which the backfill
+// gates on at read, mid-loop, and UPDATE WHERE. We deliberately do
+// NOT set pack_override here, because the UI's hasManualOverride
+// detection (ReviewQueue:256) reads that column and would then
+// misreport the PACK as human-set. Trade-off: a direct price
+// override is NOT durable across the next backfill. Kevin decides
+// whether to accept that or add a dedicated price-only protection
+// flag; see PROMPT A2 "open question".
+export async function setVendorItemPriceOverride(
+  client: SupabaseClient,
+  args: {
+    itemId: string;
+    perBase: number;
+    baseUom: string;
+    reason: string;
+    actorEmail: string;
+  }
+): Promise<{ ok: boolean; error?: string; twins: number }> {
+  const { itemId, actorEmail } = args;
+  const perBase = Number(args.perBase);
+  const baseUom = String(args.baseUom ?? "").trim().toUpperCase();
+  const reason = String(args.reason ?? "").trim();
+
+  if (!Number.isFinite(perBase) || perBase <= 0) {
+    return { ok: false, error: "perBase must be a positive finite number", twins: 0 };
+  }
+  if (!(baseUom === "LB" || baseUom === "FLOZ" || baseUom === "EA")) {
+    return { ok: false, error: "baseUom must be LB, FLOZ, or EA", twins: 0 };
+  }
+  if (reason.length === 0) {
+    return { ok: false, error: "reason required", twins: 0 };
+  }
+
+  const { data: itemRow, error: itemErr } = await client
+    .from("pr_vendor_items")
+    .select("id,vendor_id,item_number_norm,price_estimate,status")
+    .eq("id", itemId)
+    .maybeSingle();
+  if (itemErr) return { ok: false, error: itemErr.message, twins: 0 };
+  if (!itemRow) return { ok: false, error: "Item not found", twins: 0 };
+  const item = itemRow as {
+    id: string;
+    vendor_id: string;
+    item_number_norm: string | null;
+    price_estimate: Record<string, unknown> | null;
+    status: string;
+  };
+  if (item.status === "merged") {
+    return { ok: false, error: "Item is merged", twins: 0 };
+  }
+
+  const prevPe = item.price_estimate ?? null;
+  const newPe = {
+    per_base: perBase,
+    base_uom: baseUom,
+    // No case math on a direct price override - case_price is derived
+    // from pack+catalog, which this path deliberately does not touch.
+    case_price: null,
+    case_price_source: "override",
+    // pack_source stays whatever it was so the UI's "pack read from X"
+    // caption keeps telling the truth about the pack.
+    pack_source: (prevPe && typeof prevPe === "object" && typeof (prevPe as { pack_source?: unknown }).pack_source === "string"
+      ? (prevPe as { pack_source: string }).pack_source
+      : null),
+    confidence: "override",
+    note: reason,
+  };
+
+  const nowIso = new Date().toISOString();
+
+  const writeTargets: Array<{ id: string; before: Record<string, unknown> }> = [
+    { id: item.id, before: { price_estimate: prevPe } },
+  ];
+
+  // Twin propagation on the same (vendor_id, item_number_norm) key the
+  // pack override uses. Skip when the key is incomplete.
+  let twins = 0;
+  if (item.item_number_norm) {
+    const { data: twinRows, error: twinErr } = await client
+      .from("pr_vendor_items")
+      .select("id,price_estimate")
+      .eq("vendor_id", item.vendor_id)
+      .eq("item_number_norm", item.item_number_norm)
+      .neq("id", item.id);
+    if (twinErr) return { ok: false, error: twinErr.message, twins: 0 };
+    for (const t of (twinRows ?? []) as Array<{ id: string; price_estimate: Record<string, unknown> | null }>) {
+      writeTargets.push({
+        id: t.id,
+        before: { price_estimate: t.price_estimate, twin_of: item.id },
+      });
+      twins += 1;
+    }
+  }
+
+  let mainWritten = false;
+  for (const t of writeTargets) {
+    const { error: upErr } = await client
+      .from("pr_vendor_items")
+      .update({ price_estimate: newPe, updated_at: nowIso })
+      .eq("id", t.id);
+    if (upErr) {
+      if (t.id === item.id) return { ok: false, error: upErr.message, twins: 0 };
+      // eslint-disable-next-line no-console
+      console.error(`price override twin write failed for ${t.id}: ${upErr.message}`);
+      continue;
+    }
+    if (t.id === item.id) mainWritten = true;
+
+    await client.from("pr_events").insert({
+      entity_type: "vendor_item",
+      entity_id: t.id,
+      kind: "price_override_set",
+      before: t.before,
+      after: newPe,
+      actor: actorEmail,
+    });
+  }
+
+  return { ok: mainWritten, twins };
+}
