@@ -1137,20 +1137,26 @@ function PackOverrideBlock({
     }
   }
 
-  // S2: band check on the computed per-base. Soft warning only, no
-  // block on save - Kevin may be right. Uses the base UOM of the
-  // entered pack (not the ingredient's) so the hint reads the pack
-  // the way the user is proposing to save it.
-  const previewBaseUom = catchWeight ? "LB" : uom && UOM_TO_BASE[uom] ? UOM_TO_BASE[uom].base : null;
-  const band = previewBaseUom ? PACK_BANDS[previewBaseUom] : null;
+  // S2: band check on the price per the USER's chosen uom - not the
+  // normalized base. Avocado-oil 1x1 GAL at $298.75 normalizes to
+  // $2.33/fl oz which falls inside the FLOZ band; it is $298.75/gal
+  // which falls outside the GAL band. The user is thinking in gallons,
+  // so we band in gallons. Soft warning only, no save-block.
+  const userUom = catchWeight ? "LB" : uom && UOM_TO_BASE[uom] ? uom : null;
+  const band = userUom ? PACK_BANDS[userUom] : null;
+  const pricePerUserUom = catchWeight
+    ? perLbValid ? perLb : null
+    : qtyValid && sizeValid && previewCasePrice
+      ? previewCasePrice.v / (qty * size)
+      : null;
   const outOfBand =
-    preview.perBase != null && band != null &&
-    (preview.perBase < band.low || preview.perBase > band.high);
+    pricePerUserUom != null && band != null &&
+    (pricePerUserUom < band.low || pricePerUserUom > band.high);
   // Suggest a "case of N" fix when N in 2..12 lands inside the band.
   let bandCaseHint: { n: number; perUnit: number } | null = null;
-  if (outOfBand && preview.perBase != null && band) {
+  if (outOfBand && pricePerUserUom != null && band) {
     for (let n = 2; n <= 12; n += 1) {
-      const candidate = preview.perBase / n;
+      const candidate = pricePerUserUom / n;
       if (candidate >= band.low && candidate <= band.high) {
         bandCaseHint = { n, perUnit: candidate };
         break;
@@ -1477,14 +1483,12 @@ function PackOverrideBlock({
                 {verdict.text}
               </span>
             ) : null}
-            {outOfBand && preview.perBase != null && band && previewBaseUom ? (
+            {outOfBand && pricePerUserUom != null && band && userUom ? (
               <span className="kf-chain__verdict kf-chain__verdict--warn">
-                {fmtUsd(preview.perBase)}/
-                {previewBaseUom === "LB" ? "lb" : previewBaseUom === "FLOZ" ? "fl oz" : "each"}{" "}
-                is far outside the usual range for per-{previewBaseUom === "LB" ? "pound" : previewBaseUom === "FLOZ" ? "fluid-ounce" : "each"}{" "}
-                ingredients.
+                {fmtUsd(pricePerUserUom)}/{userUom.toLowerCase()}{" "}
+                is far outside the usual range for per-{userUom.toLowerCase()} ingredients.
                 {bandCaseHint
-                  ? ` Check the pack - a case of ${bandCaseHint.n} would make this ${fmtUsd(bandCaseHint.perUnit)}.`
+                  ? ` Check the pack - a case of ${bandCaseHint.n} would make this ${fmtUsd(bandCaseHint.perUnit)}/${userUom.toLowerCase()}.`
                   : " Check the pack."}
               </span>
             ) : null}
