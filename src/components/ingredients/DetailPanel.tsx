@@ -1755,9 +1755,18 @@ function EvidenceSection({ item }: { item: ReviewGroupItem }) {
     | { phase: "ready"; data: EvidencePayload }
     | { phase: "error"; message: string }
   >({ phase: "idle" });
+  // Which item id's fetch has been kicked off. The effect cannot read
+  // `state.phase` as a dep: it mutates state.phase to "loading", which
+  // retriggers itself, cancels the in-flight request, and the whole
+  // thing stays stuck on "Loading..." - verified live on step-1 before
+  // this fix. Keep deps narrow and track "already requested" out of
+  // band in a ref. Item change (new id) naturally refetches because
+  // requestedFor stays on the OLD id until the new effect runs.
+  const requestedFor = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!open || state.phase !== "idle") return;
+    if (!open || requestedFor.current === item.id) return;
+    requestedFor.current = item.id;
     let cancelled = false;
     setState({ phase: "loading" });
     (async () => {
@@ -1782,7 +1791,7 @@ function EvidenceSection({ item }: { item: ReviewGroupItem }) {
     return () => {
       cancelled = true;
     };
-  }, [open, state.phase, item.id]);
+  }, [open, item.id]);
 
   const summary =
     state.phase === "ready"
