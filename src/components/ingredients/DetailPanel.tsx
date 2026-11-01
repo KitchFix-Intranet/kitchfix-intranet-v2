@@ -1616,6 +1616,14 @@ function deriveAttention(
   return issues;
 }
 
+// Default UOM for the "Fix the pack" button when the issue itself
+// does not pin one: the linked ingredient's base unit beats LB,
+// because that is the dimension the panel is trying to join.
+function fixPackDefaultUom(ingredient: ReviewCardIngredient | null): string {
+  if (!ingredient) return "LB";
+  return INGREDIENT_BASE_UOM[ingredient.base_unit?.toLowerCase() ?? ""] ?? "LB";
+}
+
 function AttentionIcon({ tone }: { tone: "bad" | "warn" | "info" | "good" }) {
   if (tone === "good") return <Check size={16} strokeWidth={1.75} aria-hidden />;
   if (tone === "info") return <Info size={16} strokeWidth={1.75} aria-hidden />;
@@ -1682,7 +1690,9 @@ function AttentionSection({
                       className="kf-btn kf-btn--line kf-btn--sm kf-attn__fix"
                       onClick={() =>
                         onFixPack(
-                          "targetUom" in issue ? (issue as { targetUom: string }).targetUom : "LB"
+                          "targetUom" in issue
+                            ? (issue as { targetUom: string }).targetUom
+                            : fixPackDefaultUom(ingredient)
                         )
                       }
                     >
