@@ -1152,10 +1152,15 @@ function PackOverrideBlock({
   const outOfBand =
     pricePerUserUom != null && band != null &&
     (pricePerUserUom < band.low || pricePerUserUom > band.high);
-  // Suggest a "case of N" fix when N in 2..12 lands inside the band.
+  // Suggest a "case of N" fix. Try common case sizes first (6, 4, 12,
+  // 2, 24, 3, 8) because N=2 lands "in band" trivially for anything
+  // just-over the band; the common sizes are more likely to be what
+  // OCR actually dropped. The 6/1 GAL avocado oil must suggest 6,
+  // not 2.
+  const COMMON_CASE_SIZES = [6, 4, 12, 2, 24, 3, 8, 5, 10];
   let bandCaseHint: { n: number; perUnit: number } | null = null;
   if (outOfBand && pricePerUserUom != null && band) {
-    for (let n = 2; n <= 12; n += 1) {
+    for (const n of COMMON_CASE_SIZES) {
       const candidate = pricePerUserUom / n;
       if (candidate >= band.low && candidate <= band.high) {
         bandCaseHint = { n, perUnit: candidate };
