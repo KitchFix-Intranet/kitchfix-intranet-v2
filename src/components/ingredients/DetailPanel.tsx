@@ -1768,6 +1768,18 @@ function EvidenceSection({ item }: { item: ReviewGroupItem }) {
     if (!open || requestedFor.current === item.id) return;
     requestedFor.current = item.id;
     let cancelled = false;
+    // Only keep the ref set when the request actually succeeded.
+    // Three stall cases the first ref-only fix left:
+    //   1. collapsed mid-flight -> cleanup fires cancelled=true,
+    //      fetch short-circuits, ref stays pointing at this id,
+    //      reopen is cached-not-done forever.
+    //   2. fetch returned !ok -> error state renders, ref stays,
+    //      no retry on reopen.
+    //   3. fetch threw -> same as 2.
+    // Track completion with `done`; cleanup clears the ref when it
+    // was abandoned, and the error branches clear it inline so a
+    // reopen refetches rather than showing a permanent error.
+    let done = false;
     setState({ phase: "loading" });
     (async () => {
       try {
@@ -1779,17 +1791,24 @@ function EvidenceSection({ item }: { item: ReviewGroupItem }) {
             data && typeof data === "object" && "error" in data && typeof data.error === "string"
               ? data.error
               : `Fetch failed (${res.status})`;
+          requestedFor.current = null;
           setState({ phase: "error", message: msg });
+          done = true;
           return;
         }
         setState({ phase: "ready", data: data as EvidencePayload });
+        done = true;
       } catch (e) {
         if (cancelled) return;
+        requestedFor.current = null;
         setState({ phase: "error", message: e instanceof Error ? e.message : String(e) });
+        done = true;
       }
     })();
     return () => {
       cancelled = true;
+      // Abandoned mid-flight: let the next open refetch.
+      if (!done) requestedFor.current = null;
     };
   }, [open, item.id]);
 
