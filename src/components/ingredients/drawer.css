@@ -17,7 +17,10 @@
   position: fixed;
   top: 0;
   right: 0;
-  width: min(480px, 100%);
+  /* A3b: widened from 480 so the pack chain + evidence tables breathe
+   * without horizontal scroll inside the panel. 100vw - 32px keeps a
+   * 16px gutter either side on viewports under 660 + 32 = 692px. */
+  width: min(660px, 100vw - 32px);
   height: 100dvh;
   background: var(--sp-card);
   border-left: 1px solid var(--sp-line);
