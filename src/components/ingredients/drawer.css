@@ -277,7 +277,10 @@
   cursor: pointer;
   text-align: center;
 }
-.kf-chain__mode-btn:hover:not(:disabled) { background: var(--sp-sky-tint); }
+.kf-chain__mode-btn:not(.is-on):hover:not(:disabled) { background: var(--sp-sky-tint); }
+/* On-state hover darkens the navy instead of flipping to sky-tint,
+   which collapses to ~1.1:1 against the white label (A2 live-check). */
+.kf-chain__mode-btn.is-on:hover:not(:disabled) { background: var(--sp-navy-deep); }
 .kf-chain__mode-btn:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
 .kf-chain__mode-btn.is-on {
   background: var(--sp-navy);
@@ -348,3 +351,143 @@
 }
 .kf-chain__verdict--good { background: var(--sp-good-bg); color: var(--sp-good); }
 .kf-chain__verdict--block { background: var(--sp-block-bg); color: var(--sp-block); }
+
+/* ----- Attention + Evidence sections (A3b) --------------------- */
+
+/* Collapsible section header - full-width button, corp floor, with a
+ * rotating caret on the left and a count/summary on the right. */
+.kf-attn__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  width: 100%;
+  min-height: var(--sp-floor-corp);
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: var(--sp-ink);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.kf-attn__head:focus-visible {
+  outline: 2px solid var(--sp-navy);
+  outline-offset: 2px;
+}
+.kf-attn__chev {
+  flex: none;
+  color: var(--sp-muted);
+  transition: transform var(--sp-fast) var(--sp-ease);
+}
+.kf-attn__chev.is-open { transform: rotate(180deg); }
+.kf-attn__title {
+  flex: 1 1 auto;
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-h3);
+  color: var(--sp-navy);
+  margin: 0;
+}
+.kf-attn__count {
+  flex: none;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  padding: 2px var(--sp-sp-2);
+  background: var(--sp-sky-tint);
+  border-radius: var(--sp-r-pill);
+}
+
+/* Issue note. Mirrors .kf-why on the master pane (same four tones)
+ * but owns its own class so changing one surface doesn't bleed. */
+.kf-attn__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+  margin-top: var(--sp-sp-3);
+}
+.kf-attn__note {
+  display: flex;
+  gap: var(--sp-sp-3);
+  padding: var(--sp-sp-3);
+  border-radius: var(--sp-r-sm);
+  background: var(--sp-warn-bg);
+  border: 1px solid #EBDAB4;
+}
+.kf-attn__note--bad { background: var(--sp-block-bg); border-color: var(--sp-block-line); }
+.kf-attn__note--info { background: var(--sp-info-bg); border-color: #D4E2F3; }
+.kf-attn__note--good { background: var(--sp-good-bg); border-color: #C6E3D5; }
+.kf-attn__note > svg { flex: none; margin-top: 2px; color: var(--sp-warn); }
+.kf-attn__note--bad > svg { color: var(--sp-block); }
+.kf-attn__note--info > svg { color: var(--sp-link); }
+.kf-attn__note--good > svg { color: var(--sp-good); }
+.kf-attn__note > div { min-width: 0; }
+.kf-attn__note > div > b {
+  display: block;
+  font-family: var(--sp-ui);
+  font-weight: 800;
+  font-size: var(--sp-t-label);
+  margin-bottom: 2px;
+  color: var(--sp-warn);
+}
+.kf-attn__note--bad > div > b { color: var(--sp-block); }
+.kf-attn__note--info > div > b { color: var(--sp-link); }
+.kf-attn__note--good > div > b { color: var(--sp-good); }
+.kf-attn__note span { display: block; font-size: var(--sp-t-micro); color: var(--sp-body); }
+/* Fix button lives inside the note body; .kf-btn is inline-flex at
+ * 44px, so block-level + fit-content keeps the note's rhythm intact. */
+.kf-attn__note .kf-attn__fix { display: flex; width: fit-content; margin-top: var(--sp-sp-2); }
+
+/* Evidence - groups of micro-headed tables. Tables scroll horizontally
+ * inside their container so a wide column never widens the panel. */
+.kf-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-4);
+  margin-top: var(--sp-sp-3);
+}
+.kf-evi__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+}
+.kf-evi__h {
+  margin: 0;
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-micro);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--sp-muted);
+}
+.kf-evi__scroll { overflow-x: auto; border: 1px solid var(--sp-line-soft); border-radius: var(--sp-r-sm); }
+.kf-evi__t {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+}
+.kf-evi__t thead th {
+  text-align: left;
+  padding: 6px var(--sp-sp-2);
+  color: var(--sp-muted);
+  font-size: var(--sp-t-label);
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  font-weight: 700;
+  background: var(--sp-sky-soft);
+  border-bottom: 1px solid var(--sp-line-soft);
+  white-space: nowrap;
+}
+.kf-evi__t tbody td {
+  padding: 6px var(--sp-sp-2);
+  border-bottom: 1px solid var(--sp-line-soft);
+  color: var(--sp-ink);
+  vertical-align: top;
+  font-variant-numeric: tabular-nums;
+}
+.kf-evi__t tbody tr:last-child td { border-bottom: none; }
+.kf-evi__num { text-align: right; }
+.kf-evi__t th.kf-evi__num { text-align: right; }
+.kf-evi__row--self { background: var(--sp-sky-tint); }
+.kf-evi__row--self td { font-weight: 700; }

@@ -20,7 +20,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, Info, X } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtDate, fmtUsd, fmtUsdLong, timeAgo } from "@/lib/fmt";
 import { SUPER_CATEGORIES, type SuperCategory } from "@/lib/ingredients/categories";
@@ -217,10 +217,7 @@ export function DetailPanel({
         )}
 
         {open.kind === "item" && item ? (
-          <>
-            <PackOverrideBlock item={item} ingredient={ingredient} onDone={() => router.refresh()} />
-            <PriceOverrideBlock item={item} ingredient={ingredient} onDone={() => router.refresh()} />
-          </>
+          <ItemPanelBody item={item} ingredient={ingredient} onDone={() => router.refresh()} />
         ) : null}
 
         <LedgerBlock
@@ -974,13 +971,20 @@ function parsePackNormalized(
   return { qty, size, uom };
 }
 
+// Hint from the Attention section to the pack chain: set a UOM,
+// focus Qty, scroll the Result row into view. nonce changes on each
+// click so the effect fires even when the UOM stays the same.
+type PackHint = { uom: string; nonce: number };
+
 function PackOverrideBlock({
   item,
   ingredient,
+  hint,
   onDone,
 }: {
   item: ReviewGroupItem;
   ingredient: ReviewCardIngredient | null;
+  hint: PackHint | null;
   onDone: () => void;
 }) {
   // Prefill: catch-weight toggle takes the item's current flag; $/lb
@@ -991,6 +995,18 @@ function PackOverrideBlock({
   const [qtyStr, setQtyStr] = useState<string>("");
   const [sizeStr, setSizeStr] = useState<string>("");
   const [uom, setUom] = useState<string>("LB");
+  const qtyInputRef = useRef<HTMLInputElement | null>(null);
+  const resultRef = useRef<HTMLDivElement | null>(null);
+  // Fix-the-pack hint from Attention: set UOM, focus Qty, scroll
+  // Result into view. Does NOT prefill qty/size - the user supplies
+  // the number. nonce avoids stale-closure skips.
+  useEffect(() => {
+    if (!hint) return;
+    setCatchWeight(false);
+    setUom(hint.uom);
+    qtyInputRef.current?.focus();
+    resultRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [hint?.nonce, hint?.uom]);
   // Display seed only: two decimals, like every other money field. What
   // the user types is what saves - this does not touch the write.
   const [perLbStr, setPerLbStr] = useState<string>(
@@ -1218,6 +1234,7 @@ function PackOverrideBlock({
                 <label className="kf-dpn__label">
                   <span>Qty</span>
                   <input
+                    ref={qtyInputRef}
                     type="number"
                     inputMode="numeric"
                     step="1"
@@ -1308,7 +1325,7 @@ function PackOverrideBlock({
         </div>
 
         {/* Row 4 - Result: derived $/unit + verdict. */}
-        <div className="kf-chain__row kf-chain__row--result">
+        <div ref={resultRef} className="kf-chain__row kf-chain__row--result">
           <div className="kf-chain__label">Result</div>
           <div className="kf-chain__value">
             {preview.perBase != null ? (
@@ -1489,5 +1506,491 @@ function PriceOverrideBlock({
         <SaveFlash savedAt={savedAt} error={error} />
       </div>
     </section>
+  );
+}
+
+// ===================================================================
+// A3b: What needs attention + Evidence, around the Fix-this-item blocks
+// ===================================================================
+
+type AttentionIssue =
+  | { kind: "no_price"; tone: "bad"; head: string; body: string; fix?: "pack" }
+  | { kind: "pack_unreadable"; tone: "info"; head: string; body: string; fix: "pack" }
+  | { kind: "unit_mismatch"; tone: "bad"; head: string; body: string; fix: "pack"; targetUom: string }
+  | { kind: "pack_hand_set"; tone: "warn"; head: string; body: string }
+  | { kind: "price_hand_set"; tone: "warn"; head: string; body: string }
+  | { kind: "no_ingredient"; tone: "info"; head: string; body: string };
+
+const UOM_BASE_DIM: Record<string, "weight" | "volume" | "count"> = {
+  LB: "weight",
+  FLOZ: "volume",
+  EA: "count",
+};
+const INGREDIENT_BASE_DIM: Record<string, "weight" | "volume" | "count"> = {
+  lb: "weight",
+  each: "count",
+  dozen: "count",
+  gal: "volume",
+};
+const INGREDIENT_BASE_UOM: Record<string, "LB" | "FLOZ" | "EA"> = {
+  lb: "LB",
+  each: "EA",
+  dozen: "EA",
+  gal: "FLOZ",
+};
+
+function deriveAttention(
+  item: ReviewGroupItem,
+  ingredient: ReviewCardIngredient | null
+): AttentionIssue[] {
+  const issues: AttentionIssue[] = [];
+
+  // Pack provenance notes - stated as warn, not errors.
+  if (item.packManualOverride) {
+    issues.push({
+      kind: "pack_hand_set",
+      tone: "warn",
+      head: "Pack is set by hand",
+      body: "The qty / size / UOM on this item came from a human override. The backfill will not touch it.",
+    });
+  }
+  if (item.priceManualOverride) {
+    issues.push({
+      kind: "price_hand_set",
+      tone: "warn",
+      head: "Price is set by hand",
+      body: "The $ / unit on this item came from a human override and persists across backfills.",
+    });
+  }
+
+  if (!ingredient) {
+    issues.push({
+      kind: "no_ingredient",
+      tone: "info",
+      head: "Not linked to an ingredient",
+      body: "This item has not been confirmed into an ingredient. The Review queue is the usual path for that.",
+    });
+  }
+
+  // Unit mismatch (item side only - see spec acceptance 5): we only
+  // claim this when the ingredient has a known base dimension AND the
+  // item's own uom resolves to a different one.
+  const ingBase = ingredient ? INGREDIENT_BASE_DIM[ingredient.base_unit?.toLowerCase() ?? ""] : null;
+  const itemBase = item.perBaseUom ? UOM_BASE_DIM[item.perBaseUom] : null;
+  if (ingBase && itemBase && itemBase !== ingBase && ingredient) {
+    const targetUom = INGREDIENT_BASE_UOM[ingredient.base_unit?.toLowerCase() ?? ""] ?? "EA";
+    issues.push({
+      kind: "unit_mismatch",
+      tone: "bad",
+      head: `Priced in ${itemBase}, ingredient is ${ingBase}`,
+      body: `${ingredient.name} is costed per ${ingredient.base_unit}. This item will not blend until the pack is corrected to match.`,
+      fix: "pack",
+      targetUom,
+    });
+  }
+
+  // Could-not-read: show the parser's note. Only emit when it has
+  // something to say, otherwise no_price covers it.
+  if (item.perBase == null && item.perBaseNote) {
+    issues.push({
+      kind: "pack_unreadable",
+      tone: "info",
+      head: "Pack could not be read",
+      body: item.perBaseNote,
+      fix: "pack",
+    });
+  }
+
+  // No price at all: the primary failure. Always paired with pack_unreadable
+  // when the parser left a note; still worth stating plainly.
+  if (item.perBase == null) {
+    issues.push({
+      kind: "no_price",
+      tone: "bad",
+      head: "No per-unit price yet",
+      body: "This item carries 12-month spend but no $ / unit, so every recipe cost that depends on it is wrong by this item's share.",
+      fix: "pack",
+    });
+  }
+
+  return issues;
+}
+
+function AttentionIcon({ tone }: { tone: "bad" | "warn" | "info" | "good" }) {
+  if (tone === "good") return <Check size={16} strokeWidth={1.75} aria-hidden />;
+  if (tone === "info") return <Info size={16} strokeWidth={1.75} aria-hidden />;
+  return <AlertTriangle size={16} strokeWidth={1.75} aria-hidden />;
+}
+
+function AttentionSection({
+  item,
+  ingredient,
+  onFixPack,
+}: {
+  item: ReviewGroupItem;
+  ingredient: ReviewCardIngredient | null;
+  onFixPack: (uom: string) => void;
+}) {
+  const issues = deriveAttention(item, ingredient);
+  const clear = issues.length === 0;
+  // Open unless the only state is "clear" (collapsed by design) and
+  // unless the only issues are provenance warnings (they are not
+  // actionable; let Kevin expand if curious). But if ANY real issue
+  // exists, open on load.
+  const hasBad = issues.some((i) => i.tone === "bad");
+  const hasInfo = issues.some((i) => i.tone === "info" && i.kind !== "no_ingredient");
+  const defaultOpen = hasBad || hasInfo;
+  const [open, setOpen] = useState<boolean>(defaultOpen);
+
+  return (
+    <section className="kf-drawer__block kf-dpn__block" aria-label="What needs attention">
+      <button
+        type="button"
+        className="kf-attn__head"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        <ChevronDown
+          size={16}
+          strokeWidth={1.75}
+          aria-hidden
+          className={`kf-attn__chev${open ? " is-open" : ""}`}
+        />
+        <h4 className="kf-attn__title">What needs attention</h4>
+        <span className="kf-attn__count">{clear ? "clear" : `${issues.length}`}</span>
+      </button>
+      {open ? (
+        <div className="kf-attn__body">
+          {clear ? (
+            <div className="kf-attn__note kf-attn__note--good">
+              <AttentionIcon tone="good" />
+              <div>
+                <b>Nothing flagged</b>
+                <span>This item has a price in the master&rsquo;s unit, with no override on either the pack or the number.</span>
+              </div>
+            </div>
+          ) : (
+            issues.map((issue) => (
+              <div key={issue.kind} className={`kf-attn__note kf-attn__note--${issue.tone}`}>
+                <AttentionIcon tone={issue.tone} />
+                <div>
+                  <b>{issue.head}</b>
+                  <span>{issue.body}</span>
+                  {"fix" in issue && issue.fix === "pack" ? (
+                    <button
+                      type="button"
+                      className="kf-btn kf-btn--line kf-btn--sm kf-attn__fix"
+                      onClick={() =>
+                        onFixPack(
+                          "targetUom" in issue ? (issue as { targetUom: string }).targetUom : "LB"
+                        )
+                      }
+                    >
+                      Fix the pack
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+// -------------------------------------------------------------------
+// Evidence - lazy-loaded on first expand. Fetches /api/review/item-evidence.
+// -------------------------------------------------------------------
+
+type EvidenceInvoiceLine = {
+  date: string | null;
+  site: string;
+  qty: number | null;
+  unitPrice: number | null;
+  extended: number | null;
+  billedUnit: string | null;
+  weightLineValue: number | null;
+};
+type EvidenceBySite = {
+  site: string;
+  lines: number;
+  spend: number;
+  lastPaid: number | null;
+  lastBuy: string | null;
+};
+type EvidenceSibling = {
+  id: string;
+  name: string;
+  vendor: string;
+  pack: string | null;
+  perBase: number | null;
+  perBaseUom: string | null;
+  usd12m: number;
+};
+type EvidenceVariant = { name: string; count: number };
+type EvidencePayload = {
+  catchWeight: boolean;
+  invoiceLines: EvidenceInvoiceLine[];
+  bySite: EvidenceBySite[];
+  siblings: EvidenceSibling[];
+  variants: EvidenceVariant[];
+};
+
+function EvidenceSection({ item }: { item: ReviewGroupItem }) {
+  const [open, setOpen] = useState(false);
+  const [state, setState] = useState<
+    | { phase: "idle" }
+    | { phase: "loading" }
+    | { phase: "ready"; data: EvidencePayload }
+    | { phase: "error"; message: string }
+  >({ phase: "idle" });
+
+  useEffect(() => {
+    if (!open || state.phase !== "idle") return;
+    let cancelled = false;
+    setState({ phase: "loading" });
+    (async () => {
+      try {
+        const res = await fetch(`/api/review/item-evidence?id=${encodeURIComponent(item.id)}`);
+        const data = (await res.json().catch(() => null)) as EvidencePayload | { error?: string } | null;
+        if (cancelled) return;
+        if (!res.ok || !data || "error" in data) {
+          const msg =
+            data && typeof data === "object" && "error" in data && typeof data.error === "string"
+              ? data.error
+              : `Fetch failed (${res.status})`;
+          setState({ phase: "error", message: msg });
+          return;
+        }
+        setState({ phase: "ready", data: data as EvidencePayload });
+      } catch (e) {
+        if (cancelled) return;
+        setState({ phase: "error", message: e instanceof Error ? e.message : String(e) });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, state.phase, item.id]);
+
+  const summary =
+    state.phase === "ready"
+      ? `${fmtCount(state.data.invoiceLines.length)} line${state.data.invoiceLines.length === 1 ? "" : "s"} · ${fmtCount(state.data.bySite.length)} site${state.data.bySite.length === 1 ? "" : "s"}`
+      : "";
+
+  return (
+    <section className="kf-drawer__block kf-dpn__block" aria-label="Evidence">
+      <button
+        type="button"
+        className="kf-attn__head"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        <ChevronDown
+          size={16}
+          strokeWidth={1.75}
+          aria-hidden
+          className={`kf-attn__chev${open ? " is-open" : ""}`}
+        />
+        <h4 className="kf-attn__title">Evidence</h4>
+        <span className="kf-attn__count">{summary || "expand to load"}</span>
+      </button>
+      {open ? (
+        <div className="kf-evidence">
+          {state.phase === "loading" ? (
+            <div className="kf-muted">Loading...</div>
+          ) : state.phase === "error" ? (
+            <div className="kf-attn__note kf-attn__note--bad">
+              <AttentionIcon tone="bad" />
+              <div>
+                <b>Could not load evidence</b>
+                <span>{state.message}</span>
+              </div>
+            </div>
+          ) : state.phase === "ready" ? (
+            <EvidenceBody data={state.data} highlightItemId={item.id} />
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function EvidenceBody({
+  data,
+  highlightItemId,
+}: {
+  data: EvidencePayload;
+  highlightItemId: string;
+}) {
+  return (
+    <>
+      {data.invoiceLines.length > 0 ? (
+        <div className="kf-evi__group">
+          <h5 className="kf-evi__h">Invoice lines</h5>
+          <div className="kf-evi__scroll">
+            <table className="kf-evi__t">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Site</th>
+                  <th className="kf-evi__num">{data.catchWeight ? "Billed weight" : "Qty"}</th>
+                  <th className="kf-evi__num">{data.catchWeight ? "$ / lb" : "Unit $"}</th>
+                  <th className="kf-evi__num">Extended</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.invoiceLines.map((l, i) => (
+                  <tr key={i}>
+                    <td>{fmtDate(l.date, "short")}</td>
+                    <td>{l.site}</td>
+                    <td className="kf-evi__num">
+                      {data.catchWeight
+                        ? l.weightLineValue != null
+                          ? `${l.weightLineValue.toFixed(2)} lb`
+                          : "-"
+                        : l.qty != null
+                          ? fmtCount(l.qty)
+                          : "-"}
+                    </td>
+                    <td className="kf-evi__num">
+                      {l.unitPrice != null ? fmtUsd(l.unitPrice) : "-"}
+                    </td>
+                    <td className="kf-evi__num">
+                      {l.extended != null ? fmtUsd(l.extended) : "-"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+
+      {data.bySite.length > 0 ? (
+        <div className="kf-evi__group">
+          <h5 className="kf-evi__h">Spend by site</h5>
+          <div className="kf-evi__scroll">
+            <table className="kf-evi__t">
+              <thead>
+                <tr>
+                  <th>Site</th>
+                  <th className="kf-evi__num">Lines</th>
+                  <th className="kf-evi__num">Spend</th>
+                  <th className="kf-evi__num">Last paid</th>
+                  <th>Last buy</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.bySite.map((s) => (
+                  <tr key={s.site}>
+                    <td>{s.site}</td>
+                    <td className="kf-evi__num">{fmtCount(s.lines)}</td>
+                    <td className="kf-evi__num">{fmtUsd(s.spend)}</td>
+                    <td className="kf-evi__num">{s.lastPaid != null ? fmtUsd(s.lastPaid) : "-"}</td>
+                    <td>{fmtDate(s.lastBuy, "short")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+
+      {data.siblings.length > 0 ? (
+        <div className="kf-evi__group">
+          <h5 className="kf-evi__h">Other items on this ingredient</h5>
+          <div className="kf-evi__scroll">
+            <table className="kf-evi__t">
+              <thead>
+                <tr>
+                  <th>Vendor</th>
+                  <th>Pack</th>
+                  <th className="kf-evi__num">Per-unit</th>
+                  <th className="kf-evi__num">Annual $</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.siblings.map((s) => (
+                  <tr key={s.id} className={s.id === highlightItemId ? "kf-evi__row--self" : undefined}>
+                    <td title={s.name}>
+                      <div className="kf-cell-strong kf-cell-ellipsis">{s.vendor}</div>
+                      <div className="kf-cell-sub kf-cell-ellipsis">{s.name}</div>
+                    </td>
+                    <td>{s.pack ?? "-"}</td>
+                    <td className="kf-evi__num">
+                      {s.perBase != null ? (
+                        <>
+                          <strong>{fmtUsd(s.perBase)}</strong>
+                          <span className="kf-muted">
+                            {" "}
+                            / {s.perBaseUom === "LB" ? "lb" : s.perBaseUom === "FLOZ" ? "fl oz" : s.perBaseUom === "EA" ? "each" : s.perBaseUom ?? "unit"}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="kf-muted">-</span>
+                      )}
+                    </td>
+                    <td className="kf-evi__num">{fmtUsd(s.usd12m)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+
+      {data.variants.length > 0 ? (
+        <div className="kf-evi__group">
+          <h5 className="kf-evi__h">Description variants</h5>
+          <div className="kf-evi__scroll">
+            <table className="kf-evi__t">
+              <thead>
+                <tr>
+                  <th>Description</th>
+                  <th className="kf-evi__num">Lines (12m)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.variants.map((v) => (
+                  <tr key={v.name}>
+                    <td>{v.name}</td>
+                    <td className="kf-evi__num">{fmtCount(v.count)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+// Composite that wires Attention + Pack + Price + Evidence together,
+// holding the shared pack-hint state the Attention "Fix the pack"
+// button writes into and the Pack chain reads.
+function ItemPanelBody({
+  item,
+  ingredient,
+  onDone,
+}: {
+  item: ReviewGroupItem;
+  ingredient: ReviewCardIngredient | null;
+  onDone: () => void;
+}) {
+  const [packHint, setPackHint] = useState<PackHint | null>(null);
+  return (
+    <>
+      <AttentionSection
+        item={item}
+        ingredient={ingredient}
+        onFixPack={(uom) => setPackHint({ uom, nonce: Date.now() })}
+      />
+      <PackOverrideBlock item={item} ingredient={ingredient} hint={packHint} onDone={onDone} />
+      <PriceOverrideBlock item={item} ingredient={ingredient} onDone={onDone} />
+      <EvidenceSection item={item} />
+    </>
   );
 }
