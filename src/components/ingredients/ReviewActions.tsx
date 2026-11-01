@@ -40,6 +40,11 @@ type Ingredient = { id: string; name: string; parent: string | null };
 type Props = {
   kind: "existing" | "new";
   currentIngredientId: string | null;
+  // Whether the current target ingredient is Retail. On existing-group
+  // confirms with this true, confirmItems lands the items as
+  // status='resale' instead of 'active' (S1). Null when there is no
+  // existing ingredient (ai-new groups).
+  ingredientResale?: boolean;
   proposedName: string | null;
   proposedParent: string | null;
   ingredients: Ingredient[];
@@ -77,6 +82,7 @@ function errMsg(data: unknown, fallback: string): string {
 export function ReviewActions({
   kind,
   currentIngredientId,
+  ingredientResale,
   proposedName,
   proposedParent,
   ingredients,
@@ -158,17 +164,24 @@ export function ReviewActions({
       setOp(null);
       return;
     }
-    const d = r.data as { confirmed?: number };
+    const d = r.data as { confirmed?: number; movedToResale?: number };
     const confirmedIds = [...checkedIds];
-    toast(`Confirmed ${fmtCount(d.confirmed ?? checkedCount)} items`, {
-      tone: "good",
-      undo: async () => {
-        for (const id of confirmedIds) {
-          await postJson("/api/review/undo", { itemId: id });
-        }
-        router.refresh();
-      },
-    });
+    const movedToResale = d.movedToResale ?? 0;
+    const base = `Confirmed ${fmtCount(d.confirmed ?? checkedCount)} items`;
+    toast(
+      movedToResale > 0
+        ? `${base} (${fmtCount(movedToResale)} landed as retail)`
+        : base,
+      {
+        tone: "good",
+        undo: async () => {
+          for (const id of confirmedIds) {
+            await postJson("/api/review/undo", { itemId: id });
+          }
+          router.refresh();
+        },
+      }
+    );
     setOp(null);
     setLastDone(Date.now());
     // Hand off to the parent card for the leaving-animation + the
@@ -374,7 +387,9 @@ export function ReviewActions({
               ? "Saving..."
               : kind === "new"
                 ? "Create ingredient"
-                : "Confirm"}
+                : ingredientResale
+                  ? "Confirm as retail"
+                  : "Confirm"}
           </span>
         </button>
 

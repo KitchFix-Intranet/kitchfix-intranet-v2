@@ -639,6 +639,33 @@ function IngredientBlock({
   const [resaleBusy, setResaleBusy] = useState(false);
   const [resaleSavedAt, setResaleSavedAt] = useState<number | null>(null);
   const [resaleError, setResaleError] = useState<string | null>(null);
+  // S1: live counts for the "Also moves N confirmed items" hint.
+  // Fetched once on mount per ingredient; refreshed after a save so
+  // the next toggle shows the new state.
+  const [resalePreview, setResalePreview] = useState<{ active: number; resale: number } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/review/set-resale?ingredientId=${encodeURIComponent(ingredient.id)}`
+        );
+        const data = (await res.json().catch(() => null)) as
+          | { confirmedActive?: number; confirmedResale?: number }
+          | null;
+        if (cancelled || !res.ok || !data) return;
+        setResalePreview({
+          active: Number(data.confirmedActive ?? 0),
+          resale: Number(data.confirmedResale ?? 0),
+        });
+      } catch {
+        /* non-fatal; hint stays hidden */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [ingredient.id, resaleSavedAt]);
 
   const [mergeTarget, setMergeTarget] = useState<string>("");
   const [mergeBusy, setMergeBusy] = useState(false);
@@ -718,7 +745,15 @@ function IngredientBlock({
       setResaleBusy(false);
       return;
     }
-    toast(next ? "Saved: moved to resale bucket" : "Saved: moved to recipe-coverage bucket");
+    const d = (r.data ?? {}) as { moved?: number };
+    const moved = d.moved ?? 0;
+    const base = next ? "Saved: moved to resale bucket" : "Saved: moved to recipe-coverage bucket";
+    const direction = next ? "to resale" : "back to active";
+    toast(
+      moved > 0
+        ? `${base} (${fmtCount(moved)} confirmed items moved ${direction})`
+        : base
+    );
     setResaleSavedAt(Date.now());
     setResaleBusy(false);
     onDone();
@@ -866,6 +901,15 @@ function IngredientBlock({
           </label>
           <div className="kf-dpn__hint">
             Resale items (bottled water, disposables) are tracked but excluded from recipe-coverage.
+            {resalePreview
+              ? ingredient.resale
+                ? resalePreview.resale > 0
+                  ? ` Unticking also moves ${fmtCount(resalePreview.resale)} confirmed item${resalePreview.resale === 1 ? "" : "s"} back into the working set.`
+                  : ""
+                : resalePreview.active > 0
+                  ? ` Ticking also moves ${fmtCount(resalePreview.active)} confirmed item${resalePreview.active === 1 ? "" : "s"} out of the working set.`
+                  : ""
+              : ""}
           </div>
         </div>
       </div>

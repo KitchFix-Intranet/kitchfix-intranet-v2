@@ -15,6 +15,10 @@ export type ConfirmResult = {
   confirmed: number;
   usd: number;
   errors: string[];
+  // S1: items that landed as status='resale' because the target
+  // ingredient is Retail. Reported in the Review-queue toast so the
+  // user sees the side-effect of confirming into a Retail master.
+  movedToResale?: number;
 };
 
 type ItemRow = {
@@ -24,6 +28,9 @@ type ItemRow = {
   usd_12m: number | null;
   link_status: string;
   ingredient_id: string | null;
+  // S1: carried so confirmItems can land items as 'resale' when the
+  // target ingredient is Retail, without touching duplicate/archived.
+  status: string;
 };
 
 async function readItems(client: SupabaseClient, itemIds: string[]): Promise<ItemRow[]> {
@@ -34,7 +41,7 @@ async function readItems(client: SupabaseClient, itemIds: string[]): Promise<Ite
     const slice = itemIds.slice(i, i + page);
     const { data, error } = await client
       .from("pr_vendor_items")
-      .select("id,name,description_key,usd_12m,link_status,ingredient_id")
+      .select("id,name,description_key,usd_12m,link_status,ingredient_id,status")
       .in("id", slice);
     if (error) throw error;
     out.push(...((data ?? []) as ItemRow[]));
@@ -63,16 +70,21 @@ export async function confirmItems(
   const result: ConfirmResult = { confirmed: 0, usd: 0, errors: [] };
   if (itemIds.length === 0) return result;
 
-  // Validate ingredient exists + is active (not merged).
+  // Validate ingredient exists + is active (not merged). Also carry
+  // its resale flag so we can land the confirm as status='resale'
+  // when the target is Retail (S1): this is the "proposed path" the
+  // resale cascade deliberately does not touch.
   const { data: ing, error: ingErr } = await client
     .from("pr_ingredients")
-    .select("id,status")
+    .select("id,status,resale")
     .eq("id", ingredientId)
     .maybeSingle();
   if (ingErr) throw ingErr;
   if (!ing || (ing as { status: string }).status === "merged") {
     throw new Error("Ingredient not found or merged");
   }
+  const ingRow = ing as { id: string; status: string; resale: boolean };
+  const ingredientIsRetail = ingRow.resale === true;
 
   const rows = await readItems(client, itemIds);
   const confirmable = rows.filter((r) => r.link_status === "proposed");
@@ -100,15 +112,23 @@ export async function confirmItems(
   // Flip link_status + lock ingredient_id to the confirmed target. Guard
   // with .eq('link_status','proposed') so a race against the UI never
   // overwrites a human-touched state.
+  //
+  // S1: when the target ingredient is Retail, land the item as
+  // status='resale' instead of leaving it 'active'. Only touch rows
+  // currently 'active' - duplicate/archived rows have their own
+  // state and must not be re-coloured by this write.
   for (const r of confirmable) {
+    const nextStatusChange = ingredientIsRetail && r.status === "active";
+    const update: Record<string, unknown> = {
+      ingredient_id: ingredientId,
+      link_status: "confirmed",
+      link_confidence: "high",
+      link_reason: `confirmed:${actorEmail}`,
+    };
+    if (nextStatusChange) update.status = "resale";
     const { error } = await client
       .from("pr_vendor_items")
-      .update({
-        ingredient_id: ingredientId,
-        link_status: "confirmed",
-        link_confidence: "high",
-        link_reason: `confirmed:${actorEmail}`,
-      })
+      .update(update)
       .eq("id", r.id)
       .eq("link_status", "proposed");
     if (error) {
@@ -117,6 +137,17 @@ export async function confirmItems(
     }
     result.confirmed += 1;
     result.usd += Number(r.usd_12m ?? 0);
+    if (nextStatusChange) {
+      result.movedToResale = (result.movedToResale ?? 0) + 1;
+      await client.from("pr_events").insert({
+        entity_type: "vendor_item",
+        entity_id: r.id,
+        kind: "status_set",
+        before: { status: "active" },
+        after: { status: "resale", via: "confirm_into_retail", ingredient_id: ingredientId },
+        actor: actorEmail,
+      });
+    }
   }
 
   // Learned aliases - one per unique description_key. Upsert on
@@ -855,10 +886,43 @@ export async function setIngredientCategory(
 // bucket. Every confirmed vendor item that points to this ingredient
 // moves with it; the pr_v_overview_* views do the resale split by
 // joining on this flag.
+// Lookup for the cascade preview: how many confirmed items on this
+// ingredient are currently 'active' vs 'resale'. Used by the Resale
+// toggle UI so it can say "Also moves N confirmed items out of the
+// working set" BEFORE the user clicks. Only looks at confirmed links
+// and only at active/resale statuses - duplicate/archived rows are
+// never cascaded, so counting them would mislead the hint.
+export async function previewResaleCascade(
+  client: SupabaseClient,
+  args: { ingredientId: string }
+): Promise<{ ok: boolean; error?: string; confirmedActive: number; confirmedResale: number }> {
+  const base = client
+    .from("pr_vendor_items")
+    .select("id", { count: "exact", head: true })
+    .eq("ingredient_id", args.ingredientId)
+    .eq("link_status", "confirmed");
+  const [actRes, resRes] = await Promise.all([
+    base.eq("status", "active"),
+    client
+      .from("pr_vendor_items")
+      .select("id", { count: "exact", head: true })
+      .eq("ingredient_id", args.ingredientId)
+      .eq("link_status", "confirmed")
+      .eq("status", "resale"),
+  ]);
+  if (actRes.error) return { ok: false, error: actRes.error.message, confirmedActive: 0, confirmedResale: 0 };
+  if (resRes.error) return { ok: false, error: resRes.error.message, confirmedActive: 0, confirmedResale: 0 };
+  return {
+    ok: true,
+    confirmedActive: actRes.count ?? 0,
+    confirmedResale: resRes.count ?? 0,
+  };
+}
+
 export async function setIngredientResale(
   client: SupabaseClient,
   args: { ingredientId: string; resale: boolean; actorEmail: string }
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; moved: number }> {
   const { ingredientId, resale, actorEmail } = args;
 
   const { data: cur, error: curErr } = await client
@@ -866,17 +930,17 @@ export async function setIngredientResale(
     .select("id,resale,status")
     .eq("id", ingredientId)
     .maybeSingle();
-  if (curErr) return { ok: false, error: curErr.message };
-  if (!cur) return { ok: false, error: "Ingredient not found" };
+  if (curErr) return { ok: false, error: curErr.message, moved: 0 };
+  if (!cur) return { ok: false, error: "Ingredient not found", moved: 0 };
   const row = cur as { id: string; resale: boolean; status: string };
-  if (row.status === "merged") return { ok: false, error: "Ingredient is merged" };
-  if (row.resale === resale) return { ok: true };
+  if (row.status === "merged") return { ok: false, error: "Ingredient is merged", moved: 0 };
+  if (row.resale === resale) return { ok: true, moved: 0 };
 
   const { error: upErr } = await client
     .from("pr_ingredients")
     .update({ resale, updated_at: new Date().toISOString() })
     .eq("id", ingredientId);
-  if (upErr) return { ok: false, error: upErr.message };
+  if (upErr) return { ok: false, error: upErr.message, moved: 0 };
 
   await client.from("pr_events").insert({
     entity_type: "ingredient",
@@ -887,7 +951,50 @@ export async function setIngredientResale(
     actor: actorEmail,
   });
 
-  return { ok: true };
+  // Cascade: confirmed links only, active <-> resale only.
+  //   ticking   -> active -> resale
+  //   unticking -> resale -> active
+  // Never touches duplicate or archived rows (a duplicate that is also
+  // retail stays a duplicate). Never cascades to proposed links; a
+  // proposal is the matcher's guess and acting on it would pre-empt
+  // the review - confirmItems handles the proposed path separately by
+  // writing status='resale' at confirm time when the target is Retail.
+  const fromStatus = resale ? "active" : "resale";
+  const toStatus = resale ? "resale" : "active";
+
+  const { data: targets, error: tgtErr } = await client
+    .from("pr_vendor_items")
+    .select("id")
+    .eq("ingredient_id", ingredientId)
+    .eq("link_status", "confirmed")
+    .eq("status", fromStatus);
+  if (tgtErr) return { ok: false, error: tgtErr.message, moved: 0 };
+  const ids = ((targets ?? []) as { id: string }[]).map((r) => r.id);
+
+  let moved = 0;
+  for (const id of ids) {
+    const { error: upErr2 } = await client
+      .from("pr_vendor_items")
+      .update({ status: toStatus })
+      .eq("id", id)
+      .eq("status", fromStatus); // race guard
+    if (upErr2) {
+      // eslint-disable-next-line no-console
+      console.error(`resale cascade: failed on ${id}: ${upErr2.message}`);
+      continue;
+    }
+    moved += 1;
+    await client.from("pr_events").insert({
+      entity_type: "vendor_item",
+      entity_id: id,
+      kind: "status_set",
+      before: { status: fromStatus },
+      after: { status: toStatus, via: "ingredient_resale_cascade", ingredient_id: ingredientId },
+      actor: actorEmail,
+    });
+  }
+
+  return { ok: true, moved };
 }
 
 // The master's unit of account. Every per-unit price on the Ingredients

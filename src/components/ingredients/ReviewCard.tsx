@@ -361,6 +361,7 @@ export function ReviewCard({
       <ReviewActions
         kind={group.kind}
         currentIngredientId={group.ingredient?.id ?? null}
+        ingredientResale={group.ingredient?.resale ?? false}
         proposedName={group.proposedName}
         proposedParent={group.proposedParent}
         ingredients={ingredients}
