@@ -354,6 +354,31 @@
 }
 .kf-chain__verdict--good { background: var(--sp-good-bg); color: var(--sp-good); }
 .kf-chain__verdict--block { background: var(--sp-block-bg); color: var(--sp-block); }
+/* S2: out-of-band soft warning sits beside the dimension verdict. Not
+   a block - Kevin may be right and the save is still allowed. */
+.kf-chain__verdict--warn { background: var(--sp-warn-bg); color: var(--sp-warn); }
+
+/* S2: case-price source selector. When catalog and billed are both
+   on file we show them as options so Kevin can see the disagreement
+   before the Result row commits to a figure. */
+.kf-chain__caseprice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-sp-2);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+}
+.kf-chain__caseprice-label {
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+.kf-chain__caseprice-note {
+  font-style: italic;
+  color: var(--sp-warn);
+}
 
 /* ----- Attention + Evidence sections (A3b) --------------------- */
 

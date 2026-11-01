@@ -976,6 +976,32 @@ function parsePackNormalized(
 // click so the effect fires even when the UOM stays the same.
 type PackHint = { uom: string; nonce: number };
 
+// $/base plausibility bands. Mirrors IngredientMasters.tsx:62-69 - a
+// hit is a soft "look here", not a hard assertion. Kept local to keep
+// S2's diff within DetailPanel + drawer.css per spec acceptance 7.
+// If a third file needs this later, extract to a shared module in
+// one commit.
+const PACK_BANDS: Record<string, { low: number; high: number }> = {
+  LB: { low: 0.5, high: 100 },
+  OZ: { low: 0.03, high: 6 },
+  FLOZ: { low: 0.01, high: 5 },
+  GAL: { low: 1, high: 200 },
+  EA: { low: 0.1, high: 25 },
+  DZ: { low: 1, high: 60 },
+};
+
+// Exact-cents currency for the Evidence Extended column. fmtUsd rounds
+// to $5K at amounts >= $1000; fmtUsdLong rounds to the dollar. Neither
+// lets a human check 273 x $21.44 against $4,504.50.
+function fmtUsdCents(n: number): string {
+  const sign = n < 0 ? "-" : "";
+  const abs = Math.abs(n);
+  return `${sign}$${abs.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
 function PackOverrideBlock({
   item,
   ingredient,
@@ -987,14 +1013,14 @@ function PackOverrideBlock({
   hint: PackHint | null;
   onDone: () => void;
 }) {
-  // Prefill: catch-weight toggle takes the item's current flag; $/lb
-  // takes any existing per-base when catch; qty/size left blank for
-  // the human to type (we don't surface the raw override jsonb on the
-  // ReviewGroupItem). UOM defaults to LB - the most common choice.
+  // S2: pre-fill qty/size/uom from the item's own stored pack so
+  // correcting one field is one keystroke, not a retype. When
+  // packNormalized does not parse, fields stay blank.
+  const seededPack = parsePackNormalized(item.packNormalized);
   const [catchWeight, setCatchWeight] = useState<boolean>(item.catchWeight);
-  const [qtyStr, setQtyStr] = useState<string>("");
-  const [sizeStr, setSizeStr] = useState<string>("");
-  const [uom, setUom] = useState<string>("LB");
+  const [qtyStr, setQtyStr] = useState<string>(seededPack ? String(seededPack.qty) : "");
+  const [sizeStr, setSizeStr] = useState<string>(seededPack ? String(seededPack.size) : "");
+  const [uom, setUom] = useState<string>(seededPack?.uom && UOM_TO_BASE[seededPack.uom] ? seededPack.uom : "LB");
   const qtyInputRef = useRef<HTMLInputElement | null>(null);
   const resultRef = useRef<HTMLDivElement | null>(null);
   // Fix-the-pack hint from Attention: set UOM, focus Qty, scroll
@@ -1019,6 +1045,31 @@ function PackOverrideBlock({
   const [error, setError] = useState<string | null>(null);
   const [lastTwins, setLastTwins] = useState<number | null>(null);
 
+  // S2: case-price source. When both catalog and billed exist we offer
+  // a select; default to billed when the two disagree by > 25% (that
+  // disagreement is the warning signal). When only one exists the
+  // select degenerates to a static line.
+  const catalogV =
+    item.catalogPrice != null && item.catalogPrice > 0 ? item.catalogPrice : null;
+  const billedV = item.unitPrice != null && item.unitPrice > 0 ? item.unitPrice : null;
+  const bigGap =
+    catalogV != null && billedV != null
+      ? Math.abs(catalogV - billedV) / Math.max(catalogV, billedV) > 0.25
+      : false;
+  const defaultCaseSrc: "catalog" | "billed" | null =
+    bigGap ? "billed" : catalogV != null ? "catalog" : billedV != null ? "billed" : null;
+  const [caseSrc, setCaseSrc] = useState<"catalog" | "billed" | null>(defaultCaseSrc);
+  const previewCasePrice =
+    caseSrc === "catalog" && catalogV != null
+      ? { v: catalogV, src: "catalog" as const }
+      : caseSrc === "billed" && billedV != null
+        ? { v: billedV, src: "billed" as const }
+        : catalogV != null
+          ? { v: catalogV, src: "catalog" as const }
+          : billedV != null
+            ? { v: billedV, src: "billed" as const }
+            : null;
+
   const qty = Number(qtyStr);
   const size = Number(sizeStr);
   const perLb = Number(perLbStr);
@@ -1026,26 +1077,41 @@ function PackOverrideBlock({
   const sizeValid = Number.isFinite(size) && size > 0;
   const perLbValid = Number.isFinite(perLb) && perLb > 0;
 
+  // Pristine check: the entered pack still equals the stored one.
+  // Save pack stays disabled when nothing has changed so pre-filling
+  // never writes an unchanged pack back as a human-set override.
+  const packPristine =
+    !!seededPack &&
+    qtyValid &&
+    sizeValid &&
+    Number(seededPack.qty) === qty &&
+    Number(seededPack.size) === size &&
+    seededPack.uom === uom;
+  const perLbPristine =
+    item.perBase != null &&
+    item.catchWeight &&
+    perLbValid &&
+    Math.abs(Number(item.perBase) - perLb) < 0.005;
+
   // Live preview math - mirrors estimateFromOverride for a client-side
   // display BEFORE the save; the server re-does the math from the same
   // table so there's no drift risk.
-  const previewCasePrice =
-    item.catalogPrice != null && item.catalogPrice > 0
-      ? { v: item.catalogPrice, src: "catalog" as const }
-      : item.unitPrice != null && item.unitPrice > 0
-        ? { v: item.unitPrice, src: "billed" as const }
-        : null;
-
-  let preview: { line: string; dim: string | null; perBase: number | null } = { line: "", dim: null, perBase: null };
+  let preview: { line: string; dim: string | null; perBase: number | null; baseLabel: string | null } = {
+    line: "",
+    dim: null,
+    perBase: null,
+    baseLabel: null,
+  };
   if (catchWeight) {
     if (perLbValid) {
       preview = {
         line: `${fmtUsd(perLb)} / lb (catch-weight)`,
         dim: "weight",
         perBase: perLb,
+        baseLabel: "lb",
       };
     } else {
-      preview = { line: "enter $/lb to preview", dim: null, perBase: null };
+      preview = { line: "enter $/lb to preview", dim: null, perBase: null, baseLabel: null };
     }
   } else {
     if (qtyValid && sizeValid && uom && UOM_TO_BASE[uom]) {
@@ -1056,20 +1122,44 @@ function PackOverrideBlock({
           line: `${qty} x ${size} ${uom} = ${total.toFixed(2)} ${UOM_LABEL[b.base]} -> ${fmtUsd(previewCasePrice.v / total)} / ${UOM_LABEL[b.base]}  (case ${fmtUsd(previewCasePrice.v)} ${previewCasePrice.src})`,
           dim: "math",
           perBase: previewCasePrice.v / total,
+          baseLabel: UOM_LABEL[b.base],
         };
       } else {
         preview = {
           line: `${qty} x ${size} ${uom} = ${total.toFixed(2)} ${UOM_LABEL[b.base]}  (no case price on file - per-unit will be blank)`,
           dim: "no-price",
           perBase: null,
+          baseLabel: UOM_LABEL[b.base],
         };
       }
     } else {
-      preview = { line: "enter qty / size / uom to preview", dim: null, perBase: null };
+      preview = { line: "enter qty / size / uom to preview", dim: null, perBase: null, baseLabel: null };
     }
   }
 
-  const readyToSave = catchWeight ? perLbValid : qtyValid && sizeValid && !!UOM_TO_BASE[uom];
+  // S2: band check on the computed per-base. Soft warning only, no
+  // block on save - Kevin may be right. Uses the base UOM of the
+  // entered pack (not the ingredient's) so the hint reads the pack
+  // the way the user is proposing to save it.
+  const previewBaseUom = catchWeight ? "LB" : uom && UOM_TO_BASE[uom] ? UOM_TO_BASE[uom].base : null;
+  const band = previewBaseUom ? PACK_BANDS[previewBaseUom] : null;
+  const outOfBand =
+    preview.perBase != null && band != null &&
+    (preview.perBase < band.low || preview.perBase > band.high);
+  // Suggest a "case of N" fix when N in 2..12 lands inside the band.
+  let bandCaseHint: { n: number; perUnit: number } | null = null;
+  if (outOfBand && preview.perBase != null && band) {
+    for (let n = 2; n <= 12; n += 1) {
+      const candidate = preview.perBase / n;
+      if (candidate >= band.low && candidate <= band.high) {
+        bandCaseHint = { n, perUnit: candidate };
+        break;
+      }
+    }
+  }
+
+  const readyToSave =
+    (catchWeight ? perLbValid && !perLbPristine : qtyValid && sizeValid && !!UOM_TO_BASE[uom] && !packPristine);
 
   async function save() {
     if (busy || !readyToSave) return;
@@ -1121,16 +1211,26 @@ function PackOverrideBlock({
       : item.perBase == null
         ? "Could not read"
         : "Read as";
+  // S2: append the derived $/unit so the Read-as row answers the
+  // question "is the existing pack already fine?". Uses the SAME
+  // case-price source the Result row uses (previewCasePrice) so the
+  // two numbers can be compared directly.
   let readAsBody: string;
   if (parsedBack) {
     const b = UOM_TO_BASE[parsedBack.uom];
     const total = b ? parsedBack.qty * parsedBack.size * b.factor : null;
-    readAsBody =
-      total != null && b
-        ? parsedBack.qty === 1
-          ? `${parsedBack.size} ${parsedBack.uom} = ${total.toFixed(2)} ${UOM_LABEL[b.base]}`
-          : `${parsedBack.qty} x ${parsedBack.size} ${parsedBack.uom} = ${total.toFixed(2)} ${UOM_LABEL[b.base]}`
-        : item.packNormalized ?? item.pack ?? "(not available)";
+    const base = total != null && b
+      ? parsedBack.qty === 1
+        ? `${parsedBack.size} ${parsedBack.uom} = ${total.toFixed(2)} ${UOM_LABEL[b.base]}`
+        : `${parsedBack.qty} x ${parsedBack.size} ${parsedBack.uom} = ${total.toFixed(2)} ${UOM_LABEL[b.base]}`
+      : item.packNormalized ?? item.pack ?? "(not available)";
+    const derived =
+      total != null && total > 0 && b && previewCasePrice
+        ? ` -> ${fmtUsd(previewCasePrice.v / total)} / ${UOM_LABEL[b.base]}`
+        : total != null && b && !previewCasePrice
+          ? " -> no price"
+          : "";
+    readAsBody = base + derived;
   } else {
     readAsBody = item.packNormalized ?? item.pack ?? "(not available)";
   }
@@ -1310,9 +1410,30 @@ function PackOverrideBlock({
               </label>
             </div>
             {!catchWeight ? (
-              <div className="kf-dpn__hint">
-                Case price on file:{" "}
-                {previewCasePrice ? (
+              <div className="kf-chain__caseprice">
+                <span className="kf-chain__caseprice-label">Case price</span>
+                {catalogV != null && billedV != null ? (
+                  <>
+                    <select
+                      className="kf-dt__unitsel"
+                      value={caseSrc ?? "catalog"}
+                      onChange={(e) => setCaseSrc(e.target.value as "catalog" | "billed")}
+                      disabled={busy}
+                    >
+                      <option value="catalog">
+                        {fmtUsd(catalogV)} - catalog
+                      </option>
+                      <option value="billed">
+                        {fmtUsd(billedV)} - billed, latest invoice line
+                      </option>
+                    </select>
+                    {bigGap ? (
+                      <span className="kf-chain__caseprice-note">
+                        catalog and billed disagree by more than 25%
+                      </span>
+                    ) : null}
+                  </>
+                ) : previewCasePrice ? (
                   <strong>
                     {fmtUsd(previewCasePrice.v)} ({previewCasePrice.src})
                   </strong>
@@ -1354,6 +1475,17 @@ function PackOverrideBlock({
             {verdict ? (
               <span className={`kf-chain__verdict kf-chain__verdict--${verdict.tone}`}>
                 {verdict.text}
+              </span>
+            ) : null}
+            {outOfBand && preview.perBase != null && band && previewBaseUom ? (
+              <span className="kf-chain__verdict kf-chain__verdict--warn">
+                {fmtUsd(preview.perBase)}/
+                {previewBaseUom === "LB" ? "lb" : previewBaseUom === "FLOZ" ? "fl oz" : "each"}{" "}
+                is far outside the usual range for per-{previewBaseUom === "LB" ? "pound" : previewBaseUom === "FLOZ" ? "fluid-ounce" : "each"}{" "}
+                ingredients.
+                {bandCaseHint
+                  ? ` Check the pack - a case of ${bandCaseHint.n} would make this ${fmtUsd(bandCaseHint.perUnit)}.`
+                  : " Check the pack."}
               </span>
             ) : null}
             <div className="kf-dpn__btns">
@@ -1677,14 +1809,22 @@ function AttentionSection({
                 <span>This item has a price in the master&rsquo;s unit, with no override on either the pack or the number.</span>
               </div>
             </div>
-          ) : (
-            issues.map((issue) => (
+          ) : (() => {
+            // S2: multiple issues can resolve to the same "Fix the pack"
+            // action - render the button once, on the most severe one.
+            // Priority: bad > info > warn (bad is the one Kevin
+            // actually acts on; info/warn stay as context).
+            const toneRank: Record<string, number> = { bad: 3, info: 2, warn: 1 };
+            const fixCandidates = issues.filter((i) => "fix" in i && i.fix === "pack");
+            fixCandidates.sort((a, b) => (toneRank[b.tone] ?? 0) - (toneRank[a.tone] ?? 0));
+            const buttonKind = fixCandidates[0]?.kind ?? null;
+            return issues.map((issue) => (
               <div key={issue.kind} className={`kf-attn__note kf-attn__note--${issue.tone}`}>
                 <AttentionIcon tone={issue.tone} />
                 <div>
                   <b>{issue.head}</b>
                   <span>{issue.body}</span>
-                  {"fix" in issue && issue.fix === "pack" ? (
+                  {issue.kind === buttonKind ? (
                     <button
                       type="button"
                       className="kf-btn kf-btn--line kf-btn--sm kf-attn__fix"
@@ -1701,8 +1841,8 @@ function AttentionSection({
                   ) : null}
                 </div>
               </div>
-            ))
-          )}
+            ));
+          })()}
         </div>
       ) : null}
     </section>
@@ -1893,10 +2033,10 @@ function EvidenceBody({
                           : "-"}
                     </td>
                     <td className="kf-evi__num">
-                      {l.unitPrice != null ? fmtUsd(l.unitPrice) : "-"}
+                      {l.unitPrice != null ? fmtUsdCents(l.unitPrice) : "-"}
                     </td>
                     <td className="kf-evi__num">
-                      {l.extended != null ? fmtUsd(l.extended) : "-"}
+                      {l.extended != null ? fmtUsdCents(l.extended) : "-"}
                     </td>
                   </tr>
                 ))}
