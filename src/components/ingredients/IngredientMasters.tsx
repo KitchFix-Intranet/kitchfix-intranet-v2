@@ -137,60 +137,14 @@ const BANDS: Record<string, { low: number; high: number }> = {
   DZ: { low: 1, high: 60 },
 };
 
-// Convert a `pricePerStoredUom` value (what the backfill wrote into
-// `price_estimate.per_base`, labeled by `storedUom`) into the master's
-// `targetUom`. Returns null when the two uoms are from different
-// dimensions (unit mismatch - a strong "bad pack" signal). The master
-// is the source of truth; the stored base_uom came out of a pack
-// parse that doesn't know about the ingredient's natural unit.
-// Factor + dimension lookups live in src/lib/ingredients/pack.ts as of
-// Prompt A - one source of truth across the backfill, the estimator,
-// and this display. convertPer uses them with the same (tf / sf)
-// math that was here before the swap; result values are unchanged
-// (verified against the Bacon / Milk / Bottled-water baselines).
-import { DIM_BY_UOM, TO_BASE, normUom } from "@/lib/ingredients/pack";
+// S5: convertPer / canonicalFromBaseUnit live in pack.ts now so the
+// item panel's Result + Read-as can read the same converter the
+// master list uses - a fl-oz price displayed as $/gal here must line
+// up with the same price displayed as $/gal in the item panel.
+// DIM_BY_UOM / normUom still needed below for the item-dim-vs-master-dim
+// mismatch classification (an orthogonal use the item panel does not share).
+import { DIM_BY_UOM, normUom, convertPer, canonicalFromBaseUnit } from "@/lib/ingredients/pack";
 import { isPriceManualOverride } from "./itemTypes";
-
-function convertPer(
-  value: number,
-  storedUom: string | null | undefined,
-  targetUom: string | null | undefined
-): number | null {
-  if (value == null || !Number.isFinite(value)) return null;
-  if (!storedUom || !targetUom) return null;
-  const su = storedUom.toUpperCase();
-  const tu = targetUom.toUpperCase();
-  if (su === tu) return value;
-  const sf = TO_BASE[su];
-  const tf = TO_BASE[tu];
-  if (sf == null || tf == null) return null;
-  if (DIM_BY_UOM[su] !== DIM_BY_UOM[tu]) return null; // different dimensions - mismatch
-  // $/A = value; convert so we're expressing $/target.
-  //   per-$-per-target = value * (tf / sf)
-  return value * (tf / sf);
-}
-
-// Normalize the master's base_unit text ('lb', 'each', 'gal', 'dozen',
-// anything the schema allows) to one of our canonical uoms so BANDS +
-// convertPer can key by it. Delegates to the shared normUom() for the
-// unit vocabulary; falls back to the few long-form spellings normUom
-// doesn't yet carry ("POUND"/"POUNDS"/"EACH"/"GALLON" etc.).
-function canonicalFromBaseUnit(baseUnit: string | null): string | null {
-  if (!baseUnit) return null;
-  const u = baseUnit.toUpperCase().trim();
-  const n = normUom(u);
-  if (n) return n;
-  if (u === "POUND" || u === "POUNDS") return "LB";
-  if (u === "EACH") return "EA";
-  if (u === "DOZEN") return "DZ";
-  if (u === "GALLON") return "GAL";
-  if (u === "LITER") return "L";
-  if (u === "QUART") return "QT";
-  if (u === "PINT") return "PT";
-  if (u === "COUNT") return "CT";
-  if (u === "PIECE") return "PC";
-  return null;
-}
 
 export async function IngredientMasters() {
   const client = serviceClient();

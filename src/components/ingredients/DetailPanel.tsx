@@ -24,6 +24,7 @@ import { AlertTriangle, Check, ChevronDown, Info, X } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtDate, fmtUsd, fmtUsdLong, timeAgo } from "@/lib/fmt";
 import { SUPER_CATEGORIES, type SuperCategory } from "@/lib/ingredients/categories";
+import { canonicalFromBaseUnit, convertPer } from "@/lib/ingredients/pack";
 import { humanizeKind } from "@/lib/humanizeKind";
 import { IngredientTypeahead } from "./IngredientTypeahead";
 import type { ReviewCardIngredient, ReviewGroupItem } from "./itemTypes";
@@ -977,6 +978,31 @@ const UOM_LABEL: Record<"LB" | "FLOZ" | "EA", string> = {
   EA: "each",
 };
 
+// S5: convert a $-per-dim-base number into $-per-master-unit for the
+// item panel's Result + Read-as rows. The master list already converts
+// per_base -> master.base_unit for display (IngredientMasters.tsx via
+// the same convertPer / canonicalFromBaseUnit helpers in pack.ts);
+// without this, a gallon-costed master shows $298.75/gal while the
+// item panel reads $2.33/fl oz for the same price, and the user
+// reads it as "my edit did not take". Fallbacks:
+//   - no linked ingredient         -> dim-base label (today's behavior)
+//   - master base_unit not canonical -> dim-base label
+//   - cross-dimension (verdict's "won't blend") -> dim-base label
+// Only the LABEL and the DISPLAYED VALUE change here; nothing writes
+// anywhere.
+function displayPerBase(
+  perBaseInDim: number,
+  dimBase: "LB" | "FLOZ" | "EA",
+  ingredient: ReviewCardIngredient | null,
+): { value: number; label: string } {
+  if (!ingredient) return { value: perBaseInDim, label: UOM_LABEL[dimBase] };
+  const target = canonicalFromBaseUnit(ingredient.base_unit);
+  if (!target) return { value: perBaseInDim, label: UOM_LABEL[dimBase] };
+  const converted = convertPer(perBaseInDim, dimBase, target);
+  if (converted == null) return { value: perBaseInDim, label: UOM_LABEL[dimBase] };
+  return { value: converted, label: ingredient.base_unit };
+}
+
 // Billed unit = how the VENDOR charged for the line, which decides which
 // price tier fires:
 //   a base unit  -> Tier A / Tier B use the invoice price directly
@@ -1148,11 +1174,16 @@ function PackOverrideBlock({
   };
   if (catchWeight) {
     if (perLbValid) {
+      // Catch-weight is weight-dim; displayPerBase converts LB ->
+      // ingredient.base_unit when linked (lb master is a no-op; cross
+      // dim is impossible in practice because catch-weight only exists
+      // on meat/produce, but the helper falls back cleanly).
+      const disp = displayPerBase(perLb, "LB", ingredient);
       preview = {
-        line: `${fmtUsd(perLb)} / lb (catch-weight)`,
+        line: `${fmtUsd(disp.value)} / ${disp.label} (catch-weight)`,
         dim: "weight",
-        perBase: perLb,
-        baseLabel: "lb",
+        perBase: disp.value,
+        baseLabel: disp.label,
       };
     } else {
       preview = { line: "enter $/lb to preview", dim: null, perBase: null, baseLabel: null };
@@ -1162,11 +1193,19 @@ function PackOverrideBlock({
       const b = UOM_TO_BASE[uom];
       const total = qty * size * b.factor;
       if (previewCasePrice) {
+        // Compute perBase in the DIMENSION base (what the backfill
+        // writes to price_estimate.per_base and what the server stamps
+        // on save), then convert for DISPLAY only. The pack-total
+        // echo on the left of "->" stays in the dim-base unit because
+        // it is a math echo of the pack ("6 x 1 GAL = 768.00 fl oz"),
+        // not a price display.
+        const perBaseInDim = previewCasePrice.v / total;
+        const disp = displayPerBase(perBaseInDim, b.base, ingredient);
         preview = {
-          line: `${qty} x ${size} ${uom} = ${total.toFixed(2)} ${UOM_LABEL[b.base]} -> ${fmtUsd(previewCasePrice.v / total)} / ${UOM_LABEL[b.base]}  (case ${fmtUsd(previewCasePrice.v)} ${previewCasePrice.src})`,
+          line: `${qty} x ${size} ${uom} = ${total.toFixed(2)} ${UOM_LABEL[b.base]} -> ${fmtUsd(disp.value)} / ${disp.label}  (case ${fmtUsd(previewCasePrice.v)} ${previewCasePrice.src})`,
           dim: "math",
-          perBase: previewCasePrice.v / total,
-          baseLabel: UOM_LABEL[b.base],
+          perBase: disp.value,
+          baseLabel: disp.label,
         };
       } else {
         preview = {
@@ -1279,12 +1318,17 @@ function PackOverrideBlock({
         ? `${parsedBack.size} ${parsedBack.uom} = ${total.toFixed(2)} ${UOM_LABEL[b.base]}`
         : `${parsedBack.qty} x ${parsedBack.size} ${parsedBack.uom} = ${total.toFixed(2)} ${UOM_LABEL[b.base]}`
       : item.packNormalized ?? item.pack ?? "(not available)";
-    const derived =
-      total != null && total > 0 && b && previewCasePrice
-        ? ` -> ${fmtUsd(previewCasePrice.v / total)} / ${UOM_LABEL[b.base]}`
-        : total != null && b && !previewCasePrice
-          ? " -> no price"
-          : "";
+    // S5: derived tail converts the pack's dim-base price into the
+    // master's unit so this line agrees with the Result row and the
+    // master list. The left side ("6/1 GAL = 768.00 fl oz") stays in
+    // dim-base because it is a math echo of the pack, not a price.
+    let derived = "";
+    if (total != null && total > 0 && b && previewCasePrice) {
+      const disp = displayPerBase(previewCasePrice.v / total, b.base, ingredient);
+      derived = ` -> ${fmtUsd(disp.value)} / ${disp.label}`;
+    } else if (total != null && b && !previewCasePrice) {
+      derived = " -> no price";
+    }
     readAsBody = base + derived;
   } else {
     readAsBody = item.packNormalized ?? item.pack ?? "(not available)";
@@ -1506,7 +1550,10 @@ function PackOverrideBlock({
           <div className="kf-chain__value">
             {preview.perBase != null ? (
               <strong className="kf-chain__big">
-                {fmtUsd(preview.perBase)} / {catchWeight ? "lb" : enteredBase ? UOM_LABEL[enteredBase] : "unit"}
+                {/* S5: label comes from preview.baseLabel (the master's
+                    unit when linked; else dim-base) so the headline
+                    agrees with the Read-as line and the master list. */}
+                {fmtUsd(preview.perBase)} / {preview.baseLabel ?? "unit"}
               </strong>
             ) : (
               <strong className="kf-chain__big kf-muted">- / unit</strong>

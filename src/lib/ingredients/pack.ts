@@ -109,6 +109,54 @@ function toBase(size: number, uom: string): { base_uom: BaseUom; total: number; 
   return { base_uom: BASE_BY_DIM[dim], dim, total: size * factor };
 }
 
+// Normalize a master's base_unit text ('lb', 'each', 'gal', 'dozen',
+// 'POUND', ...) to one of our canonical uoms so convertPer / BANDS can
+// key by it. Delegates to normUom() for the unit vocabulary; falls
+// back to the few long-form spellings normUom doesn't yet carry.
+// Lives here (not in the server-only IngredientMasters.tsx that
+// originally owned it) so client surfaces - the item panel's Result /
+// Read-as (S5) - can share the same lookup the master list uses.
+export function canonicalFromBaseUnit(baseUnit: string | null): string | null {
+  if (!baseUnit) return null;
+  const u = baseUnit.toUpperCase().trim();
+  const n = normUom(u);
+  if (n) return n;
+  if (u === "POUND" || u === "POUNDS") return "LB";
+  if (u === "EACH") return "EA";
+  if (u === "DOZEN") return "DZ";
+  if (u === "GALLON") return "GAL";
+  if (u === "LITER") return "L";
+  if (u === "QUART") return "QT";
+  if (u === "PINT") return "PT";
+  if (u === "COUNT") return "CT";
+  if (u === "PIECE") return "PC";
+  return null;
+}
+
+// Convert a `$ per storedUom` value into `$ per targetUom`. Returns
+// null when the two uoms are in different dimensions (unit mismatch -
+// a strong "bad pack" signal; the master-list and the item-panel's
+// verdict both treat that case as "won't blend"). The math is a
+// factor ratio against TO_BASE: value * (TO_BASE[target] /
+// TO_BASE[stored]). Verified byte-identical against the Bacon / Milk /
+// Bottled-water baselines when the helper lived in IngredientMasters.
+export function convertPer(
+  value: number,
+  storedUom: string | null | undefined,
+  targetUom: string | null | undefined,
+): number | null {
+  if (value == null || !Number.isFinite(value)) return null;
+  if (!storedUom || !targetUom) return null;
+  const su = storedUom.toUpperCase();
+  const tu = targetUom.toUpperCase();
+  if (su === tu) return value;
+  const sf = TO_BASE[su];
+  const tf = TO_BASE[tu];
+  if (sf == null || tf == null) return null;
+  if (DIM_BY_UOM[su] !== DIM_BY_UOM[tu]) return null;
+  return value * (tf / sf);
+}
+
 // Trailing pack-container words we want to strip before parsing. Kept
 // deliberately narrow so we don't eat a real unit; "PC" / "EA" are NOT
 // in this list because they ARE units.
