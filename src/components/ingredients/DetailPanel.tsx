@@ -1340,14 +1340,68 @@ function PackOverrideBlock({
     }
   }
 
+  // S6: moving the Case-price dropdown counts as a change, so a user
+  // who ONLY picks "billed" (keeping the pack) can save. The save
+  // routes to the A2.1 price-override path in save() below (durable;
+  // the backfill skips pack_override.price_only). Catch-weight path
+  // is unchanged - it has no case-price dropdown.
+  const caseSrcChanged = caseSrc !== defaultCaseSrc;
   const readyToSave =
-    (catchWeight ? perLbValid && !perLbPristine : qtyValid && sizeValid && !!UOM_TO_BASE[uom] && !packPristine);
+    (catchWeight
+      ? perLbValid && !perLbPristine
+      : qtyValid && sizeValid && !!UOM_TO_BASE[uom] && (!packPristine || caseSrcChanged));
 
   async function save() {
     if (busy || !readyToSave) return;
     setBusy(true);
     setError(null);
     setLastTwins(null);
+
+    // S6: pack pristine + ONLY the case-price source moved -> write a
+    // durable price override through A2.1's /set-price-override. This
+    // is the branch where the user picked catalog-vs-billed in the
+    // dropdown and clicked save; before S6 the pristine-pack check
+    // would have left Save disabled, and even bypassing that the
+    // pack-override route recomputes case price catalog-first and
+    // discards the pick. Reuses setVendorItemPriceOverride (writes
+    // pack_override.price_only, which the backfill skips). When the
+    // user changed BOTH the pack and the case source, the pack
+    // override wins - one save, one effect, no double-write.
+    if (!catchWeight && packPristine && caseSrcChanged && previewCasePrice) {
+      const b = UOM_TO_BASE[uom];
+      const total = qty * size * b.factor;
+      const perBaseInDim = previewCasePrice.v / total;
+      const srcLabel = previewCasePrice.src;
+      const userNote = note.trim();
+      const auto = `Costed from ${srcLabel} case price ${fmtUsd(previewCasePrice.v)} instead of the default`;
+      const reason = userNote ? `${auto}. ${userNote}` : auto;
+      const r = await postJson("/api/review/set-price-override", {
+        itemId: item.id,
+        perBase: perBaseInDim,
+        baseUom: b.base,
+        reason,
+      });
+      if (!r.ok) {
+        const msg = errMsg(r.data, `Save failed (${r.status})`);
+        setError(msg);
+        toast(msg, { tone: "block" });
+        setBusy(false);
+        return;
+      }
+      const d = (r.data ?? {}) as { twins?: number };
+      const twins = d.twins ?? 0;
+      setLastTwins(twins);
+      toast(
+        twins > 0
+          ? `Saved: price override (applied to ${fmtCount(twins + 1)} matching items)`
+          : "Saved: price override"
+      );
+      setSavedAt(Date.now());
+      setBusy(false);
+      onDone();
+      return;
+    }
+
     const body: Record<string, unknown> = {
       itemId: item.id,
       catchWeight,
@@ -1714,7 +1768,14 @@ function PackOverrideBlock({
                 disabled={busy || !readyToSave}
                 onClick={save}
               >
-                {busy ? "Saving..." : "Save pack"}
+                {/* S6: label follows the action. Pack pristine + source
+                    moved -> price-override write ("Save price"). Any
+                    other save path ("Save pack") keeps today's label. */}
+                {busy
+                  ? "Saving..."
+                  : !catchWeight && packPristine && caseSrcChanged
+                    ? "Save price"
+                    : "Save pack"}
               </button>
               <SaveFlash savedAt={savedAt} error={error} />
             </div>
