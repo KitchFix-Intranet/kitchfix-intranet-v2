@@ -57,6 +57,12 @@ export type ReviewGroupItem = {
   perBaseUom: string | null;
   perBaseConfidence: "high" | "low" | "override" | "derived" | null;
   perBaseNote: string | null;
+  // S4: the case price the engine recorded alongside the stored
+  // per_base. May be null when the item was priced by a non-case tier
+  // (actuals_base_unit, catch_weight, override). Surfaced so the pack
+  // chain's dropdown can offer the engine's actual case figure as a
+  // selectable option rather than hiding it as a third source.
+  storedCasePrice: number | null;
   caseSource:
     | "catalog"
     | "billed"

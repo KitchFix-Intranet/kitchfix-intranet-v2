@@ -222,6 +222,10 @@ export async function GET(req: NextRequest) {
     perBaseUom: pe?.base_uom ?? null,
     perBaseConfidence,
     perBaseNote: pe?.note ?? null,
+    storedCasePrice:
+      pe?.case_price != null && Number.isFinite(Number(pe.case_price))
+        ? Number(pe.case_price)
+        : null,
     caseSource:
       (pe?.case_price_source as
         | "catalog"
