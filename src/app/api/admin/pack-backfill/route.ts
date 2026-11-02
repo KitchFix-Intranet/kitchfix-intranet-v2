@@ -36,6 +36,41 @@ const TIER_B_MAX_PER_LB = 200;
 const CROSS_CHECK_THRESHOLD = 3; // 3x deviation flags
 const CROSS_CHECK_MIN_OTHERS = 2; // need 2+ other priced links on the master
 
+// S3: median-based outlier exclusion. The reference blend used by the
+// per-item sanity flag must apply the same rule as IngredientMasters.tsx
+// so the two sites agree on what the master's blend IS. Rule: with 3+
+// priced peers, any peer >3x median or <median/3 is dropped from the
+// reference; otherwise include everything. Constants mirrored in
+// IngredientMasters.tsx (OUTLIER_RATIO, OUTLIER_MIN) - identical.
+const OUTLIER_RATIO = 3;
+const OUTLIER_MIN = 3;
+
+function medianOf(xs: readonly number[]): number {
+  const s = [...xs].sort((a, b) => a - b);
+  const n = s.length;
+  if (n === 0) return 0;
+  if (n % 2 === 1) return s[Math.floor(n / 2)];
+  return (s[n / 2 - 1] + s[n / 2]) / 2;
+}
+
+// Returns the survivor mean for use as the "clean" peer blend. The
+// cross-check only needs the headline figure; it does not surface
+// which peer was dropped.
+function peerSurvivorMean(vs: readonly number[]): number | null {
+  if (vs.length === 0) return null;
+  if (vs.length < OUTLIER_MIN) {
+    const sum = vs.reduce((a, b) => a + b, 0);
+    return sum / vs.length;
+  }
+  const med = medianOf(vs);
+  const low = med / OUTLIER_RATIO;
+  const high = med * OUTLIER_RATIO;
+  const survivors = vs.filter((v) => v >= low && v <= high);
+  if (survivors.length === 0) return null;
+  const sum = survivors.reduce((a, b) => a + b, 0);
+  return sum / survivors.length;
+}
+
 type Item = {
   id: string;
   vendor_id: string;
@@ -794,9 +829,12 @@ export async function POST(req: NextRequest) {
           (x) => x.itemId !== it.id && x.perBase != null
         );
         if (others.length >= CROSS_CHECK_MIN_OTHERS) {
-          const blend =
-            others.reduce((s, x) => s + (x.perBase as number), 0) / others.length;
-          if (Number.isFinite(blend) && blend > 0) {
+          // S3: survivor-mean, not raw mean. A single wild peer must
+          // not drag the reference away from the real centre of the
+          // master. Below OUTLIER_MIN peers (3), nothing to be a
+          // median of; include everything.
+          const blend = peerSurvivorMean(others.map((x) => x.perBase as number));
+          if (blend != null && Number.isFinite(blend) && blend > 0) {
             // Convert this item's new per_base into the master's unit
             // for the comparison. Dimension mismatch -> don't flag
             // (unit mismatch has its own signal elsewhere).

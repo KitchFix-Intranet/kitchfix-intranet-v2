@@ -45,12 +45,18 @@ export type MasterLinkedItem = {
   // converted to the master's base_unit (different dimension; e.g.
   // the pack parse wrote $/LB but the master is 'each').
   unitMismatch: boolean;
-  // true when this item's converted per-base sits more than 3x above
-  // or below the master's blend. Never set on a unit-mismatched item -
-  // its number is in a different dimension, so the comparison would be
-  // meaningless. Computed server-side so the client and the master-
-  // level flag cannot drift apart.
+  // S3: true when this item was EXCLUDED from the master's blend
+  // because it sits >3x median or <median/3 across the priced items in
+  // the master's dimension. Only possible with 3+ priced in-dim items;
+  // below that there's no median to be an outlier against. Never set
+  // on a unit-mismatched item - its number is in a different dimension
+  // and would not be comparable. Computed server-side so the client
+  // and the master-level flag cannot drift apart.
   outlier: boolean;
+  // S3: hand-set price survives the backfill and is still subject to
+  // the outlier rule. Surfaced on the chip as "set by hand" so the
+  // user sees the fix is the override, not the parser.
+  priceManualOverride: boolean;
   usd12m: number;
 };
 
@@ -81,6 +87,10 @@ export type MasterRow = {
   // disagrees with the master's current one. Null when they agree or
   // the vote is inconclusive. A suggestion only - see Prompt R1.
   suggestedBaseUnit: string | null;
+  // S3: median of the priced-in-dim items BEFORE outlier exclusion.
+  // The attention note reads this to say what the excluded items
+  // deviated from. Null when no priced items in-dim.
+  medianBeforeExclusion: number | null;
   linkedItems: MasterLinkedItem[];
 };
 
@@ -727,14 +737,22 @@ function IssueNote({ row }: { row: MasterRow }) {
   }
   if (row.issues.includes("outlier")) {
     const o = row.linkedItems.filter((li) => li.outlier);
+    const median = row.medianBeforeExclusion;
     notes.push({
       tone: "bad",
       icon: <AlertTriangle size={16} strokeWidth={1.5} aria-hidden />,
-      head: `${fmtCount(o.length)} item${o.length === 1 ? "" : "s"} far from the blend`,
+      head: `${fmtCount(o.length)} item${o.length === 1 ? "" : "s"} excluded as outlier${o.length === 1 ? "" : "s"}`,
       body: (
         <>
-          {o.map((li) => `${li.name} at ${fmtUsd(li.perBase ?? 0)}/${uomLabel(li.perBaseUom)}`).join("; ")}
-          . Blend is {fmtUsd(row.avgPerBase ?? 0)}/{uom}.
+          {o
+            .map(
+              (li) =>
+                `${li.name} at ${fmtUsd(li.perBase ?? 0)}/${uomLabel(li.perBaseUom)}${li.priceManualOverride ? " (set by hand)" : ""}`
+            )
+            .join("; ")}
+          {median != null ? ` against a ${fmtUsd(median)}/${uom} median.` : "."}{" "}
+          Excluded from the master&rsquo;s blend; survivors give{" "}
+          {row.avgPerBase != null ? `${fmtUsd(row.avgPerBase)}/${uom}` : "no blend"}.
         </>
       ),
     });
@@ -899,7 +917,9 @@ function MasterDetail({
                           unit mismatch vs master ({li.perBaseUom ?? "?"})
                         </span>
                       ) : outlier ? (
-                        <span className="kf-cell-sub kf-cell-sub--note">outlier vs blend</span>
+                        <span className="kf-cell-sub kf-cell-sub--note">
+                          outlier · excluded{li.priceManualOverride ? " · set by hand" : ""}
+                        </span>
                       ) : null}
                     </td>
                     <td>{li.vendor}</td>

@@ -51,7 +51,76 @@ type LinkedItemRow = {
     base_uom?: string | null;
     confidence?: string | null;
   } | null;
+  // S3: carried so linkedItems can label hand-set prices on the
+  // outlier chip ("outlier · excluded · set by hand"). Reads
+  // isPriceManualOverride(pack_override) without a cross-dimension
+  // ingredient check - the label is about provenance, not blend math.
+  pack_override: unknown;
 };
+
+// S3: median-based outlier exclusion for the master blend. Rule:
+// with 3+ priced items, any item >3x median or <median/3 is excluded;
+// the master's price/spread are mean/min/max of the survivors. Under
+// 3 items there is nothing to be a median of; include everything.
+//
+// Applied identically here (render blend) and in
+// pack-backfill/route.ts (per-item cross-check). The duplication is
+// ~20 lines each with the same constants; if a third site appears,
+// extract to a shared module. The constants are the one authoritative
+// place for the thresholds.
+const OUTLIER_RATIO = 3;
+const OUTLIER_MIN = 3;
+
+function medianOf(xs: readonly number[]): number {
+  const s = [...xs].sort((a, b) => a - b);
+  const n = s.length;
+  if (n === 0) return 0;
+  if (n % 2 === 1) return s[Math.floor(n / 2)];
+  return (s[n / 2 - 1] + s[n / 2]) / 2;
+}
+
+function blendStats(priced: ReadonlyArray<{ id: string; v: number }>): {
+  median: number | null;
+  survivorMean: number | null;
+  survivorMin: number | null;
+  survivorMax: number | null;
+  excluded: Set<string>;
+} {
+  if (priced.length === 0) {
+    return { median: null, survivorMean: null, survivorMin: null, survivorMax: null, excluded: new Set() };
+  }
+  const vals = priced.map((p) => p.v);
+  const med = medianOf(vals);
+  if (priced.length < OUTLIER_MIN) {
+    const sum = vals.reduce((a, b) => a + b, 0);
+    return {
+      median: med,
+      survivorMean: sum / vals.length,
+      survivorMin: Math.min(...vals),
+      survivorMax: Math.max(...vals),
+      excluded: new Set(),
+    };
+  }
+  const low = med / OUTLIER_RATIO;
+  const high = med * OUTLIER_RATIO;
+  const excluded = new Set<string>();
+  const survivors: number[] = [];
+  for (const p of priced) {
+    if (p.v > high || p.v < low) excluded.add(p.id);
+    else survivors.push(p.v);
+  }
+  if (survivors.length === 0) {
+    return { median: med, survivorMean: null, survivorMin: null, survivorMax: null, excluded };
+  }
+  const sum = survivors.reduce((a, b) => a + b, 0);
+  return {
+    median: med,
+    survivorMean: sum / survivors.length,
+    survivorMin: Math.min(...survivors),
+    survivorMax: Math.max(...survivors),
+    excluded,
+  };
+}
 
 type VendorRow = { id: string; name: string };
 
@@ -80,6 +149,7 @@ const BANDS: Record<string, { low: number; high: number }> = {
 // math that was here before the swap; result values are unchanged
 // (verified against the Bacon / Milk / Bottled-water baselines).
 import { DIM_BY_UOM, TO_BASE, normUom } from "@/lib/ingredients/pack";
+import { isPriceManualOverride } from "./itemTypes";
 
 function convertPer(
   value: number,
@@ -141,7 +211,7 @@ export async function IngredientMasters() {
   for (;;) {
     const { data, error } = await client
       .from("pr_vendor_items")
-      .select("id,vendor_id,ingredient_id,name,usd_12m,price_estimate")
+      .select("id,vendor_id,ingredient_id,name,usd_12m,price_estimate,pack_override")
       .eq("link_status", "confirmed")
       .not("ingredient_id", "is", null)
       .order("id", { ascending: true })
@@ -183,13 +253,17 @@ export async function IngredientMasters() {
   const rows: MasterRow[] = ingredients.map((m) => {
     const items = byMaster.get(m.id) ?? [];
     const masterUom = canonicalFromBaseUnit(m.base_unit);
-    const perBaseValues: number[] = [];
+    // S3: collect {id, v} so blendStats can tag exclusions back to
+    // the item that owns each priced value.
+    const priced: Array<{ id: string; v: number }> = [];
     const mismatchedItemIds = new Set<string>();
     let usd = 0;
-    // Spend on items that contribute NOTHING to perBaseValues - either
-    // no usable per_base at all, or a cross-dimension value we refuse
-    // to average. This is the money the headline $/unit does not
-    // describe, and until now it was invisible.
+    // Spend on items that contribute NOTHING to the master's price -
+    // either no usable per_base at all, or a cross-dimension value we
+    // refuse to average. This is the money the headline $/unit does
+    // not describe. (S3 does NOT re-classify outliers as "unpriced":
+    // their spend IS covered by a confirmed link; the blend just
+    // leaves them out of its own math.)
     let unpricedUsd = 0;
     // How many priced items sit in each dimension, regardless of
     // whether they converted. Used ONLY to suggest a base_unit when the
@@ -216,24 +290,28 @@ export async function IngredientMasters() {
           // polluted by cross-dimension values; the mismatch flag
           // handles the surface.
         } else {
-          perBaseValues.push(converted);
+          priced.push({ id: it.id, v: converted });
         }
       } else if (storedUom && !masterUom) {
         // Master has no canonical uom (unusual base_unit text); fall
         // back to the stored value as-is so the row still shows a
         // number.
-        perBaseValues.push(rawN);
+        priced.push({ id: it.id, v: rawN });
       } else {
-        perBaseValues.push(rawN);
+        priced.push({ id: it.id, v: rawN });
       }
     }
-    const avg =
-      perBaseValues.length > 0
-        ? perBaseValues.reduce((s, x) => s + x, 0) / perBaseValues.length
-        : null;
-    const min = perBaseValues.length > 0 ? Math.min(...perBaseValues) : null;
-    const max = perBaseValues.length > 0 ? Math.max(...perBaseValues) : null;
+    // S3: median-based outlier exclusion. avg/min/max/spread describe
+    // the survivors only; linkedItems.outlier below tags the excluded
+    // rows so they still appear in the table (visibly dropped from
+    // the blend, not deleted).
+    const stats = blendStats(priced);
+    const avg = stats.survivorMean;
+    const min = stats.survivorMin;
+    const max = stats.survivorMax;
     const spread = min != null && max != null && min > 0 ? max / min : null;
+    const excludedIds = stats.excluded;
+    const medianBeforeExclusion = stats.median;
     const ratioFlag = spread != null && spread > 3;
     const bandKey = masterUom;
     const bandFlag =
@@ -274,14 +352,16 @@ export async function IngredientMasters() {
                 : null,
           perBaseUom: normalized != null ? masterUom : storedUom,
           unitMismatch: mismatchedItemIds.has(it.id),
-          // Same 3x rule the client was applying inline; moved here so
-          // there is one definition. Gated on a clean conversion - a
-          // mismatched item's number is in another dimension and must
-          // not be compared against the blend.
-          outlier:
-            avg != null &&
-            normalized != null &&
-            (normalized > avg * 3 || normalized < avg / 3),
+          // S3: outlier means EXCLUDED by the median-based rule. True
+          // only when >=3 priced items in-dim exist AND this item's
+          // converted per-base is >3x median or <median/3. Under 3
+          // items this stays false (there is no median to be an
+          // outlier against).
+          outlier: excludedIds.has(it.id),
+          // S3: hand-set price survives the backfill and still gets
+          // outlier-checked by this rule. The chip surfaces it so
+          // Kevin knows the fix is the override, not the parser.
+          priceManualOverride: isPriceManualOverride(it.pack_override),
           usd12m: Number(it.usd_12m ?? 0),
         };
       })
@@ -313,7 +393,12 @@ export async function IngredientMasters() {
     // Typed issues, ordered most-actionable first. `flagged` and
     // `flagReason` above keep their exact previous meaning for anything
     // still reading them; this is a parallel, richer signal.
-    const pricedCount = perBaseValues.length;
+    // S3: pricedCount describes items that CONTRIBUTE to the headline
+    // price. Outliers are excluded here too so "N of M in this price"
+    // tells the truth: the Vidalat case was 1 of 10 priced; after
+    // outlier exclusion it would be 1 of 1, which is correct - the
+    // other 9 blended, this one didn't.
+    const pricedCount = priced.length - excludedIds.size;
     const issues: MasterIssue[] = [
       spread != null && spread > 3 ? ("spread" as const) : null,
       pricedCount < items.length ? ("coverage" as const) : null,
@@ -339,6 +424,10 @@ export async function IngredientMasters() {
       unpricedUsd,
       issues,
       suggestedBaseUnit,
+      // S3: pre-exclusion median used by the "N items excluded as
+      // outliers" note. Null when no priced items in the master's
+      // dimension.
+      medianBeforeExclusion,
       // Display + band lookup use the master's canonical uom so Milk
       // reads "$/gal" (not "$/floz"), Bottled water reads "$/each", etc.
       baseUom: masterUom,
