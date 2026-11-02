@@ -1062,6 +1062,10 @@ function PackOverrideBlock({
   // packNormalized does not parse, fields stay blank.
   const seededPack = parsePackNormalized(item.packNormalized);
   const [catchWeight, setCatchWeight] = useState<boolean>(item.catchWeight);
+  // S4: tracks whether the user has toggled the mode button. Toggling
+  // is an edit for display purposes (the chain switches to recomputed
+  // from a different formula), so it must flip showStored off.
+  const [catchWeightEdited, setCatchWeightEdited] = useState<boolean>(false);
   const [qtyStr, setQtyStr] = useState<string>(seededPack ? String(seededPack.qty) : "");
   const [sizeStr, setSizeStr] = useState<string>(seededPack ? String(seededPack.size) : "");
   const [uom, setUom] = useState<string>(seededPack?.uom && UOM_TO_BASE[seededPack.uom] ? seededPack.uom : "LB");
@@ -1073,6 +1077,7 @@ function PackOverrideBlock({
   useEffect(() => {
     if (!hint) return;
     setCatchWeight(false);
+    setCatchWeightEdited(true);
     setUom(hint.uom);
     qtyInputRef.current?.focus();
     resultRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -1089,30 +1094,54 @@ function PackOverrideBlock({
   const [error, setError] = useState<string | null>(null);
   const [lastTwins, setLastTwins] = useState<number | null>(null);
 
-  // S2: case-price source. When both catalog and billed exist we offer
-  // a select; default to billed when the two disagree by > 25% (that
-  // disagreement is the warning signal). When only one exists the
-  // select degenerates to a static line.
+  // S4: case-price source. Three options now (catalog, billed, avg)
+  // and the default is the source that produced the stored per_base,
+  // not the S2 ">25% disagreement" rule. When the stored source is an
+  // averaged tier (actuals_*), surface the engine's case figure as an
+  // "invoice average" option so the dropdown can honestly reproduce
+  // the saved price. Falls back to the S2 bigGap heuristic only when
+  // the item has no stored source (new / unpriced).
   const catalogV =
     item.catalogPrice != null && item.catalogPrice > 0 ? item.catalogPrice : null;
   const billedV = item.unitPrice != null && item.unitPrice > 0 ? item.unitPrice : null;
+  const avgV =
+    item.caseSource != null && item.caseSource.startsWith("actuals_") &&
+    item.storedCasePrice != null && item.storedCasePrice > 0
+      ? item.storedCasePrice
+      : null;
   const bigGap =
     catalogV != null && billedV != null
       ? Math.abs(catalogV - billedV) / Math.max(catalogV, billedV) > 0.25
       : false;
-  const defaultCaseSrc: "catalog" | "billed" | null =
-    bigGap ? "billed" : catalogV != null ? "catalog" : billedV != null ? "billed" : null;
-  const [caseSrc, setCaseSrc] = useState<"catalog" | "billed" | null>(defaultCaseSrc);
+  // Which source produced the stored per_base? Used both to default
+  // the dropdown and to decide whether the Result row shows the
+  // stored figure (showStored below).
+  const storedSrc: "catalog" | "billed" | "avg" | null =
+    item.caseSource === "catalog"
+      ? "catalog"
+      : item.caseSource === "billed"
+        ? "billed"
+        : item.caseSource != null && item.caseSource.startsWith("actuals_")
+          ? "avg"
+          : null;
+  const defaultCaseSrc: "catalog" | "billed" | "avg" | null =
+    storedSrc ??
+    (bigGap ? "billed" : catalogV != null ? "catalog" : billedV != null ? "billed" : null);
+  const [caseSrc, setCaseSrc] = useState<"catalog" | "billed" | "avg" | null>(defaultCaseSrc);
   const previewCasePrice =
     caseSrc === "catalog" && catalogV != null
       ? { v: catalogV, src: "catalog" as const }
       : caseSrc === "billed" && billedV != null
         ? { v: billedV, src: "billed" as const }
-        : catalogV != null
-          ? { v: catalogV, src: "catalog" as const }
-          : billedV != null
-            ? { v: billedV, src: "billed" as const }
-            : null;
+        : caseSrc === "avg" && avgV != null
+          ? { v: avgV, src: "avg" as const }
+          : catalogV != null
+            ? { v: catalogV, src: "catalog" as const }
+            : billedV != null
+              ? { v: billedV, src: "billed" as const }
+              : avgV != null
+                ? { v: avgV, src: "avg" as const }
+                : null;
 
   const qty = Number(qtyStr);
   const size = Number(sizeStr);
@@ -1136,6 +1165,25 @@ function PackOverrideBlock({
     item.catchWeight &&
     perLbValid &&
     Math.abs(Number(item.perBase) - perLb) < 0.005;
+
+  // S4: show the item's SAVED per_base in the Result row (and the
+  // Read-as derived tail, and the band check) when nothing has moved
+  // yet - pack inputs are at their seeded values, the mode has not
+  // been toggled, and the case-price dropdown is still on the source
+  // that produced the stored price. The master list reads the stored
+  // price; the panel must agree with it on open. Rotating the
+  // dropdown to a different source puts the chain into "what-if"
+  // mode and the recomputed figure takes over - rotating back to the
+  // stored source restores the stored figure.
+  const chainPristine =
+    !catchWeight &&
+    packPristine &&
+    !catchWeightEdited &&
+    caseSrc === storedSrc;
+  const showStored =
+    chainPristine &&
+    item.perBase != null &&
+    item.perBaseUom != null;
 
   // Live preview math - mirrors estimateFromOverride for a client-side
   // display BEFORE the save; the server re-does the math from the same
@@ -1181,18 +1229,50 @@ function PackOverrideBlock({
     }
   }
 
+  // S4: on pristine open override preview.perBase + the sub line with
+  // the item's SAVED values. The master list reads the stored price;
+  // the chain must agree with it on open. The sub tag says "saved" so
+  // the user knows this isn't a recomputation.
+  const storedBaseLabel =
+    item.perBaseUom === "LB"
+      ? "lb"
+      : item.perBaseUom === "FLOZ"
+        ? "fl oz"
+        : item.perBaseUom === "EA"
+          ? "each"
+          : item.perBaseUom?.toLowerCase() ?? null;
+  if (showStored && item.perBase != null && storedBaseLabel != null && seededPack) {
+    const packStr =
+      seededPack.qty === 1
+        ? `${seededPack.size} ${seededPack.uom}`
+        : `${seededPack.qty} x ${seededPack.size} ${seededPack.uom}`;
+    preview = {
+      line: `${packStr} - saved per-unit from ${item.caseSource ?? "stored estimate"}`,
+      dim: "math",
+      perBase: item.perBase,
+      baseLabel: storedBaseLabel,
+    };
+  }
+
   // S2: band check on the price per the USER's chosen uom - not the
   // normalized base. Avocado-oil 1x1 GAL at $298.75 normalizes to
   // $2.33/fl oz which falls inside the FLOZ band; it is $298.75/gal
   // which falls outside the GAL band. The user is thinking in gallons,
   // so we band in gallons. Soft warning only, no save-block.
+  //
+  // S4: on pristine open, band-check the stored price (converted into
+  // the user's declared uom) rather than a recomputed hypothetical.
+  // Out-of-band saves should fire the warning on open too.
   const userUom = catchWeight ? "LB" : uom && UOM_TO_BASE[uom] ? uom : null;
   const band = userUom ? PACK_BANDS[userUom] : null;
-  const pricePerUserUom = catchWeight
+  let pricePerUserUom: number | null = catchWeight
     ? perLbValid ? perLb : null
     : qtyValid && sizeValid && previewCasePrice
       ? previewCasePrice.v / (qty * size)
       : null;
+  if (showStored && item.perBase != null && userUom && UOM_TO_BASE[userUom]) {
+    pricePerUserUom = item.perBase * UOM_TO_BASE[userUom].factor;
+  }
   const outOfBand =
     pricePerUserUom != null && band != null &&
     (pricePerUserUom < band.low || pricePerUserUom > band.high);
@@ -1279,12 +1359,17 @@ function PackOverrideBlock({
         ? `${parsedBack.size} ${parsedBack.uom} = ${total.toFixed(2)} ${UOM_LABEL[b.base]}`
         : `${parsedBack.qty} x ${parsedBack.size} ${parsedBack.uom} = ${total.toFixed(2)} ${UOM_LABEL[b.base]}`
       : item.packNormalized ?? item.pack ?? "(not available)";
+    // S4: when the chain is pristine, show the item's stored per-unit
+    // in the Read-as tail - not a recomputed hypothetical. Falls back
+    // to the recomputed figure once the user edits anything.
     const derived =
-      total != null && total > 0 && b && previewCasePrice
-        ? ` -> ${fmtUsd(previewCasePrice.v / total)} / ${UOM_LABEL[b.base]}`
-        : total != null && b && !previewCasePrice
-          ? " -> no price"
-          : "";
+      showStored && item.perBase != null && storedBaseLabel != null
+        ? ` -> ${fmtUsd(item.perBase)} / ${storedBaseLabel}`
+        : total != null && total > 0 && b && previewCasePrice
+          ? ` -> ${fmtUsd(previewCasePrice.v / total)} / ${UOM_LABEL[b.base]}`
+          : total != null && b && !previewCasePrice
+            ? " -> no price"
+            : "";
     readAsBody = base + derived;
   } else {
     readAsBody = item.packNormalized ?? item.pack ?? "(not available)";
@@ -1328,7 +1413,7 @@ function PackOverrideBlock({
           type="button"
           className={`kf-chain__mode-btn${!catchWeight ? " is-on" : ""}`}
           aria-pressed={!catchWeight}
-          onClick={() => setCatchWeight(false)}
+          onClick={() => { setCatchWeight(false); setCatchWeightEdited(true); }}
           disabled={busy}
         >
           Priced by the case
@@ -1337,7 +1422,7 @@ function PackOverrideBlock({
           type="button"
           className={`kf-chain__mode-btn${catchWeight ? " is-on" : ""}`}
           aria-pressed={catchWeight}
-          onClick={() => setCatchWeight(true)}
+          onClick={() => { setCatchWeight(true); setCatchWeightEdited(true); }}
           disabled={busy}
         >
           Catch weight - priced by actual weight
@@ -1467,34 +1552,46 @@ function PackOverrideBlock({
             {!catchWeight ? (
               <div className="kf-chain__caseprice">
                 <span className="kf-chain__caseprice-label">Case price</span>
-                {catalogV != null && billedV != null ? (
-                  <>
-                    <select
-                      className="kf-dt__unitsel"
-                      value={caseSrc ?? "catalog"}
-                      onChange={(e) => setCaseSrc(e.target.value as "catalog" | "billed")}
-                      disabled={busy}
-                    >
-                      <option value="catalog">
-                        {fmtUsd(catalogV)} - catalog
-                      </option>
-                      <option value="billed">
-                        {fmtUsd(billedV)} - billed, latest invoice line
-                      </option>
-                    </select>
-                    {bigGap ? (
-                      <span className="kf-chain__caseprice-note">
-                        catalog and billed disagree by more than 25%
-                      </span>
-                    ) : null}
-                  </>
-                ) : previewCasePrice ? (
-                  <strong>
-                    {fmtUsd(previewCasePrice.v)} ({previewCasePrice.src})
-                  </strong>
-                ) : (
-                  <span className="kf-muted">none - pack will save, per-unit will be blank</span>
-                )}
+                {(() => {
+                  // S4: options come from whatever the item carries. The
+                  // engine's own case figure ("invoice average") joins
+                  // catalog and billed when the stored source was an
+                  // actuals_* tier - without it the dropdown would hide
+                  // the number that produced the saved per_base.
+                  const options: Array<{ src: "catalog" | "billed" | "avg"; label: string; v: number }> = [];
+                  if (catalogV != null) options.push({ src: "catalog", label: `${fmtUsd(catalogV)} - catalog`, v: catalogV });
+                  if (billedV != null) options.push({ src: "billed", label: `${fmtUsd(billedV)} - billed, latest invoice line`, v: billedV });
+                  if (avgV != null) options.push({ src: "avg", label: `${fmtUsd(avgV)} - invoice average`, v: avgV });
+                  if (options.length >= 2) {
+                    return (
+                      <>
+                        <select
+                          className="kf-dt__unitsel"
+                          value={caseSrc ?? options[0].src}
+                          onChange={(e) =>
+                            setCaseSrc(e.target.value as "catalog" | "billed" | "avg")
+                          }
+                          disabled={busy}
+                        >
+                          {options.map((o) => (
+                            <option key={o.src} value={o.src}>
+                              {o.label}
+                            </option>
+                          ))}
+                        </select>
+                        {bigGap ? (
+                          <span className="kf-chain__caseprice-note">
+                            catalog and billed disagree by more than 25%
+                          </span>
+                        ) : null}
+                      </>
+                    );
+                  }
+                  if (options.length === 1) {
+                    return <strong>{options[0].label}</strong>;
+                  }
+                  return <span className="kf-muted">none - pack will save, per-unit will be blank</span>;
+                })()}
               </div>
             ) : null}
           </div>
@@ -1506,7 +1603,14 @@ function PackOverrideBlock({
           <div className="kf-chain__value">
             {preview.perBase != null ? (
               <strong className="kf-chain__big">
-                {fmtUsd(preview.perBase)} / {catchWeight ? "lb" : enteredBase ? UOM_LABEL[enteredBase] : "unit"}
+                {fmtUsd(preview.perBase)} /{" "}
+                {showStored && storedBaseLabel != null
+                  ? storedBaseLabel
+                  : catchWeight
+                    ? "lb"
+                    : enteredBase
+                      ? UOM_LABEL[enteredBase]
+                      : "unit"}
               </strong>
             ) : (
               <strong className="kf-chain__big kf-muted">- / unit</strong>
