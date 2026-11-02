@@ -1267,6 +1267,12 @@ export async function setVendorItemPackOverride(
         pack_state: "override",
         pack_override: override,
         price_estimate: priceEstimate,
+        // S7: persist the toggle to the top-level column so the item
+        // panel re-reads it on open. Conditional, not unconditional:
+        // callers that don't pass catch_weight (bulk ops, future
+        // helpers) must not clobber a legit catch-weight flag with
+        // undefined -> null. Only the UI's toggle sends this today.
+        ...(payload.catch_weight !== undefined ? { catch_weight: payload.catch_weight } : {}),
         updated_at: nowIso,
       })
       .eq("id", t.id);

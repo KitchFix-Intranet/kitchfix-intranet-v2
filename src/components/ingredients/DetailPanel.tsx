@@ -1346,10 +1346,18 @@ function PackOverrideBlock({
   // the backfill skips pack_override.price_only). Catch-weight path
   // is unchanged - it has no case-price dropdown.
   const caseSrcChanged = caseSrc !== defaultCaseSrc;
+  // S7: flipping the mode toggle counts as a change too. Shrimp live
+  // example: fixed 4x5 LB case stored catch_weight=true, so the
+  // catch-weight tier wrote the case total ($172.99) as $/lb. Flip
+  // to "priced by the case" with no other edit must save and re-cost
+  // via the normal pack path (172.99 / 20 = $8.65/lb). Compare
+  // against item.catchWeight so toggling off then back on nets to
+  // "no change" and leaves Save disabled.
+  const catchWeightChanged = catchWeight !== (item.catchWeight ?? false);
   const readyToSave =
     (catchWeight
       ? perLbValid && !perLbPristine
-      : qtyValid && sizeValid && !!UOM_TO_BASE[uom] && (!packPristine || caseSrcChanged));
+      : qtyValid && sizeValid && !!UOM_TO_BASE[uom] && (!packPristine || caseSrcChanged || catchWeightChanged));
 
   async function save() {
     if (busy || !readyToSave) return;
@@ -1367,7 +1375,10 @@ function PackOverrideBlock({
     // pack_override.price_only, which the backfill skips). When the
     // user changed BOTH the pack and the case source, the pack
     // override wins - one save, one effect, no double-write.
-    if (!catchWeight && packPristine && caseSrcChanged && previewCasePrice) {
+    // S7: also skip when the toggle flipped - a mode change needs a
+    // pack-override recompute (new tier), not a price pin. Same "one
+    // save, one effect" rule.
+    if (!catchWeight && packPristine && caseSrcChanged && !catchWeightChanged && previewCasePrice) {
       const b = UOM_TO_BASE[uom];
       const total = qty * size * b.factor;
       const perBaseInDim = previewCasePrice.v / total;
@@ -1770,10 +1781,13 @@ function PackOverrideBlock({
               >
                 {/* S6: label follows the action. Pack pristine + source
                     moved -> price-override write ("Save price"). Any
-                    other save path ("Save pack") keeps today's label. */}
+                    other save path ("Save pack") keeps today's label.
+                    S7: a toggle flip is a pack save (recompute), so
+                    the label stays "Save pack" even when caseSrc
+                    also moved - matches the save-routing guard. */}
                 {busy
                   ? "Saving..."
-                  : !catchWeight && packPristine && caseSrcChanged
+                  : !catchWeight && packPristine && caseSrcChanged && !catchWeightChanged
                     ? "Save price"
                     : "Save pack"}
               </button>
