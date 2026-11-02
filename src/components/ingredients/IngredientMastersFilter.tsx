@@ -26,6 +26,7 @@ import {
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { ItemPanelById } from "./ItemPanelById";
+import { IngredientPanelById } from "./IngredientPanelById";
 import { SUPER_CATEGORIES } from "@/lib/ingredients/categories";
 import { RowSendBackButton } from "./RowSendBackButton";
 import { MasterSendAllBackButton } from "./MasterSendAllBackButton";
@@ -148,6 +149,11 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
   // <ItemPanelById> is mounted at the island level and switches on
   // this id, so the panel is never duplicated per row.
   const [openItemId, setOpenItemId] = useState<string | null>(null);
+  // Ingredient-editor panel opened from a master name (Prompt A4).
+  // The same shared DetailPanel in its ingredient-mode, fed by
+  // /api/review/ingredient. One <IngredientPanelById> at the island
+  // root; the id drives the fetch.
+  const [openIngredientId, setOpenIngredientId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // "/" focuses the input; Esc clears it.
@@ -454,6 +460,7 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
                       setSelId(row.id);
                       setPaneOpen(true);
                     }}
+                    onOpen={() => setOpenIngredientId(row.id)}
                   />
                 </li>
               ))}
@@ -474,6 +481,13 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
           change. Not mounted per-row - a master with 10 linked items
           still has exactly one <ItemPanelById>. */}
       <ItemPanelById itemId={openItemId} onClose={() => setOpenItemId(null)} />
+      {/* Same shape for the ingredient editor (A4). The master name is
+          a button that sets openIngredientId; this one mount drives the
+          panel for the whole pane. */}
+      <IngredientPanelById
+        ingredientId={openIngredientId}
+        onClose={() => setOpenIngredientId(null)}
+      />
     </>
   );
 }
@@ -482,22 +496,54 @@ function MasterRowButton({
   row,
   selected,
   onSelect,
+  onOpen,
 }: {
   row: MasterRow;
   selected: boolean;
   onSelect: () => void;
+  onOpen: () => void;
 }) {
   const uom = uomLabel(row.baseUom);
   const lv = row.spreadRatio == null ? null : row.spreadRatio > 3 ? "hi" : row.spreadRatio > 2 ? "mid" : "ok";
+  // A4 nests a real <button> for the master name inside the row.
+  // HTML forbids button-in-button, so the row swaps to a role="button"
+  // div. Keyboard reach stays the same (tabIndex 0 + Enter/Space),
+  // and the pane-selection click handler is undisturbed; the name
+  // button stops propagation so clicking the name opens the editor
+  // without also selecting the row.
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
       aria-current={selected ? "true" : undefined}
       className={`kf-master__row${row.issues.length > 0 ? " kf-master__row--flagged" : ""}`}
     >
       <span className="kf-master__name-col">
-        <strong className="kf-master__name">{row.name}</strong>
+        <button
+          type="button"
+          className="kf-master__name kf-master__nameopen"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpen();
+          }}
+          onKeyDown={(e) => {
+            // Space on a button toggles; stop it from bubbling to the
+            // row's Space-activates handler so one keystroke does one
+            // thing. Enter still bubbles, which keeps the native
+            // button activation route intact for AT.
+            if (e.key === " ") e.stopPropagation();
+          }}
+          title={`Open ingredient editor for ${row.name}`}
+        >
+          {row.name}
+        </button>
         <span className="kf-master__sub">
           {row.category ? row.category : <em className="kf-muted">Needs category</em>}
           {row.parent ? <> &middot; {row.parent}</> : null}
@@ -556,7 +602,7 @@ function MasterRowButton({
       </span>
 
       <span className="kf-master__spend-col">{fmtUsd(row.usd12m)}</span>
-    </button>
+    </div>
   );
 }
 

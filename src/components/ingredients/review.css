@@ -1710,6 +1710,28 @@
 .kf-dt__itemopen:focus-visible { text-decoration: underline; }
 .kf-dt__itemopen:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
 
+/* Master name is a button that opens the shared DetailPanel in its
+ * ingredient-mode (A4). Mirror of .kf-dt__itemopen: button-reset so
+ * the control reads as the name text itself, not a button chrome.
+ * Pairs with .kf-master__name on the same element - that class
+ * supplies the typography (weight, size, ellipsis), this one supplies
+ * the button-reset + hover/focus affordance. */
+.kf-master__nameopen {
+  display: inline-block;
+  max-width: 100%;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-height: var(--sp-floor-corp);
+}
+.kf-master__nameopen:hover,
+.kf-master__nameopen:focus-visible { text-decoration: underline; }
+.kf-master__nameopen:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
+
 /* issue notes */
 .kf-why {
   display: flex;
