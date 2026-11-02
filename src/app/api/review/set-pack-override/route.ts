@@ -5,8 +5,12 @@ import { setVendorItemPackOverride } from "@/lib/reviewWrites";
 
 export const dynamic = "force-dynamic";
 
+// Mirrors UOM_TO_BASE in DetailPanel.tsx and TO_BASE in pack.ts. CAN10
+// (U1) is a UI-only weight unit (#10 can, 6.6 lb) that the pack chain
+// can emit; without it here the save path 400s on legitimate CAN10
+// overrides and the chain's blend-wiring is theatre.
 const ALLOWED_UOMS = new Set([
-  "LB", "OZ", "G", "KG",
+  "LB", "OZ", "G", "KG", "CAN10",
   "FLOZ", "L", "ML", "GAL", "QT", "PT",
   "EA", "CT", "DZ", "PC",
 ]);

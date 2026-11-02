@@ -37,10 +37,25 @@ const EMPTY: ParsedPack = {
   note: null,
 };
 
+// U1: a #10 can's net weight for the pack-chain conversion. #10 is a
+// standard food-service container; sauces, tomatoes, beans and the like
+// come 6 cans to a case and a chef costs these per lb, not per can.
+// 6.6 lb is the convention across the KitchFix basket (crushed tomatoes
+// ~6.56, corn ~6.6, green beans ~6.3, sauce ~6.6). Picked over 7 lb for
+// a slightly higher, more conservative $/lb - the safe side for food
+// costing. Outliers (cranberry 7.3, drained beans ~4) are handled by
+// the user switching to LB and typing the exact weight; this constant
+// is not meant to cover them. One place to change if the basket shifts.
+export const CAN10_LB_PER_UNIT = 6.6;
+
 // Dimension and base-unit lookup for every canonical uom this parser
-// may emit. "CT" and "PC" fall through to count/EA (treated as units).
+// may emit, PLUS CAN10 (U1) which the pack-chain UI emits for #10
+// cans so a chef can cost sauces/beans/tomatoes per lb. CAN10 is not
+// an invoice-text token - normUom does not recognise it - it reaches
+// these tables only via the pack-chain dropdown and the override
+// write path. "CT" and "PC" fall through to count/EA (treated as units).
 export const DIM_BY_UOM: Record<string, Dim> = {
-  LB: "weight", OZ: "weight", G: "weight", KG: "weight",
+  LB: "weight", OZ: "weight", G: "weight", KG: "weight", CAN10: "weight",
   FLOZ: "volume", L: "volume", ML: "volume", GAL: "volume", QT: "volume", PT: "volume",
   CT: "count", DZ: "count", PC: "count", EA: "count",
 };
@@ -56,6 +71,7 @@ export const TO_BASE: Record<string, number> = {
   OZ: 1 / 16,
   G: 1 / 453.592,
   KG: 2.20462,
+  CAN10: CAN10_LB_PER_UNIT,
   // volume -> FLOZ
   FLOZ: 1,
   L: 33.814,

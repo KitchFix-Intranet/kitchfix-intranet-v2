@@ -24,7 +24,7 @@ import { AlertTriangle, Check, ChevronDown, Info, X } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtDate, fmtUsd, fmtUsdLong, timeAgo } from "@/lib/fmt";
 import { SUPER_CATEGORIES, type SuperCategory } from "@/lib/ingredients/categories";
-import { canonicalFromBaseUnit, convertPer } from "@/lib/ingredients/pack";
+import { CAN10_LB_PER_UNIT, canonicalFromBaseUnit, convertPer } from "@/lib/ingredients/pack";
 import { humanizeKind } from "@/lib/humanizeKind";
 import { IngredientTypeahead } from "./IngredientTypeahead";
 import type { ReviewCardIngredient, ReviewGroupItem } from "./itemTypes";
@@ -952,7 +952,7 @@ function IngredientBlock({
 // in estimate.ts; mirrored here for the client preview). On save,
 // propagates to same-SKU twins.
 const UOM_GROUPS: Array<{ label: string; options: string[] }> = [
-  { label: "Weight", options: ["LB", "OZ", "G", "KG"] },
+  { label: "Weight", options: ["LB", "OZ", "G", "KG", "CAN10"] },
   { label: "Volume", options: ["FLOZ", "GAL", "QT", "L", "ML", "PT"] },
   { label: "Count", options: ["EA", "CT", "DZ", "PC"] },
 ];
@@ -961,6 +961,10 @@ const UOM_TO_BASE: Record<string, { base: "LB" | "FLOZ" | "EA"; factor: number }
   OZ: { base: "LB", factor: 1 / 16 },
   G: { base: "LB", factor: 1 / 453.592 },
   KG: { base: "LB", factor: 2.20462 },
+  // U1: #10 can treated as a weight unit; the shared factor is in
+  // pack.ts (CAN10_LB_PER_UNIT) so client preview and server estimate
+  // never drift.
+  CAN10: { base: "LB", factor: CAN10_LB_PER_UNIT },
   FLOZ: { base: "FLOZ", factor: 1 },
   L: { base: "FLOZ", factor: 33.814 },
   ML: { base: "FLOZ", factor: 0.033814 },
@@ -977,6 +981,14 @@ const UOM_LABEL: Record<"LB" | "FLOZ" | "EA", string> = {
   FLOZ: "fl oz",
   EA: "each",
 };
+// Display label for the UOM dropdown. CAN10 is a user-facing option
+// but the token is a code; render it as "#10 can" in the <select>
+// and anywhere the chosen uom is echoed back on the Result row.
+function uomDisplay(u: string): string {
+  if (u === "FLOZ") return "FL OZ";
+  if (u === "CAN10") return "#10 can";
+  return u;
+}
 
 // S5: convert a $-per-dim-base number into $-per-master-unit for the
 // item panel's Result + Read-as rows. The master list already converts
@@ -1087,6 +1099,15 @@ function PackOverrideBlock({
   // correcting one field is one keystroke, not a retype. When
   // packNormalized does not parse, fields stay blank.
   const seededPack = parsePackNormalized(item.packNormalized);
+  // U1: when the parser tagged this item as a #10 can (raw pack text
+  // carries "#10"), pre-select "#10 can" as the Change-to UOM so the
+  // common fix is one confirm. qty + size come from seededPack
+  // unchanged - the parser already emits qty=caseCount, size=1 for
+  // these - we only swap the uom from the parser's symbolic "CT" to
+  // the weight-dimension CAN10 so the Result math produces $/lb.
+  // UI suggestion only: no stored data is rewritten; the user still
+  // has to confirm.
+  const can10Hint = /#10\b/.test(item.pack ?? "");
   const [catchWeight, setCatchWeight] = useState<boolean>(item.catchWeight);
   // S4: tracks whether the user has toggled the mode button. Toggling
   // is an edit for display purposes (the chain switches to recomputed
@@ -1094,7 +1115,13 @@ function PackOverrideBlock({
   const [catchWeightEdited, setCatchWeightEdited] = useState<boolean>(false);
   const [qtyStr, setQtyStr] = useState<string>(seededPack ? String(seededPack.qty) : "");
   const [sizeStr, setSizeStr] = useState<string>(seededPack ? String(seededPack.size) : "");
-  const [uom, setUom] = useState<string>(seededPack?.uom && UOM_TO_BASE[seededPack.uom] ? seededPack.uom : "LB");
+  const [uom, setUom] = useState<string>(
+    can10Hint
+      ? "CAN10"
+      : seededPack?.uom && UOM_TO_BASE[seededPack.uom]
+        ? seededPack.uom
+        : "LB"
+  );
   const qtyInputRef = useRef<HTMLInputElement | null>(null);
   const resultRef = useRef<HTMLDivElement | null>(null);
   // Fix-the-pack hint from Attention: set UOM, focus Qty, scroll
@@ -1250,14 +1277,14 @@ function PackOverrideBlock({
         const perBaseInDim = previewCasePrice.v / total;
         const disp = displayPerBase(perBaseInDim, b.base, ingredient);
         preview = {
-          line: `${qty} x ${size} ${uom} = ${total.toFixed(2)} ${UOM_LABEL[b.base]} -> ${fmtUsd(disp.value)} / ${disp.label}  (case ${fmtUsd(previewCasePrice.v)} ${previewCasePrice.src})`,
+          line: `${qty} x ${size} ${uomDisplay(uom)} = ${total.toFixed(2)} ${UOM_LABEL[b.base]} -> ${fmtUsd(disp.value)} / ${disp.label}  (case ${fmtUsd(previewCasePrice.v)} ${previewCasePrice.src})`,
           dim: "math",
           perBase: disp.value,
           baseLabel: disp.label,
         };
       } else {
         preview = {
-          line: `${qty} x ${size} ${uom} = ${total.toFixed(2)} ${UOM_LABEL[b.base]}  (no case price on file - per-unit will be blank)`,
+          line: `${qty} x ${size} ${uomDisplay(uom)} = ${total.toFixed(2)} ${UOM_LABEL[b.base]}  (no case price on file - per-unit will be blank)`,
           dim: "no-price",
           perBase: null,
           baseLabel: UOM_LABEL[b.base],
@@ -1468,8 +1495,8 @@ function PackOverrideBlock({
     const total = b ? parsedBack.qty * parsedBack.size * b.factor : null;
     const base = total != null && b
       ? parsedBack.qty === 1
-        ? `${parsedBack.size} ${parsedBack.uom} = ${total.toFixed(2)} ${UOM_LABEL[b.base]}`
-        : `${parsedBack.qty} x ${parsedBack.size} ${parsedBack.uom} = ${total.toFixed(2)} ${UOM_LABEL[b.base]}`
+        ? `${parsedBack.size} ${uomDisplay(parsedBack.uom)} = ${total.toFixed(2)} ${UOM_LABEL[b.base]}`
+        : `${parsedBack.qty} x ${parsedBack.size} ${uomDisplay(parsedBack.uom)} = ${total.toFixed(2)} ${UOM_LABEL[b.base]}`
       : item.packNormalized ?? item.pack ?? "(not available)";
     // S4 + S5: showStored branch displays the item's stored per-unit
     // when the chain is pristine; the else branch recomputes from the
@@ -1628,7 +1655,7 @@ function PackOverrideBlock({
                       <optgroup key={g.label} label={g.label}>
                         {g.options.map((o) => (
                           <option key={o} value={o}>
-                            {o === "FLOZ" ? "FL OZ" : o}
+                            {uomDisplay(o)}
                           </option>
                         ))}
                       </optgroup>
