@@ -13,8 +13,22 @@
 // Casing rule: ingredient names are shown as-is (sentence case per the
 // house standard - the writer owns the display case; parents in muted
 // after a dash). No text-transform on names.
+//
+// Polish 2 (2026-11-02):
+//   - Menu portaled to document.body with position:fixed anchored to
+//     the input's bounding rect. Why: the Review-queue card
+//     (.kf-rvc, overflow:clip) clipped the dropdown mid-list. The
+//     fix is to leave the card untouched and render the menu above
+//     the card's clipping context.
+//   - Dismiss triggers: outside pointerdown, Escape (already), and
+//     input blur. Blur is guarded against the "option mousedown"
+//     case by the <ul>'s own onMouseDown preventDefault (focus never
+//     leaves the input while committing a pick).
+//   - Styling (border/outline/icon padding/clear-x) handled in
+//     review.css at the .kf-ingtype__field selector family.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Search, X } from "lucide-react";
 
 type Ingredient = { id: string; name: string; parent: string | null };
@@ -54,6 +68,13 @@ export function IngredientTypeahead({
   const [open, setOpen] = useState(false);
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const fieldRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLUListElement>(null);
+  // Anchor rect for the portaled menu. Null until the component mounts
+  // in the browser (createPortal needs document.body). Updated on open
+  // and on scroll/resize while open so a scrolling card does not
+  // detach the menu from its input.
+  const [anchor, setAnchor] = useState<{ top: number; left: number; width: number } | null>(null);
 
   // When pickedId arrives via prop, reflect it as the input value so the
   // picker is visibly committed. User typing re-opens the dropdown.
@@ -72,6 +93,46 @@ export function IngredientTypeahead({
   useEffect(() => {
     setCursor(0);
   }, [query]);
+
+  const measure = useCallback(() => {
+    const el = fieldRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setAnchor({ top: r.bottom + 2, left: r.left, width: r.width });
+  }, []);
+
+  // Measure on open, and keep the menu glued to the input as any
+  // ancestor scrolls (capture:true catches scroll in nested
+  // containers, not just window). Resize covers viewport changes.
+  useLayoutEffect(() => {
+    if (!open) return;
+    measure();
+    const onScroll = () => measure();
+    const onResize = () => measure();
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [open, measure]);
+
+  // Outside pointerdown dismisses. Captures taps on non-focusable
+  // regions where blur alone would not fire. Pointerdown fires before
+  // the click that would blur the input, so we check containment
+  // against both the field and the (portaled) menu.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Node | null;
+      if (!t) return;
+      if (fieldRef.current?.contains(t)) return;
+      if (menuRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [open]);
 
   function commit(ing: Ingredient) {
     onPick(ing.id, ing.name);
@@ -107,11 +168,25 @@ export function IngredientTypeahead({
     }
   }
 
+  // Blur dismisses, with a guard: if the next focus target lives
+  // inside the field or the menu, keep open. The <ul>'s own
+  // onMouseDown preventDefault keeps focus on the input during an
+  // option click, so blur fires only for genuine out-of-widget focus
+  // moves (Tab to next field, click on non-focusable background).
+  function onBlur(e: React.FocusEvent<HTMLInputElement>) {
+    const next = e.relatedTarget as Node | null;
+    if (next && (fieldRef.current?.contains(next) || menuRef.current?.contains(next))) return;
+    setOpen(false);
+  }
+
+  const showList = open && filtered.length > 0 && anchor != null;
+  const showEmpty = open && filtered.length === 0 && query.trim().length > 0 && anchor != null;
+
   return (
     <div className="kf-ingtype">
       <label className="kf-dpn__label">
         <span>{label}</span>
-        <div className="kf-ingtype__field">
+        <div className="kf-ingtype__field" ref={fieldRef}>
           <span className="kf-field__icon" aria-hidden>
             <Search size={16} strokeWidth={1.5} />
           </span>
@@ -121,6 +196,7 @@ export function IngredientTypeahead({
             value={query}
             placeholder={placeholder}
             onFocus={() => setOpen(true)}
+            onBlur={onBlur}
             onChange={(e) => {
               const v = e.target.value;
               setQuery(v);
@@ -147,31 +223,45 @@ export function IngredientTypeahead({
         </div>
       </label>
 
-      {open && filtered.length > 0 ? (
-        <ul
-          id="kf-ingtype-list"
-          role="listbox"
-          className="kf-ingtype__list"
-          onMouseDown={(e) => e.preventDefault() /* keep focus on input */}
-        >
-          {filtered.map((ing, i) => (
-            <li
-              key={ing.id}
-              role="option"
-              aria-selected={i === cursor}
-              className={`kf-ingtype__opt${i === cursor ? " kf-ingtype__opt--on" : ""}`}
-              onClick={() => commit(ing)}
-              onMouseEnter={() => setCursor(i)}
+      {typeof document !== "undefined" && showList
+        ? createPortal(
+            <ul
+              id="kf-ingtype-list"
+              role="listbox"
+              className="kf-ingtype__list"
+              ref={menuRef}
+              style={{ top: anchor.top, left: anchor.left, width: anchor.width }}
+              onMouseDown={(e) => e.preventDefault() /* keep focus on input */}
             >
-              <span className="kf-ingtype__name">{ing.name}</span>
-              {ing.parent ? <span className="kf-ingtype__parent">{ing.parent}</span> : null}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {open && filtered.length === 0 && query.trim().length > 0 ? (
-        <div className="kf-ingtype__empty">No active ingredients match &ldquo;{query.trim()}&rdquo;.</div>
-      ) : null}
+              {filtered.map((ing, i) => (
+                <li
+                  key={ing.id}
+                  role="option"
+                  aria-selected={i === cursor}
+                  className={`kf-ingtype__opt${i === cursor ? " kf-ingtype__opt--on" : ""}`}
+                  onClick={() => commit(ing)}
+                  onMouseEnter={() => setCursor(i)}
+                >
+                  <span className="kf-ingtype__name">{ing.name}</span>
+                  {ing.parent ? <span className="kf-ingtype__parent">{ing.parent}</span> : null}
+                </li>
+              ))}
+            </ul>,
+            document.body
+          )
+        : null}
+      {typeof document !== "undefined" && showEmpty
+        ? createPortal(
+            <div
+              className="kf-ingtype__empty kf-ingtype__list"
+              style={{ top: anchor.top, left: anchor.left, width: anchor.width, maxHeight: "none", padding: "var(--sp-sp-3)" }}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              No active ingredients match &ldquo;{query.trim()}&rdquo;.
+            </div>,
+            document.body
+          )
+        : null}
     </div>
   );
 }

@@ -101,6 +101,8 @@
   .kf-segs {
     flex-wrap: nowrap;
     overflow-x: auto;
+    /* Polish 2: contain so the chip-rail wheel does not scroll the page. */
+    overscroll-behavior: contain;
     /* mask alpha, not a palette color */
     -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent);
             mask-image: linear-gradient(90deg, #000 85%, transparent);
@@ -272,6 +274,8 @@
 .kf-table-scroll {
   width: 100%;
   overflow-x: auto;
+  /* Polish 2: contain horizontal wheel so it does not chain to the page. */
+  overscroll-behavior: contain;
 }
 .kf-table {
   width: 100%;

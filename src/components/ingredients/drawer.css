@@ -488,7 +488,14 @@
   text-transform: uppercase;
   color: var(--sp-muted);
 }
-.kf-evi__scroll { overflow-x: auto; border: 1px solid var(--sp-line-soft); border-radius: var(--sp-r-sm); }
+/* Polish 2: overscroll contain so horizontal wheel at the ends of the
+ * evidence table does not chain to the drawer's own vertical scroll. */
+.kf-evi__scroll {
+  overflow-x: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--sp-line-soft);
+  border-radius: var(--sp-r-sm);
+}
 .kf-evi__t {
   width: 100%;
   border-collapse: collapse;

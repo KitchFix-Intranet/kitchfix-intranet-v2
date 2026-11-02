@@ -51,6 +51,8 @@
      underline over the 2px border is 2px of vertical overflow - that is the
      stray vertical scrollbar. Clip it; the underline is unaffected. */
   overflow-y: hidden;
+  /* Polish 2: contain so wheel on the tabs rail does not chain to the page. */
+  overscroll-behavior: contain;
   position: relative;
 }
 @media (max-width: 860px) {
