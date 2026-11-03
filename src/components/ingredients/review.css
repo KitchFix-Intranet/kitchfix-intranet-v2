@@ -63,6 +63,106 @@
   margin: 0;
 }
 
+/* ---------- Polish 5: viewport-fixed Confirm shortcut ----------
+ * Appears when the user has scrolled past the inline action bar on
+ * a long group's rows. Lives at the document-body level
+ * (position:fixed) so no card's overflow:clip can clamp it - the
+ * exact failure mode of the 2026-10-30 card-scoped sticky attempt.
+ * Width is pulled in from the viewport edges on desktop so it does
+ * not stretch across a 2000px screen; on phones it hugs the edges.
+ * Dark-navy fill matches the primary button's rest state - this bar
+ * reads as a floating primary affordance, not another card. */
+.kf-sticky-confirm {
+  position: fixed;
+  left: 50%;
+  bottom: var(--sp-sp-3);
+  transform: translateX(-50%);
+  z-index: calc(var(--sp-z-topbar) + 20);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sp-3);
+  min-width: min(560px, calc(100vw - var(--sp-sp-4) * 2));
+  max-width: calc(100vw - var(--sp-sp-4) * 2);
+  padding: var(--sp-sp-2) var(--sp-sp-3);
+  background: var(--sp-navy);
+  color: var(--sp-on-navy);
+  border-radius: var(--sp-r-pill);
+  box-shadow: var(--sp-shadow-float);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+}
+.kf-sticky-confirm__meta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-sp-2);
+  min-width: 0;
+  flex: 1 1 auto;
+  color: color-mix(in srgb, var(--sp-on-navy) 85%, transparent);
+}
+.kf-sticky-confirm__count {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--sp-on-navy);
+}
+.kf-sticky-confirm__dot { opacity: 0.5; }
+.kf-sticky-confirm__name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--sp-on-navy);
+  font-weight: 700;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+/* The in-bar primary has already been inverted - it is sitting on
+ * navy. Flip to the on-navy variant visually so Confirm reads as the
+ * action, not another chip. .kf-btn--primary on this surface would
+ * blend into the navy fill. */
+.kf-sticky-confirm .kf-btn--primary {
+  background: var(--sp-on-navy);
+  color: var(--sp-navy-deep);
+  border-color: var(--sp-on-navy);
+}
+.kf-sticky-confirm .kf-btn--primary:hover:not(:disabled) {
+  background: var(--sp-sky);
+  border-color: var(--sp-sky);
+}
+.kf-sticky-confirm .kf-btn--primary:disabled {
+  background: color-mix(in srgb, var(--sp-on-navy) 25%, transparent);
+  color: color-mix(in srgb, var(--sp-on-navy) 60%, transparent);
+  border-color: transparent;
+}
+@media (max-width: 640px) {
+  /* Phone: bar hugs the viewport edges with a smaller gutter so it
+   * does not overlap the chef floor-tap controls. */
+  .kf-sticky-confirm {
+    left: var(--sp-sp-2);
+    right: var(--sp-sp-2);
+    transform: none;
+    min-width: 0;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  /* A quiet slide-in so the bar does not pop. One shot, 180ms,
+   * triggered by a key change via React's mount lifecycle (new
+   * group picked up) - the CSS keyframe only fires on initial
+   * render for a given key. */
+  .kf-sticky-confirm {
+    animation: kf-sticky-confirm-in 180ms var(--sp-ease);
+  }
+  @keyframes kf-sticky-confirm-in {
+    from { transform: translateX(-50%) translateY(16px); opacity: 0; }
+    to   { transform: translateX(-50%) translateY(0);   opacity: 1; }
+  }
+  @media (max-width: 640px) {
+    .kf-sticky-confirm { animation: kf-sticky-confirm-in-phone 180ms var(--sp-ease); }
+    @keyframes kf-sticky-confirm-in-phone {
+      from { transform: translateY(16px); opacity: 0; }
+      to   { transform: translateY(0);    opacity: 1; }
+    }
+  }
+}
+
 /* Sticky search bar - stays visible under the topbar while the groups
    list scrolls. Sits above the groups so Kevin can keep typing while
    results pour past. The input reuses the shared .kf-field--search
@@ -338,10 +438,12 @@
 /* Deliberately NOT sticky. `position: sticky; bottom: 0` clamps to the
  * top of the containing block whenever the card's natural bar position
  * is below the fold, which rendered the action bar ABOVE its own rows
- * on 169 of 171 cards. Reverted 2026-10-30. If "Confirm stays in reach
- * on a long group" is wanted again, it needs a different mechanism -
- * a viewport-fixed bar bound to the card in view, not card-scoped
- * sticky. */
+ * on 169 of 171 cards. Reverted 2026-10-30. The "Confirm stays in
+ * reach on a long group" affordance was reimplemented as Polish 5's
+ * viewport-fixed .kf-sticky-confirm bar - a shortcut rendered at the
+ * document-body level that binds to the group in view, not inside
+ * the card. See StickyConfirmBar.tsx + the .kf-sticky-confirm rules
+ * below. */
 .kf-rvc__actions {
   padding: var(--sp-sp-3) var(--sp-sp-4);
   border-top: 1px solid var(--sp-line-soft);
