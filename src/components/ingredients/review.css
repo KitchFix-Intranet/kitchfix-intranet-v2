@@ -1892,6 +1892,11 @@
 .kf-master__bdg--coverage,
 .kf-master__bdg--band { background: var(--sp-warn-bg); color: var(--sp-warn); }
 .kf-master__bdg--mismatch { background: var(--sp-info-bg); color: var(--sp-link); }
+/* B1: "Check allergens" marker. A to-do indicator, not an error -
+ * uses the quiet info register so Needs-attention (spread/outlier,
+ * red) and Unreviewed (allergens, blue) are visibly different
+ * signals. */
+.kf-master__bdg--unreviewed { background: var(--sp-info-bg); color: var(--sp-link); }
 
 .kf-masters__legend {
   display: flex;
@@ -1998,3 +2003,102 @@
   .kf-master__price-col { grid-column: 2; }
   .kf-master__spend-col { grid-column: 2; text-align: right; }
 }
+
+/* ---------------------------------------------------------------------
+ * B1: allergens pill grid in the ingredient detail panel.
+ *
+ * Nine toggleable pills + a "None" pill (same shape, labelled by its
+ * modifier). The grid wraps - must not overflow the panel or force a
+ * horizontal scrollbar at any supported width. Pills reuse the chip
+ * tokens so the focus ring and the on/off colouring match every
+ * other toggle in the section; no new palette.
+ * --------------------------------------------------------------------- */
+.kf-allergens {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+  min-width: 0;
+}
+.kf-allergens__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-sp-2);
+  flex-wrap: wrap;
+}
+.kf-allergens__label {
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-label);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--sp-muted);
+}
+.kf-allergens__state {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 800;
+  padding: 2px var(--sp-sp-2);
+  border-radius: var(--sp-r-pill);
+  white-space: nowrap;
+}
+.kf-allergens__state--warn {
+  color: var(--sp-warn);
+  background: var(--sp-warn-bg);
+}
+.kf-allergens__state--ok {
+  color: var(--sp-good);
+  background: var(--sp-good-bg, var(--sp-sky-tint));
+}
+/* Pill grid. Flex-wrap so long names never force overflow; min-width
+ * on each pill protects against a cramped column stealing the Confirm
+ * button's row. */
+.kf-allergens__grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-sp-1) var(--sp-sp-2);
+  min-width: 0;
+}
+.kf-allergen {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: var(--sp-sp-1) var(--sp-sp-3);
+  background: var(--sp-card);
+  color: var(--sp-body);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-pill);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--sp-fast) var(--sp-ease),
+              color var(--sp-fast) var(--sp-ease),
+              border-color var(--sp-fast) var(--sp-ease);
+}
+/* 44px hit target around the 32px visual - mirrors the chip rule
+ * (notch-toggle precedent per DESIGN.md section 2). */
+.kf-allergen::before {
+  content: "";
+  position: absolute;
+  inset: -6px -2px;
+}
+.kf-allergen:hover:not(:disabled) { background: var(--sp-sky-tint); }
+.kf-allergen:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
+.kf-allergen:disabled { opacity: 0.55; cursor: not-allowed; }
+.kf-allergen--on {
+  background: var(--sp-navy);
+  color: var(--sp-on-navy);
+  border-color: var(--sp-navy);
+}
+.kf-allergen--on:hover:not(:disabled) {
+  background: var(--sp-navy-deep);
+  border-color: var(--sp-navy-deep);
+}
+/* None pill shares every property; this rule exists so a future
+ * change to the None style has a scoped home. Visually identical
+ * today - the semantic difference (None is a positive choice, not
+ * a selection) is carried by the state line + the hint text. */
+.kf-allergen--none { /* same tokens as .kf-allergen */ }

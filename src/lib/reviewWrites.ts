@@ -997,6 +997,77 @@ export async function setIngredientResale(
   return { ok: true, moved };
 }
 
+// B1: write the master's allergen review. The reviewed_at stamp IS
+// the state - setting it moves the ingredient out of the Unreviewed
+// bucket, whether or not any pills are selected ("confirmed none" is
+// a valid outcome; blank unreviewed is the bug we are fixing). A
+// re-confirm overwrites and emits a fresh pr_events row; there is no
+// lock. The migration already wrote one `ingredient_allergens_set`
+// row per previously-tagged ingredient with actor `studio-migration`,
+// so this helper continues the same thread.
+//
+// Allergens must be a subset of ALLERGENS (the canonical nine); the
+// caller already normalises client-side and the API re-validates on
+// the wire, but a CHECK constraint on the column catches a bad value
+// as a database error either way.
+export async function setIngredientAllergens(
+  client: SupabaseClient,
+  args: { ingredientId: string; allergens: readonly string[]; actorEmail: string }
+): Promise<{ ok: boolean; error?: string }> {
+  const { ingredientId, allergens, actorEmail } = args;
+
+  const { data: cur, error: curErr } = await client
+    .from("pr_ingredients")
+    .select("id,status,allergens,allergens_reviewed_at,allergens_reviewed_by")
+    .eq("id", ingredientId)
+    .maybeSingle();
+  if (curErr) return { ok: false, error: curErr.message };
+  if (!cur) return { ok: false, error: "Ingredient not found" };
+  const row = cur as {
+    id: string;
+    status: string;
+    allergens: string[];
+    allergens_reviewed_at: string | null;
+    allergens_reviewed_by: string | null;
+  };
+  if (row.status === "merged") return { ok: false, error: "Ingredient is merged" };
+
+  // Preserve canonical order from the client's normalisation. The
+  // write replaces the whole array (not merges) so unticking a pill
+  // removes it.
+  const nowIso = new Date().toISOString();
+
+  const { error: upErr } = await client
+    .from("pr_ingredients")
+    .update({
+      allergens,
+      allergens_reviewed_at: nowIso,
+      allergens_reviewed_by: actorEmail,
+      updated_at: nowIso,
+    })
+    .eq("id", ingredientId);
+  if (upErr) return { ok: false, error: upErr.message };
+
+  await client.from("pr_events").insert({
+    entity_type: "ingredient",
+    entity_id: ingredientId,
+    kind: "ingredient_allergens_set",
+    before: {
+      allergens: row.allergens ?? [],
+      reviewed_at: row.allergens_reviewed_at,
+      reviewed_by: row.allergens_reviewed_by,
+    },
+    after: {
+      allergens,
+      reviewed_at: nowIso,
+      reviewed_by: actorEmail,
+    },
+    actor: actorEmail,
+  });
+
+  return { ok: true };
+}
+
 // The master's unit of account. Every per-unit price on the Ingredients
 // tab is each linked item's stored per_base converted INTO this unit at
 // render time, so changing it re-blends that master on the next load -

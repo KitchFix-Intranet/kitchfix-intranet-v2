@@ -25,6 +25,7 @@ import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtDate, fmtUsd, fmtUsdLong, timeAgo } from "@/lib/fmt";
 import { SUPER_CATEGORIES, type SuperCategory } from "@/lib/ingredients/categories";
 import { CAN10_LB_PER_UNIT, canonicalFromBaseUnit, convertPer } from "@/lib/ingredients/pack";
+import { ALLERGENS, type Allergen } from "@/lib/ingredients/allergens";
 import { humanizeKind } from "@/lib/humanizeKind";
 import { IngredientTypeahead } from "./IngredientTypeahead";
 import type { ReviewCardIngredient, ReviewGroupItem } from "./itemTypes";
@@ -640,6 +641,40 @@ function IngredientBlock({
   const [resaleBusy, setResaleBusy] = useState(false);
   const [resaleSavedAt, setResaleSavedAt] = useState<number | null>(null);
   const [resaleError, setResaleError] = useState<string | null>(null);
+
+  // B1: allergen review state. Seed from the ingredient's current
+  // saved values. The toggle rules:
+  //   - clicking a pill toggles that pill in `selected`, clears
+  //     `confirmNone` so a pill-pick and "none" cannot be true at
+  //     once.
+  //   - clicking None toggles `confirmNone`; turning it on clears
+  //     `selected`.
+  // Confirm enablement (the state-machine trap the pack-chain saves
+  // paid for twice): enable when the selection differs from saved OR
+  // the ingredient is currently unreviewed. The unreviewed branch is
+  // what lets "I looked, there's nothing" leave the queue - a naive
+  // selection-changed-only gate would strand unreviewed-with-no-pick
+  // ingredients forever.
+  const seedSelected = useMemo(
+    () => new Set<string>((ingredient.allergens ?? []).filter((a) => (ALLERGENS as readonly string[]).includes(a))),
+    [ingredient.allergens]
+  );
+  const seedConfirmNone =
+    ingredient.allergens_reviewed_at != null && (ingredient.allergens ?? []).length === 0;
+  const [allergenSelected, setAllergenSelected] = useState<Set<string>>(seedSelected);
+  const [allergenConfirmNone, setAllergenConfirmNone] = useState<boolean>(seedConfirmNone);
+  // Re-seed when the ingredient prop identity changes (e.g. the
+  // panel navigates to a different master). A new ingredient's
+  // selection must come from its own saved state, not the last one's.
+  useEffect(() => {
+    setAllergenSelected(new Set<string>((ingredient.allergens ?? []).filter((a) => (ALLERGENS as readonly string[]).includes(a))));
+    setAllergenConfirmNone(
+      ingredient.allergens_reviewed_at != null && (ingredient.allergens ?? []).length === 0
+    );
+  }, [ingredient.id, ingredient.allergens, ingredient.allergens_reviewed_at]);
+  const [allergenBusy, setAllergenBusy] = useState(false);
+  const [allergenSavedAt, setAllergenSavedAt] = useState<number | null>(null);
+  const [allergenError, setAllergenError] = useState<string | null>(null);
   // S1: live counts for the "Also moves N confirmed items" hint.
   // Fetched once on mount per ingredient; refreshed after a save so
   // the next toggle shows the new state.
@@ -757,6 +792,66 @@ function IngredientBlock({
     );
     setResaleSavedAt(Date.now());
     setResaleBusy(false);
+    onDone();
+  }
+
+  // B1: compute Confirm enablement from the diff + the unreviewed
+  // escape hatch. See the state table at the top of the component
+  // and in src/lib/ingredients/allergens.ts.
+  const allergenUnreviewed = !ingredient.allergens_reviewed_at;
+  const savedAllergenSet = useMemo(
+    () => new Set<string>(ingredient.allergens ?? []),
+    [ingredient.allergens]
+  );
+  const selectionMatchesSaved = useMemo(() => {
+    if (allergenSelected.size !== savedAllergenSet.size) return false;
+    for (const a of allergenSelected) if (!savedAllergenSet.has(a)) return false;
+    return true;
+  }, [allergenSelected, savedAllergenSet]);
+  const canConfirmAllergens = allergenUnreviewed || !selectionMatchesSaved;
+
+  function toggleAllergen(a: Allergen) {
+    setAllergenConfirmNone(false);
+    setAllergenSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(a)) next.delete(a);
+      else next.add(a);
+      return next;
+    });
+  }
+  function toggleAllergenNone() {
+    setAllergenConfirmNone((prev) => {
+      const next = !prev;
+      if (next) setAllergenSelected(new Set<string>());
+      return next;
+    });
+  }
+  async function confirmAllergens() {
+    if (allergenBusy || !canConfirmAllergens) return;
+    setAllergenBusy(true);
+    setAllergenError(null);
+    // Normalise to canonical order on the wire so the server never
+    // sees "Peanuts" before "Milk" from a toggle order.
+    const payload = ALLERGENS.filter((a) => allergenSelected.has(a));
+    const r = await postJson("/api/review/set-allergens", {
+      ingredientId: ingredient.id,
+      allergens: payload,
+    });
+    if (!r.ok) {
+      const msg = errMsg(r.data, `Save failed (${r.status})`);
+      setAllergenError(msg);
+      toast(msg, { tone: "block" });
+      setAllergenBusy(false);
+      return;
+    }
+    toast(
+      payload.length === 0
+        ? "Confirmed: no Top 9 allergens"
+        : `Confirmed ${payload.length} allergen${payload.length === 1 ? "" : "s"}`,
+      { tone: "good" }
+    );
+    setAllergenSavedAt(Date.now());
+    setAllergenBusy(false);
     onDone();
   }
 
@@ -912,6 +1007,84 @@ function IngredientBlock({
                   : ""
               : ""}
           </div>
+        </div>
+      </div>
+
+      {/* B1 (allergens): nine-pill grid + None + Confirm. The three
+          states (unreviewed / confirmed none / confirmed-with-tags)
+          are all driven by the reviewed timestamp; the state line
+          above the grid names what the panel is currently reading. */}
+      <div className="kf-dpn__row">
+        <div className="kf-allergens">
+          <div className="kf-allergens__head">
+            <span className="kf-allergens__label">Allergens</span>
+            {allergenUnreviewed ? (
+              <span className="kf-allergens__state kf-allergens__state--warn">
+                Check allergens
+              </span>
+            ) : (ingredient.allergens ?? []).length === 0 ? (
+              <span className="kf-allergens__state kf-allergens__state--ok">
+                No Top 9 allergens
+              </span>
+            ) : (
+              <span className="kf-allergens__state kf-allergens__state--ok">
+                Confirmed
+              </span>
+            )}
+          </div>
+          <div
+            className="kf-allergens__grid"
+            role="group"
+            aria-label="Top 9 allergens"
+          >
+            {ALLERGENS.map((a) => {
+              const on = allergenSelected.has(a);
+              return (
+                <button
+                  key={a}
+                  type="button"
+                  className={`kf-allergen${on ? " kf-allergen--on" : ""}`}
+                  aria-pressed={on}
+                  onClick={() => toggleAllergen(a)}
+                  disabled={allergenBusy}
+                >
+                  {a}
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              className={`kf-allergen kf-allergen--none${allergenConfirmNone ? " kf-allergen--on" : ""}`}
+              aria-pressed={allergenConfirmNone}
+              onClick={toggleAllergenNone}
+              disabled={allergenBusy}
+              title="No Top 9 allergens in this ingredient"
+            >
+              None
+            </button>
+          </div>
+          <div className="kf-dpn__btns">
+            <button
+              type="button"
+              className={`kf-btn kf-btn--primary kf-btn--sm${allergenBusy ? " is-busy" : ""}`}
+              disabled={!canConfirmAllergens || allergenBusy}
+              onClick={confirmAllergens}
+            >
+              {allergenBusy ? "Saving..." : "Confirm allergens"}
+            </button>
+            <SaveFlash savedAt={allergenSavedAt} error={allergenError} />
+          </div>
+          {ingredient.allergens_reviewed_at ? (
+            <div className="kf-dpn__hint">
+              Last confirmed by {ingredient.allergens_reviewed_by ?? "someone"}
+              {" "}on {fmtDate(ingredient.allergens_reviewed_at, "short")}.
+            </div>
+          ) : (
+            <div className="kf-dpn__hint">
+              Unreviewed. Allergens never render as blank - pick a tag or
+              Confirm &ldquo;None&rdquo; to clear this from the queue.
+            </div>
+          )}
         </div>
       </div>
 

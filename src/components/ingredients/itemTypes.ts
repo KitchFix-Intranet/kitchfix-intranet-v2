@@ -126,4 +126,13 @@ export type ReviewCardIngredient = {
   // dozen). The pack-override chain in A2 reads this to say whether an
   // edit will actually make the item join the blend.
   base_unit: string;
+  // B1 (allergens): the three-state model lives on the master. The
+  // reviewed timestamp IS the state - null means unreviewed and must
+  // render "Check allergens" everywhere; a set timestamp with an
+  // empty array is "No Top 9 allergens"; a set timestamp with a
+  // non-empty array is the tags. See src/lib/ingredients/allergens.ts
+  // for the canonical nine and the three-state rules.
+  allergens: string[];
+  allergens_reviewed_by: string | null;
+  allergens_reviewed_at: string | null;
 };

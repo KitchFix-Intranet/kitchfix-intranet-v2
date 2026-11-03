@@ -68,6 +68,13 @@ export type MasterRow = {
   category: string | null;
   baseUnit: string;
   resale: boolean;
+  // B1 (allergens): three-state model via allergensReviewedAt. Null
+  // means unreviewed - the row renders the "Check allergens" marker
+  // and the master contributes to the Unreviewed chip's count.
+  // See src/lib/ingredients/allergens.ts for the full state table.
+  allergens: string[];
+  allergensReviewedBy: string | null;
+  allergensReviewedAt: string | null;
   linkedCount: number;
   usd12m: number;
   avgPerBase: number | null;
@@ -145,6 +152,12 @@ export function IngredientMastersFilter({
   const [sort, setSort] = useState<SortMode>("spend");
   const [superCat, setSuperCat] = useState<string | "all">("all");
   const [onlyFlagged, setOnlyFlagged] = useState(false);
+  // B1 (allergens): "Unreviewed" chip. Kept separate from onlyFlagged
+  // on purpose - Needs-attention is the spread/unit/outlier signal
+  // (small, actionable); allergen-unreviewed is a to-do backlog
+  // (initially matches every master). Collapsing them would wreck
+  // the Needs-attention signal.
+  const [onlyUnreviewed, setOnlyUnreviewed] = useState(false);
   // Workbench selection. `selId` is the user's explicit pick; the row
   // actually shown falls back to the first row in the current filter, so
   // the pane is never empty while the list has contents and a filter that
@@ -205,6 +218,7 @@ export function IngredientMastersFilter({
     // by pr_ingredients.resale, so recipe/resale toggles here would
     // only ever match "all" of this tab's set.
     if (onlyFlagged) out = out.filter((r) => r.issues.length > 0);
+    if (onlyUnreviewed) out = out.filter((r) => r.allergensReviewedAt == null);
     if (sort === "name") out = [...out].sort((a, b) => a.name.localeCompare(b.name));
     else if (sort === "links") out = [...out].sort((a, b) => b.linkedCount - a.linkedCount);
     else if (sort === "spread") {
@@ -213,7 +227,7 @@ export function IngredientMastersFilter({
       out = [...out].sort((a, b) => b.usd12m - a.usd12m);
     }
     return out;
-  }, [rows, trimmed, superCat, onlyFlagged, sort]);
+  }, [rows, trimmed, superCat, onlyFlagged, onlyUnreviewed, sort]);
 
   // The row the pane shows. Explicit pick when there is one, else the
   // first row of the current filter - so the pane is never empty while
@@ -237,15 +251,24 @@ export function IngredientMastersFilter({
     () => rows.filter((r) => r.issues.length > 0).length,
     [rows]
   );
+  // B1 (allergens): whole-set count of masters that have never been
+  // reviewed. Starts equal to rows.length - every master is unreviewed
+  // today - and decays as a human confirms them.
+  const unreviewedCount = useMemo(
+    () => rows.filter((r) => r.allergensReviewedAt == null).length,
+    [rows]
+  );
   const anyFilterActive =
     trimmed.length > 0 ||
     superCat !== "all" ||
-    onlyFlagged;
+    onlyFlagged ||
+    onlyUnreviewed;
 
   function clearAll() {
     setQuery("");
     setSuperCat("all");
     setOnlyFlagged(false);
+    setOnlyUnreviewed(false);
     inputRef.current?.focus();
   }
 
@@ -415,6 +438,21 @@ export function IngredientMastersFilter({
             title="Masters with a spread, coverage, unit or outlier issue"
           >
             Needs attention <span className="kf-chip__count">{fmtCount(needsCount)}</span>
+          </button>
+          {/* B1: Unreviewed allergens filter. Kept beside Needs
+              attention (both are quiet to-do markers) but on its own
+              chip - allergen-unreviewed and spread-outlier are
+              different signals. */}
+          <button
+            type="button"
+            role="radio"
+            aria-checked={onlyUnreviewed}
+            aria-pressed={onlyUnreviewed}
+            className={`kf-chip kf-chip--warn${onlyUnreviewed ? " kf-chip--on" : ""}`}
+            onClick={() => setOnlyUnreviewed((v) => !v)}
+            title="Masters whose Top 9 allergens have not been reviewed"
+          >
+            Unreviewed <span className="kf-chip__count">{fmtCount(unreviewedCount)}</span>
           </button>
           {anyFilterActive ? (
             <button type="button" className="kf-btn kf-btn--ghost kf-btn--sm" onClick={clearAll}>
@@ -590,6 +628,17 @@ function MasterRowButton({
               {ISSUE_LABEL[k] ?? k}
             </span>
           ))}
+          {/* B1: a to-do marker, not an error - uses the same muted
+              register as the issue badges but a distinct variant so
+              Needs-attention and Unreviewed never read as one signal. */}
+          {row.allergensReviewedAt == null ? (
+            <span
+              className="kf-master__bdg kf-master__bdg--unreviewed"
+              title="Allergens not yet reviewed"
+            >
+              Check allergens
+            </span>
+          ) : null}
         </span>
       </span>
 

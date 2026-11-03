@@ -63,6 +63,12 @@ type Ingredient = {
   category: string | null;
   resale: boolean;
   base_unit: string;
+  // B1: allergen three-state fields flow through this type so the
+  // detail panel's IngredientBlock reads them when opened from the
+  // Review queue.
+  allergens: string[];
+  allergens_reviewed_by: string | null;
+  allergens_reviewed_at: string | null;
 };
 type Vendor = { id: string; name: string };
 
@@ -132,7 +138,7 @@ async function loadReview() {
     client.from("pr_vendors").select("id,name"),
     client
       .from("pr_ingredients")
-      .select("id,name,parent,category,resale,base_unit")
+      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at")
       .eq("status", "active")
       .order("name"),
     client

@@ -38,12 +38,12 @@ export async function GET(req: NextRequest) {
   const [ingRes, parentsRes] = await Promise.all([
     client
       .from("pr_ingredients")
-      .select("id,name,parent,category,resale,base_unit")
+      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at")
       .eq("id", id)
       .maybeSingle(),
     client
       .from("pr_ingredients")
-      .select("id,name,parent,category,resale,base_unit")
+      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at")
       .eq("status", "active")
       .order("name"),
   ]);

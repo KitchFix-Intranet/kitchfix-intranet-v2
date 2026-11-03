@@ -39,6 +39,11 @@ type Ingredient = {
   category: string | null;
   resale: boolean;
   base_unit: string;
+  // B1: allergen three-state fields. Null reviewed_at = unreviewed
+  // (must render "Check allergens" at every surface).
+  allergens: string[];
+  allergens_reviewed_by: string | null;
+  allergens_reviewed_at: string | null;
 };
 
 type LinkedItemRow = {
@@ -164,7 +169,7 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
   // combined total (every master has `resale` set, defaults to false).
   const { data: ingData, error: ingErr } = await client
     .from("pr_ingredients")
-    .select("id,name,parent,category,resale,base_unit")
+    .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at")
     .eq("status", "active")
     .eq("resale", mode === "resale")
     .order("name");
@@ -381,6 +386,12 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
       category: m.category,
       baseUnit: m.base_unit,
       resale: m.resale,
+      // B1 (allergens): three-state values pass through verbatim.
+      // Row-level marker + filter chip + count derive from
+      // allergensReviewedAt == null.
+      allergens: m.allergens,
+      allergensReviewedBy: m.allergens_reviewed_by,
+      allergensReviewedAt: m.allergens_reviewed_at,
       linkedCount: items.length,
       usd12m: usd,
       avgPerBase: avg,
