@@ -27,6 +27,7 @@ import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { ItemPanelById } from "./ItemPanelById";
 import { IngredientPanelById } from "./IngredientPanelById";
+import { IngredientAllergens } from "./IngredientAllergens";
 import { SUPER_CATEGORIES } from "@/lib/ingredients/categories";
 import { RowSendBackButton } from "./RowSendBackButton";
 import { MasterSendAllBackButton } from "./MasterSendAllBackButton";
@@ -452,7 +453,7 @@ export function IngredientMastersFilter({
             onClick={() => setOnlyUnreviewed((v) => !v)}
             title="Masters whose Top 9 allergens have not been reviewed"
           >
-            Unreviewed <span className="kf-chip__count">{fmtCount(unreviewedCount)}</span>
+            Check allergens <span className="kf-chip__count">{fmtCount(unreviewedCount)}</span>
           </button>
           {anyFilterActive ? (
             <button type="button" className="kf-btn kf-btn--ghost kf-btn--sm" onClick={clearAll}>
@@ -975,6 +976,22 @@ function MasterDetail({
       <div className="kf-dt__sec">
         <h4 className="kf-dt__sec-h">What needs attention</h4>
         <IssueNote row={row} />
+      </div>
+
+      {/* B1 fix: the pill grid lives IN the master detail pane now.
+          Previously it was only rendered inside the slide-in
+          DetailPanel drawer (opened via the A4 master-name button),
+          which left the primary workbench pane with no allergen
+          control. The shared IngredientAllergens component drives
+          both surfaces. */}
+      <div className="kf-dt__sec">
+        <h4 className="kf-dt__sec-h">Allergens</h4>
+        <IngredientAllergens
+          ingredientId={row.id}
+          allergens={row.allergens}
+          reviewedBy={row.allergensReviewedBy}
+          reviewedAt={row.allergensReviewedAt}
+        />
       </div>
 
       {row.linkedCount === 0 ? (
