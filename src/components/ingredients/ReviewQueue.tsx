@@ -7,7 +7,7 @@
 import { serviceClient } from "@/lib/supabase/service";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { Tabs } from "./Tabs";
-import { SectionHeader } from "./SectionHeader";
+import { IdentBand } from "@/components/ui/IdentBand";
 import { ReviewCard, type ReviewCardGroup } from "./ReviewCard";
 import { isPackManualOverride, isPriceManualOverride } from "./itemTypes";
 import { ReviewLedger } from "./ReviewLedger";
@@ -460,28 +460,29 @@ export async function ReviewQueue() {
 
   return (
     <div className="kf-ing">
-      <SectionHeader
+      {/* Polish 6: Overview-style hero header. Same IdentBand the
+          Overview tab uses; no description row (kick omitted); no CTA
+          (Run intake stays in the top bar). Stats are the two facts
+          the retired .kf-review__meta white strip used to carry -
+          same props, new home. */}
+      <IdentBand
         eyebrow="Culinary office"
         title="Review queue"
-        kicker="Every proposal the matcher wrote. Grouped by proposed ingredient; dollar-ordered. Confirm a whole group in one click to turn its items into permanent links."
+        facts={[
+          {
+            label: "Proposals",
+            value: fmtCount(totals.items),
+            note: `${fmtUsd(totals.usd)} · ${fmtCount(totals.groups)} groups`,
+          },
+          {
+            label: "Flagged not food",
+            value: fmtCount(totals.notFood),
+            note: "matcher called them not food",
+          },
+        ]}
       />
 
       <Tabs active="review" />
-
-      <section className="kf-review__meta" aria-label="Queue totals">
-        <div className="kf-review__meta-stat">
-          <span className="kf-review__meta-label">Proposals</span>
-          <strong>{fmtCount(totals.items)}</strong>
-          <span className="kf-review__meta-sub">
-            {fmtUsd(totals.usd)} across {fmtCount(totals.groups)} groups
-          </span>
-        </div>
-        <div className="kf-review__meta-stat">
-          <span className="kf-review__meta-label">Flagged not food</span>
-          <strong>{fmtCount(totals.notFood)}</strong>
-          <span className="kf-review__meta-sub">matcher called them not food</span>
-        </div>
-      </section>
 
       {groups.length === 0 ? (
         <div className="kf-empty">

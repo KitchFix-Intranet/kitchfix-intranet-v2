@@ -20,7 +20,12 @@ export type BandStatus = "ok" | "failed" | "running";
 type Props = {
   eyebrow: string;
   title: string;
-  kick: string;
+  // Polish 6: optional. The Overview still passes a kick; the Review
+  // queue / Ingredients / Vendor items tabs omit it (Kevin's "no
+  // description line at all" rule). An empty or missing kick skips
+  // the .kf-band__kick row entirely so the band's left column holds
+  // just eyebrow + title.
+  kick?: string;
   kickInfo?: React.ReactNode;
   facts?: BandFact[];
   cta?: BandCta;
@@ -54,14 +59,16 @@ export function IdentBand({
   runningStartedAt,
   pageName,
 }: Props) {
-  if (process.env.NODE_ENV !== "production" && kick.length > KICK_MAX) {
+  if (process.env.NODE_ENV !== "production" && kick && kick.length > KICK_MAX) {
     // eslint-disable-next-line no-console
     console.warn(`IdentBand: kick is ${kick.length} chars, max ${KICK_MAX}: "${kick}"`);
   }
 
-  const trimmed = (facts ?? []).slice(0, 2);
+  // Polish 6: dropped the slice(0, 2) cap - Ingredients needs four
+  // cells (Masters / Linked items / Linked spend / Needs attention).
+  // Overview passes exactly 2 facts so its render is unchanged.
   let resolvedTitle = title;
-  let resolvedFacts: BandFact[] = trimmed;
+  let resolvedFacts: BandFact[] = facts ?? [];
   const extraWatch = status === "running";
   let stalled = false;
 
@@ -87,10 +94,12 @@ export function IdentBand({
         <div className="kf-band__left">
           <span className="kf-eyebrow kf-band__eyebrow">{eyebrow}</span>
           <h2 className="kf-band__title">{resolvedTitle}</h2>
-          <div className="kf-band__kick">
-            <span className="kf-band__kick-text">{kick}</span>
-            {kickInfo ? <KickInfoButton>{kickInfo}</KickInfoButton> : null}
-          </div>
+          {kick && kick.length > 0 ? (
+            <div className="kf-band__kick">
+              <span className="kf-band__kick-text">{kick}</span>
+              {kickInfo ? <KickInfoButton>{kickInfo}</KickInfoButton> : null}
+            </div>
+          ) : null}
         </div>
 
         {resolvedFacts.length > 0 || cta || status === "failed" ? (

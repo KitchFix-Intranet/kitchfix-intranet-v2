@@ -21,7 +21,7 @@
 import { serviceClient } from "@/lib/supabase/service";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { Tabs } from "./Tabs";
-import { SectionHeader } from "./SectionHeader";
+import { IdentBand } from "@/components/ui/IdentBand";
 import {
   IngredientMastersFilter,
   type MasterRow,
@@ -405,38 +405,21 @@ export async function IngredientMasters() {
 
   return (
     <div className="kf-ing">
-      <SectionHeader
+      {/* Polish 6: Overview-style hero. Four facts absorbed from
+          the retired .kf-review__meta white strip. Same props, new
+          home - no new fetch, no re-aggregation. */}
+      <IdentBand
         eyebrow="Culinary office"
         title="Ingredients"
-        kicker="The master list, building as the review progresses. Each row is one named ingredient; the per-unit column blends the per-unit price of every linked vendor item. Rows with a wide spread or an out-of-band average are flagged - that's usually a bad pack hiding on one of the linked items."
+        facts={[
+          { label: "Masters", value: fmtCount(totalMasters), note: "active ingredients" },
+          { label: "Linked items", value: fmtCount(totalLinked), note: "confirmed to a master" },
+          { label: "Linked spend", value: fmtUsd(totalUsd), note: "12 months" },
+          { label: "Needs attention", value: fmtCount(totalFlagged), note: "spread, unit or outlier" },
+        ]}
       />
 
       <Tabs active="ingredients" />
-
-      <section className="kf-review__meta" aria-label="Master-list totals">
-        <div className="kf-review__meta-stat">
-          <span className="kf-review__meta-label">Masters</span>
-          <strong>{fmtCount(totalMasters)}</strong>
-          <span className="kf-review__meta-sub">active ingredients</span>
-        </div>
-        <div className="kf-review__meta-stat">
-          <span className="kf-review__meta-label">Linked vendor items</span>
-          <strong>{fmtCount(totalLinked)}</strong>
-          <span className="kf-review__meta-sub">confirmed to a master</span>
-        </div>
-        <div className="kf-review__meta-stat">
-          <span className="kf-review__meta-label">Linked spend</span>
-          <strong>{fmtUsd(totalUsd)}</strong>
-          <span className="kf-review__meta-sub">12 months, from linked items</span>
-        </div>
-        <div className="kf-review__meta-stat">
-          <span className="kf-review__meta-label">Needs attention</span>
-          <strong>{fmtCount(totalFlagged)}</strong>
-          <span className="kf-review__meta-sub">
-            spread, coverage, unit or outlier
-          </span>
-        </div>
-      </section>
 
       <IngredientMastersFilter rows={rows} />
     </div>

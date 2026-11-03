@@ -1,53 +1,8 @@
 /* Review queue layout. One card per proposed-ingredient group, dollar-ordered. */
 
-.kf-review__meta {
-  display: flex;
-  gap: var(--sp-sp-5);
-  padding: var(--sp-sp-4);
-  background: var(--sp-card);
-  border: 1px solid var(--sp-line);
-  border-radius: var(--sp-r-card);
-  box-shadow: var(--sp-shadow);
-}
-.kf-review__meta-stat {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-sp-1);
-  min-width: 0;
-}
-/* Polish 4 (B): hairline between stat cells so the row reads as a
- * strip of cells (one shared compact stat strip across Review queue
- * and Ingredients) rather than one shadowed card holding four
- * numbers. No change to padding or shadow - just the inter-cell
- * line. */
-.kf-review__meta-stat + .kf-review__meta-stat {
-  padding-left: var(--sp-sp-5);
-  border-left: 1px solid var(--sp-line-soft);
-}
-@media (max-width: 640px) {
-  /* On narrow viewports the stat row stacks; drop the vertical
-   * divider so the stacked cells don't carry a floating left
-   * border. */
-  .kf-review__meta { flex-wrap: wrap; gap: var(--sp-sp-3); }
-  .kf-review__meta-stat + .kf-review__meta-stat { padding-left: 0; border-left: none; }
-}
-.kf-review__meta-label {
-  font-family: var(--sp-disp);
-  font-size: var(--sp-t-label);
-  font-weight: 700;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  color: var(--sp-muted);
-}
-.kf-review__meta-stat strong {
-  font-family: var(--sp-disp);
-  font-weight: 800;
-  font-size: var(--sp-t-num);
-  color: var(--sp-ink);
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-}
-.kf-review__meta-sub { color: var(--sp-muted); font-size: var(--sp-t-micro); }
+/* .kf-review__meta* rules removed in Polish 6: the Review queue and
+ * Ingredients tabs no longer render a white stats strip - the same
+ * counts live in the hero's IdentBand facts now. */
 
 .kf-review__groups {
   list-style: none;
