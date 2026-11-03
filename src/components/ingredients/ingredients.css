@@ -5,9 +5,16 @@
 
 /* Polish 7: tighter vertical rhythm. Was var(--sp-sp-5) (24px); the
  * shared stack now uses var(--sp-sp-3) (12px) so hero -> tabs ->
- * search snug up ~40% across all five tabs. Hero size, card
- * padding, and table spacing stay as they are. */
+ * search snug up ~40% across the four working tabs (Review queue,
+ * Ingredients, Resale, Vendor items). Hero size, card padding, and
+ * table spacing stay as they are.
+ *
+ * Overview is the reference surface and keeps its pre-Polish-7
+ * 24px section rhythm via the .kf-ing--loose modifier - its tiles /
+ * flagged / coverage / health cards were spaced for 24px and
+ * tightening them compressed too much. */
 .kf-ing { display: flex; flex-direction: column; gap: var(--sp-sp-3); }
+.kf-ing.kf-ing--loose { gap: var(--sp-sp-5); }
 
 /* Polish 4's .kf-section-header rules were removed in Polish 6 - the
  * three tabs now use the same IdentBand hero the Overview uses. See

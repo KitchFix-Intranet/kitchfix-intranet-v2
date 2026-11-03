@@ -193,7 +193,12 @@ export async function Overview() {
   );
 
   return (
-    <div className="kf-ing">
+    /* Polish 7 fix: Overview keeps its pre-Polish-7 24px section
+       rhythm. The four working tabs want the tighter 12px shared
+       stack; Overview is the reference surface and its tiles /
+       flagged / coverage / health cards were spaced for 24px. The
+       .kf-ing--loose modifier lifts the gap back for this tab only. */
+    <div className="kf-ing kf-ing--loose">
       {/* Polish 7: hero reads like every other tab now - kicker +
           title + stat cells. Dropped kick + kickInfo + cta per the
           cleanup pass. IdentBand still accepts those props (Polish 6
