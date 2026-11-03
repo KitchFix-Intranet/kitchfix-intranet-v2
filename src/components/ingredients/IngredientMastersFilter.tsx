@@ -424,6 +424,26 @@ export function IngredientMastersFilter({
         </div>
       </div>
 
+      {/* Polish 7: the flags legend moves OUT of the card so the card
+          opens with its shaded column-header band. The legend here is
+          a quiet single line below the sort/filter row, above the
+          workbench. Variant modifier kf-table-legend--quiet drops the
+          band fill + top-bottom border so it reads as a horizontal
+          strip, not a header band. */}
+      {filtered.length > 0 ? (
+        <div className="kf-table-legend kf-table-legend--quiet" aria-label="Attention legend">
+          <span className="kf-table-legend__label">Flags</span>
+          <span className="kf-master__bdg kf-master__bdg--spread">Spread</span>
+          <span className="kf-table-legend__hint">over 3x</span>
+          <span className="kf-master__bdg kf-master__bdg--coverage">Coverage</span>
+          <span className="kf-table-legend__hint">missing a price</span>
+          <span className="kf-master__bdg kf-master__bdg--mismatch">Unit</span>
+          <span className="kf-table-legend__hint">another dimension</span>
+          <span className="kf-master__bdg kf-master__bdg--outlier">Outlier</span>
+          <span className="kf-table-legend__hint">far from the blend</span>
+        </div>
+      ) : null}
+
       {filtered.length === 0 ? (
         <div className="kf-empty">
           <div>
@@ -439,20 +459,10 @@ export function IngredientMastersFilter({
       ) : (
         <div className={`kf-wb${paneOpen ? " kf-wb--pane" : ""}`}>
           <div className="kf-wb__index">
-            {/* Polish 4 (C): legend now in its own bar above the list,
-                reusing the vendor-items .kf-table-legend shape. The
-                column header carries only column labels. */}
-            <div className="kf-table-legend" aria-label="Attention legend">
-              <span className="kf-table-legend__label">Flags</span>
-              <span className="kf-master__bdg kf-master__bdg--spread">Spread</span>
-              <span className="kf-table-legend__hint">cheapest to dearest over 3x</span>
-              <span className="kf-master__bdg kf-master__bdg--coverage">Coverage</span>
-              <span className="kf-table-legend__hint">some links carry no price</span>
-              <span className="kf-master__bdg kf-master__bdg--mismatch">Unit</span>
-              <span className="kf-table-legend__hint">priced in another dimension</span>
-              <span className="kf-master__bdg kf-master__bdg--outlier">Outlier</span>
-              <span className="kf-table-legend__hint">one item far from the blend</span>
-            </div>
+            {/* Polish 7: shaded header band - mirrors vendor-items thead
+                (background var(--sp-sky-soft), hairline border-bottom)
+                so the card opens with the same column-label treatment
+                every table in the section uses. */}
             <div className="kf-masters__head" aria-hidden>
               <span>Ingredient</span>
               <span className="kf-masters__head-num">Per-unit</span>

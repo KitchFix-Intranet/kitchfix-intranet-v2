@@ -23,6 +23,10 @@
   gap: var(--sp-sp-5);
   align-items: center;
   box-sizing: border-box;
+  /* Polish 7: resting surface per DESIGN.md section 8. Puts the
+   * hero on the same elevation as .kf-rvc / .kf-tile / .kf-wb__index
+   * so sibling surfaces never differ. */
+  box-shadow: var(--sp-shadow);
 }
 .kf-band__sheen {
   position: absolute;

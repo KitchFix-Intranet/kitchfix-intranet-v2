@@ -194,27 +194,17 @@ export async function Overview() {
 
   return (
     <div className="kf-ing">
+      {/* Polish 7: hero reads like every other tab now - kicker +
+          title + stat cells. Dropped kick + kickInfo + cta per the
+          cleanup pass. IdentBand still accepts those props (Polish 6
+          made kick optional); they are just no longer passed. */}
       <IdentBand
         eyebrow="Where we stand"
         title={bandHeadline}
-        kick="What we buy, in our words: every line, named once."
-        kickInfo={
-          <>
-            <p style={{ margin: 0 }}>
-              Invoice lines become vendor items; vendor items link to one
-              ingredient; the price a recipe sees is the company price with a
-              date on it.
-            </p>
-            <p style={{ margin: "var(--sp-sp-2) 0 0" }}>
-              Nothing enters without a human saying so.
-            </p>
-          </>
-        }
         facts={[
           { label: "Last intake", value: lastRun ? fmtStatus(lastRun.status) : "-", note: lastRun ? fmtDate(lastRun.started_at, "time") : "No run yet" },
           { label: "Lines read", value: identityOf(linesReadFromRun) },
         ]}
-        cta={{ label: "Open vendor items", href: "/stockpot/ingredients/vendor-items" }}
         status={bandStatus}
         runningStartedAt={bandStatus === "running" ? lastRun?.started_at ?? null : null}
         pageName="Ingredients"

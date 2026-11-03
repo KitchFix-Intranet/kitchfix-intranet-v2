@@ -34,7 +34,9 @@
   gap: var(--sp-sp-4);
   flex-wrap: wrap;
   border-bottom: 1px solid var(--sp-line-soft);
-  margin: 0 0 var(--sp-sp-3);
+  /* Polish 7: dropped the 12px margin-bottom - the toolbar below
+   * now owns the search -> sort gap via its own padding-top. */
+  margin: 0;
 }
 .kf-review__search-field {
   flex: 1;
@@ -697,7 +699,10 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--sp-sp-3);
-  padding: var(--sp-sp-2) 0 var(--sp-sp-3);
+  /* Polish 7: 12/0/12 - search's margin-bottom was removed so the
+   * padding-top here is the whole search -> sort gap (~12px, nearest
+   * token to the 10px target). */
+  padding: var(--sp-sp-3) 0 var(--sp-sp-3);
   align-items: center;
   justify-content: flex-start;
 }
@@ -1553,6 +1558,9 @@
   background: var(--sp-card);
   border: 1px solid var(--sp-line);
   border-radius: var(--sp-r-card);
+  /* Polish 7: resting surface - carries --sp-shadow per DESIGN.md
+   * section 8, matching .kf-rvc / .kf-table-wrap / .kf-tile. */
+  box-shadow: var(--sp-shadow);
   overflow: hidden;
 }
 .kf-wb__detail { min-width: 0; position: sticky; top: var(--sp-sp-4); }
@@ -1597,8 +1605,15 @@
 .kf-master__row[aria-current="true"] .kf-master__name { color: var(--sp-navy); }
 
 .kf-masters__head {
-  padding-top: 0;
-  padding-bottom: var(--sp-sp-1);
+  /* Polish 7: shaded header band - mirrors vendor-items thead so the
+   * card opens with the same column-label treatment every table in
+   * the section uses. Horizontal padding stays on the shared row-grid
+   * rule above (var(--sp-sp-4) at .kf-masters__head, .kf-master__row);
+   * only the vertical and the band fill/line are overridden here. */
+  padding-top: 10px;
+  padding-bottom: 10px;
+  background: var(--sp-sky-soft);
+  border-bottom: 1px solid var(--sp-line);
   cursor: default;
   font-family: var(--sp-disp);
   font-weight: 700;
@@ -1618,6 +1633,9 @@
   background: var(--sp-card);
   border: 1px solid var(--sp-line);
   border-radius: var(--sp-r-card);
+  /* Polish 7: resting surface, same shadow as .kf-wb__index so
+   * sibling cards never differ. */
+  box-shadow: var(--sp-shadow);
   overflow: hidden;
 }
 .kf-dt__head {
