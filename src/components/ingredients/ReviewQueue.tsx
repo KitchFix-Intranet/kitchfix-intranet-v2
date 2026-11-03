@@ -81,7 +81,7 @@ type CatalogRow = {
 
 type AiNewPayload = { proposed_name?: string; proposed_parent?: string | null; reason?: string };
 
-function parseReason(raw: string | null): { prefix: "ai" | "ai-new" | "ai-notfood" | "alias" | "other" | null; body: string; aiNew?: AiNewPayload } {
+function parseReason(raw: string | null): { prefix: "ai" | "ai-new" | "ai-notfood" | "alias" | "undo" | "other" | null; body: string; aiNew?: AiNewPayload } {
   if (!raw) return { prefix: null, body: "" };
   if (raw.startsWith("ai-new:")) {
     const body = raw.slice("ai-new:".length);
@@ -92,6 +92,11 @@ function parseReason(raw: string | null): { prefix: "ai" | "ai-new" | "ai-notfoo
   if (raw.startsWith("ai-notfood:")) return { prefix: "ai-notfood", body: raw.slice("ai-notfood:".length) };
   if (raw.startsWith("ai:")) return { prefix: "ai", body: raw.slice("ai:".length) };
   if (raw.startsWith("alias:")) return { prefix: "alias", body: raw.slice("alias:".length) };
+  // Polish 3: `undo:<email>` is written server-side (reviewWrites.ts:532)
+  // when a confirm is reversed - audit-ledger context, not row-label
+  // context. The row card just needs to say the row was undone; the
+  // actor sits in the ledger. Render body "Undo" without attribution.
+  if (raw.startsWith("undo:")) return { prefix: "undo", body: "Undo" };
   return { prefix: "other", body: raw };
 }
 

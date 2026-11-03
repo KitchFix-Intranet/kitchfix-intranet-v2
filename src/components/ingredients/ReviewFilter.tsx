@@ -222,8 +222,14 @@ export function ReviewFilter({
       {/* Toolbar: sort toggle on the left, category chips in the
           middle, resale/needs quick-filters on the right. Everything is
           purely client-side over the already-loaded groups and composes
-          AND with the search box above. */}
+          AND with the search box above.
+          Polish 3: a quiet "Sort" kicker before the sort chips keeps
+          the sort group from reading as a selected filter chip. The
+          existing kf-chips__sep hairline between sort and categories
+          stays - the kicker names what the group is, the hairline
+          marks where the groups split. */}
       <div className="kf-review__toolbar" role="toolbar" aria-label="Sort and filter">
+        <span className="kf-review__kicker" aria-hidden>Sort</span>
         <div className="kf-review__toolbar-group" role="radiogroup" aria-label="Sort order">
           <button
             type="button"
@@ -266,6 +272,14 @@ export function ReviewFilter({
           </button>
           {SUPER_CATEGORIES.map((c) => {
             const n = perSuperCount.get(c) ?? 0;
+            // Polish 3: hide zero-count super-categories entirely.
+            // Previously they rendered as disabled "Dairy 0 / Bakery
+            // 0 / Beverages 0" chips - noisy and the user can't
+            // click them anyway. The chip rail now shows only
+            // categories that actually have groups today. If a
+            // category earns a group it reappears on the next
+            // router.refresh.
+            if (n === 0) return null;
             return (
               <button
                 key={c}
@@ -273,9 +287,8 @@ export function ReviewFilter({
                 role="radio"
                 aria-checked={superCat === c}
                 aria-pressed={superCat === c}
-                className={`kf-chip${superCat === c ? " kf-chip--on" : ""}${n === 0 ? " kf-chip--empty" : ""}`}
+                className={`kf-chip${superCat === c ? " kf-chip--on" : ""}`}
                 onClick={() => setSuperCat(c)}
-                disabled={n === 0}
               >
                 {c} <span className="kf-chip__count">{fmtCount(n)}</span>
               </button>

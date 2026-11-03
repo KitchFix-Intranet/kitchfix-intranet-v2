@@ -737,6 +737,25 @@
 }
 .kf-review__cats { flex: 1 1 auto; min-width: 0; }
 
+/* Polish 3: small uppercase "Sort" label before the sort chips so the
+ * filled "Dollars"/"A-Z" chip reads as the selected sort rather than as
+ * another filter alongside "All N". Quiet by default, no interaction. */
+.kf-review__kicker {
+  font-family: var(--sp-ui);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--sp-muted);
+  margin-right: var(--sp-sp-1);
+  align-self: center;
+}
+@media (max-width: 640px) {
+  /* Phone layout stacks toolbar groups; keep the kicker inline with
+   * its own group so it reads as that group's label, not a floater. */
+  .kf-review__kicker { width: 100%; margin-right: 0; margin-bottom: calc(-1 * var(--sp-sp-1)); }
+}
+
 .kf-chip {
   position: relative;            /* anchors the ::before hit area */
   display: inline-flex;

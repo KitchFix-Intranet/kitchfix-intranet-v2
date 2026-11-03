@@ -282,8 +282,19 @@ export function ReviewCard({
                     {it.displayName}
                   </button>
                   {it.catchWeight ? (
-                    <span className="kf-flag kf-flag--warn" title="Priced by actual weight">
-                      <Scale size={14} strokeWidth={1.5} />
+                    /* Polish 3: a decorative-looking scale glyph in the
+                     * row scans as "settings/gear" at a glance. Give it
+                     * an aria-label so AT users and the tooltip tell
+                     * the same story, and name the fix path in the
+                     * title so a sighted user knows where to go
+                     * (pack-chain toggle, S7). */
+                    <span
+                      className="kf-flag kf-flag--warn"
+                      role="img"
+                      aria-label="Catch-weight item - priced by actual weight"
+                      title="Catch-weight item - priced by actual weight. Open the item to re-cost as priced by the case."
+                    >
+                      <Scale size={14} strokeWidth={1.5} aria-hidden />
                     </span>
                   ) : null}
                   <RowFlagToggle
