@@ -14,7 +14,6 @@ import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { SUPER_CATEGORIES, categoryForParent, type SuperCategory } from "@/lib/ingredients/categories";
 import { IngredientTypeahead } from "./IngredientTypeahead";
-import { useStickyConfirmRegister } from "./StickyConfirmBar";
 
 // Kept exported so other call sites that import it keep compiling even
 // though ReviewCard no longer passes a memberItems prop.
@@ -40,12 +39,6 @@ type Ingredient = { id: string; name: string; parent: string | null };
 
 type Props = {
   kind: "existing" | "new";
-  // Polish 5: group identity for the viewport-fixed Confirm shortcut.
-  // ReviewCard passes group.key + the display title; ReviewActions
-  // registers them with the StickyConfirmBar so the fixed bar can
-  // name the group it is about to confirm.
-  groupKey: string;
-  groupName: string;
   currentIngredientId: string | null;
   // Whether the current target ingredient is Retail. On existing-group
   // confirms with this true, confirmItems lands the items as
@@ -88,8 +81,6 @@ function errMsg(data: unknown, fallback: string): string {
 
 export function ReviewActions({
   kind,
-  groupKey,
-  groupName,
   currentIngredientId,
   ingredientResale,
   proposedName,
@@ -363,23 +354,6 @@ export function ReviewActions({
     setLastDone(Date.now());
     router.refresh();
   }
-
-  // Polish 5: register this group with the viewport-fixed Confirm
-  // shortcut. The shortcut only shows when the user has scrolled past
-  // this card's inline action bar on a long group - it reuses the
-  // same confirmChecked() handler the inline Confirm button calls,
-  // and inherits the same disabled gates (op in flight / nothing
-  // selected). Re-runs on every meaningful state change so the fixed
-  // bar sees live selected count + busy state.
-  useStickyConfirmRegister({
-    groupKey,
-    groupName,
-    selectedCount: checkedCount,
-    memberCount,
-    canConfirm: kind === "new" ? true : currentIngredientId != null,
-    busy: op !== null,
-    confirmChecked,
-  });
 
   return (
     <div className="kf-rvc__actions">

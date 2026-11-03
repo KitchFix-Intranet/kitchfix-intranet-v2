@@ -18,7 +18,6 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowDownAZ, DollarSign, Search, X } from "lucide-react";
 import { fmtCount, fmtDate, fmtUsd, fmtUsdLong } from "@/lib/fmt";
 import { SUPER_CATEGORIES } from "@/lib/ingredients/categories";
-import { StickyConfirmBar, StickyConfirmProvider } from "./StickyConfirmBar";
 
 // A copy of the shape the server passes in. Keeping it narrow (not the
 // full ReviewCardGroup) so no stray React-element props leak in.
@@ -171,10 +170,7 @@ export function ReviewFilter({
   }
 
   return (
-    /* Polish 5: wrap the search / toolbar / groups list in the
-       StickyConfirmProvider so every ReviewActions can register,
-       and mount one <StickyConfirmBar /> alongside the list. */
-    <StickyConfirmProvider>
+    <>
       <div className="kf-review__search">
         <form
           className="kf-field kf-field--search kf-review__search-field"
@@ -371,7 +367,6 @@ export function ReviewFilter({
           ? ` Latest member last seen ${fmtDate(filtered[0].lastSeen)}.`
           : ""}
       </p>
-      <StickyConfirmBar />
-    </StickyConfirmProvider>
+    </>
   );
 }

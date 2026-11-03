@@ -160,10 +160,6 @@ export function ReviewCard({
     <article
       className={`kf-rvc${group.kind === "new" ? " kf-rvc--new" : ""}${leavingAll ? " kf-rvc--leaving" : ""}`}
       aria-busy={leavingAll || undefined}
-      /* Polish 5: data-attribute lets StickyConfirmBar find this card
-         by scroll scan without touching React state. The card is the
-         scrollable surface the viewport-fixed Confirm bar binds to. */
-      data-group-key={group.key}
     >
       <header className="kf-rvc__head">
         <div className="kf-rvc__title-wrap">
@@ -375,8 +371,6 @@ export function ReviewCard({
 
       <ReviewActions
         kind={group.kind}
-        groupKey={group.key}
-        groupName={title}
         currentIngredientId={group.ingredient?.id ?? null}
         ingredientResale={group.ingredient?.resale ?? false}
         proposedName={group.proposedName}
