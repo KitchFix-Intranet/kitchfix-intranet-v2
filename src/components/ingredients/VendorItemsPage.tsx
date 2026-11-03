@@ -56,7 +56,15 @@ function toParam(x: string | string[] | undefined): string | undefined {
 
 function parseSeg(v: string | undefined): StatusSeg {
   const s = (v ?? "all").toLowerCase();
-  if (s === "unlinked" || s === "catch_weight" || s === "no_number" || s === "not_food" || s === "duplicates") return s;
+  if (
+    s === "unlinked" ||
+    s === "catch_weight" ||
+    s === "no_number" ||
+    s === "not_food" ||
+    s === "duplicates" ||
+    s === "archived"
+  )
+    return s;
   return "all";
 }
 
@@ -93,13 +101,18 @@ function applyFilters(q: any, vendor: string | undefined, seg: StatusSeg): any {
     q = q.eq("is_food", false);
   } else if (seg === "duplicates") {
     q = q.eq("status", "duplicate");
+  } else if (seg === "archived") {
+    // R2: isolate archived items (status='archived'). The "all" branch
+    // below mixes archived with every other disposition, so without
+    // this branch there was no way to scan archived on its own.
+    q = q.eq("status", "archived");
   } else {
     q = q.in("status", ["active", "resale", "duplicate", "one_off", "not_food", "archived"]);
   }
   return q;
 }
 
-type SegCounts = { all: number; unlinked: number; catch_weight: number; no_number: number; not_food: number; duplicates: number };
+type SegCounts = { all: number; unlinked: number; catch_weight: number; no_number: number; not_food: number; duplicates: number; archived: number };
 
 async function readSegCounts(
   client: ReturnType<typeof serviceClient>,
@@ -113,13 +126,14 @@ async function readSegCounts(
     );
     return q;
   };
-  const [a, u, c, n, nf, d] = await Promise.all([
+  const [a, u, c, n, nf, d, ar] = await Promise.all([
     build("all"),
     build("unlinked"),
     build("catch_weight"),
     build("no_number"),
     build("not_food"),
     build("duplicates"),
+    build("archived"),
   ]);
   return {
     all: a.count ?? 0,
@@ -128,6 +142,7 @@ async function readSegCounts(
     no_number: n.count ?? 0,
     not_food: nf.count ?? 0,
     duplicates: d.count ?? 0,
+    archived: ar.count ?? 0,
   };
 }
 

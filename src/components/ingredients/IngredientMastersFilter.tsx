@@ -96,7 +96,6 @@ export type MasterRow = {
 };
 
 type SortMode = "spend" | "name" | "links" | "spread";
-type ResaleFilter = "all" | "recipe" | "resale";
 
 // Badge wording. Short enough to sit inline on the row's sub-line, and
 // each one names the fix: "Coverage" means links are missing a price,
@@ -130,11 +129,21 @@ function matches(row: MasterRow, needle: string): boolean {
   return false;
 }
 
-export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
+// R2: the workbench is used by two tabs. The server pre-filters rows
+// by resale flag before passing them in, so this component does not
+// need to split by resale itself - the Recipe only / Resale only
+// chips are retired here. mode is carried through so the search
+// placeholder names the right subset.
+export function IngredientMastersFilter({
+  rows,
+  mode = "recipe",
+}: {
+  rows: MasterRow[];
+  mode?: "recipe" | "resale";
+}) {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortMode>("spend");
   const [superCat, setSuperCat] = useState<string | "all">("all");
-  const [resaleFilter, setResaleFilter] = useState<ResaleFilter>("all");
   const [onlyFlagged, setOnlyFlagged] = useState(false);
   // Workbench selection. `selId` is the user's explicit pick; the row
   // actually shown falls back to the first row in the current filter, so
@@ -192,8 +201,9 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
     let out = rows;
     if (trimmed) out = out.filter((r) => matches(r, trimmed));
     if (superCat !== "all") out = out.filter((r) => r.category === superCat);
-    if (resaleFilter === "recipe") out = out.filter((r) => !r.resale);
-    else if (resaleFilter === "resale") out = out.filter((r) => r.resale);
+    // R2: resaleFilter removed - the server already pre-split rows
+    // by pr_ingredients.resale, so recipe/resale toggles here would
+    // only ever match "all" of this tab's set.
     if (onlyFlagged) out = out.filter((r) => r.issues.length > 0);
     if (sort === "name") out = [...out].sort((a, b) => a.name.localeCompare(b.name));
     else if (sort === "links") out = [...out].sort((a, b) => b.linkedCount - a.linkedCount);
@@ -203,7 +213,7 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
       out = [...out].sort((a, b) => b.usd12m - a.usd12m);
     }
     return out;
-  }, [rows, trimmed, superCat, resaleFilter, onlyFlagged, sort]);
+  }, [rows, trimmed, superCat, onlyFlagged, sort]);
 
   // The row the pane shows. Explicit pick when there is one, else the
   // first row of the current filter - so the pane is never empty while
@@ -230,13 +240,11 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
   const anyFilterActive =
     trimmed.length > 0 ||
     superCat !== "all" ||
-    resaleFilter !== "all" ||
     onlyFlagged;
 
   function clearAll() {
     setQuery("");
     setSuperCat("all");
-    setResaleFilter("all");
     setOnlyFlagged(false);
     inputRef.current?.focus();
   }
@@ -256,7 +264,11 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
           <input
             ref={inputRef}
             type="search"
-            placeholder="Filter by name, parent, category, linked vendor or SKU"
+            placeholder={
+              mode === "resale"
+                ? "Filter resale by name, linked vendor or SKU"
+                : "Filter by name, parent, category, linked vendor or SKU"
+            }
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             aria-label="Filter masters"
@@ -387,27 +399,12 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
           })}
         </div>
 
-        <div className="kf-review__toolbar-group" role="radiogroup" aria-label="Resale and flag filters">
-          <button
-            type="button"
-            role="radio"
-            aria-checked={resaleFilter === "recipe"}
-            aria-pressed={resaleFilter === "recipe"}
-            className={`kf-chip${resaleFilter === "recipe" ? " kf-chip--on" : ""}`}
-            onClick={() => setResaleFilter((v) => (v === "recipe" ? "all" : "recipe"))}
-          >
-            Recipe only
-          </button>
-          <button
-            type="button"
-            role="radio"
-            aria-checked={resaleFilter === "resale"}
-            aria-pressed={resaleFilter === "resale"}
-            className={`kf-chip${resaleFilter === "resale" ? " kf-chip--on" : ""}`}
-            onClick={() => setResaleFilter((v) => (v === "resale" ? "all" : "resale"))}
-          >
-            Resale only
-          </button>
+        {/* R2: Recipe only / Resale only chips removed - the server
+            pre-filters this list by resale, so each tab shows one
+            homogeneous subset and the toggles would be no-ops. The
+            Needs-attention chip stays in both modes; a resale master
+            with a spread or unit mismatch is still worth surfacing. */}
+        <div className="kf-review__toolbar-group" role="radiogroup" aria-label="Attention filter">
           <button
             type="button"
             role="radio"

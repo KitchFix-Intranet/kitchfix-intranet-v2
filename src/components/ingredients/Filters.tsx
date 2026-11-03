@@ -5,9 +5,13 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Search, X } from "lucide-react";
 import { fmtCount } from "@/lib/fmt";
 
-export type StatusSeg = "all" | "unlinked" | "catch_weight" | "no_number" | "not_food" | "duplicates";
+// R2: added "archived" after "not_food" so there's a way to list
+// archived items on their own. Previously the only path was the
+// catch-all "All" (which mixes archived with active + duplicate +
+// one_off), so you couldn't scan archived items as a group.
+export type StatusSeg = "all" | "unlinked" | "catch_weight" | "no_number" | "not_food" | "duplicates" | "archived";
 type Vendor = { id: string; name: string };
-type SegCounts = { all: number; unlinked: number; catch_weight: number; no_number: number; not_food: number; duplicates: number };
+type SegCounts = { all: number; unlinked: number; catch_weight: number; no_number: number; not_food: number; duplicates: number; archived: number };
 
 const SEGS: Array<{ k: StatusSeg; label: string }> = [
   { k: "all", label: "All" },
@@ -16,6 +20,7 @@ const SEGS: Array<{ k: StatusSeg; label: string }> = [
   { k: "no_number", label: "No item number" },
   { k: "not_food", label: "Not food" },
   { k: "duplicates", label: "Duplicates" },
+  { k: "archived", label: "Archived" },
 ];
 
 const PHONE_PER = 30;

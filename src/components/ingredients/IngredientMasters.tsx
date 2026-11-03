@@ -147,14 +147,26 @@ const BANDS: Record<string, { low: number; high: number }> = {
 import { DIM_BY_UOM, normUom, convertPer, canonicalFromBaseUnit } from "@/lib/ingredients/pack";
 import { isPriceManualOverride } from "./itemTypes";
 
-export async function IngredientMasters() {
+// R2: this workbench powers two tabs. `mode="recipe"` is the Ingredients
+// tab (resale = false); `mode="resale"` is the new Resale tab (resale =
+// true). The split happens server-side on pr_ingredients.resale so each
+// consumer gets a pre-filtered list - no new write path, no new query
+// shape, and the filter rail / editor / item-panel chain all run
+// unchanged. The flip of a master's resale flag in the editor is what
+// moves it between tabs on the next router.refresh() (see
+// DetailPanel's IngredientBlock + the existing /api/review/resale
+// cascade).
+export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" | "resale" } = {}) {
   const client = serviceClient();
 
-  // Masters.
+  // Masters. Server-side split on `resale` - one list per tab; the
+  // combined count of recipe + resale masters equals the previous
+  // combined total (every master has `resale` set, defaults to false).
   const { data: ingData, error: ingErr } = await client
     .from("pr_ingredients")
     .select("id,name,parent,category,resale,base_unit")
     .eq("status", "active")
+    .eq("resale", mode === "resale")
     .order("name");
   if (ingErr) throw ingErr;
   const ingredients = (ingData ?? []) as Ingredient[];
@@ -403,25 +415,35 @@ export async function IngredientMasters() {
   // number to rise; that is the point.
   const totalFlagged = rows.filter((r) => r.issues.length > 0).length;
 
-  return (
-    <div className="kf-ing">
-      {/* Polish 6: Overview-style hero. Four facts absorbed from
-          the retired .kf-review__meta white strip. Same props, new
-          home - no new fetch, no re-aggregation. */}
-      <IdentBand
-        eyebrow="Culinary office"
-        title="Ingredients"
-        facts={[
+  // R2: hero + Tabs vary by mode. Recipe mode keeps the four-cell
+  // layout; Resale drops the Needs-attention cell per the Oct 31
+  // ruling (resale is outside recipe coverage / attention math).
+  // Every number is live over the pre-filtered master set.
+  const heroFacts =
+    mode === "resale"
+      ? [
+          { label: "Resale masters", value: fmtCount(totalMasters), note: "sold as-is, not cooked" },
+          { label: "Linked items", value: fmtCount(totalLinked), note: "confirmed to a master" },
+          { label: "12-mo spend", value: fmtUsd(totalUsd), note: "outside recipe coverage" },
+        ]
+      : [
           { label: "Masters", value: fmtCount(totalMasters), note: "active ingredients" },
           { label: "Linked items", value: fmtCount(totalLinked), note: "confirmed to a master" },
           { label: "Linked spend", value: fmtUsd(totalUsd), note: "12 months" },
           { label: "Needs attention", value: fmtCount(totalFlagged), note: "spread, unit or outlier" },
-        ]}
+        ];
+
+  return (
+    <div className="kf-ing">
+      <IdentBand
+        eyebrow="Culinary office"
+        title={mode === "resale" ? "Resale" : "Ingredients"}
+        facts={heroFacts}
       />
 
-      <Tabs active="ingredients" />
+      <Tabs active={mode === "resale" ? "resale" : "ingredients"} />
 
-      <IngredientMastersFilter rows={rows} />
+      <IngredientMastersFilter rows={rows} mode={mode} />
     </div>
   );
 }
