@@ -126,12 +126,20 @@ export function Filters({
       </div>
 
       <div className="kf-segs" role="group" aria-label="Status">
-        {SEGS.map((s) => (
+        {SEGS.map((s) => {
+          // Polish 4 (E): "Catch weight" and "Duplicates" are the
+          // vendor-items twin of "Needs category" / "Needs attention"
+          // - attention categories. Tint them with the same amber
+          // modifier other tabs' chips use so the three tabs share
+          // one attention tone. Styling only; filter logic unchanged.
+          const warn = s.k === "catch_weight" || s.k === "duplicates";
+          const active = activeSeg === s.k;
+          return (
           <button
             key={s.k}
             type="button"
-            aria-pressed={activeSeg === s.k}
-            className={`kf-seg${activeSeg === s.k ? " kf-seg--active" : ""}`}
+            aria-pressed={active}
+            className={`kf-seg${warn ? " kf-seg--warn" : ""}${active ? " kf-seg--active" : ""}`}
             onClick={() =>
               navigate((u) => {
                 if (s.k === "all") u.delete("status");
@@ -142,7 +150,8 @@ export function Filters({
             <span>{s.label}</span>
             <b>{fmtCount(segCounts[s.k])}</b>
           </button>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

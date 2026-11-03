@@ -7,6 +7,7 @@ import { ChevronLeft, ChevronRight, Scale, Copy, ArrowDown } from "lucide-react"
 import { serviceClient } from "@/lib/supabase/service";
 import { fmtCount, fmtDate, fmtUsdLong } from "@/lib/fmt";
 import { Tabs } from "./Tabs";
+import { SectionHeader } from "./SectionHeader";
 import { Filters, type StatusSeg } from "./Filters";
 import { RowLink } from "./RowLink";
 import { SortSelect } from "./SortSelect";
@@ -219,6 +220,16 @@ export async function VendorItemsPage({
 
   return (
     <div className="kf-ing">
+      {/* Polish 4: Vendor items had no section header until now. The
+          @topbar slot already owns the primary actions (Export CSV +
+          Run intake); this header just carries the eyebrow/title/
+          description for consistency with Review and Ingredients. */}
+      <SectionHeader
+        eyebrow="Culinary office"
+        title="Vendor items"
+        kicker="Every vendor line we've read, newest spend first. Filter to the ones still waiting to be named."
+      />
+
       <Tabs active="vendor-items" />
 
       <Filters

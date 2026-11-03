@@ -135,6 +135,14 @@
   color: var(--sp-on-navy);
   border-color: var(--sp-navy);
 }
+/* Polish 4 (E): attention tone matches .kf-chip--warn across tabs so
+ * "Catch weight" / "Duplicates" segments scan as attention categories
+ * before the user clicks them. On click, .kf-seg--active still wins
+ * (same inactive->active treatment every segment carries). */
+.kf-seg--warn { color: var(--sp-warn); border-color: color-mix(in srgb, var(--sp-warn) 40%, var(--sp-line)); }
+.kf-seg--warn:hover:not(.kf-seg--active) { background: var(--sp-warn-bg); color: var(--sp-warn); border-color: color-mix(in srgb, var(--sp-warn) 50%, var(--sp-line)); }
+.kf-seg--warn.kf-seg--active,
+.kf-seg--warn.kf-seg--active:hover { background: var(--sp-warn); color: var(--sp-card); border-color: var(--sp-warn); }
 
 /* ---------- Table card ---------- */
 .kf-table-wrap {
@@ -216,6 +224,11 @@
   font-size: var(--sp-t-micro);
 }
 .kf-table-legend .kf-pill { margin-left: 0; }
+/* Polish 4 (C): same legend shape now renders the Ingredients tab's
+ * attention badges (.kf-master__bdg--spread/coverage/mismatch/outlier).
+ * Reset the margin that the inline-on-rows variant carries so the
+ * legend row aligns like it does for pills. */
+.kf-table-legend .kf-master__bdg { margin-left: 0; }
 
 /* Sort select */
 .kf-sort select {

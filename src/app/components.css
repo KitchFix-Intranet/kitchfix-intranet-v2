@@ -86,6 +86,16 @@
 .kf-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 .kf-btn--primary { background: var(--sp-navy); color: var(--sp-on-navy); }
 .kf-btn--primary:hover:not(:disabled) { background: var(--sp-navy-deep); }
+/* Polish 4 (I): a disabled primary used to render as faded navy that
+ * still invited a click. Swap to a muted fill + muted text so the
+ * disabled state reads unmistakably. The `.kf-btn:disabled` opacity
+ * rule still applies on top (same cursor/opacity floor); this just
+ * overrides the fill so it's not "faded navy." */
+.kf-btn--primary:disabled {
+  background: var(--sp-line-soft);
+  color: var(--sp-muted);
+  border-color: transparent;
+}
 .kf-btn--line { color: var(--sp-navy); border-color: var(--sp-navy); background: var(--sp-card); }
 .kf-btn--line:hover:not(:disabled) { background: var(--sp-sky-tint); }
 .kf-btn--soft { background: var(--sp-sky-tint); color: var(--sp-navy); }

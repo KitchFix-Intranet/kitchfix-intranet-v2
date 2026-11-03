@@ -21,6 +21,7 @@
 import { serviceClient } from "@/lib/supabase/service";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { Tabs } from "./Tabs";
+import { SectionHeader } from "./SectionHeader";
 import {
   IngredientMastersFilter,
   type MasterRow,
@@ -404,17 +405,11 @@ export async function IngredientMasters() {
 
   return (
     <div className="kf-ing">
-      <header className="kf-ing__header">
-        <span className="kf-eyebrow">Culinary office</span>
-        <h2>Ingredients</h2>
-        <p className="kf-ing__kicker">
-          The master list, building as the review progresses. Each row is one named
-          ingredient; the per-unit column blends the per-unit price of every linked vendor
-          item. Rows with a wide spread or an out-of-band
-          average are flagged - that&rsquo;s usually a bad pack hiding on one of the linked
-          items.
-        </p>
-      </header>
+      <SectionHeader
+        eyebrow="Culinary office"
+        title="Ingredients"
+        kicker="The master list, building as the review progresses. Each row is one named ingredient; the per-unit column blends the per-unit price of every linked vendor item. Rows with a wide spread or an out-of-band average are flagged - that's usually a bad pack hiding on one of the linked items."
+      />
 
       <Tabs active="ingredients" />
 

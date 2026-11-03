@@ -5,6 +5,55 @@
 
 .kf-ing { display: flex; flex-direction: column; gap: var(--sp-sp-5); }
 
+/* ---------- Polish 4: shared section header ----------
+ * The three working tabs (Review queue / Ingredients / Vendor items)
+ * open with the same compact header shape - eyebrow kicker, title,
+ * one-line description, optional right-action top-aligned. Lighter
+ * than the Overview hero (no navy band). See SectionHeader.tsx.
+ * All three tabs sit inside .kf-ing, which gives them the same left
+ * gutter and max-width so the headers align across tabs. */
+.kf-section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-sp-4);
+  padding: 0;
+}
+.kf-section-header__text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.kf-section-header__title {
+  margin: 0;
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-title);
+  color: var(--sp-ink);
+  letter-spacing: -0.01em;
+}
+.kf-section-header__kicker {
+  margin: 0;
+  color: var(--sp-body);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  line-height: 1.5;
+  max-width: 72ch;
+}
+.kf-section-header__action {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  display: inline-flex;
+  gap: var(--sp-sp-2);
+}
+@media (max-width: 640px) {
+  .kf-section-header { flex-direction: column; align-items: stretch; }
+  .kf-section-header__action { align-self: flex-start; }
+}
+
+
 /* Phone intake row that replaces the band on phones */
 .kf-ing__phone-action {
   display: none;

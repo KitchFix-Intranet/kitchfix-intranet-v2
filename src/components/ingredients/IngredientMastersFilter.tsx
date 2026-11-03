@@ -297,7 +297,11 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
         </span>
       </div>
 
+      {/* Polish 4 (D): same "Sort" kicker Polish 3 gave the Review
+          queue, so a filled sort chip (Spend / A-Z / ...) does not
+          read as another selected filter next to the category chips. */}
       <div className="kf-review__toolbar" role="toolbar" aria-label="Sort and filter">
+        <span className="kf-review__kicker" aria-hidden>Sort</span>
         <div className="kf-review__toolbar-group" role="radiogroup" aria-label="Sort order">
           <button
             type="button"
@@ -363,6 +367,10 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
           </button>
           {SUPER_CATEGORIES.map((c) => {
             const n = perSuperCount.get(c) ?? 0;
+            // Polish 4: hide zero-count categories here too (matches
+            // the Polish 3 treatment in ReviewFilter). Reappear on
+            // the next render when a master lands under them.
+            if (n === 0) return null;
             return (
               <button
                 key={c}
@@ -370,9 +378,8 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
                 role="radio"
                 aria-checked={superCat === c}
                 aria-pressed={superCat === c}
-                className={`kf-chip${superCat === c ? " kf-chip--on" : ""}${n === 0 ? " kf-chip--empty" : ""}`}
+                className={`kf-chip${superCat === c ? " kf-chip--on" : ""}`}
                 onClick={() => setSuperCat(c)}
-                disabled={n === 0}
               >
                 {c} <span className="kf-chip__count">{fmtCount(n)}</span>
               </button>
@@ -435,20 +442,24 @@ export function IngredientMastersFilter({ rows }: { rows: MasterRow[] }) {
       ) : (
         <div className={`kf-wb${paneOpen ? " kf-wb--pane" : ""}`}>
           <div className="kf-wb__index">
+            {/* Polish 4 (C): legend now in its own bar above the list,
+                reusing the vendor-items .kf-table-legend shape. The
+                column header carries only column labels. */}
+            <div className="kf-table-legend" aria-label="Attention legend">
+              <span className="kf-table-legend__label">Flags</span>
+              <span className="kf-master__bdg kf-master__bdg--spread">Spread</span>
+              <span className="kf-table-legend__hint">cheapest to dearest over 3x</span>
+              <span className="kf-master__bdg kf-master__bdg--coverage">Coverage</span>
+              <span className="kf-table-legend__hint">some links carry no price</span>
+              <span className="kf-master__bdg kf-master__bdg--mismatch">Unit</span>
+              <span className="kf-table-legend__hint">priced in another dimension</span>
+              <span className="kf-master__bdg kf-master__bdg--outlier">Outlier</span>
+              <span className="kf-table-legend__hint">one item far from the blend</span>
+            </div>
             <div className="kf-masters__head" aria-hidden>
               <span>Ingredient</span>
               <span className="kf-masters__head-num">Per-unit</span>
               <span className="kf-masters__head-num">12-mo</span>
-            </div>
-            <div className="kf-masters__legend">
-              <span className="kf-master__bdg kf-master__bdg--spread">Spread</span>
-              <span>cheapest to dearest over 3x</span>
-              <span className="kf-master__bdg kf-master__bdg--coverage">Coverage</span>
-              <span>some links carry no price</span>
-              <span className="kf-master__bdg kf-master__bdg--mismatch">Unit</span>
-              <span>priced in another dimension</span>
-              <span className="kf-master__bdg kf-master__bdg--outlier">Outlier</span>
-              <span>one item far from the blend</span>
             </div>
             <ul className="kf-masters__list" aria-label="Masters">
               {filtered.map((row) => (

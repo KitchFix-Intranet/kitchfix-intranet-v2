@@ -13,6 +13,23 @@
   display: flex;
   flex-direction: column;
   gap: var(--sp-sp-1);
+  min-width: 0;
+}
+/* Polish 4 (B): hairline between stat cells so the row reads as a
+ * strip of cells (one shared compact stat strip across Review queue
+ * and Ingredients) rather than one shadowed card holding four
+ * numbers. No change to padding or shadow - just the inter-cell
+ * line. */
+.kf-review__meta-stat + .kf-review__meta-stat {
+  padding-left: var(--sp-sp-5);
+  border-left: 1px solid var(--sp-line-soft);
+}
+@media (max-width: 640px) {
+  /* On narrow viewports the stat row stacks; drop the vertical
+   * divider so the stacked cells don't carry a floating left
+   * border. */
+  .kf-review__meta { flex-wrap: wrap; gap: var(--sp-sp-3); }
+  .kf-review__meta-stat + .kf-review__meta-stat { padding-left: 0; border-left: none; }
 }
 .kf-review__meta-label {
   font-family: var(--sp-disp);

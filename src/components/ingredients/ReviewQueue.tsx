@@ -7,6 +7,7 @@
 import { serviceClient } from "@/lib/supabase/service";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { Tabs } from "./Tabs";
+import { SectionHeader } from "./SectionHeader";
 import { ReviewCard, type ReviewCardGroup } from "./ReviewCard";
 import { isPackManualOverride, isPriceManualOverride } from "./itemTypes";
 import { ReviewLedger } from "./ReviewLedger";
@@ -459,14 +460,11 @@ export async function ReviewQueue() {
 
   return (
     <div className="kf-ing">
-      <header className="kf-ing__header">
-        <span className="kf-eyebrow">Culinary office</span>
-        <h2>Review queue</h2>
-        <p className="kf-ing__kicker">
-          Every proposal the matcher wrote. Grouped by proposed ingredient; dollar-ordered.
-          Confirm a whole group in one click to turn its items into permanent links.
-        </p>
-      </header>
+      <SectionHeader
+        eyebrow="Culinary office"
+        title="Review queue"
+        kicker="Every proposal the matcher wrote. Grouped by proposed ingredient; dollar-ordered. Confirm a whole group in one click to turn its items into permanent links."
+      />
 
       <Tabs active="review" />
 
