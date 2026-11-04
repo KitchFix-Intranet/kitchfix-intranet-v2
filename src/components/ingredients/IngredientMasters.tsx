@@ -27,6 +27,7 @@ import {
   type MasterRow,
   type MasterLinkedItem,
   type MasterIssue,
+  type LensStats,
 } from "./IngredientMastersFilter";
 import "./ingredients.css";
 import "./review.css";
@@ -89,7 +90,26 @@ function medianOf(xs: readonly number[]): number {
   return (s[n / 2 - 1] + s[n / 2]) / 2;
 }
 
-function blendStats(priced: ReadonlyArray<{ id: string; v: number }>): {
+// G2: `survivorMean` is now SPEND-WEIGHTED: sum(per_base * usd_12m) /
+// sum(usd_12m) over the survivors. Pre-G2 this was a plain mean, which
+// let a small-spend item count as much as a high-spend one. The recipe
+// cost that reads this field is the operational reason: weighting
+// makes the headline match the dollars actually spent.
+//
+// Outlier exclusion is UNCHANGED - median of raw per_base values,
+// items >3x or <1/3 of median drop out. The rule still protects the
+// mean from a very-low or very-high outlier; weighting only shrinks
+// what the remaining outliers do to the number.
+//
+// `survivorMin` and `survivorMax` remain plain (unweighted) over the
+// survivor set. They describe the range of prices, not the blended
+// cost - per Kevin's §2.3 ruling, spread/min/max are not weighted
+// even when the lens is on.
+//
+// Fallback: if the survivor set's total usd is 0 or null, fall back
+// to the plain mean. One priced item or a zero-spend subset cannot
+// be weighted; must not divide by zero and must never render NaN.
+function blendStats(priced: ReadonlyArray<{ id: string; v: number; usd: number }>): {
   median: number | null;
   survivorMean: number | null;
   survivorMin: number | null;
@@ -101,11 +121,25 @@ function blendStats(priced: ReadonlyArray<{ id: string; v: number }>): {
   }
   const vals = priced.map((p) => p.v);
   const med = medianOf(vals);
+  const weighted = (xs: ReadonlyArray<{ v: number; usd: number }>): number | null => {
+    if (xs.length === 0) return null;
+    let num = 0;
+    let den = 0;
+    for (const x of xs) {
+      const u = Number.isFinite(x.usd) && x.usd > 0 ? x.usd : 0;
+      num += x.v * u;
+      den += u;
+    }
+    if (den > 0) return num / den;
+    // Zero/null-spend fallback: plain mean so the lens still shows a
+    // number instead of "-" when every item has non-positive usd.
+    const sum = xs.reduce((a, b) => a + b.v, 0);
+    return sum / xs.length;
+  };
   if (priced.length < OUTLIER_MIN) {
-    const sum = vals.reduce((a, b) => a + b, 0);
     return {
       median: med,
-      survivorMean: sum / vals.length,
+      survivorMean: weighted(priced),
       survivorMin: Math.min(...vals),
       survivorMax: Math.max(...vals),
       excluded: new Set(),
@@ -114,20 +148,20 @@ function blendStats(priced: ReadonlyArray<{ id: string; v: number }>): {
   const low = med / OUTLIER_RATIO;
   const high = med * OUTLIER_RATIO;
   const excluded = new Set<string>();
-  const survivors: number[] = [];
+  const survivors: Array<{ v: number; usd: number }> = [];
   for (const p of priced) {
     if (p.v > high || p.v < low) excluded.add(p.id);
-    else survivors.push(p.v);
+    else survivors.push({ v: p.v, usd: p.usd });
   }
   if (survivors.length === 0) {
     return { median: med, survivorMean: null, survivorMin: null, survivorMax: null, excluded };
   }
-  const sum = survivors.reduce((a, b) => a + b, 0);
+  const svals = survivors.map((s) => s.v);
   return {
     median: med,
-    survivorMean: sum / survivors.length,
-    survivorMin: Math.min(...survivors),
-    survivorMax: Math.max(...survivors),
+    survivorMean: weighted(survivors),
+    survivorMin: Math.min(...svals),
+    survivorMax: Math.max(...svals),
     excluded,
   };
 }
@@ -274,7 +308,10 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
     // premium). Null is standard; 'premium' is the only sanctioned
     // non-null value today - any stray third value is treated as
     // standard by the UI rule.
-    const priced: Array<{ id: string; v: number; grade: string | null }> = [];
+    // G2: each priced entry also carries `usd` for the spend-weighted
+    // blend. Plain `usd` from pr_vendor_items.usd_12m - no re-shape;
+    // the weighting is in blendStats.
+    const priced: Array<{ id: string; v: number; grade: string | null; usd: number }> = [];
     // B3: per-priced-item vendor map so the band's corroboration
     // check can count DISTINCT VENDORS on the survivors (rows that
     // actually contribute to the mean). Using the same filter as
@@ -317,17 +354,17 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
           // polluted by cross-dimension values; the mismatch flag
           // handles the surface.
         } else {
-          priced.push({ id: it.id, v: converted, grade: it.grade ?? null });
+          priced.push({ id: it.id, v: converted, grade: it.grade ?? null, usd: itUsd });
           vendorByPricedItem.set(it.id, it.vendor_id);
         }
       } else if (storedUom && !masterUom) {
         // Master has no canonical uom (unusual base_unit text); fall
         // back to the stored value as-is so the row still shows a
         // number.
-        priced.push({ id: it.id, v: rawN, grade: it.grade ?? null });
+        priced.push({ id: it.id, v: rawN, grade: it.grade ?? null, usd: itUsd });
         vendorByPricedItem.set(it.id, it.vendor_id);
       } else {
-        priced.push({ id: it.id, v: rawN, grade: it.grade ?? null });
+        priced.push({ id: it.id, v: rawN, grade: it.grade ?? null, usd: itUsd });
         vendorByPricedItem.set(it.id, it.vendor_id);
       }
     }
@@ -343,9 +380,71 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
     // blendStats (one shared code path, per the spec); they just
     // filter the input. Null is standard: anything not 'premium'
     // counts in the standard subset.
+    // G2: Kevin's ruling - the lens drives every tile, not just the
+    // price. When the user picks Premium, spread/min-max/pricedCount/
+    // linkedCount/unpricedUsd/12-mo-spend all describe premium-only
+    // items. Compute three COMPLETE stats sets, let the client swap
+    // which one it reads.
+    //
+    // Each buildLensStats call:
+    //   - re-runs blendStats on its subset (outlier exclusion is
+    //     per-subset; an item that's an outlier in the combined set
+    //     may not be one within Standard alone, and vice versa)
+    //   - counts linkedCount on the same grade partition of `items`
+    //     (the raw unfiltered list, so even un-priced items count)
+    //   - splits unpricedUsd by grade so each lens's "in this price"
+    //     tells the truth about its own population.
+    // Grade predicate is just "standard" vs "premium" vs "both". Null
+    // counts as standard; anything else is treated as standard too per
+    // the UI rule (any stray third value falls into the standard bucket).
+    const inSubset = (g: string | null, lens: "blended" | "standard" | "premium"): boolean => {
+      if (lens === "blended") return true;
+      const t = g === "premium" ? "premium" : "standard";
+      return t === lens;
+    };
+    const pricedIdSet = new Set(priced.map((p) => p.id));
+    const buildLensStats = (lens: "blended" | "standard" | "premium"): LensStats => {
+      const subsetPriced = priced.filter((p) => inSubset(p.grade, lens));
+      const s = blendStats(subsetPriced);
+      const min = s.survivorMin;
+      const max = s.survivorMax;
+      const spread = min != null && max != null && min > 0 ? max / min : null;
+      let linkedCount = 0;
+      let subsetUsd = 0;
+      let subsetUnpricedUsd = 0;
+      for (const it of items) {
+        if (!inSubset(it.grade ?? null, lens)) continue;
+        linkedCount += 1;
+        const itU = Number(it.usd_12m ?? 0);
+        subsetUsd += itU;
+        // An item is "priced into" its subset if it contributed to the
+        // subset's blend - priced AND not excluded as an outlier of
+        // THIS subset's median.
+        if (!pricedIdSet.has(it.id) || s.excluded.has(it.id)) subsetUnpricedUsd += itU;
+      }
+      const pricedCount = subsetPriced.length - s.excluded.size;
+      return {
+        avgPerBase: s.survivorMean,
+        minPerBase: min,
+        maxPerBase: max,
+        spreadRatio: spread,
+        pricedCount,
+        linkedCount,
+        usd12m: subsetUsd,
+        unpricedUsd: subsetUnpricedUsd,
+      };
+    };
+
+    const blendedLens = buildLensStats("blended");
+    const standardLens = buildLensStats("standard");
+    const premiumLens = buildLensStats("premium");
+
+    // The "blended" stats stay the source of truth for the LIST row
+    // and for the attention logic below. Every pre-G1 reader of
+    // avgPerBase/spreadRatio/min/max/pricedCount/linkedCount/
+    // unpricedUsd/usd12m keeps the same number (spend-weighted now,
+    // but the field it reads is unchanged).
     const stats = blendStats(priced);
-    const standardStats = blendStats(priced.filter((p) => p.grade !== "premium"));
-    const premiumStats = blendStats(priced.filter((p) => p.grade === "premium"));
     const avg = stats.survivorMean;
     const min = stats.survivorMin;
     const max = stats.survivorMax;
@@ -354,12 +453,6 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
     const medianBeforeExclusion = stats.median;
     const ratioFlag = spread != null && spread > SPREAD_RATIO_MAX;
     const bandKey = masterUom;
-
-    // G1: priced-count per grade, for the master-detail selector's
-    // "N items" line. A grade with zero priced items drives the
-    // selector option disabled + the price displayed as "-".
-    const standardPricedCount = priced.filter((p) => p.grade !== "premium" && !standardStats.excluded.has(p.id)).length;
-    const premiumPricedCount = priced.filter((p) => p.grade === "premium" && !premiumStats.excluded.has(p.id)).length;
 
     // B3: corroboration = two or more DISTINCT VENDORS on the
     // survivor set (same rows that produce the mean), with survivor
@@ -511,14 +604,17 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
       maxPerBase: max,
       spreadRatio: spread,
       pricedCount,
-      // G1: the two subset rollups. `avgPerBase` above stays the
-      // blended figure every pre-G1 reader uses - unchanged for
-      // compatibility. Null here means no priced items in that
-      // grade (must render as "-", never a zero number).
-      avgPerBaseStandard: standardStats.survivorMean,
-      avgPerBasePremium: premiumStats.survivorMean,
-      pricedCountStandard: standardPricedCount,
-      pricedCountPremium: premiumPricedCount,
+      // G2: full per-lens stats. The client swaps which lens populates
+      // ALL FOUR tiles - price, spread, in-this-price, 12-mo spend -
+      // per Kevin's §4 correction. The flat avgPerBase/min/max/spread/
+      // pricedCount/linkedCount/unpricedUsd/usd12m fields above stay
+      // as the blended values for the list-row's existing readers;
+      // detail-pane tiles read statsByLens[lens] instead.
+      statsByLens: {
+        blended: blendedLens,
+        standard: standardLens,
+        premium: premiumLens,
+      },
       unpricedUsd,
       issues,
       suggestedBaseUnit,

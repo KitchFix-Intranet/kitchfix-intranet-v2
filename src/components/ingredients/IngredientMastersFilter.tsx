@@ -41,6 +41,23 @@ import { MasterSendAllBackButton } from "./MasterSendAllBackButton";
 // other flag.
 export type MasterIssue = "spread" | "coverage" | "mismatch" | "outlier" | "band" | "empty";
 
+// G2: full stats tile set for one lens (blended / standard / premium).
+// Every detail-pane tile (price, spread, in-this-price, 12-mo spend)
+// reads from one of these per lens choice, so switching lens swaps
+// the entire row. See IngredientMasters.tsx buildLensStats for the
+// per-subset math - outlier exclusion is per-subset, mean is
+// spend-weighted, min/max/spread stay unweighted.
+export type LensStats = {
+  avgPerBase: number | null;
+  minPerBase: number | null;
+  maxPerBase: number | null;
+  spreadRatio: number | null;
+  pricedCount: number;
+  linkedCount: number;
+  usd12m: number;
+  unpricedUsd: number;
+};
+
 export type MasterLinkedItem = {
   id: string;
   name: string;
@@ -89,13 +106,16 @@ export type MasterRow = {
   minPerBase: number | null;
   maxPerBase: number | null;
   spreadRatio: number | null;
-  // G1: subset rollups alongside the existing blended figure. Both
-  // may be null, meaning no priced items at that grade. Null must
-  // render as "-", never a zero number.
-  avgPerBaseStandard: number | null;
-  avgPerBasePremium: number | null;
-  pricedCountStandard: number;
-  pricedCountPremium: number;
+  // G2: full per-lens stats. All four detail-pane tiles (price,
+  // spread, in-this-price, 12-mo spend) follow the lens. The flat
+  // avgPerBase/etc. above stay as the blended values for the list
+  // row's own readers. See LensStats + statsByLens construction in
+  // IngredientMasters.tsx for the exact per-subset math.
+  statsByLens: {
+    blended: LensStats;
+    standard: LensStats;
+    premium: LensStats;
+  };
   baseUom: string | null;
   flagged: boolean;
   flagReason: string | null;
@@ -952,13 +972,37 @@ function IssueNote({ row }: { row: MasterRow }) {
   );
 }
 
-// G1: three-price selector. "Standard" is the default - per the spec,
-// blended is an accident of purchase mix and the least decision-
-// useful of the three. The selector is view state only; it does not
-// persist to the DB and does not need to survive a reload. Options
-// are disabled when the master has no priced items at that grade -
-// null grade subsets render "-", never a zero number.
+// G1/G2: three-price selector. Default is Standard per the spec lean -
+// blended is an accident of purchase mix and the least decision-useful
+// of the three. View state only; not persisted (R-112 pattern).
+// G2: the lens drives ALL FOUR tiles (price, spread, in-this-price,
+// 12-mo spend). Switching to Premium re-scopes the whole row to
+// premium-only items. Empty subsets keep the segment clickable but
+// dimmed - per Kevin, a dead button would be the common case
+// (220/230 masters have no premium items post-Step B).
 type PriceLens = "blended" | "standard" | "premium";
+
+const LENS_LABEL: Record<PriceLens, string> = {
+  blended: "Blended",
+  standard: "Standard",
+  premium: "Premium",
+};
+
+// G2: eyebrow copy on the price tile. "<Lens> price" so the number
+// is unambiguous even if the user scrolled past the lens control.
+// BLENDED PRICE / STANDARD PRICE / PREMIUM PRICE (uppercased by
+// .kf-dt__stat-l).
+const LENS_EYEBROW: Record<PriceLens, string> = {
+  blended: "Blended price",
+  standard: "Standard price",
+  premium: "Premium price",
+};
+
+const EMPTY_SUBSET_NOTE: Record<PriceLens, string> = {
+  blended: "no priced items",
+  standard: "no standard items",
+  premium: "no premium items",
+};
 
 function MasterDetail({
   row,
@@ -970,22 +1014,10 @@ function MasterDetail({
   onOpenItem: (itemId: string) => void;
 }) {
   const uom = uomLabel(row.baseUom);
-  const partial = row.pricedCount < row.linkedCount;
   const [lens, setLens] = useState<PriceLens>("standard");
-  const priceByLens: Record<PriceLens, number | null> = {
-    blended: row.avgPerBase,
-    standard: row.avgPerBaseStandard,
-    premium: row.avgPerBasePremium,
-  };
-  // If the active lens has no items (e.g. premium pre-migration),
-  // hold the selection but render the unavailable state - do not
-  // silently fall through to blended, that'd hide the null.
-  const activePrice = priceByLens[lens];
-  const countByLens: Record<PriceLens, number> = {
-    blended: row.pricedCount,
-    standard: row.pricedCountStandard,
-    premium: row.pricedCountPremium,
-  };
+  const active = row.statsByLens[lens];
+  const partial = active.pricedCount < active.linkedCount;
+  const spreadBad = active.spreadRatio != null && active.spreadRatio > 3;
   return (
     <div className="kf-dt">
       <div className="kf-dt__head">
@@ -1005,19 +1037,17 @@ function MasterDetail({
           ))}
           {row.resale ? <span className="kf-pill kf-pill--muted">Retail</span> : null}
           <BaseUnitControl row={row} />
-        </div>
-      </div>
-
-      <div className="kf-dt__stats">
-        <div className="kf-dt__stat kf-dt__stat--price">
-          {/* G1: selector decides which rollup the Per-unit number
-              reflects. The three prices come from one shared code
-              path on the server; this is view state only. Null in
-              `activePrice` renders "-", not a zero number. */}
-          <div className="kf-dt__lens" role="radiogroup" aria-label="Price view">
+          {/* G2: lens control lives on the header row alongside the
+              base-unit chooser. Both are view controls (change how
+              the number is expressed, not what it means). No "Price"
+              label - the tile's eyebrow already carries that word.
+              Segments stay clickable when a subset is empty; the
+              dimmed --na style says "no items here" without a dead
+              button. */}
+          <div className="kf-dt__lens kf-dt__lens--header" role="radiogroup" aria-label="Price lens">
             {(["blended", "standard", "premium"] as const).map((k) => {
-              const available = priceByLens[k] != null;
-              const label = k === "blended" ? "Blended" : k === "standard" ? "Standard" : "Premium";
+              const available = row.statsByLens[k].avgPerBase != null;
+              const label = LENS_LABEL[k];
               return (
                 <button
                   key={k}
@@ -1027,47 +1057,60 @@ function MasterDetail({
                   aria-pressed={lens === k}
                   className={`kf-dt__lens-btn${lens === k ? " kf-dt__lens-btn--on" : ""}${!available ? " kf-dt__lens-btn--na" : ""}`}
                   onClick={() => setLens(k)}
-                  title={available ? `Show ${label.toLowerCase()} price` : `No ${label.toLowerCase()} items on this master`}
-                  disabled={!available && lens !== k}
+                  title={available ? `Show ${label.toLowerCase()}` : `No ${label.toLowerCase()} items on this master`}
                 >
                   {label}
                 </button>
               );
             })}
           </div>
-          <strong>{activePrice != null ? fmtUsd(activePrice) : "-"}</strong>
+        </div>
+      </div>
+
+      <div className="kf-dt__stats">
+        {/* G2: every tile reads from `active`. Switching lens re-scopes
+            spread/min-max/count/spend alongside the price. Spread and
+            min/max stay unweighted per Kevin's §2.3 ruling - they
+            describe the range of prices, not the blended cost. */}
+        <div className="kf-dt__stat">
+          <span className="kf-dt__stat-l">{LENS_EYEBROW[lens]}</span>
+          <strong>{active.avgPerBase != null ? fmtUsd(active.avgPerBase) : "-"}</strong>
           <span className="kf-dt__stat-n">
-            {activePrice != null
-              ? `per ${uom} · ${fmtCount(countByLens[lens])} priced`
-              : lens === "premium"
-                ? "no premium items"
-                : lens === "standard"
-                  ? "no standard items"
-                  : "no priced items"}
+            {active.avgPerBase != null
+              ? `per ${uom} · ${fmtCount(active.pricedCount)} priced`
+              : EMPTY_SUBSET_NOTE[lens]}
           </span>
         </div>
-        <div className={`kf-dt__stat${row.spreadRatio != null && row.spreadRatio > 3 ? " kf-dt__stat--bad" : ""}`}>
+        <div className={`kf-dt__stat${spreadBad ? " kf-dt__stat--bad" : ""}`}>
           <span className="kf-dt__stat-l">Spread</span>
-          <strong>{row.spreadRatio != null ? `${row.spreadRatio.toFixed(1)}x` : "-"}</strong>
+          <strong>{active.spreadRatio != null ? `${active.spreadRatio.toFixed(1)}x` : "-"}</strong>
           <span className="kf-dt__stat-n">
-            {row.minPerBase != null && row.maxPerBase != null
-              ? `${fmtUsd(row.minPerBase)} - ${fmtUsd(row.maxPerBase)}`
-              : "no priced items"}
+            {active.minPerBase != null && active.maxPerBase != null
+              ? `${fmtUsd(active.minPerBase)} - ${fmtUsd(active.maxPerBase)}`
+              : EMPTY_SUBSET_NOTE[lens]}
           </span>
         </div>
-        <div className={`kf-dt__stat${partial ? " kf-dt__stat--warn" : ""}`}>
+        <div className={`kf-dt__stat${partial && active.linkedCount > 0 ? " kf-dt__stat--warn" : ""}`}>
           <span className="kf-dt__stat-l">In this price</span>
           <strong>
-            {fmtCount(row.pricedCount)} of {fmtCount(row.linkedCount)}
+            {fmtCount(active.pricedCount)} of {fmtCount(active.linkedCount)}
           </strong>
           <span className="kf-dt__stat-n">
-            {partial ? `${fmtUsd(row.unpricedUsd)} outside` : "all linked items"}
+            {active.linkedCount === 0
+              ? EMPTY_SUBSET_NOTE[lens]
+              : partial
+                ? `${fmtUsd(active.unpricedUsd)} outside`
+                : "all linked items"}
           </span>
         </div>
         <div className="kf-dt__stat">
           <span className="kf-dt__stat-l">12-mo spend</span>
-          <strong>{fmtUsd(row.usd12m)}</strong>
-          <span className="kf-dt__stat-n">{fmtCount(row.linkedCount)} linked items</span>
+          <strong>{active.linkedCount > 0 ? fmtUsd(active.usd12m) : "-"}</strong>
+          <span className="kf-dt__stat-n">
+            {active.linkedCount === 0
+              ? EMPTY_SUBSET_NOTE[lens]
+              : `${fmtCount(active.linkedCount)} linked items`}
+          </span>
         </div>
       </div>
 
