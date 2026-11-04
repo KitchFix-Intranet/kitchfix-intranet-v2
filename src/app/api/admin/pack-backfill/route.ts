@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireOwnerApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
 import { estimatePerUnit } from "@/lib/ingredients/estimate";
-import { DIM_BY_UOM, TO_BASE, normUom } from "@/lib/ingredients/pack";
+import { DIM_BY_UOM, TO_BASE, normUom, isSlashlessWeightPack, parsePack } from "@/lib/ingredients/pack";
 import { bestTrigramMatch } from "@/lib/ingredients/trigram";
 
 export const dynamic = "force-dynamic";
@@ -771,6 +771,27 @@ export async function POST(req: NextRequest) {
             : effectiveConf === "low"
               ? "check"
               : "none";
+
+    // P1 correction 2b (2026-11-04): slashless-weight catalog-
+    // disagreement signal. When the invoice's pack_text is a bare
+    // 2-3 digit weight (`45 LB`, `410 LB`, `40#`) AND a SKU-matched
+    // catalog row provided a different shape (qty > 1 after the
+    // estimator's catalog-first pick), mark the row `check` so the
+    // swap from the invoice's slashless reading to the catalog's
+    // slashed form is visible for review. The pack cols still carry
+    // CATALOG's values - check means "parsed but flagged", not
+    // "fields nulled" (the live contract has pack_state='check'
+    // rows with valid pack_qty today). Does NOT fire when no catalog
+    // match exists - the shape alone is not evidence, so a legit
+    // 25-lb sack with no catalog row stays `ok`.
+    if (
+      matchSource === "sku" &&
+      estimate.pack_source === "catalog" &&
+      isSlashlessWeightPack(it.pack_text) &&
+      parsed.qty != null && parsed.qty > 1
+    ) {
+      packState = "check";
+    }
 
     // When derived pack is accepted, override the pack cols. The
     // 'check' state is already handled above (derivedPackUsed branch).

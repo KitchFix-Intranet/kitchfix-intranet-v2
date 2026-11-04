@@ -191,20 +191,24 @@ export function convertPer(
 // information (pack_text itself keeps the full original string).
 const TRAILING_CONTAINER = /\s+(CS|CA|CASE|BX|BOX|BG|BAG|PK|PKS|PACK|COV|TUB|JAR|CTN|CARTON|CAN|CANS|SHK|WRAP|LAYER|CLAMSHELL|LOG|TRAY|BULK|PAC|INDV|EA)\s*$/i;
 
-// P1 §3.2: slashless 2-3 digit weight pack ("45 LB", "410 LB", "40#").
-// Per Kevin's P1 ruling, this shape is the Sysco slash-loss family -
-// "4/5 LB" and "4/10 LB" with the separator dropped by OCR. The parse
-// alone cannot tell a legitimate 45-lb pack from a slash-loss, so the
-// parser emits low+null (no total_base, no confident per-base). The
-// estimator's catalog-first precedence still wins when a SKU-matched
-// catalog row carries the slashed form; only items without catalog
-// corroboration fall to `check`. This makes catalog lookup load-
-// bearing for CORRECTNESS, not only for filling blanks.
-//
-// Also includes `#` as a weight equivalent (normUom maps # -> LB) so
-// `40#` gets the same treatment as `40 LB`. Kevin's regex named only
-// LB/OZ; # has the same slash-loss risk and is included here.
-const SLASHLESS_WEIGHT_RE = /^\d{2,3}\s*(LB|LBS?|OZ|#)\s*$/i;
+// P1 §3.2 slashless 2-3 digit weight pack shape ("45 LB", "410 LB",
+// "40#"). SHAPE ONLY - the parser does NOT downgrade these; a 25 LB
+// sack of flour is not a slash-loss, and the shape alone is not
+// evidence of OCR damage. The disagreement signal is CATALOG
+// MISMATCH, not digit count (Kevin's P1 correction 2b, 2026-11-04).
+// Exported so the backfill can detect the shape and, when a catalog
+// SKU match disagrees with the invoice, mark the row `check` while
+// taking the catalog's slashed form.
+export const SLASHLESS_WEIGHT_RE = /^\s*\d{2,3}\s*(LB|LBS?|OZ|#)\s*$/i;
+
+// P1: does the raw invoice pack text look like the slash-loss family?
+// Used ONLY by the backfill's catalog-disagreement check. Does not
+// imply the pack is wrong - only that a catalog SKU-match's slashed
+// form, if different, is the better reading.
+export function isSlashlessWeightPack(raw: string | null | undefined): boolean {
+  if (!raw || typeof raw !== "string") return false;
+  return SLASHLESS_WEIGHT_RE.test(raw.trim());
+}
 
 export function parsePack(raw: string | null | undefined): ParsedPack {
   if (!raw || typeof raw !== "string") return { ...EMPTY, note: "empty" };
@@ -636,34 +640,15 @@ export function parsePack(raw: string | null | undefined): ParsedPack {
     if (uom != null) {
       const conv = toBase(n, uom);
       if (conv) {
-        // P1 §3.2 Kevin's ruling: slashless 2-3 digit weight (`45 LB`,
-        // `410 LB`, `40#`) is the Sysco slash-loss family. The parse
-        // alone cannot distinguish a legit 45-lb pack from `4/5 LB`
-        // with the separator dropped, so the parser DOES NOT emit
-        // confident qty/size here. Null fields + low confidence tell
-        // the estimator and the backfill to treat the row as `check`
-        // unless a catalog SKU match provides the slashed form (the
-        // normal catalog-first precedence in estimate.ts takes care
-        // of that case and never reaches this branch). This makes
-        // catalog lookup load-bearing for CORRECTNESS, not only for
-        // filling blanks. Verified against production 2026-11-04 by
-        // the P1 prompt itself: catalog `4/5 LB` disagreed with
-        // invoice `45 LB` on a chicken breast item (a 2.2x per-lb
-        // error), and catalog `4/10` disagreed with invoice `410 LB`
-        // on chicken thigh / breast items (the ~10x error that
-        // produced the fourteen-cent-per-lb chicken bug named in §2).
-        if (SLASHLESS_WEIGHT_RE.test(s)) {
-          return {
-            qty: null,
-            size: null,
-            uom: null,
-            dim: null,
-            base_uom: null,
-            total_base: null,
-            confidence: "low",
-            note: `slashless 2-3 digit weight "${raw}"; needs catalog corroboration or human`,
-          };
-        }
+        // P1 correction 2b (2026-11-04): the parser does NOT downgrade
+        // slashless 2-3 digit weights. A 25 LB sack of flour is not a
+        // slash-loss, and the parser has no catalog visibility - shape
+        // alone is not evidence. Catalog disagreement is checked in
+        // the backfill via isSlashlessWeightPack() + a shape compare
+        // against the SKU-matched catalog's parse. Measured impact of
+        // nulling here (reverted): 340 items with a legitimate 2-3
+        // digit weight and no catalog fallback would have lost their
+        // per-base price.
         // Bare-N-large guard: a weight/volume >= 1000 bare integer
         // (`3210 OZ`, `1210 FOZ`) is almost always a dropped
         // separator - a real case rarely weighs that much in a single
