@@ -63,6 +63,9 @@ export type MasterLinkedItem = {
   // the outlier rule. Surfaced on the chip as "set by hand" so the
   // user sees the fix is the override, not the parser.
   priceManualOverride: boolean;
+  // G1: stored grade on the item. Null is standard; 'premium' is the
+  // only sanctioned non-null value today.
+  grade: string | null;
   usd12m: number;
 };
 
@@ -86,6 +89,13 @@ export type MasterRow = {
   minPerBase: number | null;
   maxPerBase: number | null;
   spreadRatio: number | null;
+  // G1: subset rollups alongside the existing blended figure. Both
+  // may be null, meaning no priced items at that grade. Null must
+  // render as "-", never a zero number.
+  avgPerBaseStandard: number | null;
+  avgPerBasePremium: number | null;
+  pricedCountStandard: number;
+  pricedCountPremium: number;
   baseUom: string | null;
   flagged: boolean;
   flagReason: string | null;
@@ -942,6 +952,14 @@ function IssueNote({ row }: { row: MasterRow }) {
   );
 }
 
+// G1: three-price selector. "Standard" is the default - per the spec,
+// blended is an accident of purchase mix and the least decision-
+// useful of the three. The selector is view state only; it does not
+// persist to the DB and does not need to survive a reload. Options
+// are disabled when the master has no priced items at that grade -
+// null grade subsets render "-", never a zero number.
+type PriceLens = "blended" | "standard" | "premium";
+
 function MasterDetail({
   row,
   onBack,
@@ -953,6 +971,21 @@ function MasterDetail({
 }) {
   const uom = uomLabel(row.baseUom);
   const partial = row.pricedCount < row.linkedCount;
+  const [lens, setLens] = useState<PriceLens>("standard");
+  const priceByLens: Record<PriceLens, number | null> = {
+    blended: row.avgPerBase,
+    standard: row.avgPerBaseStandard,
+    premium: row.avgPerBasePremium,
+  };
+  // If the active lens has no items (e.g. premium pre-migration),
+  // hold the selection but render the unavailable state - do not
+  // silently fall through to blended, that'd hide the null.
+  const activePrice = priceByLens[lens];
+  const countByLens: Record<PriceLens, number> = {
+    blended: row.pricedCount,
+    standard: row.pricedCountStandard,
+    premium: row.pricedCountPremium,
+  };
   return (
     <div className="kf-dt">
       <div className="kf-dt__head">
@@ -976,10 +1009,42 @@ function MasterDetail({
       </div>
 
       <div className="kf-dt__stats">
-        <div className="kf-dt__stat">
-          <span className="kf-dt__stat-l">Per-unit</span>
-          <strong>{row.avgPerBase != null ? fmtUsd(row.avgPerBase) : "-"}</strong>
-          <span className="kf-dt__stat-n">per {uom}</span>
+        <div className="kf-dt__stat kf-dt__stat--price">
+          {/* G1: selector decides which rollup the Per-unit number
+              reflects. The three prices come from one shared code
+              path on the server; this is view state only. Null in
+              `activePrice` renders "-", not a zero number. */}
+          <div className="kf-dt__lens" role="radiogroup" aria-label="Price view">
+            {(["blended", "standard", "premium"] as const).map((k) => {
+              const available = priceByLens[k] != null;
+              const label = k === "blended" ? "Blended" : k === "standard" ? "Standard" : "Premium";
+              return (
+                <button
+                  key={k}
+                  type="button"
+                  role="radio"
+                  aria-checked={lens === k}
+                  aria-pressed={lens === k}
+                  className={`kf-dt__lens-btn${lens === k ? " kf-dt__lens-btn--on" : ""}${!available ? " kf-dt__lens-btn--na" : ""}`}
+                  onClick={() => setLens(k)}
+                  title={available ? `Show ${label.toLowerCase()} price` : `No ${label.toLowerCase()} items on this master`}
+                  disabled={!available && lens !== k}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+          <strong>{activePrice != null ? fmtUsd(activePrice) : "-"}</strong>
+          <span className="kf-dt__stat-n">
+            {activePrice != null
+              ? `per ${uom} · ${fmtCount(countByLens[lens])} priced`
+              : lens === "premium"
+                ? "no premium items"
+                : lens === "standard"
+                  ? "no standard items"
+                  : "no priced items"}
+          </span>
         </div>
         <div className={`kf-dt__stat${row.spreadRatio != null && row.spreadRatio > 3 ? " kf-dt__stat--bad" : ""}`}>
           <span className="kf-dt__stat-l">Spread</span>
@@ -1092,7 +1157,16 @@ function MasterDetail({
                         </span>
                       ) : null}
                     </td>
-                    <td>{li.vendor}</td>
+                    <td>
+                      {li.vendor}
+                      {/* G1: tier label. Null -> blank (97% case, no
+                          visual noise). 'premium' -> small amber pill. */}
+                      {li.grade === "premium" ? (
+                        <span className="kf-pill kf-pill--premium" title="Premium tier">
+                          Premium
+                        </span>
+                      ) : null}
+                    </td>
                     <td className="kf-table__num">
                       {li.perBase != null ? (
                         <>

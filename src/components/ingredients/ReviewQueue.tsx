@@ -54,6 +54,7 @@ type ProposedItem = {
     confidence?: string | null;
     note?: string | null;
   } | null;
+  grade: string | null;
 };
 
 type Ingredient = {
@@ -118,7 +119,7 @@ async function loadReview() {
     const { data, error } = await client
       .from("pr_vendor_items")
       .select(
-        "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_qty,pack_size,pack_uom,pack_state,pack_override,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen,flagged,flag_note,flagged_by,flagged_at,price_estimate"
+        "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_qty,pack_size,pack_uom,pack_state,pack_override,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen,flagged,flag_note,flagged_by,flagged_at,price_estimate,grade"
       )
       .eq("link_status", "proposed")
       .in("status", ["active", "resale"])
@@ -337,6 +338,8 @@ async function loadReview() {
           flagNote: it.flag_note ?? null,
           flaggedBy: it.flagged_by ?? null,
           flaggedAt: it.flagged_at ?? null,
+          // G1: tier on the item.
+          grade: it.grade ?? null,
         });
       }
       groups.set(key, g);
@@ -433,6 +436,8 @@ async function loadReview() {
           flagNote: it.flag_note ?? null,
           flaggedBy: it.flagged_by ?? null,
           flaggedAt: it.flagged_at ?? null,
+          // G1: tier on the item.
+          grade: it.grade ?? null,
         });
       }
       groups.set(key, g);

@@ -80,6 +80,9 @@ export type ReviewGroupItem = {
   flagNote: string | null;
   flaggedBy: string | null;
   flaggedAt: string | null;
+  // G1 (grade model): tier on the item. Null is standard; 'premium'
+  // is the only sanctioned non-null value today.
+  grade: string | null;
 };
 
 // Does this pack_override payload actually represent a human-set

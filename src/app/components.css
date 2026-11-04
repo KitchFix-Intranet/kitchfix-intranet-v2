@@ -156,6 +156,10 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--sp-navy); }
 .kf-pill--muted { background: var(--sp-line-soft); color: var(--sp-body); }
 .kf-pill--twin { background: var(--sp-sky-tint); color: var(--sp-navy); }
 .kf-pill--reserved { background: var(--sp-info-bg); color: var(--sp-link); }
+/* G1 (grade model): amber-register tier marker on the linked-items
+   row. Register picked deliberately: Premium is noteworthy, not an
+   error. Standard has no pill - absence IS the label. */
+.kf-pill--premium { background: var(--sp-warn-bg); color: var(--sp-warn-strong); }
 
 /* ---------- Card ---------- */
 .kf-card {

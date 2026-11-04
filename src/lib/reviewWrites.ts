@@ -1140,6 +1140,57 @@ export async function setIngredientAllergens(
 // because a bad value here would surface as a 500 from Postgres.
 const BASE_UNIT_VALUES = new Set(["lb", "each", "gal", "dozen"]);
 
+// G1: grade write. Grade is a per-item tier; null is standard;
+// 'premium' is the only sanctioned non-null value today. Writes only
+// pr_vendor_items.grade and emits one pr_events row with BOTH before
+// and after populated (2026-11-04 discovery: every review_* event has
+// before=null, making audit unusable - do not add another write that
+// loses its own history).
+//
+// Column ownership (per POTRACK_INGREDIENT_GOVERNANCE_SPEC): this
+// helper never writes link_status, link_reason, link_confidence or
+// ingredient_id. Grade is orthogonal to linking.
+export async function setVendorItemGrade(
+  client: SupabaseClient,
+  args: { itemId: string; grade: "premium" | null; actorEmail: string }
+): Promise<{ ok: boolean; error?: string }> {
+  const { itemId, actorEmail } = args;
+  // Narrow to the sanctioned two-value space at the server too (the
+  // route re-validates on the wire). UI holds the line at two values;
+  // this is the belt behind that suspender.
+  const next: "premium" | null = args.grade === "premium" ? "premium" : null;
+
+  const { data: cur, error: curErr } = await client
+    .from("pr_vendor_items")
+    .select("id,grade,status")
+    .eq("id", itemId)
+    .maybeSingle();
+  if (curErr) return { ok: false, error: curErr.message };
+  if (!cur) return { ok: false, error: "Vendor item not found" };
+  const row = cur as { id: string; grade: string | null; status: string };
+
+  // No-op guard: same value in, same value out. Do not emit an
+  // audit row for nothing happening - that's noise, not history.
+  if ((row.grade ?? null) === next) return { ok: true };
+
+  const { error: upErr } = await client
+    .from("pr_vendor_items")
+    .update({ grade: next, updated_at: new Date().toISOString() })
+    .eq("id", itemId);
+  if (upErr) return { ok: false, error: upErr.message };
+
+  await client.from("pr_events").insert({
+    entity_type: "vendor_item",
+    entity_id: itemId,
+    kind: "vendor_item_grade_set",
+    before: { grade: row.grade ?? null },
+    after: { grade: next },
+    actor: actorEmail,
+  });
+
+  return { ok: true };
+}
+
 export async function setIngredientBaseUnit(
   client: SupabaseClient,
   args: { ingredientId: string; baseUnit: string; actorEmail: string }

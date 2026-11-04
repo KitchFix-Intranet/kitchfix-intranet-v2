@@ -63,7 +63,7 @@ export async function GET(req: NextRequest) {
   const { data: itRow, error: itErr } = await client
     .from("pr_vendor_items")
     .select(
-      "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_qty,pack_size,pack_uom,pack_state,pack_override,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen,flagged,flag_note,flagged_by,flagged_at,price_estimate"
+      "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_qty,pack_size,pack_uom,pack_state,pack_override,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen,flagged,flag_note,flagged_by,flagged_at,price_estimate,grade"
     )
     .eq("id", id)
     .maybeSingle();
@@ -105,6 +105,7 @@ export async function GET(req: NextRequest) {
       confidence?: string | null;
       note?: string | null;
     } | null;
+    grade: string | null;
   };
 
   // Enrichment reads: vendor name, catalog match (if the item has a
@@ -241,6 +242,9 @@ export async function GET(req: NextRequest) {
     flagNote: it.flag_note ?? null,
     flaggedBy: it.flagged_by ?? null,
     flaggedAt: it.flagged_at ?? null,
+    // G1: tier on the item. Null is standard; 'premium' is the only
+    // sanctioned non-null value today.
+    grade: it.grade ?? null,
   };
 
   const ingredient = (ingredientRes.data as ReviewCardIngredient | null) ?? null;

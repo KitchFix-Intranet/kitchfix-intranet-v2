@@ -62,6 +62,10 @@ type LinkedItemRow = {
   // isPriceManualOverride(pack_override) without a cross-dimension
   // ingredient check - the label is about provenance, not blend math.
   pack_override: unknown;
+  // G1: tier on the item. null is standard; 'premium' is the only
+  // sanctioned non-null value today. The master rolls up three
+  // prices filtered by this field.
+  grade: string | null;
 };
 
 // S3: median-based outlier exclusion for the master blend. Rule:
@@ -220,7 +224,7 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
   for (;;) {
     const { data, error } = await client
       .from("pr_vendor_items")
-      .select("id,vendor_id,ingredient_id,name,usd_12m,price_estimate,pack_override")
+      .select("id,vendor_id,ingredient_id,name,usd_12m,price_estimate,pack_override,grade")
       .eq("link_status", "confirmed")
       .in("status", LIVE_STATUSES) // B4: archived/not_food/duplicate/one_off never reach the rollup
       .not("ingredient_id", "is", null)
@@ -265,7 +269,12 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
     const masterUom = canonicalFromBaseUnit(m.base_unit);
     // S3: collect {id, v} so blendStats can tag exclusions back to
     // the item that owns each priced value.
-    const priced: Array<{ id: string; v: number }> = [];
+    // G1: each entry also carries its grade so the same priced set
+    // feeds three subset rollups below (blended / standard /
+    // premium). Null is standard; 'premium' is the only sanctioned
+    // non-null value today - any stray third value is treated as
+    // standard by the UI rule.
+    const priced: Array<{ id: string; v: number; grade: string | null }> = [];
     // B3: per-priced-item vendor map so the band's corroboration
     // check can count DISTINCT VENDORS on the survivors (rows that
     // actually contribute to the mean). Using the same filter as
@@ -308,17 +317,17 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
           // polluted by cross-dimension values; the mismatch flag
           // handles the surface.
         } else {
-          priced.push({ id: it.id, v: converted });
+          priced.push({ id: it.id, v: converted, grade: it.grade ?? null });
           vendorByPricedItem.set(it.id, it.vendor_id);
         }
       } else if (storedUom && !masterUom) {
         // Master has no canonical uom (unusual base_unit text); fall
         // back to the stored value as-is so the row still shows a
         // number.
-        priced.push({ id: it.id, v: rawN });
+        priced.push({ id: it.id, v: rawN, grade: it.grade ?? null });
         vendorByPricedItem.set(it.id, it.vendor_id);
       } else {
-        priced.push({ id: it.id, v: rawN });
+        priced.push({ id: it.id, v: rawN, grade: it.grade ?? null });
         vendorByPricedItem.set(it.id, it.vendor_id);
       }
     }
@@ -326,7 +335,17 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
     // the survivors only; linkedItems.outlier below tags the excluded
     // rows so they still appear in the table (visibly dropped from
     // the blend, not deleted).
+    //
+    // G1: the "blended" stats below run over every priced item and
+    // keep the pre-G1 single-price behaviour unchanged - every
+    // surface that reads avgPerBase / spreadRatio / etc still sees
+    // the same number. The two subset stats come from the SAME
+    // blendStats (one shared code path, per the spec); they just
+    // filter the input. Null is standard: anything not 'premium'
+    // counts in the standard subset.
     const stats = blendStats(priced);
+    const standardStats = blendStats(priced.filter((p) => p.grade !== "premium"));
+    const premiumStats = blendStats(priced.filter((p) => p.grade === "premium"));
     const avg = stats.survivorMean;
     const min = stats.survivorMin;
     const max = stats.survivorMax;
@@ -335,6 +354,12 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
     const medianBeforeExclusion = stats.median;
     const ratioFlag = spread != null && spread > SPREAD_RATIO_MAX;
     const bandKey = masterUom;
+
+    // G1: priced-count per grade, for the master-detail selector's
+    // "N items" line. A grade with zero priced items drives the
+    // selector option disabled + the price displayed as "-".
+    const standardPricedCount = priced.filter((p) => p.grade !== "premium" && !standardStats.excluded.has(p.id)).length;
+    const premiumPricedCount = priced.filter((p) => p.grade === "premium" && !premiumStats.excluded.has(p.id)).length;
 
     // B3: corroboration = two or more DISTINCT VENDORS on the
     // survivor set (same rows that produce the mean), with survivor
@@ -408,6 +433,10 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
           // outlier-checked by this rule. The chip surfaces it so
           // Kevin knows the fix is the override, not the parser.
           priceManualOverride: isPriceManualOverride(it.pack_override),
+          // G1: carry the item's stored grade so the linked-items
+          // table in the master detail pane can label the tier.
+          // Null is standard; see src/lib/ingredients/grade.ts.
+          grade: it.grade ?? null,
           usd12m: Number(it.usd_12m ?? 0),
         };
       })
@@ -482,6 +511,14 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
       maxPerBase: max,
       spreadRatio: spread,
       pricedCount,
+      // G1: the two subset rollups. `avgPerBase` above stays the
+      // blended figure every pre-G1 reader uses - unchanged for
+      // compatibility. Null here means no priced items in that
+      // grade (must render as "-", never a zero number).
+      avgPerBaseStandard: standardStats.survivorMean,
+      avgPerBasePremium: premiumStats.survivorMean,
+      pricedCountStandard: standardPricedCount,
+      pricedCountPremium: premiumPricedCount,
       unpricedUsd,
       issues,
       suggestedBaseUnit,

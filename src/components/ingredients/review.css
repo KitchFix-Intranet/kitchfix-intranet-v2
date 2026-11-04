@@ -1737,6 +1737,82 @@
 .kf-dt__stat--warn strong { color: var(--sp-warn); }
 .kf-dt__stat--bad strong { color: var(--sp-block); }
 
+/* G1 (grade model): price tile with an inline lens selector. The
+ * selector swaps which of blended/standard/premium populates the
+ * tile's main number; the number STAYS in the tile's slot so the
+ * stats row doesn't jump as you toggle. Null subset renders "-" via
+ * the --na segment state (see below) - never a zero number.
+ */
+.kf-dt__stat--price { display: flex; flex-direction: column; gap: var(--sp-sp-2); }
+.kf-dt__lens {
+  display: inline-flex;
+  gap: 2px;
+  margin-top: var(--sp-sp-1);
+  padding: 2px;
+  background: var(--sp-line-soft);
+  border-radius: var(--sp-r-pill);
+  width: fit-content;
+}
+.kf-dt__lens-btn {
+  border: 0;
+  background: transparent;
+  color: var(--sp-muted);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 700;
+  letter-spacing: .2px;
+  padding: 3px 10px;
+  border-radius: var(--sp-r-pill);
+  cursor: pointer;
+}
+.kf-dt__lens-btn:hover:not(:disabled) { color: var(--sp-ink); }
+.kf-dt__lens-btn--on {
+  background: var(--sp-card);
+  color: var(--sp-ink);
+  box-shadow: var(--sp-shadow);
+}
+/* A grade subset with no items. The segment stays selectable (user
+ * can still look) but reads quieter so it does not pretend to carry
+ * a number. The tile's strong slot renders "-" in this state - the
+ * spec is explicit that absence must never render as a zero number. */
+.kf-dt__lens-btn--na { color: var(--sp-muted); font-style: italic; }
+
+/* G1: item-panel grade control. Visually a radio pair; semantically
+ * the same. Standard is the default register (muted), Premium is the
+ * amber register when selected (matches .kf-pill--premium on the
+ * master's linked-items table). Lives in ItemGradeBlock, distinct
+ * from the pack-chain and price-override blocks by spec pin. */
+.kf-grade__ctl {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--sp-line-soft);
+  border-radius: var(--sp-r-pill);
+  align-items: center;
+}
+.kf-grade__btn {
+  border: 0;
+  background: transparent;
+  color: var(--sp-muted);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  font-weight: 700;
+  padding: 6px 14px;
+  border-radius: var(--sp-r-pill);
+  cursor: pointer;
+}
+.kf-grade__btn:hover:not(:disabled) { color: var(--sp-ink); }
+.kf-grade__btn:disabled { cursor: default; opacity: .6; }
+.kf-grade__btn--on {
+  background: var(--sp-card);
+  color: var(--sp-ink);
+  box-shadow: var(--sp-shadow);
+}
+.kf-grade__btn--premium.kf-grade__btn--on {
+  background: var(--sp-warn-bg);
+  color: var(--sp-warn-strong);
+}
+
 .kf-dt__sec { padding: var(--sp-sp-5); }
 .kf-dt__sec + .kf-dt__sec { border-top: 1px solid var(--sp-line); }
 .kf-dt__sec-head {
