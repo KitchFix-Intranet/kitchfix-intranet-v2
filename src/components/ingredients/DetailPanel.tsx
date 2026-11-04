@@ -476,11 +476,26 @@ function PendingIngredientBlock({
 }
 
 function ItemFacts({ item }: { item: ReviewGroupItem }) {
+  // P1 §5/§6: plain-English pack-origin label. Pre-P1 showed the raw
+  // enum ("catalog", "invoice", "manually entered"); P1 broadens the
+  // vocabulary to "from catalog (name match)" for trigram hits and
+  // keeps the words plain. The checkChip shows alongside when the
+  // pack is in check state (needs human verification) - the chip is
+  // what distinguishes a check pack from an ok pack "at a glance"
+  // per §6.
   const packSourceLabel =
-    item.packSource === "override" ? "manually entered"
-      : item.packSource === "catalog" ? "catalog"
-        : item.packSource === "invoice" ? "invoice"
+    item.packSource === "override" ? "set by hand"
+      : item.packSource === "catalog"
+        ? item.matchSource === "catalog_name"
+          ? "from catalog (name match)"
+          : "from catalog"
+        : item.packSource === "invoice" ? "from invoice pack text"
           : null;
+  const isCheck = item.packState === "check";
+  const checkChipTitle =
+    item.matchSource === "catalog_name" && item.matchScore != null
+      ? `matched to a catalog row by name (trigram similarity ${item.matchScore.toFixed(2)}); verify this pack is right`
+      : "pack needs human verification";
   return (
     <section className="kf-drawer__block" aria-label="Item facts">
       {item.displayNameSource === "catalog" && item.vendorOcrName !== item.displayName ? (
@@ -504,6 +519,11 @@ function ItemFacts({ item }: { item: ReviewGroupItem }) {
             {packSourceLabel ? (
               <span className={`kf-facts__note${item.packSource === "override" ? " kf-facts__note--warn" : ""}`}>
                 {packSourceLabel}
+              </span>
+            ) : null}
+            {isCheck ? (
+              <span className="kf-facts__chip kf-facts__chip--check" title={checkChipTitle}>
+                Review
               </span>
             ) : null}
           </dd>

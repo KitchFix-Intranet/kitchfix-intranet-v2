@@ -102,6 +102,9 @@ export async function GET(req: NextRequest) {
       case_price?: number | null;
       case_price_source?: string | null;
       pack_source?: string | null;
+      // P1 §5: catalog match provenance (sku vs catalog_name trigram).
+      match_source?: string | null;
+      match_score?: number | null;
       confidence?: string | null;
       note?: string | null;
     } | null;
@@ -245,6 +248,17 @@ export async function GET(req: NextRequest) {
     // G1: tier on the item. Null is standard; 'premium' is the only
     // sanctioned non-null value today.
     grade: it.grade ?? null,
+    // P1 §5: catalog match provenance. The panel's ItemFacts reads
+    // this alongside packSource to label the pack's origin in plain
+    // words ("from catalog", "from catalog (name match)", etc.).
+    matchSource:
+      pe?.match_source === "sku" || pe?.match_source === "catalog_name"
+        ? pe.match_source
+        : null,
+    matchScore:
+      pe?.match_score != null && Number.isFinite(Number(pe.match_score))
+        ? Number(pe.match_score)
+        : null,
   };
 
   const ingredient = (ingredientRes.data as ReviewCardIngredient | null) ?? null;

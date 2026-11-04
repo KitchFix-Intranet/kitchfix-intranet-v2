@@ -481,6 +481,14 @@ export function estimatePerUnit(input: EstimateInputs): EstimateResult {
   }
 
   if (parsed.confidence === "none" || parsed.total_base == null || parsed.total_base <= 0) {
+    // P1: preserve the parser's 'low' confidence (slashless-weight,
+    // bare-ratio, bulky-weight) so downstream packState lands on
+    // `check`, not `none`. The row still has no confident per_base
+    // (total_base is null), but it surfaces for human review rather
+    // than silently disappearing into the unparsed bucket. 'none'
+    // keeps its old semantics - truly unreadable packs stay 'none'.
+    const preservedConf: EstimateConfidence =
+      parsed.confidence === "none" ? "none" : "low";
     return {
       parsed,
       estimate: {
@@ -489,7 +497,7 @@ export function estimatePerUnit(input: EstimateInputs): EstimateResult {
         case_price: casePrice,
         case_price_source: priceSource,
         pack_source: packSource,
-        confidence: "none",
+        confidence: preservedConf,
         note: parsed.note ?? "pack unparsed",
       },
     };

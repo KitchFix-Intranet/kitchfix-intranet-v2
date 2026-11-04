@@ -83,6 +83,15 @@ export type ReviewGroupItem = {
   // G1 (grade model): tier on the item. Null is standard; 'premium'
   // is the only sanctioned non-null value today.
   grade: string | null;
+  // P1 §5 (pack provenance): how the catalog row backing this item's
+  // pack was matched. 'sku' is exact key; 'catalog_name' is the
+  // trigram-fuzzy name fallback introduced in P1. matchScore (0-1)
+  // is the trigram similarity, carried for the panel's tooltip. Null
+  // when no catalog hit of any kind - pack came from invoice OR was
+  // set by hand. The panel reads packSource + matchSource together
+  // to label the row in plain words.
+  matchSource: "sku" | "catalog_name" | null;
+  matchScore: number | null;
 };
 
 // Does this pack_override payload actually represent a human-set

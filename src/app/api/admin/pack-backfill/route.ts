@@ -3,6 +3,7 @@ import { requireOwnerApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
 import { estimatePerUnit } from "@/lib/ingredients/estimate";
 import { DIM_BY_UOM, TO_BASE, normUom } from "@/lib/ingredients/pack";
+import { bestTrigramMatch } from "@/lib/ingredients/trigram";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +26,18 @@ export const dynamic = "force-dynamic";
 // same writes.
 
 const BATCH = 400;
+
+// P1 §4.2: trigram-similarity thresholds for catalog-by-name matching.
+// Measured on production 2026-11-04: >= 0.75 is a trustworthy visual
+// match (e.g. "Beet Ground Brisket Blend" -> "Beef Ground Brisket
+// Blend" scores 0.875); 0.55-0.75 is plausible but needs eyes; below
+// 0.55 is noise and ignored. A tie at the top is ALSO rejected (per
+// §4.2 "ties mean the name is not distinctive enough to be safe").
+// pg_trgm is installed on the production DB; the port lives in
+// src/lib/ingredients/trigram.ts because Supabase JS cannot return a
+// similarity SCORE through PostgREST and P1 forbids migrations.
+const NAME_MATCH_MIN = 0.55;
+const NAME_MATCH_HIGH = 0.75;
 const DERIVED_PACK_MIN_LB = 0.25;
 const DERIVED_PACK_MAX_LB = 150;
 // Prompt B2: Tier B belt-and-braces. If matched-weight arithmetic
@@ -268,11 +281,21 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Phase 1.9 name-match fallback catalog load (unchanged from prior).
-  const nameMap = new Map<
-    string,
-    { packSet: Set<string>; best: NameCatalogRow | null }
-  >();
+  // P1 §4: name-match fallback catalog load.
+  //
+  // Pre-P1 (Phase 1.9) used strict exact-name equality after
+  // normalizeName() - which missed "Beet" vs "Beef", "Filet" vs
+  // "Fillet", "TU" vs "TUB". P1 replaces that with trigram similarity
+  // (pg_trgm algorithm ported in src/lib/ingredients/trigram.ts
+  // because PostgREST does not expose similarity scores and P1 forbids
+  // migrations). Tiers: >= 0.75 ok, 0.55-0.75 check, < 0.55 ignore;
+  // ties at the top are rejected (name not distinctive).
+  //
+  // The catalog is loaded once per vendor for every item missing a
+  // SKU match - same shape as the Phase 1.9 load, but storing the
+  // full row list per vendor rather than a per-name deduped map so
+  // the scorer can see every candidate.
+  const vendorCatalogRows = new Map<string, Array<NameCatalogRow>>();
   {
     const vendorsNeeding = new Set<string>();
     for (const it of items) {
@@ -284,6 +307,7 @@ export async function POST(req: NextRequest) {
     for (const vendorId of vendorsNeeding) {
       let from = 0;
       const page = 1000;
+      const bucket: Array<NameCatalogRow> = [];
       for (;;) {
         const { data: cData, error: cErr } = await client
           .from("pr_vendor_catalog")
@@ -294,32 +318,11 @@ export async function POST(req: NextRequest) {
           .range(from, from + page - 1);
         if (cErr) return NextResponse.json({ error: cErr.message }, { status: 500 });
         const rows = (cData ?? []) as NameCatalogRow[];
-        for (const r of rows) {
-          const nn = normalizeName(r.clean_name);
-          if (!nn) continue;
-          const packN = normalizePackText(r.pack_text);
-          const key = `${vendorId}#${nn}`;
-          let entry = nameMap.get(key);
-          if (!entry) {
-            entry = { packSet: new Set<string>(), best: null };
-            nameMap.set(key, entry);
-          }
-          entry.packSet.add(packN);
-          const price =
-            r.catalog_price != null ? Number(r.catalog_price) : NaN;
-          const hasPrice = Number.isFinite(price) && price > 0;
-          if (!entry.best) {
-            entry.best = r;
-          } else {
-            const bestPrice =
-              entry.best.catalog_price != null ? Number(entry.best.catalog_price) : NaN;
-            const bestHasPrice = Number.isFinite(bestPrice) && bestPrice > 0;
-            if (hasPrice && !bestHasPrice) entry.best = r;
-          }
-        }
+        bucket.push(...rows);
         if (rows.length < page) break;
         from += page;
       }
+      vendorCatalogRows.set(vendorId, bucket);
     }
   }
 
@@ -629,19 +632,25 @@ export async function POST(req: NextRequest) {
     let cat: { pack_text: string | null; catalog_price: number | null } | null =
       skuKey ? catalogByKey.get(skuKey) ?? null : null;
     let matchSource: "sku" | "catalog_name" | null = cat ? "sku" : null;
+    // P1 §4: trigram-similarity score when matchSource='catalog_name'.
+    // Carried onto the estimate so the panel and audit can show it.
+    let matchScore: number | null = null;
 
     if (!cat) {
-      const nn = normalizeName(it.name);
-      if (nn.length > 0) {
-        const nameKey = `${it.vendor_id}#${nn}`;
-        const entry = nameMap.get(nameKey);
-        if (entry && entry.packSet.size === 1 && entry.best) {
-          cat = {
-            pack_text: entry.best.pack_text,
-            catalog_price: entry.best.catalog_price,
-          };
-          matchSource = "catalog_name";
-        }
+      // Trigram top match against the vendor's catalog. `bestTrigramMatch`
+      // returns null when top < 0.55 OR when top ties with second (tie
+      // rejection per §4.2). Within-vendor only - a cross-vendor
+      // match is forbidden by the §4.1 rules.
+      const rows = vendorCatalogRows.get(it.vendor_id) ?? [];
+      const candidates = rows.map((r) => ({ key: r.clean_name ?? "", row: r }));
+      const match = bestTrigramMatch(it.name, candidates, NAME_MATCH_MIN);
+      if (match) {
+        cat = {
+          pack_text: match.row.pack_text,
+          catalog_price: match.row.catalog_price,
+        };
+        matchSource = "catalog_name";
+        matchScore = match.score;
       }
     }
 
@@ -687,12 +696,15 @@ export async function POST(req: NextRequest) {
 
     const estimate = { ...baseEstimate } as typeof baseEstimate & {
       match_source?: "sku" | "catalog_name";
+      match_score?: number;
     };
     if (matchSource) {
       estimate.match_source = matchSource;
       if (matchSource === "catalog_name") {
-        const nameNote = "matched to catalog by name (invoice SKU/pack missing); verify";
+        const scoreStr = matchScore != null ? matchScore.toFixed(2) : "n/a";
+        const nameNote = `matched to catalog by name (trigram similarity ${scoreStr}); verify`;
         estimate.note = baseEstimate.note ? `${baseEstimate.note}; ${nameNote}` : nameNote;
+        if (matchScore != null) estimate.match_score = matchScore;
       }
     }
 
@@ -738,9 +750,20 @@ export async function POST(req: NextRequest) {
           ? "high"
           : "low"
         : estimate.confidence;
+    // P1 §4.2 tiered packState for catalog-name matches:
+    //   score >= 0.75  AND pack parsed cleanly -> 'ok'
+    //   score 0.55-0.75  OR catalog pack failed to parse -> 'check'
+    // Pre-P1 (Phase 1.9) forced all catalog-name hits to 'check';
+    // that was a correct conservative default when matching was EXACT
+    // only. Trigram >= 0.75 has been verified by hand against five
+    // production samples (see P1 report), so the high tier earns 'ok'.
+    const highSimilarityNameMatch =
+      matchSource === "catalog_name" && matchScore != null && matchScore >= NAME_MATCH_HIGH;
     let packState: "ok" | "check" | "none" =
       matchSource === "catalog_name"
-        ? "check"
+        ? highSimilarityNameMatch && effectiveConf === "high"
+          ? "ok"
+          : "check"
         : derivedPackUsed
           ? "check"
           : effectiveConf === "high"
@@ -876,6 +899,38 @@ export async function POST(req: NextRequest) {
       updatePayload.pack_note = packNote;
     }
 
+    // P1 §5 (provenance): record the row's pre-write state so the
+    // pr_events write below carries a real `before` payload. The
+    // backfill is historically one of the write paths that has emitted
+    // events without `before` populated - the AI-accuracy ledger
+    // measurement called that out as the reason matcher precision
+    // cannot be audited. P1 fixes it for pack_filled events.
+    const before = {
+      pack_qty: it.price_estimate ? ((it.price_estimate as Record<string, unknown>).pack_qty ?? null) : null,
+      pack_size: null as unknown,
+      pack_uom: null as unknown,
+      pack_state: it.pack_state ?? null,
+      pack_source: oldPe && typeof oldPe.pack_source === "string" ? oldPe.pack_source : null,
+      match_source: oldPe && typeof oldPe.match_source === "string" ? oldPe.match_source : null,
+      match_score: oldPe && typeof oldPe.match_score === "number" ? oldPe.match_score : null,
+    };
+    // pr_vendor_items.pack_qty / pack_size / pack_uom are the authoritative
+    // pre-write pack fields (price_estimate does not store them). Re-select
+    // the single row to avoid a race with another writer - cheap at one
+    // row per fill.
+    {
+      const { data: liveRow, error: liveErr } = await client
+        .from("pr_vendor_items")
+        .select("pack_qty,pack_size,pack_uom")
+        .eq("id", it.id)
+        .maybeSingle();
+      if (!liveErr && liveRow) {
+        before.pack_qty = (liveRow as { pack_qty?: unknown }).pack_qty ?? null;
+        before.pack_size = (liveRow as { pack_size?: unknown }).pack_size ?? null;
+        before.pack_uom = (liveRow as { pack_uom?: unknown }).pack_uom ?? null;
+      }
+    }
+
     const { error: upErr } = await client
       .from("pr_vendor_items")
       .update(updatePayload)
@@ -889,6 +944,34 @@ export async function POST(req: NextRequest) {
     else if (packState === "check") counts.check += 1;
     else counts.none += 1;
     if (matchSource === "catalog_name") counts.nameMatched += 1;
+
+    // P1 §5: emit pack_filled event with BOTH before and after
+    // populated. Only when the fill actually CHANGED something - no
+    // noise event when the backfill would have written the same row
+    // for the Nth time.
+    const after = {
+      pack_qty: packQtyOut ?? null,
+      pack_size: packSizeOut ?? null,
+      pack_uom: packUomOut ?? null,
+      pack_state: packState,
+      pack_source: estimate.pack_source ?? null,
+      match_source: estimate.match_source ?? null,
+      match_score: estimate.match_score ?? null,
+    };
+    const beforeStr = JSON.stringify(before);
+    const afterStr = JSON.stringify(after);
+    if (beforeStr !== afterStr) {
+      // Non-blocking: if the event write fails, the pack fill already
+      // landed. Event is for audit, not for the fill.
+      await client.from("pr_events").insert({
+        entity_type: "vendor_item",
+        entity_id: it.id,
+        kind: "pack_filled",
+        before,
+        after,
+        actor: "pack-backfill",
+      });
+    }
 
     // Cross-check write: flag only. Guard again on the row being
     // currently unflagged (defense in depth against a race). We write

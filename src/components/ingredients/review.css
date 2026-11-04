@@ -855,6 +855,25 @@
   color: var(--sp-body);
 }
 .kf-facts__note--warn { color: var(--sp-warn); }
+/* P1 §6: Review chip. Inline with the pack text, amber register so a
+ * check pack is distinguishable from an ok pack at a glance. Uses
+ * the same warn tokens as the hand-set-pack note above - same visual
+ * weight, same semantic register (needs human attention). */
+.kf-facts__chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  margin-left: var(--sp-sp-2);
+  border-radius: var(--sp-r-pill);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.kf-facts__chip--check {
+  background: var(--sp-warn-bg);
+  color: var(--sp-warn-strong);
+}
 
 /* ---------------------------------------------------------------------
  * Ingredient typeahead (shared: relink + merge).

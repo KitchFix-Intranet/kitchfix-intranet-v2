@@ -98,6 +98,11 @@ export function normUom(raw: string | null | undefined): string | null {
   if (u === "LBA") return "LB";
   if (u === "#") return "LB";
   if (u === "OZ" || u === "OUNCE" || u === "OUNCES") return "OZ";
+  // P1 §3.2: `Z` is a Sysco shorthand for OZ seen on real data
+  // (`4Z`, `12/6Z`, `6x10 CSZ`). Not a standard SI symbol; Sysco-
+  // vendor use only, benign everywhere - `Z` is not a legitimate
+  // unit elsewhere in the invoice vocabulary.
+  if (u === "Z") return "OZ";
   if (u === "G" || u === "GR" || u === "GRAM" || u === "GRAMS") return "G";
   if (u === "KG") return "KG";
   if (u === "L" || u === "LTR" || u === "LT" || u === "LITER" || u === "LITRE") return "L";
@@ -179,7 +184,27 @@ export function convertPer(
 // Trailing pack-container words we strip before parsing. CA is a common
 // OCR-truncated "CASE" seen on real data (step 5 Phase 1.6). "PC"/"EA"
 // deliberately NOT here - they are units.
-const TRAILING_CONTAINER = /\s+(CS|CA|CASE|BX|BOX|BG|BAG|PK|PACK|COV|TUB|JAR|CTN|CARTON|CAN|CANS)\s*$/i;
+// P1 §3.7: expanded to include the packaging-descriptor words seen on
+// real invoice data (SHK, WRAP, LAYER, CLAMSHELL, LOG, TRAY, BULK,
+// PAC, PKS, INDV, EA) so a bare pack like "16 OZ SHK" matches "16 OZ"
+// after the strip. These are never units; stripping them never loses
+// information (pack_text itself keeps the full original string).
+const TRAILING_CONTAINER = /\s+(CS|CA|CASE|BX|BOX|BG|BAG|PK|PKS|PACK|COV|TUB|JAR|CTN|CARTON|CAN|CANS|SHK|WRAP|LAYER|CLAMSHELL|LOG|TRAY|BULK|PAC|INDV|EA)\s*$/i;
+
+// P1 §3.2: slashless 2-3 digit weight pack ("45 LB", "410 LB", "40#").
+// Per Kevin's P1 ruling, this shape is the Sysco slash-loss family -
+// "4/5 LB" and "4/10 LB" with the separator dropped by OCR. The parse
+// alone cannot tell a legitimate 45-lb pack from a slash-loss, so the
+// parser emits low+null (no total_base, no confident per-base). The
+// estimator's catalog-first precedence still wins when a SKU-matched
+// catalog row carries the slashed form; only items without catalog
+// corroboration fall to `check`. This makes catalog lookup load-
+// bearing for CORRECTNESS, not only for filling blanks.
+//
+// Also includes `#` as a weight equivalent (normUom maps # -> LB) so
+// `40#` gets the same treatment as `40 LB`. Kevin's regex named only
+// LB/OZ; # has the same slash-loss risk and is included here.
+const SLASHLESS_WEIGHT_RE = /^\d{2,3}\s*(LB|LBS?|OZ|#)\s*$/i;
 
 export function parsePack(raw: string | null | undefined): ParsedPack {
   if (!raw || typeof raw !== "string") return { ...EMPTY, note: "empty" };
@@ -187,7 +212,67 @@ export function parsePack(raw: string | null | undefined): ParsedPack {
   if (!s) return { ...EMPTY, note: "empty" };
 
   s = s.toUpperCase().replace(/\s+/g, " ");
-  s = s.replace(TRAILING_CONTAINER, "").trim();
+  // P1 §3.2: strip trailing punctuation (`.`, `,`, `;`) that otherwise
+  // gets treated as non-benign trailing text and forces `none`. Seen
+  // on `64 oz.`, `32 oz.`. This runs BEFORE TRAILING_CONTAINER so
+  // "16 OZ SHK." becomes "16 OZ SHK" which then strips to "16 OZ".
+  s = s.replace(/[.,;]+\s*$/g, "").trim();
+  // P1 §3.7: strip leading "SQ" (square) prefix seen on real data
+  // (`SQ 4OZ`, `SQ 2OZ`). Not a quantity or unit; a shape descriptor.
+  s = s.replace(/^SQ\s+/, "").trim();
+  // P1 §3.6: strip trailing descriptor glued to a `#` with no space
+  // (`311#AVG` handled by trailingBenign; `3/8#INDV COV`, `40#BULK`,
+  // `#PAC`, `#COV`). Narrow to the descriptor vocabulary so we don't
+  // eat a real unit (nothing listed here is a legitimate unit).
+  // AVG and UP are NOT in this list - they are catch-weight signals
+  // the parser must preserve (see hasVaries below).
+  s = s.replace(/#\s*(INDV|COV|BULK|PAC|CAB|BCH)\b[\s\S]*$/i, "#").trim();
+  // P1 §3.7: normalise `N/M PKS` and `N/M PACK` (digit-glued or
+  // space-separated). TRAILING_CONTAINER only strips space-delimited,
+  // so `10/2pks` as a single token is handled here before fall-through.
+  s = s.replace(/^(\d+\s*\/\s*\d+(?:\.\d+)?)\s*(?:PKS?|PACK)\s*$/i, "$1").trim();
+  // P1 §3.7: trim pack-unit container words. Loop until no more
+  // matches so doubled suffixes like `5 LB EA` -> `5 LB` -> `5 LB`
+  // and `40# BULK PAC` -> `40# BULK` -> `40#` fully reduce. Bounded
+  // to prevent any pathological infinite case (max 5 iters).
+  for (let i = 0; i < 5; i += 1) {
+    const stripped = s.replace(TRAILING_CONTAINER, "").trim();
+    if (stripped === s) break;
+    s = stripped;
+  }
+  // P1 §3.3: normalise `CT`/`DZ`/`PC`/`CN` suffix glued to a count
+  // before a slash - `12CT/2.4 OZ` -> `12/2.4 OZ`. Strips the inner
+  // count-unit marker so slashM reads the multi-pack cleanly.
+  s = s.replace(/^(\d+)(?:CT|DZ|PC|CN)\s*\//i, "$1/");
+  // P1 §3.3: multi-word `FL OZ` collapsed to `FLOZ` so the unit regex
+  // `[A-Z#]+` catches it as one token. `6/48 FL OZ` -> `6/48 FLOZ`.
+  s = s.replace(/\bFL\s+OZ\b/gi, "FLOZ");
+  // P1 §3.3: `x` or `X` as a separator in "6x10 CSZ" is handled by
+  // xSepM later - but "CSZ" is `CS`+`Z`, i.e. a CASE trailing-
+  // container glued to a Z-for-OZ shorthand. Split it so Z is read.
+  s = s.replace(/\bCSZ\b/g, "Z");
+
+  // P1 §3.1: a solitary case-count like "1 CS" survives the strip
+  // pass as just "1" (CS was eaten as a trailing container). Catch
+  // the digit-only remainder BEFORE the match-nothing fallback so
+  // these items read as a countable pack of N (size unknown), low
+  // confidence, no per-base. Mirrors "case of N" semantics.
+  const bareCaseM = s.match(/^(\d+)$/) && /\b(CS|CASE|BX|BOX|BG|BAG|CTN|CARTON)\b/i.test(raw);
+  if (bareCaseM) {
+    const n = parseInt(s, 10);
+    if (n > 0 && n <= 1000) {
+      return {
+        qty: n,
+        size: null,
+        uom: null,
+        dim: null,
+        base_uom: null,
+        total_base: null,
+        confidence: "low",
+        note: `${n} case${n === 1 ? "" : "s"}; inner size not stated`,
+      };
+    }
+  }
 
   // Grade suffix early-reject. Meat grades glued to the pack
   // (`410-13#CAB`, `320#AVGBCH`, `215#AVGCABSHNT`, `89-11AVCAB`)
@@ -291,6 +376,40 @@ export function parsePack(raw: string | null | undefined): ParsedPack {
     };
   }
 
+  // P1 §3.5: three-level pack "9/12/2.12 OZ" = outer 9 x inner 12 x
+  // size 2.12 OZ. The pack_qty / pack_size / pack_uom columns hold
+  // only two levels, so flatten: qty = outer * inner, size = innermost
+  // size, uom = innermost unit. total_base = qty * size * TO_BASE[uom]
+  // is preserved - which is the only number downstream math reads.
+  // Original shape stays in pack_text untouched. "6/4/12 BTL" falls
+  // through here because BTL is not a unit; tripleSlashM below then
+  // tries its unit-less path and the row ends up as check.
+  const threeLevelM = s.match(
+    /^(\d+)\s*\/\s*(\d+)\s*\/\s*(\d+(?:\.\d+)?)\s*([A-Z#]+)/
+  );
+  if (threeLevelM) {
+    const outer = parseInt(threeLevelM[1], 10);
+    const inner = parseInt(threeLevelM[2], 10);
+    const size = parseFloat(threeLevelM[3]);
+    const uom = normUom(threeLevelM[4]);
+    if (uom != null) {
+      const conv = toBase(size, uom);
+      if (conv) {
+        const qty = outer * inner;
+        return {
+          qty,
+          size,
+          uom,
+          dim: conv.dim,
+          base_uom: conv.base_uom,
+          total_base: qty * conv.total,
+          confidence: hasVaries ? "low" : "high",
+          note: `three-level: ${outer} x ${inner} x ${size} ${uom}; flattened to qty=${qty}`,
+        };
+      }
+    }
+  }
+
   // 2b. Triple-slash slash-before-unit pattern: "2/5/LB", "4/1/GL",
   // "6/10/CN". Same semantics as the standard N/size UNIT but with an
   // explicit third segment. CN (can) is treated like a #10 can - the
@@ -385,7 +504,10 @@ export function parsePack(raw: string | null | undefined): ParsedPack {
 
   // 3. Standard qty/size UNIT pattern: "6/1 LB", "024/12OZ",
   // "48/2.60 OZ", "4/3 L", "12/5.3 OZ".
-  const slashM = s.match(/^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\s*([A-Z#]+)/);
+  // P1 §3.3: size regex broadened to accept leading-decimal sizes
+  // (`24/.6OZ`). The qty group is still integer-friendly; parseFloat
+  // happily handles `024` leading zeros per §3.4.
+  const slashM = s.match(/^(\d+(?:\.\d+)?)\s*\/\s*(\d*\.?\d+)\s*([A-Z#]+)/);
   if (slashM) {
     const qty = parseFloat(slashM[1]);
     const size = parseFloat(slashM[2]);
@@ -468,9 +590,38 @@ export function parsePack(raw: string | null | undefined): ParsedPack {
     };
   }
 
+  // P1 §3.3: space-as-separator "N M UNIT" - `1 10 LB` means qty 1,
+  // size 10, uom LB. End-anchored to avoid colliding with the
+  // doubled-unit spaceDoubleM below. Confidence stays high because the
+  // unit is explicit; only the separator is unusual.
+  const spaceSepM = s.match(
+    /^(\d+)\s+(\d+(?:\.\d+)?)\s*([A-Z#]+)\s*$/
+  );
+  if (spaceSepM) {
+    const qty = parseInt(spaceSepM[1], 10);
+    const size = parseFloat(spaceSepM[2]);
+    const uom = normUom(spaceSepM[3]);
+    if (uom != null) {
+      const conv = toBase(size, uom);
+      if (conv) {
+        return {
+          qty,
+          size,
+          uom,
+          dim: conv.dim,
+          base_uom: conv.base_uom,
+          total_base: qty * conv.total,
+          confidence: hasVaries ? "low" : "high",
+          note: hasVaries ? "contains VARIES/AVERAGE/UP wording" : `space-separated pack; qty ${qty} x ${size} ${uom}`,
+        };
+      }
+    }
+  }
+
   // 5. Bare "N UNIT": "66 LB", "10 LB", "110#", "25 LBS", "50 LBS",
   // "43 L", "12.5 PT", "3210 OZ", "1210 FOZ".
-  const bareM = s.match(/^(\d+(?:\.\d+)?)\s*(#|[A-Z]+)/);
+  // P1 §3.2: broadened to accept leading-decimal numbers like `.5 GL`.
+  const bareM = s.match(/^(\d*\.?\d+)\s*(#|[A-Z]+)/);
   if (bareM) {
     const bareTail = s.slice(bareM[0].length).trim();
     if (!trailingBenign(bareTail)) {
@@ -485,6 +636,34 @@ export function parsePack(raw: string | null | undefined): ParsedPack {
     if (uom != null) {
       const conv = toBase(n, uom);
       if (conv) {
+        // P1 §3.2 Kevin's ruling: slashless 2-3 digit weight (`45 LB`,
+        // `410 LB`, `40#`) is the Sysco slash-loss family. The parse
+        // alone cannot distinguish a legit 45-lb pack from `4/5 LB`
+        // with the separator dropped, so the parser DOES NOT emit
+        // confident qty/size here. Null fields + low confidence tell
+        // the estimator and the backfill to treat the row as `check`
+        // unless a catalog SKU match provides the slashed form (the
+        // normal catalog-first precedence in estimate.ts takes care
+        // of that case and never reaches this branch). This makes
+        // catalog lookup load-bearing for CORRECTNESS, not only for
+        // filling blanks. Verified against production 2026-11-04 by
+        // the P1 prompt itself: catalog `4/5 LB` disagreed with
+        // invoice `45 LB` on a chicken breast item (a 2.2x per-lb
+        // error), and catalog `4/10` disagreed with invoice `410 LB`
+        // on chicken thigh / breast items (the ~10x error that
+        // produced the fourteen-cent-per-lb chicken bug named in §2).
+        if (SLASHLESS_WEIGHT_RE.test(s)) {
+          return {
+            qty: null,
+            size: null,
+            uom: null,
+            dim: null,
+            base_uom: null,
+            total_base: null,
+            confidence: "low",
+            note: `slashless 2-3 digit weight "${raw}"; needs catalog corroboration or human`,
+          };
+        }
         // Bare-N-large guard: a weight/volume >= 1000 bare integer
         // (`3210 OZ`, `1210 FOZ`) is almost always a dropped
         // separator - a real case rarely weighs that much in a single
@@ -621,6 +800,28 @@ export function parsePack(raw: string | null | undefined): ParsedPack {
         note: `case of ${n}; unit size not stated`,
       };
     }
+  }
+
+  // P1 §3.8: bare ratio with no unit - `6/4`, `12/2`, `8/3`, `2/2`.
+  // "Six of what, by four of what?" Unknowable; the row must surface
+  // for human verification. Captures qty + size so the shape is
+  // preserved in pack_qty / pack_size on the row, but uom + base_uom
+  // + total_base stay null so no confident per-unit flows through.
+  // Low confidence so the backfill maps the row to pack_state='check'.
+  const bareRatioM = s.match(/^(\d+)\s*\/\s*(\d+(?:\.\d+)?)\s*$/);
+  if (bareRatioM) {
+    const qty = parseInt(bareRatioM[1], 10);
+    const size = parseFloat(bareRatioM[2]);
+    return {
+      qty,
+      size,
+      uom: null,
+      dim: null,
+      base_uom: null,
+      total_base: null,
+      confidence: "low",
+      note: `bare ratio "${raw}" with no unit; needs human`,
+    };
   }
 
   // 8. Fallback: garbled input the parser can't reduce.

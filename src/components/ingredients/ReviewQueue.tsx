@@ -51,6 +51,13 @@ type ProposedItem = {
     case_price?: number | null;
     case_price_source?: string | null;
     pack_source?: string | null;
+    // P1 §5: how the catalog row (if any) was matched. 'sku' is exact
+    // key match; 'catalog_name' is trigram-fuzzy name match (score
+    // carried in match_score for the panel's tooltip). The panel's
+    // ItemFacts reads BOTH pack_source and match_source to label the
+    // row (e.g. "from catalog (name match)").
+    match_source?: string | null;
+    match_score?: number | null;
     confidence?: string | null;
     note?: string | null;
   } | null;
@@ -340,6 +347,15 @@ async function loadReview() {
           flaggedAt: it.flagged_at ?? null,
           // G1: tier on the item.
           grade: it.grade ?? null,
+          // P1 §5: pack provenance (how the catalog row was matched).
+          matchSource:
+            pe?.match_source === "sku" || pe?.match_source === "catalog_name"
+              ? pe.match_source
+              : null,
+          matchScore:
+            pe?.match_score != null && Number.isFinite(Number(pe.match_score))
+              ? Number(pe.match_score)
+              : null,
         });
       }
       groups.set(key, g);
@@ -438,6 +454,15 @@ async function loadReview() {
           flaggedAt: it.flagged_at ?? null,
           // G1: tier on the item.
           grade: it.grade ?? null,
+          // P1 §5: pack provenance (how the catalog row was matched).
+          matchSource:
+            pe?.match_source === "sku" || pe?.match_source === "catalog_name"
+              ? pe.match_source
+              : null,
+          matchScore:
+            pe?.match_score != null && Number.isFinite(Number(pe.match_score))
+              ? Number(pe.match_score)
+              : null,
         });
       }
       groups.set(key, g);
