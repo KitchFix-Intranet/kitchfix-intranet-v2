@@ -2597,6 +2597,14 @@ function ItemPanelBody({
         ingredient={ingredient}
         onFixPack={(uom) => setPackHint({ uom, nonce: Date.now() })}
       />
+      {/* G3 fix for the G1 miss: ItemGradeBlock was defined (line
+          1867) but never called in this body. The function shipped,
+          the JSX line did not. Chat-Claude's "zero kf-grade in the
+          DOM on a mounted ItemPanelBody" was exact. Mounting it
+          here now - between Attention and PackOverride, matching
+          the spec pin ("plainly a quality tier, not a price field").
+      */}
+      <ItemGradeBlock item={item} onDone={onDone} />
       <PackOverrideBlock item={item} ingredient={ingredient} hint={packHint} onDone={onDone} />
       <PriceOverrideBlock item={item} ingredient={ingredient} onDone={onDone} />
       <EvidenceSection item={item} />

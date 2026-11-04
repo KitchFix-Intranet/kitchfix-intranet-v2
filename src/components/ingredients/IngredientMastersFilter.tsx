@@ -20,6 +20,7 @@ import {
   Info,
   Scale,
   Search,
+  Tag,
   Wand2,
   X,
 } from "lucide-react";
@@ -30,6 +31,7 @@ import { IngredientPanelById } from "./IngredientPanelById";
 import { IngredientAllergens } from "./IngredientAllergens";
 import { SUPER_CATEGORIES } from "@/lib/ingredients/categories";
 import { RowSendBackButton } from "./RowSendBackButton";
+import { RowGradeToggle } from "./RowGradeToggle";
 import { MasterSendAllBackButton } from "./MasterSendAllBackButton";
 
 // The four problems the bad-pack radar actually finds. They have
@@ -1021,7 +1023,17 @@ function MasterDetail({
 }) {
   const uom = uomLabel(row.baseUom);
   const [lens, setLens] = useState<PriceLens>("blended");
-  const active = row.statsByLens[lens];
+  // G3 §3: suppress the lens unless two grades are populated. 10 of
+  // 230 masters currently qualify; the other 220 show one grade's
+  // price with no view-switch chrome. The control reappears on its
+  // own the moment a second grade exists - no flag, no setting.
+  const showLens =
+    row.statsByLens.standard.linkedCount > 0 && row.statsByLens.premium.linkedCount > 0;
+  // When the lens is hidden, read the blended figure (which equals
+  // whichever single grade is populated). Pane answers the same
+  // question as the list row: "what does this cost".
+  const effectiveLens: PriceLens = showLens ? lens : "blended";
+  const active = row.statsByLens[effectiveLens];
   const partial = active.pricedCount < active.linkedCount;
   const spreadBad = active.spreadRatio != null && active.spreadRatio > 3;
   return (
@@ -1043,48 +1055,48 @@ function MasterDetail({
           ))}
           {row.resale ? <span className="kf-pill kf-pill--muted">Retail</span> : null}
           <BaseUnitControl row={row} />
-          {/* G2: lens control lives on the header row alongside the
-              base-unit chooser. Both are view controls (change how
-              the number is expressed, not what it means). No "Price"
-              label - the tile's eyebrow already carries that word.
-              Segments stay clickable when a subset is empty; the
-              dimmed --na style says "no items here" without a dead
-              button. */}
-          <div className="kf-dt__lens kf-dt__lens--header" role="radiogroup" aria-label="Price lens">
-            {(["blended", "standard", "premium"] as const).map((k) => {
-              const available = row.statsByLens[k].avgPerBase != null;
-              const label = LENS_LABEL[k];
-              return (
-                <button
-                  key={k}
-                  type="button"
-                  role="radio"
-                  aria-checked={lens === k}
-                  aria-pressed={lens === k}
-                  className={`kf-dt__lens-btn${lens === k ? " kf-dt__lens-btn--on" : ""}${!available ? " kf-dt__lens-btn--na" : ""}`}
-                  onClick={() => setLens(k)}
-                  title={available ? `Show ${label.toLowerCase()}` : `No ${label.toLowerCase()} items on this master`}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
+          {/* G3 §1: lens is now a <select> matching BaseUnitControl's
+              chrome and register. Native element - keyboard + SR
+              behaviour comes free. Hidden entirely when only one
+              grade is populated (see showLens above); the segmented
+              pill from G1/G2 is retired. */}
+          {showLens ? (
+            <span className="kf-dt__unitctl">
+              <Tag size={13} strokeWidth={1.5} aria-hidden />
+              <label className="kf-dt__unitctl-l" htmlFor={`lens-${row.id}`}>
+                Price
+              </label>
+              <select
+                id={`lens-${row.id}`}
+                className="kf-dt__unitsel"
+                value={lens}
+                onChange={(e) => setLens(e.target.value as PriceLens)}
+              >
+                {(["blended", "standard", "premium"] as const).map((k) => (
+                  <option key={k} value={k}>{LENS_LABEL[k]}</option>
+                ))}
+              </select>
+            </span>
+          ) : null}
         </div>
       </div>
 
       <div className="kf-dt__stats">
-        {/* G2: every tile reads from `active`. Switching lens re-scopes
-            spread/min-max/count/spend alongside the price. Spread and
-            min/max stay unweighted per Kevin's §2.3 ruling - they
-            describe the range of prices, not the blended cost. */}
+        {/* G2/G3: every tile reads from `active`. With both grades
+            populated the lens dropdown swaps subsets. With only one
+            grade the lens is hidden and `active` is the blended
+            figure (which equals the one grade). Spread and min/max
+            stay unweighted - they describe the range of prices, not
+            the blended cost. */}
         <div className="kf-dt__stat">
-          <span className="kf-dt__stat-l">{LENS_EYEBROW[lens]}</span>
+          <span className="kf-dt__stat-l">
+            {showLens ? LENS_EYEBROW[lens] : "Price"}
+          </span>
           <strong>{active.avgPerBase != null ? fmtUsd(active.avgPerBase) : "-"}</strong>
           <span className="kf-dt__stat-n">
             {active.avgPerBase != null
               ? `per ${uom} · ${fmtCount(active.pricedCount)} priced`
-              : EMPTY_SUBSET_NOTE[lens]}
+              : EMPTY_SUBSET_NOTE[effectiveLens]}
           </span>
         </div>
         <div className={`kf-dt__stat${spreadBad ? " kf-dt__stat--bad" : ""}`}>
@@ -1093,7 +1105,7 @@ function MasterDetail({
           <span className="kf-dt__stat-n">
             {active.minPerBase != null && active.maxPerBase != null
               ? `${fmtUsd(active.minPerBase)} - ${fmtUsd(active.maxPerBase)}`
-              : EMPTY_SUBSET_NOTE[lens]}
+              : EMPTY_SUBSET_NOTE[effectiveLens]}
           </span>
         </div>
         <div className={`kf-dt__stat${partial && active.linkedCount > 0 ? " kf-dt__stat--warn" : ""}`}>
@@ -1103,7 +1115,7 @@ function MasterDetail({
           </strong>
           <span className="kf-dt__stat-n">
             {active.linkedCount === 0
-              ? EMPTY_SUBSET_NOTE[lens]
+              ? EMPTY_SUBSET_NOTE[effectiveLens]
               : partial
                 ? `${fmtUsd(active.unpricedUsd)} outside`
                 : "all linked items"}
@@ -1114,7 +1126,7 @@ function MasterDetail({
           <strong>{active.linkedCount > 0 ? fmtUsd(active.usd12m) : "-"}</strong>
           <span className="kf-dt__stat-n">
             {active.linkedCount === 0
-              ? EMPTY_SUBSET_NOTE[lens]
+              ? EMPTY_SUBSET_NOTE[effectiveLens]
               : `${fmtCount(active.linkedCount)} linked items`}
           </span>
         </div>
@@ -1173,9 +1185,20 @@ function MasterDetail({
               <tr>
                 <th>Vendor item</th>
                 <th>Vendor</th>
+                {/* G3 §5: new Grade column. The G1 Premium pill moved
+                    out of the Vendor cell and became a per-row toggle
+                    here - Standard items now show an affordance too,
+                    so there is finally a UI hint that the setting
+                    exists. Writes through the G1 path; ledger covers
+                    undo. */}
+                <th>Grade</th>
                 <th className="kf-table__num">Per-unit</th>
                 <th className="kf-table__num">Annual $</th>
-                <th aria-label="Open" />
+                {/* G3 §4: Open column retired. The vendor item NAME is
+                    already a button that opens ItemPanelById inline;
+                    Open was a duplicate route to a different drawer.
+                    Send back stays. */}
+                <th aria-label="Actions" />
               </tr>
             </thead>
             <tbody>
@@ -1206,15 +1229,9 @@ function MasterDetail({
                         </span>
                       ) : null}
                     </td>
+                    <td>{li.vendor}</td>
                     <td>
-                      {li.vendor}
-                      {/* G1: tier label. Null -> blank (97% case, no
-                          visual noise). 'premium' -> small amber pill. */}
-                      {li.grade === "premium" ? (
-                        <span className="kf-pill kf-pill--premium" title="Premium tier">
-                          Premium
-                        </span>
-                      ) : null}
+                      <RowGradeToggle itemId={li.id} grade={li.grade} />
                     </td>
                     <td className="kf-table__num">
                       {li.perBase != null ? (
@@ -1230,12 +1247,6 @@ function MasterDetail({
                     <td className="kf-table__num">
                       <span className="kf-dt__rowacts">
                         <RowSendBackButton itemId={li.id} itemName={li.name} />
-                        <a
-                          href={`/stockpot/ingredients/vendor-items?drawer=${li.id}`}
-                          className="kf-btn kf-btn--line kf-btn--sm"
-                        >
-                          Open
-                        </a>
                       </span>
                     </td>
                   </tr>

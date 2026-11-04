@@ -451,7 +451,23 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
     const spread = min != null && max != null && min > 0 ? max / min : null;
     const excludedIds = stats.excluded;
     const medianBeforeExclusion = stats.median;
-    const ratioFlag = spread != null && spread > SPREAD_RATIO_MAX;
+    // G3 §2: Spread flag is now evaluated PER GRADE SUBSET, not across
+    // the blend. A master whose only reason for a >3x blended spread
+    // is the gap between standard and premium items is the grade
+    // working correctly, not a pricing problem. Flag fires iff some
+    // populated subset is itself >=3x internally. Single-grade masters
+    // behave identically to pre-G3 - with one subset, that subset IS
+    // the blend.
+    //
+    // Measured on production 2026-11-04: Salmon filet, Bacon sliced
+    // and Chicken breast b/s clear; Beef tenderloin PSMO is unchanged
+    // (2.9x lives inside Standard, under the 3x threshold, so it is
+    // already unflagged and stays unflagged).
+    const stdSpread = standardLens.spreadRatio;
+    const premSpread = premiumLens.spreadRatio;
+    const stdSpreadFlag = stdSpread != null && stdSpread > SPREAD_RATIO_MAX;
+    const premSpreadFlag = premSpread != null && premSpread > SPREAD_RATIO_MAX;
+    const ratioFlag = stdSpreadFlag || premSpreadFlag;
     const bandKey = masterUom;
 
     // B3: corroboration = two or more DISTINCT VENDORS on the
@@ -484,8 +500,21 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
         : false;
     const mismatchFlag = mismatchedItemIds.size > 0;
     const flagged = ratioFlag || bandFlag || mismatchFlag;
+    // G3: name which subset drove the spread flag when both grades
+    // are populated; single-grade masters keep the plain copy.
+    const bothGradesPopulated =
+      standardLens.linkedCount > 0 && premiumLens.linkedCount > 0;
+    const spreadReason = !ratioFlag
+      ? null
+      : !bothGradesPopulated
+        ? "wide price spread"
+        : stdSpreadFlag && premSpreadFlag
+          ? "wide price spread in both subsets"
+          : stdSpreadFlag
+            ? `wide price spread (standard ${stdSpread!.toFixed(1)}x)`
+            : `wide price spread (premium ${premSpread!.toFixed(1)}x)`;
     const flagReason = [
-      ratioFlag ? "wide price spread" : null,
+      spreadReason,
       bandFlag ? "outside typical band" : null,
       mismatchFlag ? `${mismatchedItemIds.size} unit mismatch${mismatchedItemIds.size === 1 ? "" : "es"}` : null,
     ]
@@ -576,7 +605,11 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
     // array below.
     const emptyFlag = items.length === 0;
     const issues: MasterIssue[] = [
-      spread != null && spread > SPREAD_RATIO_MAX ? ("spread" as const) : null,
+      // G3: subset-aware. Same threshold (3x), evaluated per populated
+      // grade. Three masters (Salmon filet, Bacon sliced, Chicken
+      // breast b/s) lose this flag because their >3x was the grade
+      // split, not internal.
+      ratioFlag ? ("spread" as const) : null,
       pricedCount < items.length ? ("coverage" as const) : null,
       mismatchedItemIds.size > 0 ? ("mismatch" as const) : null,
       linkedItems.some((li) => li.outlier) ? ("outlier" as const) : null,

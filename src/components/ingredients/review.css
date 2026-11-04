@@ -1737,58 +1737,46 @@
 .kf-dt__stat--warn strong { color: var(--sp-warn); }
 .kf-dt__stat--bad strong { color: var(--sp-block); }
 
-/* G2 (lens placement): the price lens is a VIEW CONTROL, not data,
- * so it lives on the header .kf-dt__meta row beside BaseUnitControl -
- * both change how the number is expressed without changing what it
- * means. Pre-G2 it sat inside the price tile where it crowded the
- * number and the "Premium" italic-grey collided with the cell
- * divider. The .kf-dt__stat--price class is retired; the tile uses
- * the plain .kf-dt__stat chrome and its eyebrow carries the current
- * lens name (BLENDED/STANDARD/PREMIUM PRICE) so the number is
- * unambiguous even if the user scrolled past the control.
- *
- * G2 (lens subset follows the lens): all four tiles (price, spread,
- * in-this-price, 12-mo spend) read the active lens's stats. The
- * --na segment state marks an empty subset (clickable but dimmed);
- * clicking it still re-scopes the row and the tiles render "-"
- * rather than zero numbers. Per Kevin, a dead button would be the
- * common case post-Step B (220/230 masters have no premium items).
+/* G3 §5 (row-level grade toggle): one-click pill in the linked-items
+ * table. Both states show the control (G1/G2 only showed Premium;
+ * Standard rows had no hint). Standard reads muted, Premium reads
+ * amber to match .kf-pill--premium. Clicking toggles via the G1
+ * write path; ledger covers undo so no confirm dialog is needed.
  */
-.kf-dt__lens {
+.kf-grade-row {
   display: inline-flex;
-  gap: 2px;
-  padding: 2px;
-  background: var(--sp-line-soft);
+  align-items: center;
+  padding: 3px 10px;
   border-radius: var(--sp-r-pill);
-  width: fit-content;
-}
-/* Header-row variant: sits inline with BaseUnitControl, picks up the
- * meta row's flex-wrap so narrow widths wrap each control onto its
- * own line rather than crushing either. The meta row is already
- * display:flex; this just lets the lens participate in it. */
-.kf-dt__lens--header { align-self: center; }
-.kf-dt__lens-btn {
-  border: 0;
+  border: 1px solid var(--sp-line);
   background: transparent;
-  color: var(--sp-muted);
   font-family: var(--sp-ui);
   font-size: var(--sp-t-micro);
   font-weight: 700;
-  letter-spacing: .2px;
-  padding: 3px 10px;
-  border-radius: var(--sp-r-pill);
   cursor: pointer;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
 }
-.kf-dt__lens-btn:hover:not(:disabled) { color: var(--sp-ink); }
-.kf-dt__lens-btn--on {
-  background: var(--sp-card);
-  color: var(--sp-ink);
-  box-shadow: var(--sp-shadow);
+.kf-grade-row:hover:not(:disabled) { border-color: var(--sp-ink); color: var(--sp-ink); }
+.kf-grade-row:disabled { cursor: default; opacity: .6; }
+.kf-grade-row.is-busy { opacity: .7; }
+.kf-grade-row--standard { color: var(--sp-muted); border-color: var(--sp-line); background: transparent; }
+.kf-grade-row--premium {
+  color: var(--sp-warn-strong);
+  background: var(--sp-warn-bg);
+  border-color: var(--sp-warn-bg);
 }
-/* A grade subset with no items. The segment stays selectable (user
- * can still look) but reads quieter so it does not pretend to carry
- * a number. */
-.kf-dt__lens-btn--na { color: var(--sp-muted); font-style: italic; }
+
+/* G3 (lens dropdown): the price lens is now a native <select> wearing
+ * the same .kf-dt__unitctl / .kf-dt__unitsel chrome as BaseUnitControl,
+ * so the two read as one control vocabulary on the master-detail
+ * header row. Keyboard + SR behaviour come free. The segmented pill
+ * from G1/G2 (and its --header / --on / --na states) is retired. The
+ * lens is hidden entirely on masters with only one grade populated
+ * (10 visible / 220 hidden as of 2026-11-04); when hidden, the price
+ * tile eyebrow reads "PRICE" (flat), not BLENDED PRICE - "blended"
+ * is jargon for a distinction that does not exist when there is only
+ * one grade.
+ */
 
 /* G1: item-panel grade control. Visually a radio pair; semantically
  * the same. Standard is the default register (muted), Premium is the
