@@ -134,6 +134,18 @@ type VendorRow = { id: string; name: string };
 // miss by the spread rule. Loose bounds; a hit is a soft "look here",
 // not a hard assertion. Keyed by the MASTER's base_unit (the source
 // of truth), after we convert the per-base values to that unit.
+//
+// B3 (2026-11-04): the band's VALUE and thresholds are unchanged.
+// What changed is WHEN it fires:
+//   Rule 1 - if two or more distinct vendors agree on the price
+//            (same 3x threshold the Spread flag uses), the band is
+//            suppressed. Vendor agreement outranks population-level
+//            comparison; the band becomes the fallback for when
+//            there is no second opinion.
+//   Rule 2 - never fire the band for count units (EA/DZ). "Each"
+//            spans eggs, bottled water and case-priced items; the
+//            typical-price comparison is meaningless by construction.
+//   Spread, Coverage and Unit are untouched.
 const BANDS: Record<string, { low: number; high: number }> = {
   LB: { low: 0.5, high: 100 },
   OZ: { low: 0.03, high: 6 },
@@ -142,6 +154,18 @@ const BANDS: Record<string, { low: number; high: number }> = {
   EA: { low: 0.1, high: 25 },
   DZ: { low: 1, high: 60 },
 };
+
+// B3: the "wide spread" threshold, shared between the Spread flag
+// (ratioFlag) and the band's corroboration check. "Vendors agree" IS
+// the Spread threshold - do not duplicate the number. Any future
+// tuning updates both callers.
+const SPREAD_RATIO_MAX = 3;
+
+// B3: count units where the typical-price comparison is meaningless
+// by construction - a case-priced sauce and a bottle of water are
+// both "each," and the population spans two orders of magnitude.
+// `lb` and `gal` keep the band.
+const BAND_SUPPRESS_UNITS = new Set<string>(["EA", "DZ"]);
 
 // S5: convertPer / canonicalFromBaseUnit live in pack.ts now so the
 // item panel's Result + Read-as can read the same converter the
@@ -228,6 +252,14 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
     // S3: collect {id, v} so blendStats can tag exclusions back to
     // the item that owns each priced value.
     const priced: Array<{ id: string; v: number }> = [];
+    // B3: per-priced-item vendor map so the band's corroboration
+    // check can count DISTINCT VENDORS on the survivors (rows that
+    // actually contribute to the mean). Using the same filter as
+    // `priced` - the mean's set IS the corroboration set. Important
+    // subtlety: this must count vendors, not vendor items. Two
+    // Sysco rows is one opinion, not two; a master whose only
+    // priced items are Sysco is NOT corroborated.
+    const vendorByPricedItem = new Map<string, string>();
     const mismatchedItemIds = new Set<string>();
     let usd = 0;
     // Spend on items that contribute NOTHING to the master's price -
@@ -263,14 +295,17 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
           // handles the surface.
         } else {
           priced.push({ id: it.id, v: converted });
+          vendorByPricedItem.set(it.id, it.vendor_id);
         }
       } else if (storedUom && !masterUom) {
         // Master has no canonical uom (unusual base_unit text); fall
         // back to the stored value as-is so the row still shows a
         // number.
         priced.push({ id: it.id, v: rawN });
+        vendorByPricedItem.set(it.id, it.vendor_id);
       } else {
         priced.push({ id: it.id, v: rawN });
+        vendorByPricedItem.set(it.id, it.vendor_id);
       }
     }
     // S3: median-based outlier exclusion. avg/min/max/spread describe
@@ -284,9 +319,34 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
     const spread = min != null && max != null && min > 0 ? max / min : null;
     const excludedIds = stats.excluded;
     const medianBeforeExclusion = stats.median;
-    const ratioFlag = spread != null && spread > 3;
+    const ratioFlag = spread != null && spread > SPREAD_RATIO_MAX;
     const bandKey = masterUom;
+
+    // B3: corroboration = two or more DISTINCT VENDORS on the
+    // survivor set (same rows that produce the mean), with survivor
+    // spread within the Spread threshold. Counts vendors, not vendor
+    // items - this is the subtle bug the prompt names explicitly.
+    // When the band would have fired on a corroborated master, the
+    // Spread flag has already fired (if spread > 3) OR the vendors
+    // genuinely agree (spread <= 3). Either way, population-level
+    // band is the weaker signal.
+    const survivorVendorIds = new Set<string>();
+    for (const p of priced) {
+      if (excludedIds.has(p.id)) continue;
+      const vid = vendorByPricedItem.get(p.id);
+      if (vid) survivorVendorIds.add(vid);
+    }
+    const corroboratedByVendors =
+      survivorVendorIds.size >= 2 &&
+      spread != null &&
+      spread <= SPREAD_RATIO_MAX;
+
+    // B3 Rule 2: count units are never banded.
+    const bandAllowedByUnit = bandKey != null && !BAND_SUPPRESS_UNITS.has(bandKey);
+
     const bandFlag =
+      bandAllowedByUnit &&
+      !corroboratedByVendors &&
       avg != null && bandKey != null && BANDS[bandKey]
         ? avg < BANDS[bandKey].low || avg > BANDS[bandKey].high
         : false;
@@ -372,7 +432,7 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
     // other 9 blended, this one didn't.
     const pricedCount = priced.length - excludedIds.size;
     const issues: MasterIssue[] = [
-      spread != null && spread > 3 ? ("spread" as const) : null,
+      spread != null && spread > SPREAD_RATIO_MAX ? ("spread" as const) : null,
       pricedCount < items.length ? ("coverage" as const) : null,
       mismatchedItemIds.size > 0 ? ("mismatch" as const) : null,
       linkedItems.some((li) => li.outlier) ? ("outlier" as const) : null,
