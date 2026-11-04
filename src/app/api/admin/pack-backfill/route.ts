@@ -223,7 +223,7 @@ export async function POST(req: NextRequest) {
   const items = (itemsData ?? []) as Item[];
 
   if (items.length === 0) {
-    const emptyCounts = { ok: 0, check: 0, none: 0, skipped: 0, nameMatched: 0 };
+    const emptyCounts = { ok: 0, check: 0, none: 0, skipped: 0, nameMatched: 0, siblingMatched: 0 };
     return NextResponse.json({
       ok: true,
       done: true,
@@ -323,6 +323,129 @@ export async function POST(req: NextRequest) {
         from += page;
       }
       vendorCatalogRows.set(vendorId, bucket);
+    }
+  }
+
+  // P1 correction 2c (2026-11-04): vendor-level sibling-expansion map.
+  //
+  // The signal for a slash-loss pack (`45 LB` <- `4/5 LB`) is NOT at
+  // the item level - the broken items never have a catalog row of
+  // their own, so an item-level catalog-disagreement check fires only
+  // on rows that are already right. The signal is at the VENDOR
+  // level: when 2+ items at the same vendor share the same slashless
+  // pack_text AND each of those items has a SKU catalog row that
+  // UNANIMOUSLY agrees on one slashed form, that is the proven
+  // expansion for that (vendor, slashless) pair. Apply the expansion
+  // to orphan siblings (no catalog row of their own) with pack_state
+  // 'check' and pack_source 'catalog_sibling'.
+  //
+  // Scoped to the vendors represented in this batch; the query is
+  // bounded by the SLASHLESS_WEIGHT regex and the item_number_norm
+  // join to pr_vendor_catalog (filtered to catalog packs that contain
+  // a slash - unslashed catalog rows carry no new information).
+  const siblingExpansions = new Map<string, {
+    qty: number; size: number; uom: string; corroborators: number
+  }>();
+  {
+    const vendorsInBatch = new Set(items.map((it) => it.vendor_id));
+    if (vendorsInBatch.size > 0) {
+      // Pull every (vendor, invoice_pack_text, catalog_pack_text)
+      // corroboration row. We do the UPPER/TRIM + regex client-side
+      // because PostgREST does not express `~*` or trim() predicates
+      // without an RPC; the data volume per vendor is small (hundreds
+      // of items), so filtering the few vendor rows is fine.
+      const corrPage = 1000;
+      const corroborationRows: Array<{
+        vendor_id: string;
+        invoice_pack: string;
+        catalog_pack: string;
+      }> = [];
+      for (const vendorId of vendorsInBatch) {
+        let from = 0;
+        for (;;) {
+          const { data: cData, error: cErr } = await client
+            .from("pr_vendor_items")
+            .select("vendor_id,pack_text,item_number_norm,pack_override")
+            .eq("vendor_id", vendorId)
+            .is("pack_override", null)
+            .not("pack_text", "is", null)
+            .not("item_number_norm", "is", null)
+            .range(from, from + corrPage - 1);
+          if (cErr) return NextResponse.json({ error: cErr.message }, { status: 500 });
+          const vendorItems = (cData ?? []) as Array<{
+            vendor_id: string; pack_text: string | null; item_number_norm: string | null;
+          }>;
+          // Narrow to items whose pack_text matches the slashless shape.
+          const slashlessVendorItems = vendorItems.filter(
+            (r) => r.pack_text != null && isSlashlessWeightPack(r.pack_text)
+          );
+          if (slashlessVendorItems.length > 0) {
+            // Pull the catalog rows for those slashless items via SKU.
+            const nums = Array.from(
+              new Set(slashlessVendorItems.map((r) => r.item_number_norm!).filter(Boolean))
+            );
+            if (nums.length > 0) {
+              for (let i = 0; i < nums.length; i += 500) {
+                const slice = nums.slice(i, i + 500);
+                const { data: catData, error: catErr } = await client
+                  .from("pr_vendor_catalog")
+                  .select("item_number_norm,pack_text")
+                  .eq("vendor_id", vendorId)
+                  .in("item_number_norm", slice)
+                  .not("pack_text", "is", null);
+                if (catErr) return NextResponse.json({ error: catErr.message }, { status: 500 });
+                const byNorm = new Map<string, string>();
+                for (const c of (catData ?? []) as Array<{ item_number_norm: string; pack_text: string | null }>) {
+                  if (c.pack_text && c.pack_text.includes("/")) byNorm.set(c.item_number_norm, c.pack_text);
+                }
+                for (const r of slashlessVendorItems) {
+                  const cat = r.item_number_norm ? byNorm.get(r.item_number_norm) : undefined;
+                  if (!cat) continue;
+                  corroborationRows.push({
+                    vendor_id: vendorId,
+                    invoice_pack: r.pack_text!.toUpperCase().trim(),
+                    catalog_pack: cat,
+                  });
+                }
+              }
+            }
+          }
+          if (vendorItems.length < corrPage) break;
+          from += corrPage;
+        }
+      }
+      // Group by (vendor_id, invoice_pack). For each group, parse all
+      // catalog packs; require >=2 corroborators that unanimously
+      // agree on {qty, size, uom}. One corroborator is anecdote; a
+      // split tells us the vendor's slashless form is ambiguous.
+      const byKey = new Map<string, Array<string>>();
+      for (const r of corroborationRows) {
+        const key = `${r.vendor_id}#${r.invoice_pack}`;
+        let list = byKey.get(key);
+        if (!list) {
+          list = [];
+          byKey.set(key, list);
+        }
+        list.push(r.catalog_pack);
+      }
+      for (const [key, catPacks] of byKey) {
+        if (catPacks.length < 2) continue;
+        let shape: { qty: number; size: number; uom: string } | null = null;
+        let unanimous = true;
+        for (const cp of catPacks) {
+          const p = parsePack(cp);
+          if (p.qty == null || p.size == null || p.uom == null) { unanimous = false; break; }
+          if (shape == null) {
+            shape = { qty: p.qty, size: p.size, uom: p.uom };
+          } else if (shape.qty !== p.qty || shape.size !== p.size || shape.uom !== p.uom) {
+            unanimous = false;
+            break;
+          }
+        }
+        if (unanimous && shape) {
+          siblingExpansions.set(key, { ...shape, corroborators: catPacks.length });
+        }
+      }
     }
   }
 
@@ -613,7 +736,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Per-item processing. Writes are skipped when dryRun.
-  const counts = { ok: 0, check: 0, none: 0, skipped: 0, nameMatched: 0 };
+  const counts = { ok: 0, check: 0, none: 0, skipped: 0, nameMatched: 0, siblingMatched: 0 };
   const packStateTransitions: Record<string, number> = {};
   const bySource: Record<string, number> = {};
   const derivedPacks = { accepted: 0, rejectedByBounds: 0 };
@@ -651,6 +774,29 @@ export async function POST(req: NextRequest) {
         };
         matchSource = "catalog_name";
         matchScore = match.score;
+      }
+    }
+
+    // P1 correction 2c: sibling-expansion apply. An orphan slashless
+    // item (no catalog of its own) inherits a proven expansion from
+    // its same-vendor siblings. Builds a synthetic catalog pack_text
+    // so estimatePerUnit treats it the same way it would treat any
+    // other catalog hit - the only difference is pack_source gets
+    // stamped 'catalog_sibling' after estimation to keep the origin
+    // traceable. Requires >=2 corroborators unanimous (built above).
+    let siblingExpansionApplied: { qty: number; size: number; uom: string; corroborators: number } | null = null;
+    if (!cat && !matchSource && isSlashlessWeightPack(it.pack_text)) {
+      const sKey = `${it.vendor_id}#${it.pack_text!.toUpperCase().trim()}`;
+      const exp = siblingExpansions.get(sKey);
+      if (exp) {
+        siblingExpansionApplied = exp;
+        cat = {
+          pack_text: `${exp.qty}/${exp.size} ${exp.uom}`,
+          catalog_price: null,
+        };
+        // matchSource stays null - the catalog row did not come from
+        // THIS item's own SKU or name lookup. pack_source will be
+        // stamped 'catalog_sibling' on the output instead.
       }
     }
 
@@ -706,6 +852,18 @@ export async function POST(req: NextRequest) {
         estimate.note = baseEstimate.note ? `${baseEstimate.note}; ${nameNote}` : nameNote;
         if (matchScore != null) estimate.match_score = matchScore;
       }
+    }
+    // P1 correction 2c: stamp sibling-expansion origin AFTER
+    // estimatePerUnit so the estimator's math (which just saw a
+    // synthetic catalog pack) is preserved, but the pack_source
+    // reflects where the pack really came from. packState='check'
+    // is forced further below by the pack_source==='catalog_sibling'
+    // branch. The note names the sibling corroboration count so a
+    // reviewer knows how many invoices back the expansion.
+    if (siblingExpansionApplied) {
+      estimate.pack_source = "catalog_sibling";
+      const sibNote = `inferred from ${siblingExpansionApplied.corroborators} same-vendor siblings sharing invoice pack "${(it.pack_text ?? "").trim()}" with catalog pack "${siblingExpansionApplied.qty}/${siblingExpansionApplied.size} ${siblingExpansionApplied.uom}"; verify`;
+      estimate.note = baseEstimate.note ? `${baseEstimate.note}; ${sibNote}` : sibNote;
     }
 
     // Prompt B pack derivation (Prompt B2 denominator): when parsed
@@ -772,24 +930,13 @@ export async function POST(req: NextRequest) {
               ? "check"
               : "none";
 
-    // P1 correction 2b (2026-11-04): slashless-weight catalog-
-    // disagreement signal. When the invoice's pack_text is a bare
-    // 2-3 digit weight (`45 LB`, `410 LB`, `40#`) AND a SKU-matched
-    // catalog row provided a different shape (qty > 1 after the
-    // estimator's catalog-first pick), mark the row `check` so the
-    // swap from the invoice's slashless reading to the catalog's
-    // slashed form is visible for review. The pack cols still carry
-    // CATALOG's values - check means "parsed but flagged", not
-    // "fields nulled" (the live contract has pack_state='check'
-    // rows with valid pack_qty today). Does NOT fire when no catalog
-    // match exists - the shape alone is not evidence, so a legit
-    // 25-lb sack with no catalog row stays `ok`.
-    if (
-      matchSource === "sku" &&
-      estimate.pack_source === "catalog" &&
-      isSlashlessWeightPack(it.pack_text) &&
-      parsed.qty != null && parsed.qty > 1
-    ) {
+    // P1 correction 2c (2026-11-04): if this item was filled via the
+    // vendor-sibling expansion (slashless invoice + corroborated
+    // sibling expansion applied below), mark it check so the inferred
+    // pack is visible for review. The fix lives in the sibling-apply
+    // block (search for "sibling expansion") rather than here, but
+    // the flag lands on packState.
+    if (estimate.pack_source === "catalog_sibling") {
       packState = "check";
     }
 
@@ -904,6 +1051,7 @@ export async function POST(req: NextRequest) {
       else if (packState === "check") counts.check += 1;
       else counts.none += 1;
       if (matchSource === "catalog_name") counts.nameMatched += 1;
+      if (siblingExpansionApplied) counts.siblingMatched += 1;
       continue;
     }
 
@@ -1039,6 +1187,7 @@ export async function POST(req: NextRequest) {
     nextOffset: offset + items.length,
     counts,
     nameMatched: counts.nameMatched,
+    siblingMatched: counts.siblingMatched,
   };
   if (dryRun) {
     response.dryRunSummary = {

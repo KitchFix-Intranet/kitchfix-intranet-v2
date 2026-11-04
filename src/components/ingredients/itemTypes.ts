@@ -25,7 +25,12 @@ export type ReviewGroupItem = {
   pack: string | null;
   packNormalized: string | null;
   packState: string;
-  packSource: "override" | "catalog" | "invoice" | null;
+  // P1 correction 2c: 'catalog_sibling' names a pack that came from
+  // a proven same-vendor expansion (invoice pack_text matches >=2
+  // sibling items whose catalog rows unanimously agree on a slashed
+  // form). The item itself has no catalog row. Distinguishable in
+  // the panel's ItemFacts label and in the audit ledger.
+  packSource: "override" | "catalog" | "invoice" | "catalog_sibling" | null;
   packManualOverride: boolean;
   // Set by hand via /api/review/set-price-override. Independent of
   // packManualOverride: a row can have both at once (A2.2). Keyed off

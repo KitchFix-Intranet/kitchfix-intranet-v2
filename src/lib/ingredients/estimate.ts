@@ -123,7 +123,15 @@ export type PriceEstimate = {
     | "actuals_weight"
     | "actuals_case"
     | null;
-  pack_source: "catalog" | "invoice" | "override" | null;
+  // P1 correction 2c (2026-11-04): 'catalog_sibling' names a pack
+  // that came from a proven same-vendor expansion of a slashless
+  // invoice shape - the item has no catalog row of its own, but
+  // >=2 sibling items at the same vendor + same slashless pack_text
+  // DO have catalog rows that unanimously agree on one slashed form.
+  // That proven expansion is applied to the orphan with pack_state
+  // 'check' so the inference is visible. Distinct from 'catalog'
+  // (direct SKU hit) and from 'catalog_name' (trigram name match).
+  pack_source: "catalog" | "invoice" | "override" | "catalog_sibling" | null;
   confidence: EstimateConfidence;
   note: string | null;
   // How the catalog row (if any) was looked up:

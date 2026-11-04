@@ -172,20 +172,31 @@ export async function GET(req: NextRequest) {
   const hasManualOverride = isPackManualOverride(it.pack_override);
   const hasPriceOverride = isPriceManualOverride(it.pack_override);
   const packDisplay = hasManualOverride ? it.pack_text : catalogPack ?? it.pack_text;
-  const packSource: "override" | "catalog" | "invoice" | null = hasManualOverride
+  // P1 correction 2c: prefer price_estimate.pack_source when the
+  // backfill has stamped it with a refined value ('catalog_sibling'
+  // or 'catalog_name' via match_source). The raw-column inference
+  // below only sees pack_text and the catalog join, so a sibling-
+  // expanded item would read "invoice" by inference even though its
+  // pack came from a vendor-sibling expansion. Hand-overrides still
+  // win at the top.
+  const pe = it.price_estimate ?? null;
+  const estimatePackSource =
+    pe && typeof pe.pack_source === "string" ? pe.pack_source : null;
+  const packSource: "override" | "catalog" | "invoice" | "catalog_sibling" | null = hasManualOverride
     ? "override"
-    : catalogPack
-      ? "catalog"
-      : it.pack_text
-        ? "invoice"
-        : null;
+    : estimatePackSource === "catalog_sibling"
+      ? "catalog_sibling"
+      : catalogPack
+        ? "catalog"
+        : it.pack_text
+          ? "invoice"
+          : null;
   const normalizedPack =
     it.pack_qty != null && it.pack_size != null && it.pack_uom
       ? Number(it.pack_qty) === 1
         ? `${it.pack_size} ${it.pack_uom}`
         : `${it.pack_qty}/${it.pack_size} ${it.pack_uom}`
       : null;
-  const pe = it.price_estimate ?? null;
   const perBase =
     pe && pe.per_base != null && Number.isFinite(Number(pe.per_base)) ? Number(pe.per_base) : null;
   const perBaseConfidence =

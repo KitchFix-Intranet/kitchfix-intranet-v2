@@ -283,13 +283,25 @@ async function loadReview() {
         const packDisplay = hasManualOverride
           ? it.pack_text
           : (catalogPack ?? it.pack_text);
-        const packSource: "override" | "catalog" | "invoice" | null = hasManualOverride
+        // P1 correction 2c: prefer price_estimate.pack_source when
+        // the backfill has stamped a refined value ('catalog_sibling'
+        // via the vendor-sibling expansion rule). Raw-column inference
+        // misses it; without this a sibling-expanded item reads as
+        // "invoice" in the panel even though its pack came from
+        // vendor-sibling corroboration.
+        const estPackSource =
+          it.price_estimate && typeof it.price_estimate.pack_source === "string"
+            ? it.price_estimate.pack_source
+            : null;
+        const packSource: "override" | "catalog" | "invoice" | "catalog_sibling" | null = hasManualOverride
           ? "override"
-          : catalogPack
-            ? "catalog"
-            : it.pack_text
-              ? "invoice"
-              : null;
+          : estPackSource === "catalog_sibling"
+            ? "catalog_sibling"
+            : catalogPack
+              ? "catalog"
+              : it.pack_text
+                ? "invoice"
+                : null;
         // Normalized pack display from the backfill: "6/1 LB" style.
         // Falls back to the raw pack text when the backfill hasn't
         // produced qty+size+uom yet.
@@ -390,13 +402,25 @@ async function loadReview() {
         const packDisplay = hasManualOverride
           ? it.pack_text
           : (catalogPack ?? it.pack_text);
-        const packSource: "override" | "catalog" | "invoice" | null = hasManualOverride
+        // P1 correction 2c: prefer price_estimate.pack_source when
+        // the backfill has stamped a refined value ('catalog_sibling'
+        // via the vendor-sibling expansion rule). Raw-column inference
+        // misses it; without this a sibling-expanded item reads as
+        // "invoice" in the panel even though its pack came from
+        // vendor-sibling corroboration.
+        const estPackSource =
+          it.price_estimate && typeof it.price_estimate.pack_source === "string"
+            ? it.price_estimate.pack_source
+            : null;
+        const packSource: "override" | "catalog" | "invoice" | "catalog_sibling" | null = hasManualOverride
           ? "override"
-          : catalogPack
-            ? "catalog"
-            : it.pack_text
-              ? "invoice"
-              : null;
+          : estPackSource === "catalog_sibling"
+            ? "catalog_sibling"
+            : catalogPack
+              ? "catalog"
+              : it.pack_text
+                ? "invoice"
+                : null;
         // Normalized pack display from the backfill: "6/1 LB" style.
         // Falls back to the raw pack text when the backfill hasn't
         // produced qty+size+uom yet.

@@ -485,12 +485,13 @@ function ItemFacts({ item }: { item: ReviewGroupItem }) {
   // per §6.
   const packSourceLabel =
     item.packSource === "override" ? "set by hand"
-      : item.packSource === "catalog"
-        ? item.matchSource === "catalog_name"
-          ? "from catalog (name match)"
-          : "from catalog"
-        : item.packSource === "invoice" ? "from invoice pack text"
-          : null;
+      : item.packSource === "catalog_sibling" ? "from same-vendor siblings"
+        : item.packSource === "catalog"
+          ? item.matchSource === "catalog_name"
+            ? "from catalog (name match)"
+            : "from catalog"
+          : item.packSource === "invoice" ? "from invoice pack text"
+            : null;
   const isCheck = item.packState === "check";
   const checkChipTitle =
     item.matchSource === "catalog_name" && item.matchScore != null
