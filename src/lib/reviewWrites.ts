@@ -235,77 +235,123 @@ export async function markNotFood(
 
 // Retail disposition. Retail = sold as-is to players (bottled water,
 // snacks, pre-made sandwiches) - real spend but not a recipe
-// ingredient. The overview views already read status='resale' to
-// bucket these as retail spend (excluded from recipe coverage).
+// ingredient. The overview views read status='resale' (the DB column
+// keeps the old name; the UI word is Retail) to bucket these as
+// retail spend (excluded from recipe coverage).
 //
 // We deliberately do NOT flip is_food - a human disposition doesn't
 // retro-rewrite intake's classification (same reasoning as
-// markNotFood).
+// markNotFood). We also deliberately do NOT flip the master's
+// `pr_ingredients.resale` flag - a master can hold a mix of recipe
+// and retail items (the "Greek yogurt" case), and flagging the
+// master would wrongly drag the bulk items onto the Retail tab.
 //
-// B5 (2026-11-04): this path no longer writes link_status. Pre-B5 it
-// also wrote `link_status='rejected'` and `link_reason='resale:<...>'`
-// to drop the item from the Review queue and keep the matcher from
-// re-proposing it. That broke pricing - 42 items / $67,942 of 12-month
-// spend silently fell out of the rollup because the rollup only
-// counts link_status='confirmed'. The known-good shape produced by
-// the two other write paths (confirmItems' retail-cascade and
-// setIngredientResale's cascade) is confirmed + resale, link_status
-// untouched. This write now does the same: set status='resale' on
-// each eligible item and leave link_status / link_reason exactly as
-// they were. The item-drops-from-queue side effect goes away by
-// design - preserving the price link is the point.
+// B5 (2026-11-04): stopped writing link_status='rejected' - that
+// was the bug that silently killed pricing on every item the
+// button touched.
 //
-// Each per-item pr_events row carries the full aggregate (item_ids,
-// count, usd, actor) in the after jsonb so a single-event lookup
-// gives the complete batch context.
+// B7 (2026-11-05): Retail now finishes the job. Pre-B7 this helper
+// wrote only status='resale' and left link_status as it was. For a
+// proposed item that meant staying 'proposed' - the rollup counts
+// only 'confirmed', so the item sat on the Retail tab at $0.00.
+// B7 delegates the link confirmation to confirmItems - the same
+// code Confirm already uses - so Retail and Confirm cannot drift
+// apart. If the master is already Retail, confirmItems' S1 cascade
+// stamps status='resale' as part of the confirm; if the master is
+// NOT Retail, we stamp status='resale' here afterward so the item
+// itself carries the retail bucketing even though the ingredient
+// stays recipe. The UI surfaces that disconnect to the user.
 export async function markResale(
   client: SupabaseClient,
-  args: { itemIds: string[]; actorEmail: string }
-): Promise<{ marked: number; usd: number; errors: string[] }> {
-  const { itemIds, actorEmail } = args;
+  args: { ingredientId: string; itemIds: string[]; actorEmail: string }
+): Promise<{
+  confirmed: number;
+  marked: number;
+  usd: number;
+  ingredientIsRetail: boolean;
+  errors: string[];
+}> {
+  const { ingredientId, itemIds, actorEmail } = args;
   const errors: string[] = [];
-  if (itemIds.length === 0) return { marked: 0, usd: 0, errors };
-
-  // Preload usd_12m for the aggregate `after.usd` field (same pattern
-  // confirmItems uses). readItems also surfaces the current link_status
-  // so we skip rows that aren't in the queue anymore.
-  const rows = await readItems(client, itemIds);
-  const eligible = rows.filter((r) => r.link_status === "proposed" || r.link_status === "none");
-  const eligibleIds = eligible.map((r) => r.id);
-  const totalUsd = eligible.reduce((s, r) => s + Number(r.usd_12m ?? 0), 0);
-
-  let marked = 0;
-  for (const r of eligible) {
-    const { error } = await client
-      .from("pr_vendor_items")
-      .update({
-        // B5: status is the only mutation. link_status + link_reason
-        // are intentionally NOT written. A confirmed link would stay
-        // confirmed - but readItems eligibility above already gates
-        // to proposed/none, so in practice this write preserves
-        // whichever of those the row carried.
-        status: "resale",
-      })
-      .eq("id", r.id)
-      .in("link_status", ["proposed", "none"]); // race guard: still a read-where, not a link_status write
-    if (error) {
-      errors.push(`${r.id}: ${error.message}`);
-      continue;
-    }
-    marked += 1;
-    await client.from("pr_events").insert({
-      entity_type: "vendor_item",
-      entity_id: r.id,
-      kind: "review_resale",
-      after: {
-        item_ids: eligibleIds,
-        count: eligibleIds.length,
-        usd: Math.round(totalUsd),
-      },
-      actor: actorEmail,
-    });
+  if (itemIds.length === 0) {
+    return { confirmed: 0, marked: 0, usd: 0, ingredientIsRetail: false, errors };
   }
-  return { marked, usd: Math.round(totalUsd), errors };
+
+  // Delegate link confirmation to the shared path. This flips
+  // link_status='confirmed' + link_reason='confirmed:<actor>' on
+  // every item that was 'proposed'; it writes golden_links rows and
+  // emits the same pr_events the Confirm button does. Retail and
+  // Confirm now produce byte-identical link state.
+  let confirmResult: ConfirmResult;
+  try {
+    confirmResult = await confirmItems(client, { ingredientId, itemIds, actorEmail });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { confirmed: 0, marked: 0, usd: 0, ingredientIsRetail: false, errors: [msg] };
+  }
+  errors.push(...confirmResult.errors);
+
+  // Read the master's retail flag so the caller can tell the user
+  // whether the ingredient itself moved too.
+  const { data: ing } = await client
+    .from("pr_ingredients")
+    .select("resale")
+    .eq("id", ingredientId)
+    .maybeSingle();
+  const ingredientIsRetail = ing != null && (ing as { resale: boolean }).resale === true;
+
+  // When the master IS retail, confirmItems' S1 cascade already
+  // stamped status='resale' on every just-confirmed item (from
+  // active). When the master is NOT retail, confirmItems leaves
+  // status='active'. Retail needs the ITEM marked retail regardless -
+  // this second write catches the non-retail-master case. Scoped to
+  // rows we just confirmed AND whose current status is 'active' so
+  // we never re-colour a duplicate or archived row.
+  let marked = 0;
+  if (!ingredientIsRetail && confirmResult.confirmed > 0) {
+    const { data: justConfirmed } = await client
+      .from("pr_vendor_items")
+      .select("id,usd_12m,status")
+      .in("id", itemIds)
+      .eq("link_status", "confirmed")
+      .eq("status", "active");
+    for (const r of ((justConfirmed ?? []) as Array<{ id: string; usd_12m: number | null }>)) {
+      const { error: upErr } = await client
+        .from("pr_vendor_items")
+        .update({ status: "resale" })
+        .eq("id", r.id)
+        .eq("link_status", "confirmed")
+        .eq("status", "active");
+      if (upErr) {
+        errors.push(`${r.id}: ${upErr.message}`);
+        continue;
+      }
+      marked += 1;
+      await client.from("pr_events").insert({
+        entity_type: "vendor_item",
+        entity_id: r.id,
+        kind: "review_resale",
+        after: {
+          via: "review_retail_action",
+          ingredient_id: ingredientId,
+          usd: Math.round(Number(r.usd_12m ?? 0)),
+        },
+        actor: actorEmail,
+      });
+    }
+  } else if (ingredientIsRetail) {
+    // Master already retail -> confirmItems stamped status for us;
+    // count those as "marked" for the caller's toast.
+    marked = confirmResult.movedToResale ?? 0;
+  }
+
+  return {
+    confirmed: confirmResult.confirmed,
+    marked,
+    usd: Math.round(confirmResult.usd),
+    ingredientIsRetail,
+    errors,
+  };
 }
 
 // Flag toggle. Flag is an ORTHOGONAL marker to disposition - a flagged

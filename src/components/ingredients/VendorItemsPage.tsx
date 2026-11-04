@@ -428,7 +428,7 @@ function StatusChip({ row }: { row: Row }) {
   if (row.status === "archived") return <span className="kf-pill kf-pill--muted">Archived</span>;
   if (row.status === "one_off") return <span className="kf-pill kf-pill--muted">One off</span>;
   if (row.status === "not_food" || row.is_food === false) return <span className="kf-pill kf-pill--muted">Not food</span>;
-  if (row.status === "resale") return <span className="kf-pill kf-pill--muted">Resale</span>;
+  if (row.status === "resale") return <span className="kf-pill kf-pill--muted">Retail</span>;
   if (row.link_status === "proposed") return <span className="kf-pill kf-pill--info">Proposed</span>;
   if (row.link_status === "confirmed") return <span className="kf-pill kf-pill--good">Linked</span>;
   if (row.link_status === "rejected") return <span className="kf-pill kf-pill--muted">Rejected</span>;

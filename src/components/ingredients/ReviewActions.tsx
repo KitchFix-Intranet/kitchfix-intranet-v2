@@ -273,22 +273,40 @@ export function ReviewActions({
 
   // Retail disposition. Items sold as-is to players (bottled water,
   // snacks, pre-made sandwiches): real spend but not a recipe
-  // ingredient. The overview views already read status='resale' to
-  // bucket these as retail; this action writes that + rejects the
-  // link so the item drops out of the queue.
+  // ingredient. B7: this action now confirms the link (so the item
+  // prices on the Retail tab) AND marks the item retail. It does
+  // NOT touch the master's retail flag - a master can hold a mix.
+  // The toast names the ingredient-stays-recipe case explicitly so
+  // the user isn't left wondering why the ingredient didn't move.
   async function markResale() {
     if (op || noneChecked) return;
+    if (!currentIngredientId) {
+      toast("No ingredient target for this group", { tone: "block" });
+      return;
+    }
     setOp("resale");
-    const r = await postJson("/api/review/resale", { itemIds: checkedIds });
+    const r = await postJson("/api/review/resale", {
+      ingredientId: currentIngredientId,
+      itemIds: checkedIds,
+    });
     if (!r.ok) {
       toast(errMsg(r.data, `Mark failed (${r.status})`), { tone: "block" });
       setOp(null);
       return;
     }
-    toast(`Marked ${fmtCount(checkedCount)} as retail`);
+    const d = r.data as { confirmed?: number; marked?: number; ingredientIsRetail?: boolean };
+    const n = d.marked ?? d.confirmed ?? checkedCount;
+    const msg = d.ingredientIsRetail
+      ? `Marked ${fmtCount(n)} as retail`
+      : `Marked ${fmtCount(n)} as retail - the ingredient is still a recipe ingredient. Flip its Retail toggle in the detail panel to move the whole ingredient.`;
+    toast(msg, { tone: "good" });
     setOp(null);
     setLastDone(Date.now());
-    router.refresh();
+    if (onLeaveStart) {
+      onLeaveStart(checkedIds);
+    } else {
+      router.refresh();
+    }
   }
 
   // Archive disposition. IS-food items that are one-offs / irrelevant

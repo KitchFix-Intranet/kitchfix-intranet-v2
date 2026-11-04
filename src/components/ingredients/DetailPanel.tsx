@@ -192,7 +192,7 @@ export function DetailPanel({
                 {ingredient.parent ? (
                   <span className="kf-pill kf-pill--muted">{ingredient.parent}</span>
                 ) : null}
-                {ingredient.resale ? <span className="kf-pill kf-pill--muted">Resale</span> : null}
+                {ingredient.resale ? <span className="kf-pill kf-pill--muted">Retail</span> : null}
               </>
             ) : (
               <span className="kf-pill kf-pill--warn">Not yet created</span>
@@ -371,8 +371,8 @@ function describeEvent(e: LedgerEvent): { label: string; body: React.ReactNode }
   if (e.kind === "ingredient_resale_set") {
     const next = after.resale === true;
     return {
-      label: "Resale",
-      body: <>Moved to <strong>{next ? "resale bucket" : "recipe coverage"}</strong></>,
+      label: "Retail",
+      body: <>Moved to <strong>{next ? "retail bucket" : "recipe coverage"}</strong></>,
     };
   }
   if (e.kind === "pack_override_set") {
@@ -754,8 +754,8 @@ function IngredientBlock({
     }
     const d = (r.data ?? {}) as { moved?: number };
     const moved = d.moved ?? 0;
-    const base = next ? "Saved: moved to resale bucket" : "Saved: moved to recipe-coverage bucket";
-    const direction = next ? "to resale" : "back to active";
+    const base = next ? "Saved: moved to retail bucket" : "Saved: moved to recipe-coverage bucket";
+    const direction = next ? "to retail" : "back to active";
     toast(
       moved > 0
         ? `${base} (${fmtCount(moved)} confirmed items moved ${direction})`
@@ -896,18 +896,18 @@ function IngredientBlock({
             <input
               type="checkbox"
               checked={ingredient.resale}
-              aria-label="Mark as resale"
+              aria-label="Mark as retail"
               onChange={(e) => {
                 const v = e.currentTarget.checked;
                 toggleResale(v);
               }}
               disabled={resaleBusy}
             />
-            <span>Resale (not a recipe ingredient)</span>
+            <span>Retail (not a recipe ingredient)</span>
             <SaveFlash savedAt={resaleSavedAt} error={resaleError} />
           </label>
           <div className="kf-dpn__hint">
-            Resale items (bottled water, disposables) are tracked but excluded from recipe-coverage.
+            Retail items (bottled water, disposables) are tracked but excluded from recipe-coverage.
             {resalePreview
               ? ingredient.resale
                 ? resalePreview.resale > 0

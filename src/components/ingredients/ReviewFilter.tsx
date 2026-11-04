@@ -315,9 +315,9 @@ export function ReviewFilter({
             aria-pressed={kindFilter === "resale"}
             className={`kf-chip${kindFilter === "resale" ? " kf-chip--on" : ""}`}
             onClick={() => setKindFilter((v) => (v === "resale" ? "all" : "resale"))}
-            title="Groups whose ingredient is flagged resale"
+            title="Groups whose ingredient is flagged retail"
           >
-            Resale <span className="kf-chip__count">{fmtCount(resaleCount)}</span>
+            Retail <span className="kf-chip__count">{fmtCount(resaleCount)}</span>
           </button>
           {anyFilterActive ? (
             <button

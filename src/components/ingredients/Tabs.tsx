@@ -1,10 +1,12 @@
 import Link from "next/link";
 
-// R2: Resale slots between Ingredients and Vendor items. The dictionary
-// of masters is split by the pr_ingredients.resale flag - recipe
-// masters here, resale masters there. Both consume the same workbench
-// (IngredientMasters) parameterized by mode.
-type ActiveTab = "overview" | "review" | "ingredients" | "resale" | "vendor-items";
+// R2: Retail slots between Ingredients and Vendor items. The dictionary
+// of masters is split by the pr_ingredients.resale column (B7: the DB
+// column keeps its old name - "resale" - because it sits in a CHECK
+// constraint and in many queries; the UI word is Retail). Both tabs
+// consume the same workbench (IngredientMasters) parameterized by
+// mode.
+type ActiveTab = "overview" | "review" | "ingredients" | "retail" | "vendor-items";
 
 export function Tabs({ active }: { active: ActiveTab }) {
   return (
@@ -28,10 +30,10 @@ export function Tabs({ active }: { active: ActiveTab }) {
         Ingredients
       </Link>
       <Link
-        href="/stockpot/ingredients/resale"
-        className={`kf-tab${active === "resale" ? " kf-tab--active" : ""}`}
+        href="/stockpot/ingredients/retail"
+        className={`kf-tab${active === "retail" ? " kf-tab--active" : ""}`}
       >
-        Resale
+        Retail
       </Link>
       <Link
         href="/stockpot/ingredients/vendor-items"

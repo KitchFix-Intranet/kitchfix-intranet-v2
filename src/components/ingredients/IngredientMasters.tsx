@@ -516,7 +516,7 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
   const heroFacts =
     mode === "resale"
       ? [
-          { label: "Resale masters", value: fmtCount(totalMasters), note: "sold as-is, not cooked" },
+          { label: "Retail masters", value: fmtCount(totalMasters), note: "sold as-is, not cooked" },
           { label: "Linked items", value: fmtCount(totalLinked), note: "confirmed to a master" },
           { label: "12-mo spend", value: fmtUsd(totalUsd), note: "outside recipe coverage" },
         ]
@@ -531,11 +531,11 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
     <div className="kf-ing">
       <IdentBand
         eyebrow="Culinary office"
-        title={mode === "resale" ? "Resale" : "Ingredients"}
+        title={mode === "resale" ? "Retail" : "Ingredients"}
         facts={heroFacts}
       />
 
-      <Tabs active={mode === "resale" ? "resale" : "ingredients"} />
+      <Tabs active={mode === "resale" ? "retail" : "ingredients"} />
 
       <IngredientMastersFilter rows={rows} mode={mode} />
     </div>

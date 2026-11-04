@@ -308,7 +308,7 @@ export function IngredientMastersFilter({
             type="search"
             placeholder={
               mode === "resale"
-                ? "Filter resale by name, linked vendor or SKU"
+                ? "Filter retail by name, linked vendor or SKU"
                 : "Filter by name, parent, category, linked vendor or SKU"
             }
             value={query}
@@ -637,7 +637,7 @@ function MasterRowButton({
         <span className="kf-master__sub">
           {row.category ? row.category : <em className="kf-muted">Needs category</em>}
           {row.parent ? <> &middot; {row.parent}</> : null}
-          {row.resale ? <> &middot; <span className="kf-pill kf-pill--muted">Resale</span></> : null}
+          {row.resale ? <> &middot; <span className="kf-pill kf-pill--muted">Retail</span></> : null}
           {row.spreadRatio != null ? (
             <span className="kf-master__spr" title={`${fmtUsd(row.minPerBase ?? 0)} to ${fmtUsd(row.maxPerBase ?? 0)} per ${uom}`}>
               <span className="kf-master__spr-track">
@@ -970,7 +970,7 @@ function MasterDetail({
               {ISSUE_LABEL[k] ?? k}
             </span>
           ))}
-          {row.resale ? <span className="kf-pill kf-pill--muted">Resale</span> : null}
+          {row.resale ? <span className="kf-pill kf-pill--muted">Retail</span> : null}
           <BaseUnitControl row={row} />
         </div>
       </div>

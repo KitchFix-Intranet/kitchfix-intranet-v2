@@ -200,7 +200,7 @@ export function ReviewCard({
             <span className="kf-pill kf-pill--warn">Needs category</span>
           ) : null}
           {ingredientRow?.resale ? (
-            <span className="kf-pill kf-pill--muted">Resale</span>
+            <span className="kf-pill kf-pill--muted">Retail</span>
           ) : null}
         </div>
         <div className="kf-rvc__totals">

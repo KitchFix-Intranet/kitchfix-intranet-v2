@@ -22,7 +22,7 @@ const STATUS_LABELS: Record<string, string> = {
   archived: "Archived",
   one_off: "One off",
   not_food: "Not food",
-  resale: "Resale",
+  resale: "Retail",
   duplicate: "Duplicate",
 };
 const LINK_LABELS: Record<string, string> = {
