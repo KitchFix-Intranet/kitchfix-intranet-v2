@@ -326,34 +326,54 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // P1 correction 2c (2026-11-04): vendor-level sibling-expansion map.
+  // P1 2c + P2 (2026-11-04): vendor-level sibling-expansion map, gated
+  // by per-vendor reliability.
   //
-  // The signal for a slash-loss pack (`45 LB` <- `4/5 LB`) is NOT at
-  // the item level - the broken items never have a catalog row of
-  // their own, so an item-level catalog-disagreement check fires only
-  // on rows that are already right. The signal is at the VENDOR
-  // level: when 2+ items at the same vendor share the same slashless
-  // pack_text AND each of those items has a SKU catalog row that
-  // UNANIMOUSLY agrees on one slashed form, that is the proven
-  // expansion for that (vendor, slashless) pair. Apply the expansion
-  // to orphan siblings (no catalog row of their own) with pack_state
-  // 'check' and pack_source 'catalog_sibling'.
+  // P1 2c found the signal lives at the vendor level, not the item
+  // level. P2 adds the gate: the global 2-corroborator threshold is
+  // too strict at vendors that are perfectly consistent (Sysco: 96%
+  // unanimity; 32 fills withheld) AND too loose at vendors that
+  // reuse the same slashless string for genuinely different packs
+  // (Shamrock: 30% unanimity, 0% at deep samples; 8 fills about half
+  // of which would be wrong, worse than leaving the pack blank).
   //
-  // Scoped to the vendors represented in this batch; the query is
-  // bounded by the SLASHLESS_WEIGHT regex and the item_number_norm
-  // join to pr_vendor_catalog (filtered to catalog packs that contain
-  // a slash - unslashed catalog rows carry no new information).
+  // Each vendor earns its own threshold from its own catalog record:
+  //   deepRate < 0.80 (and vendor has deep groups) -> suppressed
+  //   reliabilityRate >= 0.90                      -> 1 corroborator
+  //   reliabilityRate <  0.70                      -> suppressed
+  //   otherwise                                    -> 2 (unchanged)
+  // Vendors with < 8 testable groups default to 2 (no record to judge).
+  //
+  // Corroborator definition (strict per P2 §2.1): a sibling item at
+  // the same vendor whose SKU-matched catalog row's pack_text
+  // contains a slash AND parses CLEANLY via parsePack. Unparseable
+  // catalog packs are SKIPPED, not counted, and must not reject the
+  // group. The round-2 implementation bailed on any parse failure,
+  // which cost valid groups wherever one LBAV sibling slipped in.
+  //
+  // Trivial expansions (shape agrees with the invoice's naive parse)
+  // are NOT recorded - applying them would flip pack_source and
+  // pack_state on items whose pack is already correct (§0 defect).
   const siblingExpansions = new Map<string, {
     qty: number; size: number; uom: string; corroborators: number
   }>();
+  type VendorMetrics = {
+    testableGroups: number;
+    unanimousGroups: number;
+    deepGroups: number;        // >= 4 corroborators
+    deepUnanimous: number;
+    reliabilityRate: number | null;
+    deepRate: number | null;
+    thresholdUsed: number;     // 1, 2, or Number.POSITIVE_INFINITY
+    suppressedByGate: number;  // groups that would fill under threshold 2 but got withheld
+    recorded: number;          // groups that made it into siblingExpansions
+  };
+  const vendorMetrics = new Map<string, VendorMetrics>();
   {
     const vendorsInBatch = new Set(items.map((it) => it.vendor_id));
     if (vendorsInBatch.size > 0) {
       // Pull every (vendor, invoice_pack_text, catalog_pack_text)
-      // corroboration row. We do the UPPER/TRIM + regex client-side
-      // because PostgREST does not express `~*` or trim() predicates
-      // without an RPC; the data volume per vendor is small (hundreds
-      // of items), so filtering the few vendor rows is fine.
+      // corroboration row. Same shape as 2c.
       const corrPage = 1000;
       const corroborationRows: Array<{
         vendor_id: string;
@@ -375,12 +395,10 @@ export async function POST(req: NextRequest) {
           const vendorItems = (cData ?? []) as Array<{
             vendor_id: string; pack_text: string | null; item_number_norm: string | null;
           }>;
-          // Narrow to items whose pack_text matches the slashless shape.
           const slashlessVendorItems = vendorItems.filter(
             (r) => r.pack_text != null && isSlashlessWeightPack(r.pack_text)
           );
           if (slashlessVendorItems.length > 0) {
-            // Pull the catalog rows for those slashless items via SKU.
             const nums = Array.from(
               new Set(slashlessVendorItems.map((r) => r.item_number_norm!).filter(Boolean))
             );
@@ -414,36 +432,127 @@ export async function POST(req: NextRequest) {
           from += corrPage;
         }
       }
-      // Group by (vendor_id, invoice_pack). For each group, parse all
-      // catalog packs; require >=2 corroborators that unanimously
-      // agree on {qty, size, uom}. One corroborator is anecdote; a
-      // split tells us the vendor's slashless form is ambiguous.
-      const byKey = new Map<string, Array<string>>();
+      // Group by (vendor_id, invoice_pack). For each group collect
+      // the PARSED corroborators (unparseable ones are skipped per
+      // P2 §2.1 - "a row that fails to parse is skipped, not counted,
+      // and must not reject the group").
+      type Shape = { qty: number; size: number; uom: string };
+      type Group = { vendor_id: string; invoice_pack: string; parses: Shape[] };
+      const byKey = new Map<string, Group>();
       for (const r of corroborationRows) {
         const key = `${r.vendor_id}#${r.invoice_pack}`;
-        let list = byKey.get(key);
+        let g = byKey.get(key);
+        if (!g) {
+          g = { vendor_id: r.vendor_id, invoice_pack: r.invoice_pack, parses: [] };
+          byKey.set(key, g);
+        }
+        const p = parsePack(r.catalog_pack);
+        if (p.qty != null && p.size != null && p.uom != null) {
+          g.parses.push({ qty: p.qty, size: p.size, uom: p.uom });
+        }
+      }
+
+      // Score each vendor from its own groups, then derive threshold.
+      const groupsByVendor = new Map<string, Group[]>();
+      for (const g of byKey.values()) {
+        let list = groupsByVendor.get(g.vendor_id);
         if (!list) {
           list = [];
-          byKey.set(key, list);
+          groupsByVendor.set(g.vendor_id, list);
         }
-        list.push(r.catalog_pack);
+        list.push(g);
       }
-      for (const [key, catPacks] of byKey) {
-        if (catPacks.length < 2) continue;
-        let shape: { qty: number; size: number; uom: string } | null = null;
-        let unanimous = true;
-        for (const cp of catPacks) {
-          const p = parsePack(cp);
-          if (p.qty == null || p.size == null || p.uom == null) { unanimous = false; break; }
-          if (shape == null) {
-            shape = { qty: p.qty, size: p.size, uom: p.uom };
-          } else if (shape.qty !== p.qty || shape.size !== p.size || shape.uom !== p.uom) {
-            unanimous = false;
-            break;
+      const shapesEqual = (a: Shape, b: Shape) =>
+        a.qty === b.qty && a.size === b.size && a.uom === b.uom;
+      const isUnanimous = (parses: Shape[]) => {
+        if (parses.length === 0) return false;
+        const first = parses[0];
+        for (let i = 1; i < parses.length; i += 1) if (!shapesEqual(parses[i], first)) return false;
+        return true;
+      };
+      for (const [vendorId, groups] of groupsByVendor) {
+        let testableGroups = 0;
+        let unanimousGroups = 0;
+        let deepGroups = 0;
+        let deepUnanimous = 0;
+        for (const g of groups) {
+          if (g.parses.length >= 2) {
+            testableGroups += 1;
+            const u = isUnanimous(g.parses);
+            if (u) unanimousGroups += 1;
+            if (g.parses.length >= 4) {
+              deepGroups += 1;
+              if (u) deepUnanimous += 1;
+            }
           }
         }
-        if (unanimous && shape) {
-          siblingExpansions.set(key, { ...shape, corroborators: catPacks.length });
+        const reliabilityRate = testableGroups > 0 ? unanimousGroups / testableGroups : null;
+        const deepRate = deepGroups > 0 ? deepUnanimous / deepGroups : null;
+        // P2 §2.2 gate, ordered as spec'd: deep check runs before the
+        // rate checks because a vendor can look fine at two samples
+        // and collapse at four.
+        let thresholdUsed: number;
+        if (testableGroups < 8) {
+          thresholdUsed = 2;
+        } else if (deepRate !== null && deepRate < 0.80) {
+          thresholdUsed = Number.POSITIVE_INFINITY;
+        } else if (reliabilityRate !== null && reliabilityRate >= 0.90) {
+          thresholdUsed = 1;
+        } else if (reliabilityRate !== null && reliabilityRate < 0.70) {
+          thresholdUsed = Number.POSITIVE_INFINITY;
+        } else {
+          thresholdUsed = 2;
+        }
+        vendorMetrics.set(vendorId, {
+          testableGroups,
+          unanimousGroups,
+          deepGroups,
+          deepUnanimous,
+          reliabilityRate,
+          deepRate,
+          thresholdUsed,
+          suppressedByGate: 0,
+          recorded: 0,
+        });
+      }
+
+      // Record proven expansions subject to each vendor's threshold.
+      // Trivial no-op expansions (shape == invoice's naive parse) are
+      // NOT recorded - applying them would flip pack_source and
+      // pack_state on an already-correct item (§0 defect from round 2).
+      for (const [key, g] of byKey) {
+        const metrics = vendorMetrics.get(g.vendor_id);
+        if (!metrics) continue;
+        const threshold = metrics.thresholdUsed;
+        if (!Number.isFinite(threshold)) continue; // vendor suppressed
+        if (g.parses.length < threshold) continue;
+        if (!isUnanimous(g.parses)) continue;
+        const shape = g.parses[0];
+        // Trivial filter. invoice_pack is already UPPER-TRIM'd.
+        const invP = parsePack(g.invoice_pack);
+        const trivial =
+          invP.qty === shape.qty && invP.size === shape.size && invP.uom === shape.uom;
+        if (trivial) continue;
+        // Count a "would have fired at threshold 2" group that got
+        // through at threshold 1 as recorded, not suppressed. Only
+        // Infinity-threshold vendors drive the suppressedByGate meter
+        // and they never reach here.
+        siblingExpansions.set(key, { ...shape, corroborators: g.parses.length });
+        metrics.recorded += 1;
+      }
+
+      // Count suppression at Infinity-threshold vendors: how many
+      // unanimous, non-trivial groups would have landed at threshold 2.
+      for (const [vendorId, groups] of groupsByVendor) {
+        const metrics = vendorMetrics.get(vendorId)!;
+        if (Number.isFinite(metrics.thresholdUsed)) continue;
+        for (const g of groups) {
+          if (g.parses.length < 2) continue;
+          if (!isUnanimous(g.parses)) continue;
+          const shape = g.parses[0];
+          const invP = parsePack(g.invoice_pack);
+          if (invP.qty === shape.qty && invP.size === shape.size && invP.uom === shape.uom) continue;
+          metrics.suppressedByGate += 1;
         }
       }
     }
@@ -862,7 +971,8 @@ export async function POST(req: NextRequest) {
     // reviewer knows how many invoices back the expansion.
     if (siblingExpansionApplied) {
       estimate.pack_source = "catalog_sibling";
-      const sibNote = `inferred from ${siblingExpansionApplied.corroborators} same-vendor siblings sharing invoice pack "${(it.pack_text ?? "").trim()}" with catalog pack "${siblingExpansionApplied.qty}/${siblingExpansionApplied.size} ${siblingExpansionApplied.uom}"; verify`;
+      const n = siblingExpansionApplied.corroborators;
+      const sibNote = `inferred from ${n} same-vendor sibling${n === 1 ? "" : "s"} sharing invoice pack "${(it.pack_text ?? "").trim()}" with catalog pack "${siblingExpansionApplied.qty}/${siblingExpansionApplied.size} ${siblingExpansionApplied.uom}"; verify`;
       estimate.note = baseEstimate.note ? `${baseEstimate.note}; ${sibNote}` : sibNote;
     }
 
@@ -896,6 +1006,16 @@ export async function POST(req: NextRequest) {
       }
     }
     const derivedPackUsed = derivedPackLb != null;
+
+    // P2 §2.4: when the fill came from a sibling expansion, overwrite
+    // packNote with the evidence-strength phrase for the review
+    // surface ("inferred from N similar items at this vendor").
+    // Separate from estimate.note; both land on the row but the panel
+    // prefers packNote for pack-origin context.
+    if (siblingExpansionApplied) {
+      const n = siblingExpansionApplied.corroborators;
+      packNote = `inferred from ${n} similar item${n === 1 ? "" : "s"} at this vendor; verify`;
+    }
 
     // Prompt B2: pack_state describes the PACK, not the price. A
     // 'derived' price on a cleanly-parsed pack is still a clean pack -
@@ -1062,9 +1182,11 @@ export async function POST(req: NextRequest) {
       pack_state: packState,
       price_estimate: estimate,
     };
-    if (derivedPackLb != null) {
+    if (derivedPackLb != null || siblingExpansionApplied) {
       // pack_note is a free-text annotation on pr_vendor_items; harmless
-      // to overwrite with each run (same inputs -> same note).
+      // to overwrite with each run (same inputs -> same note). P2 §2.4
+      // extends the write to sibling-applied rows so the review
+      // surface can show the evidence-strength phrase.
       updatePayload.pack_note = packNote;
     }
 
@@ -1179,6 +1301,33 @@ export async function POST(req: NextRequest) {
     topChanges.length = Math.min(topChanges.length, 50);
   }
 
+  // P2 §2.5: per-vendor reliability metrics in the response body.
+  // "A run that writes nothing at a vendor must say why in its own
+  // response body" - so every vendor present in the batch surfaces
+  // with its testableGroups, reliabilityRate, deepRate, thresholdUsed
+  // and suppressedByGate. Infinity is JSON-safe only as a string;
+  // emit "Infinity" for suppressed vendors.
+  const vendorReliability: Record<string, {
+    testableGroups: number;
+    reliabilityRate: number | null;
+    deepGroups: number;
+    deepRate: number | null;
+    thresholdUsed: number | "Infinity";
+    suppressedByGate: number;
+    recorded: number;
+  }> = {};
+  for (const [vendorId, m] of vendorMetrics) {
+    vendorReliability[vendorId] = {
+      testableGroups: m.testableGroups,
+      reliabilityRate: m.reliabilityRate,
+      deepGroups: m.deepGroups,
+      deepRate: m.deepRate,
+      thresholdUsed: Number.isFinite(m.thresholdUsed) ? m.thresholdUsed : "Infinity",
+      suppressedByGate: m.suppressedByGate,
+      recorded: m.recorded,
+    };
+  }
+
   const response: Record<string, unknown> = {
     ok: true,
     done,
@@ -1188,6 +1337,7 @@ export async function POST(req: NextRequest) {
     counts,
     nameMatched: counts.nameMatched,
     siblingMatched: counts.siblingMatched,
+    vendorReliability,
   };
   if (dryRun) {
     response.dryRunSummary = {
