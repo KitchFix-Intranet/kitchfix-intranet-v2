@@ -233,22 +233,31 @@ export async function markNotFood(
   return { marked, errors };
 }
 
-// Mirror of markNotFood for the Retail disposition. Retail = sold as-is
-// to players (bottled water, snacks, pre-made sandwiches) - real spend
-// but not a recipe ingredient. The two writes together are:
-//   - status='resale'       -> the overview views already read this and
-//                              bucket the dollars as retail spend
-//                              (excluded from recipe coverage).
-//   - link_status='rejected', link_reason='resale:<email>'
-//                              keeps the matcher (which only reads
-//                              link_status='none') from re-proposing
-//                              these on the next run, AND the item
-//                              visibly drops out of the proposed queue.
+// Retail disposition. Retail = sold as-is to players (bottled water,
+// snacks, pre-made sandwiches) - real spend but not a recipe
+// ingredient. The overview views already read status='resale' to
+// bucket these as retail spend (excluded from recipe coverage).
+//
 // We deliberately do NOT flip is_food - a human disposition doesn't
-// retro-rewrite intake's classification (same reasoning as markNotFood).
+// retro-rewrite intake's classification (same reasoning as
+// markNotFood).
+//
+// B5 (2026-11-04): this path no longer writes link_status. Pre-B5 it
+// also wrote `link_status='rejected'` and `link_reason='resale:<...>'`
+// to drop the item from the Review queue and keep the matcher from
+// re-proposing it. That broke pricing - 42 items / $67,942 of 12-month
+// spend silently fell out of the rollup because the rollup only
+// counts link_status='confirmed'. The known-good shape produced by
+// the two other write paths (confirmItems' retail-cascade and
+// setIngredientResale's cascade) is confirmed + resale, link_status
+// untouched. This write now does the same: set status='resale' on
+// each eligible item and leave link_status / link_reason exactly as
+// they were. The item-drops-from-queue side effect goes away by
+// design - preserving the price link is the point.
+//
 // Each per-item pr_events row carries the full aggregate (item_ids,
-// count, usd, actor) in the after jsonb so a single-event lookup gives
-// the complete batch context.
+// count, usd, actor) in the after jsonb so a single-event lookup
+// gives the complete batch context.
 export async function markResale(
   client: SupabaseClient,
   args: { itemIds: string[]; actorEmail: string }
@@ -270,12 +279,15 @@ export async function markResale(
     const { error } = await client
       .from("pr_vendor_items")
       .update({
+        // B5: status is the only mutation. link_status + link_reason
+        // are intentionally NOT written. A confirmed link would stay
+        // confirmed - but readItems eligibility above already gates
+        // to proposed/none, so in practice this write preserves
+        // whichever of those the row carried.
         status: "resale",
-        link_status: "rejected",
-        link_reason: `resale:${actorEmail}`,
       })
       .eq("id", r.id)
-      .in("link_status", ["proposed", "none"]);
+      .in("link_status", ["proposed", "none"]); // race guard: still a read-where, not a link_status write
     if (error) {
       errors.push(`${r.id}: ${error.message}`);
       continue;
