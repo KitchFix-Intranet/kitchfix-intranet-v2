@@ -167,6 +167,19 @@ const SPREAD_RATIO_MAX = 3;
 // `lb` and `gal` keep the band.
 const BAND_SUPPRESS_UNITS = new Set<string>(["EA", "DZ"]);
 
+// B4: "live" vendor-item status set. The price rollup counts only
+// items in this set - archived / not_food / duplicate / one_off are
+// NOT live and must not contribute to a master's items, usd_12m,
+// priced set, or linkedItems list. Matches the vendor-items UI's
+// working-set definition (status IN ('active','resale') is what the
+// Unlinked / Catch weight / No item number segments all filter on).
+// Factored out so B4's empty-master check and the rollup read the
+// same source of truth. Pre-B4 the server query filtered only on
+// link_status='confirmed', which let archived items with a stale
+// confirmed link flow through the mean / min / max / spread; this
+// is the bug fix the "define live once" instruction names.
+const LIVE_STATUSES: readonly string[] = ["active", "resale"];
+
 // S5: convertPer / canonicalFromBaseUnit live in pack.ts now so the
 // item panel's Result + Read-as can read the same converter the
 // master list uses - a fl-oz price displayed as $/gal here must line
@@ -209,6 +222,7 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
       .from("pr_vendor_items")
       .select("id,vendor_id,ingredient_id,name,usd_12m,price_estimate,pack_override")
       .eq("link_status", "confirmed")
+      .in("status", LIVE_STATUSES) // B4: archived/not_food/duplicate/one_off never reach the rollup
       .not("ingredient_id", "is", null)
       .order("id", { ascending: true })
       .range(from, from + page - 1);
@@ -431,12 +445,21 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
     // outlier exclusion it would be 1 of 1, which is correct - the
     // other 9 blended, this one didn't.
     const pricedCount = priced.length - excludedIds.size;
+    // B4: empty = zero LIVE vendor items under this master. The
+    // server query above already filters on LIVE_STATUSES, so
+    // items.length == 0 means "no active + no resale items" -
+    // archived / not_food / duplicate / one_off don't count as
+    // live. This can't be costed and is almost always ready to
+    // retire; it counts toward Needs attention via the issues
+    // array below.
+    const emptyFlag = items.length === 0;
     const issues: MasterIssue[] = [
       spread != null && spread > SPREAD_RATIO_MAX ? ("spread" as const) : null,
       pricedCount < items.length ? ("coverage" as const) : null,
       mismatchedItemIds.size > 0 ? ("mismatch" as const) : null,
       linkedItems.some((li) => li.outlier) ? ("outlier" as const) : null,
       bandFlag ? ("band" as const) : null,
+      emptyFlag ? ("empty" as const) : null,
     ].filter((x): x is MasterIssue => x != null);
 
     return {

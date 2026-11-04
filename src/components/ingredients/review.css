@@ -1897,6 +1897,10 @@
  * red) and Unreviewed (allergens, blue) are visibly different
  * signals. */
 .kf-master__bdg--unreviewed { background: var(--sp-info-bg); color: var(--sp-link); }
+/* B4: "No vendor items" marker. Quiet info register - not an error,
+ * usually means "retire me". Sibling of --unreviewed; both are to-do
+ * markers rather than failure flags. */
+.kf-master__bdg--empty { background: var(--sp-info-bg); color: var(--sp-link); }
 
 .kf-masters__legend {
   display: flex;

@@ -35,7 +35,11 @@ import { MasterSendAllBackButton } from "./MasterSendAllBackButton";
 // The four problems the bad-pack radar actually finds. They have
 // different fixes, so they are reported separately rather than as one
 // "flagged" boolean. "band" is the pre-existing absolute-range check.
-export type MasterIssue = "spread" | "coverage" | "mismatch" | "outlier" | "band";
+// B4: "empty" - no live vendor items under this master. Usually
+// means "ready to retire"; sits in the attention set because the
+// master cannot be costed at all and is more actionable than any
+// other flag.
+export type MasterIssue = "spread" | "coverage" | "mismatch" | "outlier" | "band" | "empty";
 
 export type MasterLinkedItem = {
   id: string;
@@ -114,6 +118,7 @@ const ISSUE_LABEL: Record<string, string> = {
   mismatch: "Unit",
   outlier: "Outlier",
   band: "Out of band",
+  empty: "No vendor items",
 };
 
 function uomLabel(uom: string | null): string {
@@ -159,6 +164,11 @@ export function IngredientMastersFilter({
   // (initially matches every master). Collapsing them would wreck
   // the Needs-attention signal.
   const [onlyUnreviewed, setOnlyUnreviewed] = useState(false);
+  // B4 (empty master): dedicated chip for masters with no live
+  // vendor items. The "empty" tag also sits inside r.issues, so
+  // onlyFlagged catches these; this chip narrows directly to the
+  // retire-candidate set.
+  const [onlyEmpty, setOnlyEmpty] = useState(false);
   // Workbench selection. `selId` is the user's explicit pick; the row
   // actually shown falls back to the first row in the current filter, so
   // the pane is never empty while the list has contents and a filter that
@@ -220,6 +230,7 @@ export function IngredientMastersFilter({
     // only ever match "all" of this tab's set.
     if (onlyFlagged) out = out.filter((r) => r.issues.length > 0);
     if (onlyUnreviewed) out = out.filter((r) => r.allergensReviewedAt == null);
+    if (onlyEmpty) out = out.filter((r) => r.issues.includes("empty"));
     if (sort === "name") out = [...out].sort((a, b) => a.name.localeCompare(b.name));
     else if (sort === "links") out = [...out].sort((a, b) => b.linkedCount - a.linkedCount);
     else if (sort === "spread") {
@@ -228,7 +239,7 @@ export function IngredientMastersFilter({
       out = [...out].sort((a, b) => b.usd12m - a.usd12m);
     }
     return out;
-  }, [rows, trimmed, superCat, onlyFlagged, onlyUnreviewed, sort]);
+  }, [rows, trimmed, superCat, onlyFlagged, onlyUnreviewed, onlyEmpty, sort]);
 
   // The row the pane shows. Explicit pick when there is one, else the
   // first row of the current filter - so the pane is never empty while
@@ -259,17 +270,24 @@ export function IngredientMastersFilter({
     () => rows.filter((r) => r.allergensReviewedAt == null).length,
     [rows]
   );
+  // B4: whole-set count of empty masters (zero live vendor items).
+  const emptyCount = useMemo(
+    () => rows.filter((r) => r.issues.includes("empty")).length,
+    [rows]
+  );
   const anyFilterActive =
     trimmed.length > 0 ||
     superCat !== "all" ||
     onlyFlagged ||
-    onlyUnreviewed;
+    onlyUnreviewed ||
+    onlyEmpty;
 
   function clearAll() {
     setQuery("");
     setSuperCat("all");
     setOnlyFlagged(false);
     setOnlyUnreviewed(false);
+    setOnlyEmpty(false);
     inputRef.current?.focus();
   }
 
@@ -454,6 +472,21 @@ export function IngredientMastersFilter({
             title="Masters whose Top 9 allergens have not been reviewed"
           >
             Check allergens <span className="kf-chip__count">{fmtCount(unreviewedCount)}</span>
+          </button>
+          {/* B4: narrow the list to empty masters (no live vendor
+              items). Quiet warn chip like the others; the count is
+              live. These masters also contribute to Needs attention
+              through the shared r.issues array. */}
+          <button
+            type="button"
+            role="radio"
+            aria-checked={onlyEmpty}
+            aria-pressed={onlyEmpty}
+            className={`kf-chip kf-chip--warn${onlyEmpty ? " kf-chip--on" : ""}`}
+            onClick={() => setOnlyEmpty((v) => !v)}
+            title="Masters with no live vendor items (candidates to retire)"
+          >
+            No vendor items <span className="kf-chip__count">{fmtCount(emptyCount)}</span>
           </button>
           {anyFilterActive ? (
             <button type="button" className="kf-btn kf-btn--ghost kf-btn--sm" onClick={clearAll}>
@@ -998,9 +1031,16 @@ function MasterDetail({
         <div className="kf-dt__sec">
           <div className="kf-empty">
             <div>
-              <div className="kf-empty__title">No links yet</div>
+              <div className="kf-empty__title">No vendor items</div>
               <div className="kf-empty__body">
-                Awaiting confirmation in the review queue.
+                {/* B4: this surface is now reached by two paths - a
+                    master just created from a split (waiting for the
+                    matcher) and a master that lost all of its items
+                    (ready to retire). The copy acknowledges both
+                    rather than assuming one. */}
+                No live items are linked to this master. If it is a
+                fresh split, the matcher will attach items next run;
+                otherwise it is likely ready to retire.
               </div>
             </div>
           </div>
