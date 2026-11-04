@@ -972,9 +972,15 @@ function IssueNote({ row }: { row: MasterRow }) {
   );
 }
 
-// G1/G2: three-price selector. Default is Standard per the spec lean -
-// blended is an accident of purchase mix and the least decision-useful
-// of the three. View state only; not persisted (R-112 pattern).
+// G1/G2 (revised 2026-11-04): three-price selector. Default is BLENDED
+// so the pane answers the same question as the list row and the recipe
+// cost - "what does this cost me". Standard and premium are opt-in
+// analysis you reach for when you want to know WHY the blended moved.
+// G1 defaulted to Standard because nothing was graded and blended ==
+// standard; post-Step B the two diverge and the G1 call becomes a
+// list-vs-pane mismatch the user has to explain.
+// View state only; not persisted (R-112 pattern).
+//
 // G2: the lens drives ALL FOUR tiles (price, spread, in-this-price,
 // 12-mo spend). Switching to Premium re-scopes the whole row to
 // premium-only items. Empty subsets keep the segment clickable but
@@ -1014,7 +1020,7 @@ function MasterDetail({
   onOpenItem: (itemId: string) => void;
 }) {
   const uom = uomLabel(row.baseUom);
-  const [lens, setLens] = useState<PriceLens>("standard");
+  const [lens, setLens] = useState<PriceLens>("blended");
   const active = row.statsByLens[lens];
   const partial = active.pricedCount < active.linkedCount;
   const spreadBad = active.spreadRatio != null && active.spreadRatio > 3;
