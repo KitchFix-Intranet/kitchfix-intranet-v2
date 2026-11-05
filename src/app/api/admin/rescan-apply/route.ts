@@ -182,6 +182,72 @@ type TopChange = {
   deltaAbs: number;
 };
 
+// M1 R1: MergePlan hoisted out of the per-line loop so both the live
+// executor and the dry-run rehearsal reach the SAME resolver. Carries
+// both participating rows directly, set at build time from `vendorItem`
+// and the collision-check result. The L1 shape referenced rows only by
+// id and relied on a batch-level vendorItemById map that never included
+// the collision candidate - which is why 0 of 149 merges executed in
+// the first live run. Rows-on-plan removes the map dependency.
+type MergePlan = {
+  aId: string;
+  bId: string;
+  aRow: VendorItem;
+  bRow: VendorItem;
+  survivor: string;
+  absorbed: string;
+  survivorRow: VendorItem;
+  absorbedRow: VendorItem;
+  precedence: "confirmed>proposed" | "equal-confirmed" | "proposed>none" | "equal-none";
+  differsOnIngredient: boolean;
+  ingredientA: string | null;
+  ingredientB: string | null;
+};
+
+// M1 R1 rehearsal path. Both the live executor and the dry-run
+// rehearsal call this. If a future refactor moves back to an id+map
+// lookup and forgets to populate the map, both the rehearsal and the
+// live run fail together - "worthless if it reports zero on unfixed
+// code" per spec. Today's plans always have both rows set at build
+// time so this returns ok=true for every plan.
+function resolveMergeParticipants(
+  plan: MergePlan
+):
+  | { ok: true; survivor: VendorItem; absorbed: VendorItem }
+  | { ok: false; reason: string } {
+  const survivor = plan.survivorRow;
+  const absorbed = plan.absorbedRow;
+  if (!survivor) {
+    return {
+      ok: false,
+      reason: `survivor row missing on plan (survivorId=${plan.survivor}, aId=${plan.aId}, bId=${plan.bId})`,
+    };
+  }
+  if (!absorbed) {
+    return {
+      ok: false,
+      reason: `absorbed row missing on plan (absorbedId=${plan.absorbed}, aId=${plan.aId}, bId=${plan.bId})`,
+    };
+  }
+  return { ok: true, survivor, absorbed };
+}
+
+type StructuralMismatch = {
+  invoice: string;
+  stagedLines: number;
+  storedLines: number;
+  printedTotal: number | null;
+  stagedSum: number;
+  storedSum: number;
+};
+
+// M1 R3.2 thresholds. A difference is structural when both the absolute
+// gap AND the ratio exceed the floors. 37 vs 16 (gap 21, ratio 2.31)
+// and 31 vs 23 (gap 8, ratio 1.35) are both classified; 100 vs 94
+// (gap 6, ratio 1.06) and 50 vs 45 (gap 5, ratio 1.11) are not.
+const STRUCTURAL_MIN_GAP = 5;
+const STRUCTURAL_MIN_RATIO = 1.25;
+
 function asNumber(v: unknown): number | null {
   if (typeof v === "number" && Number.isFinite(v)) return v;
   return null;
@@ -446,10 +512,20 @@ export async function POST(req: NextRequest) {
   if (vendorFilter) basesQuery = basesQuery.eq("vendor", vendorFilter);
   if (invoiceNumberFilter)
     basesQuery = basesQuery.eq("base_invoice_number", invoiceNumberFilter);
-  // Pull a few pages worth; the Set dedup narrows to distinct bases.
+  // M1 R2: ALWAYS take the first N pending distinct bases. offset is
+  // kept in the body for backward compat (callers may still pass it)
+  // but it is ignored for selection. In the first live run, page 2
+  // requested offset=25 against a pending set that live writes had
+  // just shrunk, found zero rows there, and reported done - leaving
+  // 116 lines across 5 invoices unprocessed. The fix is to not
+  // paginate by offset over a mutating set at all; the caller loops
+  // until `done: true`, which only fires when pending is empty.
+  //
+  // Pull a wide range so a single response's distinctBases is a good
+  // over-estimate of pending invoices for the `remaining` field.
   const { data: candidatesData, error: candidatesErr } = await basesQuery.range(
     0,
-    999
+    1999
   );
   if (candidatesErr) {
     return NextResponse.json({ error: candidatesErr.message }, { status: 500 });
@@ -462,8 +538,13 @@ export async function POST(req: NextRequest) {
     seen.add(r.base_invoice_number);
     distinctBases.push(r.base_invoice_number);
   }
-  const basesInBatch = distinctBases.slice(offset, offset + BATCH);
-  const done = offset + basesInBatch.length >= distinctBases.length;
+  const basesInBatch = distinctBases.slice(0, BATCH);
+  const remaining = Math.max(0, distinctBases.length - basesInBatch.length);
+  // M1 R2: done is strictly "nothing pending visible this call" - never
+  // "offset passed the end". A later call with no basesInBatch reports
+  // done:true and the caller stops. offset is echoed back for the
+  // response only.
+  const done = basesInBatch.length === 0;
 
   // Accumulators for the response.
   const counts = {
@@ -488,6 +569,10 @@ export async function POST(req: NextRequest) {
     },
   };
   const topChanges: TopChange[] = [];
+  // M1 R1 rehearsal + R3.2 structural-mismatch + R3.1 invoice errors.
+  const batchMergePlans: MergePlan[] = [];
+  const structuralMismatch: StructuralMismatch[] = [];
+  const invoiceErrors: Array<{ invoice: string; where: string; error: string }> = [];
 
   for (const baseInv of basesInBatch) {
     counts.invoices.considered += 1;
@@ -619,8 +704,15 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // M1 R3.1: `proceedToMatching` replaces the pre-M1 `continue`
+    // statements so the end-of-invoice stamp block (annotation batch,
+    // unmatched batch grouped by reason, defensive sweep) always runs.
+    // Pre-M1, a null-submission or structural-mismatch invoice skipped
+    // the sweep and left annotations/orphans at 'pending'.
+    let proceedToMatching = true;
+
     // L3: no submission for this invoice number -> mark every staged
-    // line 'unmatched' and move on. A silent fallback to
+    // line 'unmatched' and skip matching. A silent fallback to
     // invoice_number is how the superseded-submission bug survived
     // review; do not reintroduce it. Measured 2026-11-05 on a 27-invoice
     // batch: filtering on invoice_number pulled 1,012 rows where only
@@ -638,20 +730,7 @@ export async function POST(req: NextRequest) {
         });
         counts.lines.unmatched += 1;
       }
-      if (!dryRun && effectiveLines.length > 0) {
-        await client
-          .from("pr_rescan_lines")
-          .update({
-            apply_status: "unmatched",
-            apply_reason: "no submission found for invoice number",
-            applied_at: new Date().toISOString(),
-          })
-          .in(
-            "id",
-            effectiveLines.flatMap((l) => stagedIdsFor.get(l.id) ?? [l.id])
-          );
-      }
-      continue;
+      proceedToMatching = false;
     }
 
     // L3: filter on invoice_uuid, NOT invoice_number. An invoice number
@@ -660,84 +739,154 @@ export async function POST(req: NextRequest) {
     // loaded 1,012 rows where only 780 were live - 232 stale rows
     // across 5 invoices, which produced false corrections against a
     // dead baseline and would have written to rows nothing reads.
-    const { data: aiData, error: aiErr } = await client
-      .from("ai_line_items")
-      .select(
-        "id,vendor_name,invoice_number,invoice_date,line_num,description,quantity,unit,unit_price,extended_price,item_number,pack_size,uom_raw,parsed_pack_qty,catch_weight_marker"
-      )
-      .eq("invoice_uuid", liveSubmissionId);
-    if (aiErr) {
-      return NextResponse.json({ error: aiErr.message }, { status: 500 });
+    let storedLines: AiLine[] = [];
+    if (proceedToMatching) {
+      const { data: aiData, error: aiErr } = await client
+        .from("ai_line_items")
+        .select(
+          "id,vendor_name,invoice_number,invoice_date,line_num,description,quantity,unit,unit_price,extended_price,item_number,pack_size,uom_raw,parsed_pack_qty,catch_weight_marker"
+        )
+        .eq("invoice_uuid", liveSubmissionId);
+      if (aiErr) {
+        return NextResponse.json({ error: aiErr.message }, { status: 500 });
+      }
+      storedLines = (aiData ?? []) as AiLine[];
     }
-    const storedLines = (aiData ?? []) as AiLine[];
+
+    // --- M1 R3.2: structural line-count mismatch.
+    // When staged and stored line counts differ by both an absolute gap
+    // (>= STRUCTURAL_MIN_GAP) and a ratio (>= STRUCTURAL_MIN_RATIO),
+    // field-level matching cannot repair the invoice - our capture has
+    // the wrong NUMBER of lines, not just wrong values. Classify only:
+    // stamp every staged line 'unmatched' with reason "structural
+    // line-count mismatch; needs line-set replacement" and report the
+    // invoice in structuralMismatch for Kevin to decide. Do NOT write
+    // a line-set replacement path here; that is a separate
+    // authorisation.
+    if (proceedToMatching) {
+      const nStagedPre = effectiveLines.length;
+      const nStoredPre = storedLines.length;
+      const minN = Math.min(nStagedPre, nStoredPre);
+      const maxN = Math.max(nStagedPre, nStoredPre);
+      const gapPre = maxN - minN;
+      const ratioPre = minN > 0 ? maxN / minN : Number.POSITIVE_INFINITY;
+      if (
+        nStagedPre > 0 &&
+        gapPre >= STRUCTURAL_MIN_GAP &&
+        ratioPre >= STRUCTURAL_MIN_RATIO
+      ) {
+        const stagedSumPre = effectiveLines.reduce(
+          (acc, r) => acc + (r.extended_price_seen ?? 0),
+          0
+        );
+        const storedSumPre = storedLines.reduce(
+          (acc, r) => acc + (Number(r.extended_price) || 0),
+          0
+        );
+        structuralMismatch.push({
+          invoice: baseInv,
+          stagedLines: nStagedPre,
+          storedLines: nStoredPre,
+          printedTotal: submissionTotal,
+          stagedSum: Number(stagedSumPre.toFixed(2)),
+          storedSum: Number(storedSumPre.toFixed(2)),
+        });
+        for (const line of effectiveLines) {
+          outcomes.push({
+            stagedId: line.id,
+            status: "unmatched",
+            reason: "structural line-count mismatch; needs line-set replacement",
+            matchedLineId: null,
+            matchedVendorItemId: null,
+            fieldOutcomes: {},
+            deltaExtendedPrice: 0,
+          });
+          counts.lines.unmatched += 1;
+        }
+        proceedToMatching = false;
+      }
+    }
 
     // --- L1 §2.4 corroboration: sum(staged extended_price_seen)
     // compared to invoice_submissions.total_amount. A gap equal to a
     // printed tax figure is a reconciliation, not a defect - treat
     // the invoice as corroborated when the line sum equals the header
     // total OR when the shortfall is named in a `notes` field as tax.
-    const lineSum = effectiveLines.reduce(
-      (acc, r) => acc + (r.extended_price_seen ?? 0),
-      0
-    );
-    const gap =
-      submissionTotal != null ? Number((submissionTotal - lineSum).toFixed(2)) : null;
-    const exactMatch =
-      submissionTotal != null && Math.abs(gap ?? 0) <= CORROBORATION_CENT_TOLERANCE;
-    const notesMentionTax = stagedRows.some(
-      (r) => r.notes != null && RECONCILIATION_TAX_RE.test(r.notes)
-    );
-    const corroborated =
-      submissionTotal == null
-        ? false // cannot corroborate without the header total
-        : exactMatch || (gap != null && gap > 0 && notesMentionTax);
-    if (corroborated) counts.invoices.corroborated += 1;
-    else counts.invoices.notCorroborated += 1;
-
-    // --- L1 §2.2: assignment.
-    const nStaged = effectiveLines.length;
-    const nStored = storedLines.length;
-    const scoreMatrix: number[][] = [];
-    const floorMatrix: boolean[][] = [];
-    for (let i = 0; i < nStaged; i++) {
-      const row: number[] = new Array(nStored).fill(0);
-      const floors: boolean[] = new Array(nStored).fill(false);
-      for (let j = 0; j < nStored; j++) {
-        const r = scorePair(effectiveLines[i], storedLines[j]);
-        row[j] = r.score;
-        floors[j] = r.passesFloor;
-      }
-      scoreMatrix.push(row);
-      floorMatrix.push(floors);
+    let corroborated = false;
+    if (proceedToMatching) {
+      const lineSum = effectiveLines.reduce(
+        (acc, r) => acc + (r.extended_price_seen ?? 0),
+        0
+      );
+      const gap =
+        submissionTotal != null
+          ? Number((submissionTotal - lineSum).toFixed(2))
+          : null;
+      const exactMatch =
+        submissionTotal != null && Math.abs(gap ?? 0) <= CORROBORATION_CENT_TOLERANCE;
+      const notesMentionTax = stagedRows.some(
+        (r) => r.notes != null && RECONCILIATION_TAX_RE.test(r.notes)
+      );
+      corroborated =
+        submissionTotal == null
+          ? false
+          : exactMatch || (gap != null && gap > 0 && notesMentionTax);
+      if (corroborated) counts.invoices.corroborated += 1;
+      else counts.invoices.notCorroborated += 1;
     }
-    const pairing = assignByScore(scoreMatrix, floorMatrix);
 
-    // Partition staged lines by match result.
+    // --- L1 §2.2: assignment. Runs only when proceedToMatching;
+    // L3 null-submission and R3.2 structural-mismatch paths already
+    // populated outcomes for this invoice and bypass matching.
     const matchedPairs: Array<{ staged: StagedLine; stored: AiLine }> = [];
-    const unmatchedStaged: StagedLine[] = [];
-    for (let i = 0; i < nStaged; i++) {
-      if (pairing[i] === -1) {
-        unmatchedStaged.push(effectiveLines[i]);
-      } else {
-        const stored = storedLines[pairing[i]];
-        matchedPairs.push({ staged: effectiveLines[i], stored });
+    if (proceedToMatching) {
+      const nStaged = effectiveLines.length;
+      const nStored = storedLines.length;
+      const scoreMatrix: number[][] = [];
+      const floorMatrix: boolean[][] = [];
+      for (let i = 0; i < nStaged; i++) {
+        const row: number[] = new Array(nStored).fill(0);
+        const floors: boolean[] = new Array(nStored).fill(false);
+        for (let j = 0; j < nStored; j++) {
+          const r = scorePair(effectiveLines[i], storedLines[j]);
+          row[j] = r.score;
+          floors[j] = r.passesFloor;
+        }
+        scoreMatrix.push(row);
+        floorMatrix.push(floors);
+      }
+      const pairing = assignByScore(scoreMatrix, floorMatrix);
+
+      // Partition staged lines by match result.
+      const unmatchedStaged: StagedLine[] = [];
+      for (let i = 0; i < nStaged; i++) {
+        if (pairing[i] === -1) {
+          unmatchedStaged.push(effectiveLines[i]);
+        } else {
+          const stored = storedLines[pairing[i]];
+          matchedPairs.push({ staged: effectiveLines[i], stored });
+        }
+      }
+
+      for (const s of unmatchedStaged) {
+        outcomes.push({
+          stagedId: s.id,
+          status: "unmatched",
+          reason:
+            "no stored line passed the match floor (exact extended_price or trigram >= 0.55)",
+          matchedLineId: null,
+          matchedVendorItemId: null,
+          fieldOutcomes: {},
+          deltaExtendedPrice: 0,
+        });
+        counts.lines.unmatched += 1;
       }
     }
 
-    for (const s of unmatchedStaged) {
-      outcomes.push({
-        stagedId: s.id,
-        status: "unmatched",
-        reason: "no stored line passed the match floor (exact extended_price or trigram >= 0.55)",
-        matchedLineId: null,
-        matchedVendorItemId: null,
-        fieldOutcomes: {},
-        deltaExtendedPrice: 0,
-      });
-      counts.lines.unmatched += 1;
-    }
-
-    if (matchedPairs.length === 0) continue;
+    // M1 R3.1: do NOT `continue` here on empty matchedPairs - the
+    // end-of-invoice stamp block + defensive sweep must always run so
+    // annotations and orphans get stamped and nothing is left pending.
+    if (matchedPairs.length > 0) {
 
     // --- Vendor resolution. ai_line_items.vendor_name is the
     // authoritative vendor label; pr_vendor_items is keyed off a
@@ -1175,25 +1324,9 @@ export async function POST(req: NextRequest) {
       // --- L1 §2.5: pr_vendor_items merge. Only triggered when we
       // are about to write item_number onto a pr_vendor_items row AND
       // writing it would re-key the row onto a dedup_key already held
-      // by another row for this vendor.
-      //
-      // The merge path is only considered when:
-      //   - we have a resolved pr_vendor_items row (via line_id)
-      //   - item_number field decided to fill or correct
-      //   - the gate passed
-      //
-      // We planonly in both dryRun and live; the actual merge write
-      // sits further below in the single write guard.
-      type MergePlan = {
-        aId: string; // our resolved row
-        bId: string; // the colliding row
-        survivor: string;
-        absorbed: string;
-        precedence: "confirmed>proposed" | "equal-confirmed" | "proposed>none" | "equal-none";
-        differsOnIngredient: boolean;
-        ingredientA: string | null;
-        ingredientB: string | null;
-      };
+      // by another row for this vendor. MergePlan type is hoisted at
+      // file top so the live executor and the dry-run rehearsal share
+      // one resolver.
       let mergePlan: MergePlan | null = null;
       const itemNumberFill = fills.find((f) => f.field === "item_number");
       const willWriteSku =
@@ -1250,11 +1383,21 @@ export async function POST(req: NextRequest) {
             : rA === 1 && rB === 1 ? "equal-none"
             : rA === 1 || rB === 1 ? "proposed>none"
             : "equal-none";
+          // Both participating rows are in scope right here (`vendorItem`
+          // and `other`); setting them on the plan removes the L1 bug
+          // where the executor relied on a batch-level map lookup that
+          // never cached `other`.
+          const survivorRow = survivor === vendorItem.id ? vendorItem : other;
+          const absorbedRow = absorbed === vendorItem.id ? vendorItem : other;
           mergePlan = {
             aId: vendorItem.id,
             bId: other.id,
+            aRow: vendorItem,
+            bRow: other,
             survivor,
             absorbed,
+            survivorRow,
+            absorbedRow,
             precedence,
             differsOnIngredient: !sameIngredient && differsOnIngredient,
             ingredientA: vendorItem.ingredient_id,
@@ -1279,6 +1422,11 @@ export async function POST(req: NextRequest) {
             counts.merges.planned += 1;
             counts.merges.byPrecedence[precedence] =
               (counts.merges.byPrecedence[precedence] ?? 0) + 1;
+            // M1 R1: plans go into the batch pool so the dry-run
+            // rehearsal can run them through the same resolver the
+            // live executor uses. In live mode the rehearsal is still
+            // valid work - it confirms nothing regressed since planning.
+            batchMergePlans.push(mergePlan);
           }
         }
       }
@@ -1316,14 +1464,22 @@ export async function POST(req: NextRequest) {
             outcome.status = "conflict";
             outcome.reason = `ai_line_items update failed: ${aiUpErr.message}`;
           } else {
-            // Emit pr_events for the ai_line_items correction when it
-            // actually changed something.
+            // M1 R4: kind reflects whether ANY field in the event
+            // carried a prior non-null that changed. A row that filled
+            // four blanks and also corrected a price was being logged
+            // as rescan_filled because the decision was wired to
+            // item_number alone; this made the audit log unsearchable
+            // for "what did we change the money on". `fills` already
+            // carries the per-field outcome; any 'corrected' there is
+            // the stronger claim. Pure-fill rows (all filled, no
+            // corrected) stay rescan_filled.
+            const anyCorrected = fills.some(
+              (f) => f.outcome === "corrected"
+            );
             await client.from("pr_events").insert({
               entity_type: "ai_line_item",
               entity_id: stored.id,
-              kind: itemNumberFill && itemNumberFill.outcome === "corrected"
-                ? "rescan_corrected"
-                : "rescan_filled",
+              kind: anyCorrected ? "rescan_corrected" : "rescan_filled",
               before: beforeAi,
               after: afterAi,
               actor: "rescan-apply",
@@ -1380,14 +1536,17 @@ export async function POST(req: NextRequest) {
             //      counters - that double-counts if both have run).
             //   5. emit pr_events('rescan_merge') with both rows'
             //      pre-write state in `before`.
-            const survivor =
-              mergePlan.survivor === vendorItem.id ? vendorItem : vendorItemById.get(mergePlan.bId);
-            const absorbed =
-              mergePlan.absorbed === vendorItem.id ? vendorItem : vendorItemById.get(mergePlan.bId);
-            if (!survivor || !absorbed) {
+            // M1 R1: resolve participants from the plan via the shared
+            // resolver. Both rows are set at plan-build time; the pre-M1
+            // code reached into a batch-level vendorItemById map that
+            // never cached the collision candidate and so returned
+            // undefined on all 149 plans.
+            const participants = resolveMergeParticipants(mergePlan);
+            if (!participants.ok) {
               outcome.status = "conflict";
-              outcome.reason = "merge participants not loaded";
+              outcome.reason = `merge participants not loaded: ${participants.reason}`;
             } else {
+              const { survivor, absorbed } = participants;
               const mergeOk = await executeMergePlan(client, survivor, absorbed);
               if (!mergeOk.ok) {
                 outcome.status = "conflict";
@@ -1428,20 +1587,30 @@ export async function POST(req: NextRequest) {
           .update(applyUpdate)
           .in("id", stagedIds);
         if (stagedUpErr) {
-          // Non-fatal to this line; the writes above already landed.
-          // eslint-disable-next-line no-console
-          console.warn(
-            `rescan-apply: staged status update failed on ${staged.id}: ${stagedUpErr.message}`
-          );
+          // M1 R3.1: do not swallow. Record the failure against the
+          // invoice; the end-of-invoice defensive sweep below stamps
+          // any still-pending row so it does not get silently retried.
+          invoiceErrors.push({
+            invoice: baseInv,
+            where: `per-pair-status staged=${staged.id}`,
+            error: stagedUpErr.message,
+          });
         }
       }
     }
+    } // end `if (matchedPairs.length > 0)`
 
     // --- Mark annotations and orphans in live mode too.
+    // M1 R3.1: group unmatched outcomes by reason so a response
+    // claiming "unmatched: N" writes that same reason to the DB for
+    // each row - not "the first unmatched row's reason" copied across
+    // all N, which previously overwrote structural-mismatch reasons
+    // with "no stored line passed the match floor" and left mixed
+    // sets inconsistent with the response.
     if (!dryRun) {
       const annotationUpdates = outcomes.filter((o) => o.status === "annotation");
       if (annotationUpdates.length > 0) {
-        await client
+        const { error: annErr } = await client
           .from("pr_rescan_lines")
           .update({
             apply_status: "annotation",
@@ -1453,20 +1622,81 @@ export async function POST(req: NextRequest) {
             "id",
             annotationUpdates.map((o) => o.stagedId)
           );
+        if (annErr) {
+          invoiceErrors.push({
+            invoice: baseInv,
+            where: "annotation-batch-stamp",
+            error: annErr.message,
+          });
+        }
       }
       const unmatchedUpdates = outcomes.filter((o) => o.status === "unmatched");
       if (unmatchedUpdates.length > 0) {
-        await client
+        const byReason = new Map<string, string[]>();
+        for (const o of unmatchedUpdates) {
+          const key = o.reason ?? "unmatched";
+          const list = byReason.get(key) ?? [];
+          list.push(o.stagedId);
+          byReason.set(key, list);
+        }
+        for (const [reason, ids] of byReason) {
+          const { error: unmErr } = await client
+            .from("pr_rescan_lines")
+            .update({
+              apply_status: "unmatched",
+              apply_reason: reason,
+              applied_at: new Date().toISOString(),
+            })
+            .in("id", ids);
+          if (unmErr) {
+            invoiceErrors.push({
+              invoice: baseInv,
+              where: `unmatched-batch-stamp (reason=${reason})`,
+              error: unmErr.message,
+            });
+          }
+        }
+      }
+
+      // M1 R3.1 defensive sweep: any staged row for this invoice still
+      // 'pending' after the route considered it is a silent failure in
+      // one of the writes above. Stamp it with a reason naming the
+      // sweep so it does not get retried forever. Zero on a clean run.
+      const { data: stillPending, error: sweepReadErr } = await client
+        .from("pr_rescan_lines")
+        .select("id")
+        .eq("base_invoice_number", baseInv)
+        .eq("apply_status", "pending");
+      if (sweepReadErr) {
+        invoiceErrors.push({
+          invoice: baseInv,
+          where: "defensive-sweep-read",
+          error: sweepReadErr.message,
+        });
+      } else if ((stillPending ?? []).length > 0) {
+        const ids = (stillPending as Array<{ id: string }>).map((r) => r.id);
+        const { error: sweepErr } = await client
           .from("pr_rescan_lines")
           .update({
             apply_status: "unmatched",
-            apply_reason: unmatchedUpdates[0]?.reason ?? null,
+            apply_reason:
+              "considered but no outcome recorded (defensive sweep)",
             applied_at: new Date().toISOString(),
           })
-          .in(
-            "id",
-            unmatchedUpdates.map((o) => o.stagedId)
-          );
+          .in("id", ids);
+        if (sweepErr) {
+          invoiceErrors.push({
+            invoice: baseInv,
+            where: "defensive-sweep-write",
+            error: sweepErr.message,
+          });
+        } else {
+          invoiceErrors.push({
+            invoice: baseInv,
+            where: "defensive-sweep",
+            error: `${ids.length} row(s) stamped unmatched after being left pending`,
+          });
+        }
       }
     }
 
@@ -1476,6 +1706,41 @@ export async function POST(req: NextRequest) {
       const existing = counts.spend.byVendor.get(vendorName) ?? { delta: 0, invoices: 0 };
       existing.invoices += 1;
       counts.spend.byVendor.set(vendorName, existing);
+    }
+  }
+
+  // --- M1 R1 rehearsal. Under dryRun, walk every planned merge
+  // through resolveMergeParticipants - the same resolver the live
+  // executor uses. groupsNotLoadable > 0 means the resolver would
+  // have refused to execute at live time. The pre-M1 build (lookup
+  // via vendorItemById that never cached `other`) would have failed
+  // this on all 149 plans; the post-M1 build sets both rows on the
+  // plan at build time and passes every plan.
+  let rehearsal: {
+    groupsLoadable: number;
+    groupsNotLoadable: number;
+    firstFailures: Array<{ aId: string; bId: string; reason: string }>;
+  } | null = null;
+  if (dryRun) {
+    rehearsal = {
+      groupsLoadable: 0,
+      groupsNotLoadable: 0,
+      firstFailures: [],
+    };
+    for (const plan of batchMergePlans) {
+      const r = resolveMergeParticipants(plan);
+      if (r.ok) {
+        rehearsal.groupsLoadable += 1;
+      } else {
+        rehearsal.groupsNotLoadable += 1;
+        if (rehearsal.firstFailures.length < 5) {
+          rehearsal.firstFailures.push({
+            aId: plan.aId,
+            bId: plan.bId,
+            reason: r.reason,
+          });
+        }
+      }
     }
   }
 
@@ -1494,7 +1759,12 @@ export async function POST(req: NextRequest) {
     dryRun,
     offset,
     nextOffset: offset + basesInBatch.length,
+    // M1 R2: done is true only when the next call would find zero
+    // pending work. remaining is the distinct pending bases this call
+    // saw but did not process (bounded by the 2000-row range fetch;
+    // may under-count if pending > 2000 lines).
     done,
+    remaining,
     invoices: counts.invoices,
     lines: counts.lines,
     fields: {
@@ -1513,7 +1783,17 @@ export async function POST(req: NextRequest) {
       planned: counts.merges.planned,
       byPrecedence: counts.merges.byPrecedence,
       conflicts: counts.merges.conflicts,
+      ...(rehearsal ? { rehearsed: rehearsal } : {}),
     },
+    // M1 R3.2: structural line-count mismatches reported, never fixed.
+    structuralMismatch,
+    structuralMismatchThresholds: {
+      minGap: STRUCTURAL_MIN_GAP,
+      minRatio: STRUCTURAL_MIN_RATIO,
+    },
+    // M1 R3.1: any staged-row write that failed, including the
+    // defensive sweep's own result.
+    invoiceErrors,
     top50,
   };
   return NextResponse.json(response);
