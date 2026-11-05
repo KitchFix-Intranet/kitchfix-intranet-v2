@@ -87,18 +87,26 @@ export async function POST(req: NextRequest) {
   }
   const batchLabel = asString(body.batchLabel);
 
-  // Partition into valid vs rejected. Identity (invoice_number,
-  // visual_order) is checked up front because the upsert constraint
-  // would otherwise silently collide for a null visual_order or
-  // concatenate two different lines under the same identity for a
-  // missing invoice_number.
-  const valid: Array<{ idx: number; row: RescanRecord & { invoice_number: string; visual_order: number } }> = [];
+  // Partition into valid vs rejected. Identity is (invoice_number, page,
+  // visual_order) - visual_order is a PER-PAGE ordinal that restarts at 1 on
+  // each page, so page is part of the identity, not metadata. Checked up
+  // front because the upsert constraint would otherwise reject the batch, and
+  // because page is NOT NULL on the table as of migration 0011.
+  const valid: Array<{
+    idx: number;
+    row: RescanRecord & {
+      invoice_number: string;
+      page: number;
+      visual_order: number;
+    };
+  }> = [];
   const rejected: Array<{ index: number; reason: string }> = [];
   for (let i = 0; i < records.length; i++) {
     const r = records[i] ?? {};
     const invoiceNumberRaw = asString(r.invoice_number);
     const invoiceNumber = invoiceNumberRaw ? invoiceNumberRaw.trim() : "";
     const visualOrder = asNumber(r.visual_order);
+    const page = asNumber(r.page);
     if (!invoiceNumber) {
       rejected.push({ index: i, reason: "missing invoice_number" });
       continue;
@@ -107,9 +115,13 @@ export async function POST(req: NextRequest) {
       rejected.push({ index: i, reason: "missing visual_order" });
       continue;
     }
+    if (page == null || !Number.isInteger(page) || page <= 0) {
+      rejected.push({ index: i, reason: "missing or invalid page" });
+      continue;
+    }
     valid.push({
       idx: i,
-      row: { ...r, invoice_number: invoiceNumber, visual_order: visualOrder },
+      row: { ...r, invoice_number: invoiceNumber, page, visual_order: visualOrder },
     });
   }
 
@@ -188,12 +200,12 @@ export async function POST(req: NextRequest) {
     const slice = payload.slice(i, i + 500);
     const { error } = await client
       .from("pr_rescan_lines")
-      .upsert(slice, { onConflict: "invoice_number,visual_order" });
+      .upsert(slice, { onConflict: "invoice_number,page,visual_order" });
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
     for (const p of slice) {
-      const key = `${p.invoice_number}::${p.visual_order}`;
+      const key = `${p.invoice_number}::${p.page}::${p.visual_order}`;
       if (existingKeys.has(key)) updated += 1;
       else inserted += 1;
       byInvoice[p.invoice_number] = (byInvoice[p.invoice_number] ?? 0) + 1;

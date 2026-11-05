@@ -492,7 +492,10 @@ export async function POST(req: NextRequest) {
     // correction at a visual_order with no base row is unmatched (it
     // can never attach to an ai_line_items line since we cannot know
     // which of the base's lines it was meant to amend).
-    const baseByOrder = new Map<number, StagedLine>();
+    // Keyed by `${page}::${visual_order}` - visual_order alone is NOT unique
+    // within an invoice (it restarts per page), so keying on it would overlay
+    // a correction onto whichever page's line happened to be stored last.
+    const baseByOrder = new Map<string, StagedLine>();
     const corrections: StagedLine[] = [];
     const annotations: StagedLine[] = [];
     const orphanCorrections: StagedLine[] = [];
@@ -502,19 +505,20 @@ export async function POST(req: NextRequest) {
         continue;
       }
       if (r.is_correction) corrections.push(r);
-      else baseByOrder.set(r.visual_order, r);
+      else baseByOrder.set(`${r.page}::${r.visual_order}`, r);
     }
     // Overlay corrections onto bases; track orphans separately.
     const effectiveLines: StagedLine[] = [];
     // Tracks which staged row's id to write apply_status against for
     // each effective line - the base row owns the status for this
-    // visual_order, with corrections marked 'skipped' after they land.
+    // (page, visual_order) pair, with corrections marked 'skipped'
+    // after they land.
     const stagedIdsFor = new Map<string, string[]>();
-    for (const [vo, base] of baseByOrder) {
+    for (const [pvo, base] of baseByOrder) {
       let effective = base;
       const applied: string[] = [];
       for (const c of corrections) {
-        if (c.visual_order !== vo) continue;
+        if (`${c.page}::${c.visual_order}` !== pvo) continue;
         effective = overlayCorrection(effective, c);
         applied.push(c.id);
       }
@@ -522,7 +526,7 @@ export async function POST(req: NextRequest) {
       stagedIdsFor.set(effective.id, [effective.id, ...applied]);
     }
     for (const c of corrections) {
-      if (!baseByOrder.has(c.visual_order)) orphanCorrections.push(c);
+      if (!baseByOrder.has(`${c.page}::${c.visual_order}`)) orphanCorrections.push(c);
     }
 
     // Record annotations and orphan corrections immediately (they do
