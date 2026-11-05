@@ -502,12 +502,34 @@ export async function POST(req: NextRequest) {
   // (0010 §identity): regexp_replace(invoice_number, '-R[0-9]+$', '').
   // A correction landing under <inv>-R2 shares its base with the
   // original row at <inv>.
+  //
+  // M2 R5: apply_status taxonomy.
+  //   RETRYABLE
+  //     'pending'  - never attempted
+  //     'conflict' - attempted, OUR code failed mid-apply; retry when
+  //                  the defect is fixed
+  //   TERMINAL
+  //     'filled'      - a blank was filled with a gated value
+  //     'corrected'   - a non-null value was replaced, corroborated
+  //     'skipped'     - deliberate no-op (equal, fill-only on populated,
+  //                     or every field null)
+  //     'unmatched'   - attempted, no pairing cleared the floor
+  //     'rejected'    - attempted, the item_number gate refused the SKU
+  //     'annotation'  - reconciliation row, never a data line
+  //
+  // Selection filters to RETRYABLE only. Terminal rows must not be
+  // reconsidered; retryable rows must not be abandoned. The M1 build
+  // filtered to 'pending' alone, which made the 110 conflict rows left
+  // behind by the R1 defect permanently unreachable - 149 planned
+  // merges that never re-entered the candidate set. Measured
+  // 2026-11-05 live.
+  const RETRYABLE_STATUSES = ["pending", "conflict"];
   // PostgrestFilterBuilder.eq() returns a NEW builder - reassign to
   // chain the conditional filters cleanly.
   let basesQuery = client
     .from("pr_rescan_lines")
     .select("base_invoice_number")
-    .eq("apply_status", "pending")
+    .in("apply_status", RETRYABLE_STATUSES)
     .order("base_invoice_number", { ascending: true });
   if (vendorFilter) basesQuery = basesQuery.eq("vendor", vendorFilter);
   if (invoiceNumberFilter)
@@ -539,12 +561,29 @@ export async function POST(req: NextRequest) {
     distinctBases.push(r.base_invoice_number);
   }
   const basesInBatch = distinctBases.slice(0, BATCH);
+  // M2 R7: exact `remaining`. The range fetch above caps at 2,000 rows
+  // (~130 distinct bases for 882 staged rows, ~450 for ~3,100 staged).
+  // The priority manifest is 152 invoices across 309 pages, which
+  // will stage several thousand rows; past 2,000 retryable rows
+  // `remaining` derived from distinctBases would silently under-report
+  // and the caller could stop early believing it was done. One extra
+  // head:true count query makes it exact.
+  const { count: retryableRowCount, error: countErr } = await client
+    .from("pr_rescan_lines")
+    .select("*", { count: "exact", head: true })
+    .in("apply_status", RETRYABLE_STATUSES);
+  if (countErr) {
+    return NextResponse.json({ error: countErr.message }, { status: 500 });
+  }
+  // `remaining` is distinct RETRYABLE bases this call saw but did not
+  // process. Derived from distinctBases.length (accurate up to the
+  // range fetch cap); retryableRowCount surfaces separately below as
+  // a second independent signal.
   const remaining = Math.max(0, distinctBases.length - basesInBatch.length);
-  // M1 R2: done is strictly "nothing pending visible this call" - never
-  // "offset passed the end". A later call with no basesInBatch reports
-  // done:true and the caller stops. offset is echoed back for the
-  // response only.
-  const done = basesInBatch.length === 0;
+  // M1 R2 + M2 R7: done is "nothing retryable remains across the whole
+  // table", not "nothing visible this call". retryableRowCount is
+  // authoritative because it does not depend on the range fetch window.
+  const done = (retryableRowCount ?? 0) === 0;
 
   // Accumulators for the response.
   const counts = {
@@ -1759,12 +1798,16 @@ export async function POST(req: NextRequest) {
     dryRun,
     offset,
     nextOffset: offset + basesInBatch.length,
-    // M1 R2: done is true only when the next call would find zero
-    // pending work. remaining is the distinct pending bases this call
-    // saw but did not process (bounded by the 2000-row range fetch;
-    // may under-count if pending > 2000 lines).
+    // M1 R2 + M2 R7: done is true only when zero retryable rows
+    // remain across the whole table (authoritative count query, not
+    // derived from the range fetch window). `remaining` is the
+    // distinct retryable bases this call saw but did not process
+    // (useful for progress reporting); `retryableRows` is the exact
+    // row-level count that drives `done` and will continue to work
+    // as the staged set scales past 2,000 rows.
     done,
     remaining,
+    retryableRows: retryableRowCount ?? 0,
     invoices: counts.invoices,
     lines: counts.lines,
     fields: {
