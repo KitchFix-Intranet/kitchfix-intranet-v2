@@ -23,7 +23,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireOwnerApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
-import { applyCountableFilter } from "@/lib/ingredients/countability";
+import { COUNTABLE_OBSERVATIONS_VIEW } from "@/lib/ingredients/countability";
 
 export const dynamic = "force-dynamic";
 
@@ -75,16 +75,15 @@ export async function GET(req: NextRequest) {
     const PAGE = 1000;
     let from = 0;
     for (;;) {
-      const q = client
-        .from("pr_price_observations")
+      // N0b: countable observations via the view.
+      const { data, error } = await client
+        .from(COUNTABLE_OBSERVATIONS_VIEW)
         .select(
           "invoice_date,account_key,unit_price,quantity,extended_price,billed_unit,weight_line_value"
         )
         .eq("vendor_item_id", it.id)
         .order("invoice_date", { ascending: false, nullsFirst: false })
         .range(from, from + PAGE - 1);
-      // N0: countability predicate via shared helper.
-      const { data, error } = await applyCountableFilter(q);
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
       const rows = (data ?? []) as Obs[];
       observations.push(...rows);

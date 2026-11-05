@@ -5,7 +5,7 @@
 import type { ReactNode } from "react";
 import { Archive, Scale } from "lucide-react";
 import { serviceClient } from "@/lib/supabase/service";
-import { applyCountableFilter } from "@/lib/ingredients/countability";
+import { COUNTABLE_OBSERVATIONS_VIEW } from "@/lib/ingredients/countability";
 import { fmtCount, fmtDate, fmtUsd, fmtUsdLong, timeAgo } from "@/lib/fmt";
 import { humanizeKind } from "@/lib/humanizeKind";
 import { DrawerFrame } from "./DrawerFrame";
@@ -99,15 +99,13 @@ export async function VendorItemDrawer({ id, closeHref, vendorNameById }: Props)
       .select("description,count,last_seen")
       .eq("vendor_item_id", id)
       .order("count", { ascending: false }),
-    // N0: countability predicate via shared helper.
-    applyCountableFilter(
-      client
-        .from("pr_price_observations")
-        .select("account_key,invoice_date,unit_price,quantity,extended_price")
-        .eq("vendor_item_id", id)
-        .order("invoice_date", { ascending: false })
-        .limit(1000)
-    ),
+    // N0b: countable observations via the view.
+    client
+      .from(COUNTABLE_OBSERVATIONS_VIEW)
+      .select("account_key,invoice_date,unit_price,quantity,extended_price")
+      .eq("vendor_item_id", id)
+      .order("invoice_date", { ascending: false })
+      .limit(1000),
     client
       .from("pr_events")
       .select("id,kind,at,note,actor")

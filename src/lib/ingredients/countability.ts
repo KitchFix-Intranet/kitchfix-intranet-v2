@@ -1,66 +1,50 @@
-// N0: the canonical predicate for "this observation counts toward
-// pr_vendor_items.lines / .usd / .lines_12m / .usd_12m" and any UI
-// read that aggregates observations.
+// N0b: countability lives in the DATABASE as the view
+// `pr_countable_observations`, applied in migrations 0012 (view
+// definition) and 0013 (de-correlated form for performance). This
+// module is the one place Node code names that source; every
+// aggregate query over observations reads FROM this constant.
 //
-// RULE: an observation is COUNTABLE when `excluded_reason IS NULL`.
+// Why a view and not a column:
 //
-// The /api/admin/observation-countability route populates
-// `excluded_reason` on observations that should not count. "Non-null
-// means exclude" is the forward-compatible contract - new exclusion
-// reasons can be added without changing the filter here.
+//   invoice_submissions.status = 'corrected' is written by a system
+//   outside this codebase (verified 2026-11-05: `grep` for
+//   `invoice_submissions` in src/ returns only reads). A stored flag
+//   maintained by this app cannot be guaranteed to fire when the
+//   write comes from a sibling service, and a one-time backfill
+//   would drift at ~5 new corrected submissions per month (12 in
+//   the last 90 days). The view is computed from current state on
+//   every read, so it cannot go stale and it cannot be clobbered.
 //
-// Known exclusion values:
+// Semantics of the view (0012/0013):
 //
-//   'superseded_submission'
-//     The observation's line belongs to an invoice_submission with
-//     status='corrected' that has a LIVE replacement for the same
-//     invoice_number (another submission with status neither
-//     'corrected' nor 'deleted'). Measured 2026-11-05 after
-//     reconciling against actual excluded_reason state: 591
-//     currently-countable observations / 503 items / $63,171.17 -
-//     the largest data-accuracy defect in the stockpot workstream,
-//     and it predates every other patch. Another 120 superseded
-//     observations already carry a non-null excluded_reason
-//     (`not_food` or `needs_review` - Kevin's curation decisions);
-//     the N0a route never touches those.
+//   excluded (NOT in the view):
+//     - excluded_reason IS NOT NULL
+//       Already excluded on other grounds - 'not_food', 'needs_review'
+//       (Kevin's curation decisions) or any future reason.
+//     - the observation's submission has status = 'deleted'
+//     - the observation's submission has status = 'corrected' AND
+//       another submission exists for the same invoice_number whose
+//       status is neither 'corrected' nor 'deleted' (= superseded by
+//       a live replacement)
 //
-//   'deleted_submission'
-//     Submission's status is 'deleted'. All five deleted observations
-//     on 2026-11-05 already carried a reason, so writing this label
-//     moved zero dollars on the first run. The rule stays because it
-//     is correct; movement appears the first time a submission is
-//     deleted without prior exclusion.
+//   included (IN the view):
+//     - everything else, including:
+//       * orphans (line_id resolves to no submission) - 217 obs /
+//         $28,818 on 2026-11-05, pending Kevin's ruling
+//       * abandoned corrections (a 'corrected' submission that is the
+//         only copy of its invoice) - 262 obs / $22,193, pending
+//         Kevin's ruling
 //
-// A 'corrected' submission that is the ONLY copy of its invoice is
-// NOT superseded. The correction was started and never completed;
-// those observations STAY countable. 335 observations / $25,870 as
-// of 2026-11-05, left alone pending a separate ruling.
+// Measured 2026-11-05 against the live table:
 //
-// Orphan observations (line_id resolves to no submission) are
-// REPORT-ONLY. They may be real spend with a broken link; do not
-// exclude without a Kevin ruling. 260 observations / $30,947.
+//   26,230 countable before the view     -> 25,639 after
+//   591 observations / 503 items / $63,171.17 of double-counting
+//   removed. Full-catalog aggregate 1.27 s; per-item 19 ms.
 //
-// Every PostgREST aggregate read over pr_price_observations MUST
-// apply this filter. If a counter is derived from observations
-// without it the counter DOUBLE COUNTS the superseded set.
-// `grep applyCountableFilter src/` lists every aggregate site at
-// once - make sure any new aggregate call site uses this helper
-// and is grepped.
+// Every aggregate PostgREST read reads `.from(COUNTABLE_OBSERVATIONS_VIEW)`.
+// `grep -n 'from("pr_price_observations")' src/` should return ONLY
+// the intake upsert (writes can't go through a view); every other
+// hit is a bug. `grep -n COUNTABLE_OBSERVATIONS_VIEW src/` lists
+// every aggregate site at once.
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
-export const COUNTABILITY_PREDICATE_SQL = "excluded_reason IS NULL";
-
-export const COUNTABILITY_PREDICATE_HUMAN =
-  "excluded_reason IS NULL (see src/lib/ingredients/countability.ts)";
-
-// Applies the standard filter to a PostgREST query builder in place.
-// Usage:
-//   const q = client.from("pr_price_observations").select("...");
-//   const { data } = await applyCountableFilter(q).eq(...);
-// The helper is intentionally generic - PostgREST builder types shift
-// slightly across @supabase/supabase-js versions, so we accept any
-// builder and return the same shape.
-export function applyCountableFilter<T>(q: T): T {
-  return (q as any).is("excluded_reason", null) as T;
-}
+export const COUNTABLE_OBSERVATIONS_VIEW = "pr_countable_observations";

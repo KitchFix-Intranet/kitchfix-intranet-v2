@@ -5,7 +5,7 @@
 // (ReviewActions).
 
 import { serviceClient } from "@/lib/supabase/service";
-import { applyCountableFilter } from "@/lib/ingredients/countability";
+import { COUNTABLE_OBSERVATIONS_VIEW } from "@/lib/ingredients/countability";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { Tabs } from "./Tabs";
 import { IdentBand } from "@/components/ui/IdentBand";
@@ -211,15 +211,14 @@ async function loadReview() {
       const slice = itemIds.slice(i, i + chunk);
       let obsFrom = 0;
       for (;;) {
-        const q = client
-          .from("pr_price_observations")
+        // N0b: countable observations via the view.
+        const { data: obsData, error: obsErr } = await client
+          .from(COUNTABLE_OBSERVATIONS_VIEW)
           .select("vendor_item_id,unit_price,billed_unit,invoice_date")
           .in("vendor_item_id", slice)
           .not("unit_price", "is", null)
           .order("invoice_date", { ascending: false, nullsFirst: false })
           .range(obsFrom, obsFrom + 999);
-        // N0: countability predicate via shared helper.
-        const { data: obsData, error: obsErr } = await applyCountableFilter(q);
         if (obsErr) throw obsErr;
         const page = (obsData ?? []) as Array<{
           vendor_item_id: string;

@@ -9,7 +9,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { categoryForParent, type SuperCategory } from "@/lib/ingredients/categories";
 import { estimateFromOverride } from "@/lib/ingredients/estimate";
 import { parsePack } from "@/lib/ingredients/pack";
-import { applyCountableFilter } from "@/lib/ingredients/countability";
+import { COUNTABLE_OBSERVATIONS_VIEW } from "@/lib/ingredients/countability";
 import { isPackManualOverride } from "@/components/ingredients/itemTypes";
 
 export type ConfirmResult = {
@@ -1347,16 +1347,15 @@ export async function setVendorItemPackOverride(
   // supply per_lb we still null it, we don't invent one here).
   let latestUnitPrice: number | null = null;
   {
-    // N0: countability predicate via shared helper.
-    const { data: obsRow } = await applyCountableFilter(
-      client
-        .from("pr_price_observations")
-        .select("unit_price")
-        .eq("vendor_item_id", itemId)
-        .not("unit_price", "is", null)
-        .order("invoice_date", { ascending: false, nullsFirst: false })
-        .limit(1)
-    ).maybeSingle();
+    // N0b: countable observations via the view.
+    const { data: obsRow } = await client
+      .from(COUNTABLE_OBSERVATIONS_VIEW)
+      .select("unit_price")
+      .eq("vendor_item_id", itemId)
+      .not("unit_price", "is", null)
+      .order("invoice_date", { ascending: false, nullsFirst: false })
+      .limit(1)
+      .maybeSingle();
     if (obsRow && typeof (obsRow as { unit_price?: unknown }).unit_price === "number") {
       latestUnitPrice = (obsRow as { unit_price: number }).unit_price;
     } else if (obsRow && (obsRow as { unit_price?: unknown }).unit_price != null) {
@@ -1673,16 +1672,15 @@ export async function migrateTextPackOverrides(
       // Pull latest billed too.
       let latestUnitPrice: number | null = null;
       {
-        // N0: countability predicate via shared helper.
-        const { data: obsRow } = await applyCountableFilter(
-          client
-            .from("pr_price_observations")
-            .select("unit_price")
-            .eq("vendor_item_id", r.id)
-            .not("unit_price", "is", null)
-            .order("invoice_date", { ascending: false, nullsFirst: false })
-            .limit(1)
-        ).maybeSingle();
+        // N0b: countable observations via the view.
+        const { data: obsRow } = await client
+          .from(COUNTABLE_OBSERVATIONS_VIEW)
+          .select("unit_price")
+          .eq("vendor_item_id", r.id)
+          .not("unit_price", "is", null)
+          .order("invoice_date", { ascending: false, nullsFirst: false })
+          .limit(1)
+          .maybeSingle();
         if (obsRow && (obsRow as { unit_price?: unknown }).unit_price != null) {
           const n = Number((obsRow as { unit_price: unknown }).unit_price);
           if (Number.isFinite(n)) latestUnitPrice = n;

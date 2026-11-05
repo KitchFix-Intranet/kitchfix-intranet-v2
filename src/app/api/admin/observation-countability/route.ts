@@ -1,70 +1,48 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireOwnerApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
-import { applyCountableFilter } from "@/lib/ingredients/countability";
+import { COUNTABLE_OBSERVATIONS_VIEW } from "@/lib/ingredients/countability";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-// N0: observation-countability report + backfill.
+// N0b: observation-countability report + per-item counter recompute.
 //
-// Why: pr_vendor_items price and spend counters (lines, usd,
-// lines_12m, usd_12m) recompute from pr_price_observations WITHOUT
-// excluding observations whose line belongs to a superseded invoice
-// submission. An invoice number can carry several invoice_submissions
-// rows; status='corrected' marks the superseded ones. When an
-// invoice is re-submitted, both copies' lines keep their
-// observations, and both get counted. The same physical purchase is
-// counted twice.
+// What N0b removes from the N0 build:
 //
-// Measured 2026-11-05 live, after N0a reconciled against actual
-// excluded_reason state: 591 countable superseded observations
-// across 503 catalog items, overstating spend by $63,171.17. For
-// comparison, the entire re-scan apply moved net spend by $315.
-// A separate 120 superseded observations already carry a non-null
-// excluded_reason (`not_food` or `needs_review` - Kevin's own
-// curation) and are not touched by this route.
+//   - The excluded_reason UPDATE. Under N0b the view
+//     pr_countable_observations (migrations 0012 / 0013) excludes
+//     superseded and deleted rows by structure, so no write is
+//     needed on pr_price_observations itself. Deleting the UPDATE
+//     removes the N0a clobber risk (120 superseded rows that carry
+//     `not_food` or `needs_review` are preserved) and the latent
+//     trap (when Kevin resolves a review and excluded_reason goes
+//     null, the view still excludes the row because it is still
+//     structurally superseded).
 //
-// What this route does:
+// What N0b keeps from N0:
 //
-//   1. Classifies every pr_price_observations row where
-//      excluded_reason IS NULL (currently countable) by walking its
-//      line_id -> ai_line_items.invoice_uuid -> invoice_submissions:
-//        - 'live'              status is neither 'corrected' nor 'deleted'
-//        - 'superseded'        status='corrected' AND the same
-//                              invoice_number has another LIVE copy
-//        - 'lone_corrected'    status='corrected' AND is the only copy
-//        - 'deleted'           status='deleted'
-//        - 'orphan_no_line'    line_id resolves to no ai_line_items row
-//        - 'orphan_no_submission'
-//                              ai_line_items.invoice_uuid is null or
-//                              points to no invoice_submissions row
+//   - Classification of every observation (reads pr_price_observations
+//     directly, including rows the view excludes) so the orphan,
+//     abandoned-correction and already-excluded buckets stay visible
+//     to Kevin.
+//   - Per-item diff (stored usd vs recomputed usd from the view).
+//   - top50 by |delta|, diffMismatch sanity check, acceptanceTarget,
+//     reportOnly.
 //
-//   2. Dry-run: reports per-item diff (old vs recomputed usd/lines),
-//      top 50 by |delta|, totals per class. Writes nothing.
+// What N0b still does live:
 //
-//   3. Live: sets excluded_reason on the 'superseded' observations
-//      ('superseded_submission') and 'deleted' observations
-//      ('deleted_submission'), then recomputes the counters on every
-//      affected pr_vendor_items row from the now-filtered
-//      observations, and emits one pr_events('countability_recount')
-//      per item with the before/after counters.
+//   - Per-affected-item counter recompute from pr_countable_observations.
+//     Emits one pr_events('countability_recount') per changed item
+//     with before / after. This is the write that actually delivers
+//     the $63,171.17 move.
 //
-// What this route does NOT do:
+// dryRun defaults TRUE; opt-in to writing requires explicit
+// dryRun=false in body or ?dryRun=false on query.
 //
-//   - Exclude orphans. 260 observations / $30,947. Report-only until
-//     Kevin rules on them. They may be real spend with a broken link.
-//   - Exclude 'lone_corrected' observations. 335 observations /
-//     $25,870. A 'corrected' submission that is the only copy of
-//     its invoice is NOT superseded; the correction was started and
-//     never completed. Report-only; treatment unchanged.
-//   - Write a migration. All exclusion state lives on the existing
-//     pr_price_observations.excluded_reason column.
-//   - Deploy, run itself, or run any other route. Kevin runs this
-//     one; dry-run first, read the diff, then authorise live.
-//
-// dryRun defaults TRUE, like rescan-apply. Opt-in to writing
-// requires explicit dryRun=false in body or ?dryRun=false on query.
+// Measured target 2026-11-05: 591 observations / 503 items /
+// $63,171.17 of double-count removed. Full-catalog aggregate 1.27 s
+// against the de-correlated view in 0013.
 
 type Submission = {
   id: string;
@@ -80,10 +58,6 @@ type Observation = {
   invoice_date: string | null;
   account_key: string | null;
   needs_review: boolean | null;
-  // N0a: carry excluded_reason so classification can split 'already
-  // excluded' from 'would exclude now'. The UPDATE at step 8 writes
-  // ONLY the latter; the former stays untouched so Kevin's `not_food`
-  // and `needs_review` curation on superseded rows is preserved.
   excluded_reason: string | null;
 };
 
@@ -131,11 +105,6 @@ export async function POST(req: NextRequest) {
   const client = serviceClient();
 
   // --- 1. Load invoice_submissions and classify each.
-  //
-  // Submission class is scoped per invoice_number: a 'corrected' row
-  // is 'superseded' iff another row at the same invoice_number has
-  // status that is neither 'corrected' nor 'deleted'. Otherwise it is
-  // 'lone_corrected' and still counts.
   const submissionsAll: Submission[] = [];
   {
     let from = 0;
@@ -160,10 +129,15 @@ export async function POST(req: NextRequest) {
   {
     const byInvoiceNumber = new Map<string, Submission[]>();
     for (const s of submissionsAll) {
-      if (!s.invoice_number) continue;
-      const list = byInvoiceNumber.get(s.invoice_number) ?? [];
+      // N0b: the view uses btrim(invoice_number) because 4 of 2,722
+      // invoice_number values carry surrounding whitespace. Mirror
+      // that here so client-side classification agrees with the
+      // view's exclusion.
+      const key = s.invoice_number?.trim();
+      if (!key) continue;
+      const list = byInvoiceNumber.get(key) ?? [];
       list.push(s);
-      byInvoiceNumber.set(s.invoice_number, list);
+      byInvoiceNumber.set(key, list);
     }
     for (const list of byInvoiceNumber.values()) {
       const hasLive = list.some(
@@ -186,14 +160,11 @@ export async function POST(req: NextRequest) {
   };
   for (const cls of submissionClass.values()) submissionCounts[cls] += 1;
 
-  // --- 2. Load ALL observations (not just currently-countable).
-  //
-  // N0a: a `superseded` row that currently holds `not_food` or
-  // `needs_review` is Kevin's own curation decision and must not be
-  // overwritten. To distinguish "would become superseded now" from
-  // "already excluded on other grounds, superseded as a label only",
-  // we classify every row and gate the UPDATE on the current reason
-  // being NULL. Paged so > 1000 rows are not silently truncated.
+  // --- 2. Load ALL observations (not just countable). We classify
+  // every row for the report - including rows the view excludes -
+  // so Kevin can see orphan, abandoned-correction and
+  // already-excluded buckets alongside the "actually moving"
+  // superseded set.
   const observations: Observation[] = [];
   {
     let from = 0;
@@ -217,10 +188,6 @@ export async function POST(req: NextRequest) {
   }
 
   // --- 3. Resolve each observation's line_id to its invoice_uuid.
-  //
-  // Lookup against ai_line_items. invoice_uuid may be null (orphan)
-  // or point to a submission not in our submissionClass map (also
-  // orphan). Service role bypasses RLS.
   const lineIdToInvoiceUuid = new Map<string, string | null>();
   {
     const lineIds = Array.from(new Set(observations.map((o) => o.line_id)));
@@ -271,46 +238,39 @@ export async function POST(req: NextRequest) {
     classified.push({ obs: o, cls });
   }
 
-  // --- 5. Identify observations to exclude.
-  //
-  // N0a: split each candidate class into "countable now" (the UPDATE
-  // target) and "already excluded" (skipped - the current reason is a
-  // curation decision we do NOT overwrite). The expected acceptance
-  // target is 591 superseded obs / 503 items / $63,171.17 - revised
-  // down from an earlier 711 / 583 / $73,711 estimate that failed to
-  // account for the 120 already-excluded superseded rows. The
-  // `deleted` bucket is a no-op in practice: all 5 deleted
-  // observations on 2026-11-05 already carried a reason, so this
-  // writes zero dollars from deleted. The rule stays because it is
-  // right; expect no movement.
-  const toExcludeSuperseded = classified.filter(
+  // --- 5. Identify observations that MOVE under the view. An
+  // observation moves when:
+  //   - it is currently-countable (excluded_reason IS NULL on the base
+  //     table), AND
+  //   - its structural class is 'superseded' or 'deleted'
+  // These are exactly the rows pr_countable_observations excludes
+  // but pr_price_observations-with-excluded_reason-null-filter did
+  // not. The acceptance target maps against this set.
+  const movingSuperseded = classified.filter(
     (c) => c.cls === "superseded" && c.obs.excluded_reason == null
   );
-  const skippedSupersededAlreadyExcluded = classified.filter(
-    (c) => c.cls === "superseded" && c.obs.excluded_reason != null
-  );
-  const toExcludeDeleted = classified.filter(
+  const movingDeleted = classified.filter(
     (c) => c.cls === "deleted" && c.obs.excluded_reason == null
   );
-  const skippedDeletedAlreadyExcluded = classified.filter(
+  // Same structural class, but already excluded on other grounds -
+  // reported for transparency; the view hides them for a different
+  // reason (`not_food`/`needs_review`), so nothing moves.
+  const alreadyExcludedSuperseded = classified.filter(
+    (c) => c.cls === "superseded" && c.obs.excluded_reason != null
+  );
+  const alreadyExcludedDeleted = classified.filter(
     (c) => c.cls === "deleted" && c.obs.excluded_reason != null
   );
-  const toExcludeAll = [...toExcludeSuperseded, ...toExcludeDeleted];
 
-  // --- 6. Build per-item diff. For each affected pr_vendor_items,
-  // current usd/lines against (current minus the excluded contribution).
-  //
-  // Note: we only compute "what the counter would be after excluding
-  // these observations"; this assumes the current counter equals the
-  // sum of countable observations for the item (excluded_reason IS
-  // NULL), which Kevin confirmed holds to the cent on his 12-item
-  // sample of 710 items. If any item's current counter already
-  // diverges from that sum, the diff flags it in `diffMismatch` below.
+  // --- 6. Build per-item diff. For every item that owns at least
+  // one moving observation, compare stored usd / lines against the
+  // recomputed values. Dry-run and live diverge only in whether the
+  // recompute lands in the DB.
   const excludePerItem = new Map<
     string,
     { usd: number; lines: number }
   >();
-  for (const c of toExcludeAll) {
+  for (const c of [...movingSuperseded, ...movingDeleted]) {
     const ext = Number(c.obs.extended_price ?? 0) || 0;
     const cur = excludePerItem.get(c.obs.vendor_item_id) ?? {
       usd: 0,
@@ -326,19 +286,17 @@ export async function POST(req: NextRequest) {
   const diffMismatch: Array<{ id: string; storedUsd: number; sumUsd: number }> = [];
 
   if (affectedItemIds.length > 0) {
-    // Sum of ALL countable observations per affected item for the
-    // diff sanity check. If stored usd equals this sum, "new_usd =
-    // stored - excluded" is exact. Divergence surfaces in
-    // diffMismatch; we still produce the diff but flag it.
+    // Sum of currently-countable observations per affected item.
+    // Used for the diffMismatch sanity check: if stored usd equals
+    // this sum, the derived new_usd (= stored - excluded) matches
+    // what the view recompute would produce. Divergence flags an
+    // arithmetic drift we did not introduce.
     const sumPerItem = new Map<
       string,
       { usd: number; lines: number }
     >();
     for (const c of classified) {
       if (!excludePerItem.has(c.obs.vendor_item_id)) continue;
-      // Only currently-countable observations contribute to stored
-      // usd/lines; the already-excluded rows are already out of the
-      // counter. Filter so diffMismatch compares apples to apples.
       if (c.obs.excluded_reason != null) continue;
       const ext = Number(c.obs.extended_price ?? 0) || 0;
       const cur = sumPerItem.get(c.obs.vendor_item_id) ?? {
@@ -385,9 +343,6 @@ export async function POST(req: NextRequest) {
           new_lines: newLines,
           delta_lines: newLines - oldLines,
         });
-        // Sanity: stored usd should equal (sum of countable observations) on
-        // every affected item if there's no other arithmetic drift. Flag
-        // the mismatches so Kevin sees them even on a dry run.
         if (Math.abs(storedUsd - sumHere.usd) > 0.01) {
           diffMismatch.push({
             id: r.id,
@@ -404,40 +359,34 @@ export async function POST(req: NextRequest) {
 
   // --- 7. Totals for the response.
   const summary = {
-    toExclude: {
+    toMove: {
       superseded: {
-        observations: toExcludeSuperseded.length,
+        observations: movingSuperseded.length,
         usd: Number(
-          toExcludeSuperseded
+          movingSuperseded
             .reduce((a, c) => a + (Number(c.obs.extended_price ?? 0) || 0), 0)
             .toFixed(2)
         ),
       },
       deleted: {
-        observations: toExcludeDeleted.length,
+        observations: movingDeleted.length,
         usd: Number(
-          toExcludeDeleted
+          movingDeleted
             .reduce((a, c) => a + (Number(c.obs.extended_price ?? 0) || 0), 0)
             .toFixed(2)
         ),
       },
       itemsAffected: affectedItemIds.length,
       totalUsd: Number(
-        toExcludeAll
+        [...movingSuperseded, ...movingDeleted]
           .reduce((a, c) => a + (Number(c.obs.extended_price ?? 0) || 0), 0)
           .toFixed(2)
       ),
     },
-    // N0a: rows the UPDATE skips because they already carry a reason
-    // (Kevin's `not_food` or `needs_review`, or the prior
-    // `deleted_submission` writes). Expected on 2026-11-05 live:
-    // ~120 superseded + ~5 deleted = ~125 total. Excluding them again
-    // moves zero dollars; reporting them makes the gap between "total
-    // superseded in the DB" and "USD actually moved" obvious.
     alreadyExcluded: {
       superseded: {
-        observations: skippedSupersededAlreadyExcluded.length,
-        byReason: skippedSupersededAlreadyExcluded.reduce(
+        observations: alreadyExcludedSuperseded.length,
+        byReason: alreadyExcludedSuperseded.reduce(
           (acc, c) => {
             const k = c.obs.excluded_reason ?? "(null)";
             acc[k] = (acc[k] ?? 0) + 1;
@@ -447,8 +396,8 @@ export async function POST(req: NextRequest) {
         ),
       },
       deleted: {
-        observations: skippedDeletedAlreadyExcluded.length,
-        byReason: skippedDeletedAlreadyExcluded.reduce(
+        observations: alreadyExcludedDeleted.length,
+        byReason: alreadyExcludedDeleted.reduce(
           (acc, c) => {
             const k = c.obs.excluded_reason ?? "(null)";
             acc[k] = (acc[k] ?? 0) + 1;
@@ -457,17 +406,6 @@ export async function POST(req: NextRequest) {
           {} as Record<string, number>
         ),
       },
-    },
-    // N0a: Kevin's revised 2026-11-05 target after the N0 dry run was
-    // reconciled against actual excluded_reason state. Previous
-    // estimate 711 obs / 583 items / $73,710.79 was wrong because it
-    // did not account for the 120 superseded observations already
-    // carrying `not_food` or `needs_review`. The correct target is
-    // what the UPDATE will actually move.
-    acceptanceTarget: {
-      superseded: { observations: 591, items: 503, usd: 63171.17 },
-      deleted: { observations: 0, items: 0, usd: 0 },
-      note: "Rows already carrying a non-null excluded_reason are excluded from these targets; see alreadyExcluded above.",
     },
     reportOnly: {
       orphans: {
@@ -485,70 +423,33 @@ export async function POST(req: NextRequest) {
           ),
         },
         description:
-          "Observation's line_id resolves to no submission. May be real spend with a broken link. Report-only; do not exclude without a ruling.",
+          "Observation's line_id resolves to no submission. The view still COUNTS these - they may be real spend with a broken link. Report-only; Kevin rules.",
       },
       lone_corrected: {
         observations: classTotals.lone_corrected.observations,
         usd: Number(classTotals.lone_corrected.usd.toFixed(2)),
         description:
-          "'corrected' submission is the only copy of its invoice. The correction was started and never completed; treatment unchanged.",
+          "'corrected' submission is the only copy of its invoice. The correction was started and never completed; the view still COUNTS these. Report-only; Kevin rules.",
       },
+    },
+    acceptanceTarget: {
+      superseded: { observations: 591, items: 503, usd: 63171.17 },
+      deleted: { observations: 0, items: 0, usd: 0 },
+      note: "2026-11-05 live. The view excludes the 591 structurally-superseded rows that were previously counted; already-excluded rows count toward alreadyExcluded, not toMove.",
     },
   };
 
-  // --- 8. Live writes: set excluded_reason, recompute counters,
-  // emit pr_events per item. Everything else was a read.
+  // --- 8. Live: per-affected-item counter recompute FROM THE VIEW.
+  // The route no longer writes excluded_reason. The only live write
+  // is the pr_vendor_items counter update, emitted with a
+  // pr_events('countability_recount') per changed item.
   const writes = {
-    observationsExcluded: 0,
     itemsRecomputed: 0,
+    itemsUnchanged: 0,
     recomputeFailures: [] as Array<{ itemId: string; error: string }>,
   };
-  if (!dryRun) {
-    // (a) Set excluded_reason on observations in bulk, chunked.
-    //
-    // N0a: the .is("excluded_reason", null) filter is REQUIRED. It
-    // guarantees Kevin's `not_food` and `needs_review` curation is
-    // never overwritten even if the read-side classification drifted
-    // between selection and write - belt-and-braces. The id list
-    // already excludes already-reasoned rows from classification; the
-    // filter here is a defense-in-depth repeat.
-    const chunkUpdate = async (ids: string[], reason: string) => {
-      for (let i = 0; i < ids.length; i += 500) {
-        const slice = ids.slice(i, i + 500);
-        const { error } = await client
-          .from("pr_price_observations")
-          .update({ excluded_reason: reason })
-          .in("id", slice)
-          .is("excluded_reason", null);
-        if (error) throw new Error(error.message);
-      }
-    };
-    try {
-      await chunkUpdate(
-        toExcludeSuperseded.map((c) => c.obs.id),
-        "superseded_submission"
-      );
-      writes.observationsExcluded += toExcludeSuperseded.length;
-      await chunkUpdate(
-        toExcludeDeleted.map((c) => c.obs.id),
-        "deleted_submission"
-      );
-      writes.observationsExcluded += toExcludeDeleted.length;
-    } catch (e) {
-      return NextResponse.json(
-        {
-          error:
-            e instanceof Error ? e.message : "excluded_reason update failed",
-        },
-        { status: 500 }
-      );
-    }
 
-    // (b) Recompute counters on every affected item from observations
-    // that now pass the countability filter. Mirror the merge
-    // executor's recount shape: lines, lines_12m, usd, usd_12m,
-    // accounts, first_seen, last_seen, needs_review_lines. Never sum
-    // the two cached counters; always recompute from source.
+  if (!dryRun) {
     const twelveMonthsAgo = new Date();
     twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
     const cutoff = twelveMonthsAgo.toISOString().slice(0, 10);
@@ -570,6 +471,9 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
+      // Recount from the view. Same shape as the merge executor's
+      // recount in rescan-apply:executeMergePlan; the view now owns
+      // the exclusion rule so neither callsite has to encode it.
       let lines = 0;
       let lines12 = 0;
       let usd = 0;
@@ -582,12 +486,11 @@ export async function POST(req: NextRequest) {
       const page = 1000;
       let readOk = true;
       for (;;) {
-        const q = client
-          .from("pr_price_observations")
+        const { data, error } = await client
+          .from(COUNTABLE_OBSERVATIONS_VIEW)
           .select("extended_price,invoice_date,account_key,needs_review")
           .eq("vendor_item_id", itemId)
           .range(from, from + page - 1);
-        const { data, error } = await applyCountableFilter(q);
         if (error) {
           writes.recomputeFailures.push({
             itemId,
@@ -638,6 +541,21 @@ export async function POST(req: NextRequest) {
         needs_review_lines: needsReview,
       };
 
+      // Skip no-op writes - a row whose stored counters already
+      // match the view-derived counters doesn't need a write or an
+      // event. Only write when something actually changes.
+      const beforeSnap = (beforeRow ?? {}) as Record<string, unknown>;
+      const unchanged =
+        Number(beforeSnap.lines ?? 0) === after.lines &&
+        Number(beforeSnap.lines_12m ?? 0) === after.lines_12m &&
+        Number(beforeSnap.usd ?? 0).toFixed(2) === after.usd.toFixed(2) &&
+        Number(beforeSnap.usd_12m ?? 0).toFixed(2) === after.usd_12m.toFixed(2) &&
+        Number(beforeSnap.needs_review_lines ?? 0) === after.needs_review_lines;
+      if (unchanged) {
+        writes.itemsUnchanged += 1;
+        continue;
+      }
+
       const { error: upErr } = await client
         .from("pr_vendor_items")
         .update(after)
@@ -651,8 +569,6 @@ export async function POST(req: NextRequest) {
       }
       writes.itemsRecomputed += 1;
 
-      // Emit pr_events for the counter change. `before` carries the
-      // pre-write counters so the audit is self-contained.
       await client.from("pr_events").insert({
         entity_type: "vendor_item",
         entity_id: itemId,
@@ -660,7 +576,8 @@ export async function POST(req: NextRequest) {
         before: beforeRow,
         after,
         actor: "observation-countability",
-        note: "N0: excluded superseded/deleted submission observations",
+        note:
+          "N0b: recomputed from pr_countable_observations view (0012/0013)",
       });
     }
   }
@@ -668,26 +585,23 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     dryRun,
     definition: {
-      predicate_sql: "excluded_reason IS NULL",
+      source_view: COUNTABLE_OBSERVATIONS_VIEW,
       module: "src/lib/ingredients/countability.ts",
-      excludeValues: {
-        superseded_submission:
-          "line belongs to a 'corrected' invoice_submission that has a LIVE replacement (another submission with status neither 'corrected' nor 'deleted') for the same invoice_number",
-        deleted_submission: "submission's status is 'deleted'",
-      },
-      preserved: {
-        lone_corrected:
-          "a 'corrected' submission that is the only copy of its invoice is NOT superseded - the correction was started and never completed; stays countable",
-      },
+      migrations: ["0012", "0013"],
+      rule:
+        "The view pr_countable_observations excludes rows where (a) excluded_reason IS NOT NULL (Kevin's curation), (b) submission.status = 'deleted', or (c) submission.status = 'corrected' AND a non-corrected, non-deleted sibling exists for the same invoice_number. Orphans and abandoned corrections stay countable pending a ruling.",
+      writes: dryRun
+        ? "none (dryRun)"
+        : "pr_vendor_items counters + pr_events; excluded_reason is NEVER written by this route",
     },
     submissions: {
       total: submissionClass.size,
       distinctInvoiceNumbers:
-        new Set(submissionsAll.map((s) => s.invoice_number)).size,
+        new Set(submissionsAll.map((s) => s.invoice_number?.trim() ?? "")).size,
       classes: submissionCounts,
     },
     observations: {
-      currentlyCountable: observations.length,
+      loaded: observations.length,
       byClass: classTotals,
     },
     summary,

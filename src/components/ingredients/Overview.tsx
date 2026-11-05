@@ -9,7 +9,7 @@
 import Link from "next/link";
 import { ArrowRight, Flag } from "lucide-react";
 import { serviceClient } from "@/lib/supabase/service";
-import { applyCountableFilter } from "@/lib/ingredients/countability";
+import { COUNTABLE_OBSERVATIONS_VIEW } from "@/lib/ingredients/countability";
 import { fmtCount, fmtDate, fmtDuration, fmtStatus, fmtUsd, fmtUsdLong, timeAgo } from "@/lib/fmt";
 import { IdentBand } from "@/components/ui/IdentBand";
 import { CountUp } from "@/components/ui/CountUp";
@@ -82,13 +82,9 @@ async function loadOverview(): Promise<{
         .order("started_at", { ascending: false })
         .limit(1),
       client.from("pr_ingredients").select("id", { count: "exact", head: true }).eq("status", "active"),
-      // N0: needs_review count is an aggregate over observations - must
-      // honour the countability predicate, otherwise a flagged
-      // observation on a superseded submission would stay in the count
-      // even though the observation itself is excluded from usd/lines.
-      applyCountableFilter(
-        client.from("pr_price_observations").select("id", { count: "exact", head: true }).eq("needs_review", true)
-      ),
+      // N0b: needs_review count via the view - a flagged observation
+      // on a superseded submission must not stay in the count.
+      client.from(COUNTABLE_OBSERVATIONS_VIEW).select("id", { count: "exact", head: true }).eq("needs_review", true),
       // Flagged items (uses the partial index idx_pr_vendor_items_flagged).
       // Dollar-ordered so the biggest ones surface first.
       client
