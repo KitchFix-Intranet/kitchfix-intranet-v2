@@ -17,9 +17,13 @@ export const maxDuration = 300;
 // observations, and both get counted. The same physical purchase is
 // counted twice.
 //
-// Measured 2026-11-05: 711 observations across 583 catalog items,
-// overstating spend by $73,710.79. For comparison, the entire
-// re-scan apply moved net spend by $315.
+// Measured 2026-11-05 live, after N0a reconciled against actual
+// excluded_reason state: 591 countable superseded observations
+// across 503 catalog items, overstating spend by $63,171.17. For
+// comparison, the entire re-scan apply moved net spend by $315.
+// A separate 120 superseded observations already carry a non-null
+// excluded_reason (`not_food` or `needs_review` - Kevin's own
+// curation) and are not touched by this route.
 //
 // What this route does:
 //
@@ -76,6 +80,11 @@ type Observation = {
   invoice_date: string | null;
   account_key: string | null;
   needs_review: boolean | null;
+  // N0a: carry excluded_reason so classification can split 'already
+  // excluded' from 'would exclude now'. The UPDATE at step 8 writes
+  // ONLY the latter; the former stays untouched so Kevin's `not_food`
+  // and `needs_review` curation on superseded rows is preserved.
+  excluded_reason: string | null;
 };
 
 type SubmissionClass =
@@ -177,24 +186,26 @@ export async function POST(req: NextRequest) {
   };
   for (const cls of submissionClass.values()) submissionCounts[cls] += 1;
 
-  // --- 2. Load all currently-countable observations.
+  // --- 2. Load ALL observations (not just currently-countable).
   //
-  // Filtered by excluded_reason IS NULL via the shared helper so this
-  // route uses the same contract it enforces. Paged through so > 1000
-  // rows are not silently truncated.
+  // N0a: a `superseded` row that currently holds `not_food` or
+  // `needs_review` is Kevin's own curation decision and must not be
+  // overwritten. To distinguish "would become superseded now" from
+  // "already excluded on other grounds, superseded as a label only",
+  // we classify every row and gate the UPDATE on the current reason
+  // being NULL. Paged so > 1000 rows are not silently truncated.
   const observations: Observation[] = [];
   {
     let from = 0;
     const page = 1000;
     for (;;) {
-      const q = client
+      const { data, error } = await client
         .from("pr_price_observations")
         .select(
-          "id,vendor_item_id,line_id,extended_price,invoice_date,account_key,needs_review"
+          "id,vendor_item_id,line_id,extended_price,invoice_date,account_key,needs_review,excluded_reason"
         )
         .order("id", { ascending: true })
         .range(from, from + page - 1);
-      const { data, error } = await applyCountableFilter(q);
       if (error) {
         return NextResponse.json({ error: error.message }, { status: 500 });
       }
@@ -261,8 +272,29 @@ export async function POST(req: NextRequest) {
   }
 
   // --- 5. Identify observations to exclude.
-  const toExcludeSuperseded = classified.filter((c) => c.cls === "superseded");
-  const toExcludeDeleted = classified.filter((c) => c.cls === "deleted");
+  //
+  // N0a: split each candidate class into "countable now" (the UPDATE
+  // target) and "already excluded" (skipped - the current reason is a
+  // curation decision we do NOT overwrite). The expected acceptance
+  // target is 591 superseded obs / 503 items / $63,171.17 - revised
+  // down from an earlier 711 / 583 / $73,711 estimate that failed to
+  // account for the 120 already-excluded superseded rows. The
+  // `deleted` bucket is a no-op in practice: all 5 deleted
+  // observations on 2026-11-05 already carried a reason, so this
+  // writes zero dollars from deleted. The rule stays because it is
+  // right; expect no movement.
+  const toExcludeSuperseded = classified.filter(
+    (c) => c.cls === "superseded" && c.obs.excluded_reason == null
+  );
+  const skippedSupersededAlreadyExcluded = classified.filter(
+    (c) => c.cls === "superseded" && c.obs.excluded_reason != null
+  );
+  const toExcludeDeleted = classified.filter(
+    (c) => c.cls === "deleted" && c.obs.excluded_reason == null
+  );
+  const skippedDeletedAlreadyExcluded = classified.filter(
+    (c) => c.cls === "deleted" && c.obs.excluded_reason != null
+  );
   const toExcludeAll = [...toExcludeSuperseded, ...toExcludeDeleted];
 
   // --- 6. Build per-item diff. For each affected pr_vendor_items,
@@ -270,10 +302,10 @@ export async function POST(req: NextRequest) {
   //
   // Note: we only compute "what the counter would be after excluding
   // these observations"; this assumes the current counter equals the
-  // sum of ALL currently-countable observations for the item, which
-  // Kevin confirmed holds to the cent on his 12-item sample of 710
-  // items. If any item's current counter already diverges from that
-  // sum, the diff flags it in `diffMismatch` below.
+  // sum of countable observations for the item (excluded_reason IS
+  // NULL), which Kevin confirmed holds to the cent on his 12-item
+  // sample of 710 items. If any item's current counter already
+  // diverges from that sum, the diff flags it in `diffMismatch` below.
   const excludePerItem = new Map<
     string,
     { usd: number; lines: number }
@@ -304,6 +336,10 @@ export async function POST(req: NextRequest) {
     >();
     for (const c of classified) {
       if (!excludePerItem.has(c.obs.vendor_item_id)) continue;
+      // Only currently-countable observations contribute to stored
+      // usd/lines; the already-excluded rows are already out of the
+      // counter. Filter so diffMismatch compares apples to apples.
+      if (c.obs.excluded_reason != null) continue;
       const ext = Number(c.obs.extended_price ?? 0) || 0;
       const cur = sumPerItem.get(c.obs.vendor_item_id) ?? {
         usd: 0,
@@ -392,6 +428,47 @@ export async function POST(req: NextRequest) {
           .toFixed(2)
       ),
     },
+    // N0a: rows the UPDATE skips because they already carry a reason
+    // (Kevin's `not_food` or `needs_review`, or the prior
+    // `deleted_submission` writes). Expected on 2026-11-05 live:
+    // ~120 superseded + ~5 deleted = ~125 total. Excluding them again
+    // moves zero dollars; reporting them makes the gap between "total
+    // superseded in the DB" and "USD actually moved" obvious.
+    alreadyExcluded: {
+      superseded: {
+        observations: skippedSupersededAlreadyExcluded.length,
+        byReason: skippedSupersededAlreadyExcluded.reduce(
+          (acc, c) => {
+            const k = c.obs.excluded_reason ?? "(null)";
+            acc[k] = (acc[k] ?? 0) + 1;
+            return acc;
+          },
+          {} as Record<string, number>
+        ),
+      },
+      deleted: {
+        observations: skippedDeletedAlreadyExcluded.length,
+        byReason: skippedDeletedAlreadyExcluded.reduce(
+          (acc, c) => {
+            const k = c.obs.excluded_reason ?? "(null)";
+            acc[k] = (acc[k] ?? 0) + 1;
+            return acc;
+          },
+          {} as Record<string, number>
+        ),
+      },
+    },
+    // N0a: Kevin's revised 2026-11-05 target after the N0 dry run was
+    // reconciled against actual excluded_reason state. Previous
+    // estimate 711 obs / 583 items / $73,710.79 was wrong because it
+    // did not account for the 120 superseded observations already
+    // carrying `not_food` or `needs_review`. The correct target is
+    // what the UPDATE will actually move.
+    acceptanceTarget: {
+      superseded: { observations: 591, items: 503, usd: 63171.17 },
+      deleted: { observations: 0, items: 0, usd: 0 },
+      note: "Rows already carrying a non-null excluded_reason are excluded from these targets; see alreadyExcluded above.",
+    },
     reportOnly: {
       orphans: {
         no_line: classTotals.orphan_no_line,
@@ -428,13 +505,21 @@ export async function POST(req: NextRequest) {
   };
   if (!dryRun) {
     // (a) Set excluded_reason on observations in bulk, chunked.
+    //
+    // N0a: the .is("excluded_reason", null) filter is REQUIRED. It
+    // guarantees Kevin's `not_food` and `needs_review` curation is
+    // never overwritten even if the read-side classification drifted
+    // between selection and write - belt-and-braces. The id list
+    // already excludes already-reasoned rows from classification; the
+    // filter here is a defense-in-depth repeat.
     const chunkUpdate = async (ids: string[], reason: string) => {
       for (let i = 0; i < ids.length; i += 500) {
         const slice = ids.slice(i, i + 500);
         const { error } = await client
           .from("pr_price_observations")
           .update({ excluded_reason: reason })
-          .in("id", slice);
+          .in("id", slice)
+          .is("excluded_reason", null);
         if (error) throw new Error(error.message);
       }
     };

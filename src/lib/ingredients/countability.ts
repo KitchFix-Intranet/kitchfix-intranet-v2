@@ -15,14 +15,21 @@
 //     The observation's line belongs to an invoice_submission with
 //     status='corrected' that has a LIVE replacement for the same
 //     invoice_number (another submission with status neither
-//     'corrected' nor 'deleted'). Measured 2026-11-05: 711
-//     observations / 583 items / $73,710.79 - the largest
-//     data-accuracy defect in the stockpot workstream, and it
-//     predates every other patch.
+//     'corrected' nor 'deleted'). Measured 2026-11-05 after
+//     reconciling against actual excluded_reason state: 591
+//     currently-countable observations / 503 items / $63,171.17 -
+//     the largest data-accuracy defect in the stockpot workstream,
+//     and it predates every other patch. Another 120 superseded
+//     observations already carry a non-null excluded_reason
+//     (`not_food` or `needs_review` - Kevin's curation decisions);
+//     the N0a route never touches those.
 //
 //   'deleted_submission'
-//     Submission's status is 'deleted'. Five observations / $53.40
-//     as of 2026-11-05.
+//     Submission's status is 'deleted'. All five deleted observations
+//     on 2026-11-05 already carried a reason, so writing this label
+//     moved zero dollars on the first run. The rule stays because it
+//     is correct; movement appears the first time a submission is
+//     deleted without prior exclusion.
 //
 // A 'corrected' submission that is the ONLY copy of its invoice is
 // NOT superseded. The correction was started and never completed;
