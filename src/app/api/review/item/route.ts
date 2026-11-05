@@ -18,6 +18,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireOwnerApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
+import { applyCountableFilter } from "@/lib/ingredients/countability";
 import {
   isPackManualOverride,
   isPriceManualOverride,
@@ -126,15 +127,15 @@ export async function GET(req: NextRequest) {
           .eq("item_number_norm", it.item_number_norm)
           .maybeSingle()
       : Promise.resolve({ data: null as unknown, error: null }),
-    client
-      .from("pr_price_observations")
-      .select("unit_price,billed_unit,invoice_date")
-      .eq("vendor_item_id", it.id)
-      .is("excluded_reason", null)
-      .not("unit_price", "is", null)
-      .order("invoice_date", { ascending: false, nullsFirst: false })
-      .limit(1)
-      .maybeSingle(),
+    applyCountableFilter(
+      client
+        .from("pr_price_observations")
+        .select("unit_price,billed_unit,invoice_date")
+        .eq("vendor_item_id", it.id)
+        .not("unit_price", "is", null)
+        .order("invoice_date", { ascending: false, nullsFirst: false })
+        .limit(1)
+    ).maybeSingle(),
     it.ingredient_id
       ? client
           .from("pr_ingredients")

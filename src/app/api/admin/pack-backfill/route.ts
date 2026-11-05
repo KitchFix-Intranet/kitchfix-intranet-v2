@@ -4,6 +4,7 @@ import { serviceClient } from "@/lib/supabase/service";
 import { estimatePerUnit } from "@/lib/ingredients/estimate";
 import { DIM_BY_UOM, TO_BASE, normUom, isSlashlessWeightPack, parsePack } from "@/lib/ingredients/pack";
 import { bestTrigramMatch } from "@/lib/ingredients/trigram";
+import { applyCountableFilter } from "@/lib/ingredients/countability";
 
 export const dynamic = "force-dynamic";
 // Q2 §5.2: Vercel serverless timeout. /api/match and /api/intake both
@@ -594,15 +595,17 @@ export async function POST(req: NextRequest) {
     const page = 1000;
     let from = 0;
     for (;;) {
-      const { data: obsData, error: obsErr } = await client
+      const q = client
         .from("pr_price_observations")
         .select(
           "vendor_item_id,unit_price,invoice_date,quantity,extended_price,billed_unit,weight_line_value"
         )
         .in("vendor_item_id", ids)
-        .is("excluded_reason", null)
         .order("invoice_date", { ascending: false, nullsFirst: false })
         .range(from, from + page - 1);
+      // N0: countability predicate via shared helper - grep
+      // applyCountableFilter finds every aggregate site.
+      const { data: obsData, error: obsErr } = await applyCountableFilter(q);
       if (obsErr) return NextResponse.json({ error: obsErr.message }, { status: 500 });
       const chunk = (obsData ?? []) as Array<{
         vendor_item_id: string;

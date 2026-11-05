@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { requireOwnerApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
 import { similarity } from "@/lib/ingredients/trigram";
+import { applyCountableFilter } from "@/lib/ingredients/countability";
 
 export const dynamic = "force-dynamic";
 // Same ceiling as pack-backfill: this route can be slow when a batch
@@ -1999,11 +2000,15 @@ async function executeMergePlan(
     let from = 0;
     const page = 1000;
     for (;;) {
-      const { data: obs, error: obsErr } = await client
+      // N0: counter recompute must honour the countability predicate,
+      // otherwise a merge on a vendor with superseded submissions
+      // would re-introduce the double-count N0 removed.
+      const q = client
         .from("pr_price_observations")
         .select("extended_price,invoice_date,account_key,needs_review")
         .eq("vendor_item_id", survivor.id)
         .range(from, from + page - 1);
+      const { data: obs, error: obsErr } = await applyCountableFilter(q);
       if (obsErr) return { ok: false, error: `recount: ${obsErr.message}` };
       const rows =
         (obs ?? []) as Array<{
