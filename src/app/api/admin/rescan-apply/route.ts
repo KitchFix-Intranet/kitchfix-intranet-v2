@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { requireOwnerApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
 import { similarity } from "@/lib/ingredients/trigram";
-import { COUNTABLE_OBSERVATIONS_VIEW } from "@/lib/ingredients/countability";
+import { COUNTABLE_OBSERVATIONS_VIEW, applyCountableFilter } from "@/lib/ingredients/countability";
 
 export const dynamic = "force-dynamic";
 // Same ceiling as pack-backfill: this route can be slow when a batch
@@ -2000,14 +2000,17 @@ async function executeMergePlan(
     let from = 0;
     const page = 1000;
     for (;;) {
-      // N0b: counter recompute reads from pr_countable_observations
-      // so merge inherits the view's structural exclusion of
-      // superseded/deleted submissions. The view is 19 ms per item.
-      const { data: obs, error: obsErr } = await client
+      // N0b + 0015: structural exclusion comes from the view; the
+      // excluded_reason policy filter comes from applyCountableFilter.
+      // The merge recount uses BOTH because the stored counter it
+      // feeds (pr_vendor_items.usd via merge) is maintained with the
+      // same policy as every other read site.
+      const q = client
         .from(COUNTABLE_OBSERVATIONS_VIEW)
         .select("extended_price,invoice_date,account_key,needs_review")
         .eq("vendor_item_id", survivor.id)
         .range(from, from + page - 1);
+      const { data: obs, error: obsErr } = await applyCountableFilter(q);
       if (obsErr) return { ok: false, error: `recount: ${obsErr.message}` };
       const rows =
         (obs ?? []) as Array<{

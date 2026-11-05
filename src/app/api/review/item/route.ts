@@ -18,7 +18,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireOwnerApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
-import { COUNTABLE_OBSERVATIONS_VIEW } from "@/lib/ingredients/countability";
+import { COUNTABLE_OBSERVATIONS_VIEW, applyCountableFilter } from "@/lib/ingredients/countability";
 import {
   isPackManualOverride,
   isPriceManualOverride,
@@ -127,15 +127,16 @@ export async function GET(req: NextRequest) {
           .eq("item_number_norm", it.item_number_norm)
           .maybeSingle()
       : Promise.resolve({ data: null as unknown, error: null }),
-    // N0b: countable observations via the view.
-    client
-      .from(COUNTABLE_OBSERVATIONS_VIEW)
-      .select("unit_price,billed_unit,invoice_date")
-      .eq("vendor_item_id", it.id)
-      .not("unit_price", "is", null)
-      .order("invoice_date", { ascending: false, nullsFirst: false })
-      .limit(1)
-      .maybeSingle(),
+    // N0b + 0015: view = structure; applyCountableFilter = policy.
+    applyCountableFilter(
+      client
+        .from(COUNTABLE_OBSERVATIONS_VIEW)
+        .select("unit_price,billed_unit,invoice_date")
+        .eq("vendor_item_id", it.id)
+        .not("unit_price", "is", null)
+        .order("invoice_date", { ascending: false, nullsFirst: false })
+        .limit(1)
+    ).maybeSingle(),
     it.ingredient_id
       ? client
           .from("pr_ingredients")

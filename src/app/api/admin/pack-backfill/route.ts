@@ -4,7 +4,7 @@ import { serviceClient } from "@/lib/supabase/service";
 import { estimatePerUnit } from "@/lib/ingredients/estimate";
 import { DIM_BY_UOM, TO_BASE, normUom, isSlashlessWeightPack, parsePack } from "@/lib/ingredients/pack";
 import { bestTrigramMatch } from "@/lib/ingredients/trigram";
-import { COUNTABLE_OBSERVATIONS_VIEW } from "@/lib/ingredients/countability";
+import { COUNTABLE_OBSERVATIONS_VIEW, applyCountableFilter } from "@/lib/ingredients/countability";
 
 export const dynamic = "force-dynamic";
 // Q2 §5.2: Vercel serverless timeout. /api/match and /api/intake both
@@ -595,10 +595,11 @@ export async function POST(req: NextRequest) {
     const page = 1000;
     let from = 0;
     for (;;) {
-      // N0b: countable observations read from the view; the view
-      // excludes already-excluded, superseded, and deleted rows at
-      // the DB layer so no client-side filter is needed.
-      const { data: obsData, error: obsErr } = await client
+      // N0b + 0015: view handles STRUCTURE; applyCountableFilter
+      // handles POLICY (excluded_reason). The view no longer filters
+      // excluded_reason - omitting the helper here would re-admit
+      // $382,308 of not_food + needs_review spend.
+      const q = client
         .from(COUNTABLE_OBSERVATIONS_VIEW)
         .select(
           "vendor_item_id,unit_price,invoice_date,quantity,extended_price,billed_unit,weight_line_value"
@@ -606,6 +607,7 @@ export async function POST(req: NextRequest) {
         .in("vendor_item_id", ids)
         .order("invoice_date", { ascending: false, nullsFirst: false })
         .range(from, from + page - 1);
+      const { data: obsData, error: obsErr } = await applyCountableFilter(q);
       if (obsErr) return NextResponse.json({ error: obsErr.message }, { status: 500 });
       const chunk = (obsData ?? []) as Array<{
         vendor_item_id: string;

@@ -1,50 +1,54 @@
-// N0b: countability lives in the DATABASE as the view
-// `pr_countable_observations`, applied in migrations 0012 (view
-// definition) and 0013 (de-correlated form for performance). This
-// module is the one place Node code names that source; every
-// aggregate query over observations reads FROM this constant.
+// N0b (+0015 correction): countability is split between the view
+// pr_countable_observations and this module.
 //
-// Why a view and not a column:
+//   STRUCTURE lives in the view.
+//     Migrations 0012 / 0013 / 0015 compute the view from current
+//     state on every read. It excludes:
+//       - submissions with status = 'deleted'
+//       - submissions with status = 'corrected' whose siblings include
+//         a non-corrected, non-deleted copy (= superseded duplicate),
+//         UNLESS the observation is the item's only surviving
+//         evidence (survivor rule, 0015 - 127 food items / $13,975
+//         would otherwise show at zero, and they are merge candidates
+//         not exclusion candidates)
 //
-//   invoice_submissions.status = 'corrected' is written by a system
-//   outside this codebase (verified 2026-11-05: `grep` for
-//   `invoice_submissions` in src/ returns only reads). A stored flag
-//   maintained by this app cannot be guaranteed to fire when the
-//   write comes from a sibling service, and a one-time backfill
-//   would drift at ~5 new corrected submissions per month (12 in
-//   the last 90 days). The view is computed from current state on
-//   every read, so it cannot go stale and it cannot be clobbered.
+//   POLICY lives in each consumer.
+//     0015 explicitly does NOT filter excluded_reason, because the
+//     stored counters on pr_vendor_items deliberately include
+//     `needs_review` spend (measured: 246 of 260 food items with
+//     excluded observations carry stored counts that match the
+//     all-observations count, not the filtered one). Baking
+//     excluded_reason IS NULL into the view would silently drop
+//     needs_review spend from 246 items on the next recompute, and
+//     Kevin's standing "I don't want things that are not food in
+//     the stockpot" rule would put not_food rows back in the review
+//     surfaces with no way for consumers to opt out.
 //
-// Semantics of the view (0012/0013):
+// So every aggregate site reads FROM the view AND applies this
+// module's `applyCountableFilter` helper on top. The one documented
+// exception is the live recount in /api/admin/observation-countability
+// which reads the view WITHOUT the filter so the recomputed counter
+// matches the stored shape (otherwise the recount would drop
+// needs_review spend for every item it touches).
 //
-//   excluded (NOT in the view):
-//     - excluded_reason IS NOT NULL
-//       Already excluded on other grounds - 'not_food', 'needs_review'
-//       (Kevin's curation decisions) or any future reason.
-//     - the observation's submission has status = 'deleted'
-//     - the observation's submission has status = 'corrected' AND
-//       another submission exists for the same invoice_number whose
-//       status is neither 'corrected' nor 'deleted' (= superseded by
-//       a live replacement)
-//
-//   included (IN the view):
-//     - everything else, including:
-//       * orphans (line_id resolves to no submission) - 217 obs /
-//         $28,818 on 2026-11-05, pending Kevin's ruling
-//       * abandoned corrections (a 'corrected' submission that is the
-//         only copy of its invoice) - 262 obs / $22,193, pending
-//         Kevin's ruling
-//
-// Measured 2026-11-05 against the live table:
-//
-//   26,230 countable before the view     -> 25,639 after
-//   591 observations / 503 items / $63,171.17 of double-counting
-//   removed. Full-catalog aggregate 1.27 s; per-item 19 ms.
-//
-// Every aggregate PostgREST read reads `.from(COUNTABLE_OBSERVATIONS_VIEW)`.
-// `grep -n 'from("pr_price_observations")' src/` should return ONLY
-// the intake upsert (writes can't go through a view); every other
-// hit is a bug. `grep -n COUNTABLE_OBSERVATIONS_VIEW src/` lists
-// every aggregate site at once.
+// `grep -n 'from("pr_price_observations")' src/` should return only
+// the intake upsert and the FK-lookup sites in rescan-apply; every
+// aggregate uses the view.
+// `grep -n COUNTABLE_OBSERVATIONS_VIEW src/` lists every aggregate
+// site at once. `grep -n applyCountableFilter src/` lists every
+// site that applies policy on top - which is every aggregate site
+// EXCEPT the recount.
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 export const COUNTABLE_OBSERVATIONS_VIEW = "pr_countable_observations";
+
+// Applies the excluded_reason IS NULL policy filter to a PostgREST
+// query builder in place. Usage:
+//   const q = client.from(COUNTABLE_OBSERVATIONS_VIEW).select("...");
+//   const { data } = await applyCountableFilter(q).eq(...);
+// The helper is intentionally generic - PostgREST builder types
+// shift slightly across @supabase/supabase-js versions.
+export function applyCountableFilter<T>(q: T): T {
+  return (q as any).is("excluded_reason", null) as T;
+}
