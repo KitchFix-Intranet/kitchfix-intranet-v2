@@ -221,9 +221,29 @@ const DATA_FIELDS: Array<keyof StagedLine> = [
   "notes",
 ];
 
+// L3 §3.2: annotation emptiness test is scoped to the eight fields
+// that would actually land in ai_line_items. pack_confidence and
+// catch_weight are metadata CC sets on every record (e.g. "high" +
+// false on the two R2 reconciliation annotations); including them
+// made every real annotation look like a data line, so
+// lines.annotation reported 0 and matched+unmatched over-counted.
+// description_seen, pack_raw and notes do not have a correction
+// path to ai_line_items either (description is read for matching
+// but never overwritten) so they are also out of this test.
+const ANNOTATION_TEST_FIELDS: Array<keyof StagedLine> = [
+  "item_number",
+  "pack_count",
+  "pack_size_text",
+  "uom",
+  "qty_ordered",
+  "qty_shipped",
+  "unit_price_seen",
+  "extended_price_seen",
+];
+
 function isAnnotationShape(r: StagedLine): boolean {
   if (r.visual_order !== 99) return false;
-  for (const f of DATA_FIELDS) {
+  for (const f of ANNOTATION_TEST_FIELDS) {
     if (r[f] != null) return false;
   }
   return true;
@@ -567,16 +587,18 @@ export async function POST(req: NextRequest) {
     // RLS. Shape: invoice_number (text), status (text nullable),
     // submitted_at (timestamptz), total_amount (numeric).
     let submissionTotal: number | null = null;
+    let liveSubmissionId: string | null = null;
     {
       const { data: subs, error: subErr } = await client
         .from("invoice_submissions")
-        .select("status,submitted_at,total_amount")
+        .select("id,status,submitted_at,total_amount")
         .eq("invoice_number", baseInv)
         .limit(50);
       if (subErr) {
         return NextResponse.json({ error: subErr.message }, { status: 500 });
       }
       const rows = (subs ?? []) as Array<{
+        id: string;
         status: string | null;
         submitted_at: string | null;
         total_amount: number | string | null;
@@ -589,19 +611,62 @@ export async function POST(req: NextRequest) {
         const tb = b.submitted_at ?? "";
         return tb.localeCompare(ta); // submitted_at desc
       });
-      if (rows.length > 0 && rows[0].total_amount != null) {
-        const n = Number(rows[0].total_amount);
-        submissionTotal = Number.isFinite(n) ? n : null;
+      if (rows.length > 0) {
+        liveSubmissionId = rows[0].id;
+        if (rows[0].total_amount != null) {
+          const n = Number(rows[0].total_amount);
+          submissionTotal = Number.isFinite(n) ? n : null;
+        }
       }
     }
 
-    // --- Load stored ai_line_items for this invoice.
+    // L3: no submission for this invoice number -> mark every staged
+    // line 'unmatched' and move on. A silent fallback to
+    // invoice_number is how the superseded-submission bug survived
+    // review; do not reintroduce it. Measured 2026-11-05 on a 27-invoice
+    // batch: filtering on invoice_number pulled 1,012 rows where only
+    // 780 were live (232 stale across 5 invoices).
+    if (liveSubmissionId == null) {
+      for (const line of effectiveLines) {
+        outcomes.push({
+          stagedId: line.id,
+          status: "unmatched",
+          reason: "no submission found for invoice number",
+          matchedLineId: null,
+          matchedVendorItemId: null,
+          fieldOutcomes: {},
+          deltaExtendedPrice: 0,
+        });
+        counts.lines.unmatched += 1;
+      }
+      if (!dryRun && effectiveLines.length > 0) {
+        await client
+          .from("pr_rescan_lines")
+          .update({
+            apply_status: "unmatched",
+            apply_reason: "no submission found for invoice number",
+            applied_at: new Date().toISOString(),
+          })
+          .in(
+            "id",
+            effectiveLines.flatMap((l) => stagedIdsFor.get(l.id) ?? [l.id])
+          );
+      }
+      continue;
+    }
+
+    // L3: filter on invoice_uuid, NOT invoice_number. An invoice number
+    // can carry several submissions and the superseded ones hold stale
+    // values. On the 27-invoice batch of 2026-11-05, invoice_number
+    // loaded 1,012 rows where only 780 were live - 232 stale rows
+    // across 5 invoices, which produced false corrections against a
+    // dead baseline and would have written to rows nothing reads.
     const { data: aiData, error: aiErr } = await client
       .from("ai_line_items")
       .select(
         "id,vendor_name,invoice_number,invoice_date,line_num,description,quantity,unit,unit_price,extended_price,item_number,pack_size,uom_raw,parsed_pack_qty,catch_weight_marker"
       )
-      .eq("invoice_number", baseInv);
+      .eq("invoice_uuid", liveSubmissionId);
     if (aiErr) {
       return NextResponse.json({ error: aiErr.message }, { status: 500 });
     }

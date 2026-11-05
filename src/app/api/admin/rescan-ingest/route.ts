@@ -137,9 +137,13 @@ export async function POST(req: NextRequest) {
 
   const client = serviceClient();
 
-  // Identify pre-existing (invoice_number, visual_order) pairs so the
-  // response can distinguish inserted vs updated accurately. PostgREST's
-  // upsert does not surface which half fired per row.
+  // Identify pre-existing (invoice_number, page, visual_order) triples
+  // so the response can distinguish inserted vs updated accurately.
+  // PostgREST's upsert does not surface which half fired per row.
+  // L3 §3.1: BOTH the select and the key-build must carry page - L2
+  // moved the identity to include page but this set still built keys
+  // without it, so every row looked new and the ingest reported
+  // inserted=882/updated=0 when 603 of them were re-writes.
   const existingKeys = new Set<string>();
   {
     const invoiceNumbers = Array.from(
@@ -149,16 +153,17 @@ export async function POST(req: NextRequest) {
       const slice = invoiceNumbers.slice(i, i + 200);
       const { data, error } = await client
         .from("pr_rescan_lines")
-        .select("invoice_number,visual_order")
+        .select("invoice_number,page,visual_order")
         .in("invoice_number", slice);
       if (error) {
         return NextResponse.json({ error: error.message }, { status: 500 });
       }
       for (const r of (data ?? []) as Array<{
         invoice_number: string;
+        page: number;
         visual_order: number;
       }>) {
-        existingKeys.add(`${r.invoice_number}::${r.visual_order}`);
+        existingKeys.add(`${r.invoice_number}::${r.page}::${r.visual_order}`);
       }
     }
   }
