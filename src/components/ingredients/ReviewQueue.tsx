@@ -32,6 +32,7 @@ type ProposedItem = {
   pack_uom: string | null;
   pack_state: string;
   pack_override: unknown;
+  pack_note: string | null;
   billed_unit: string | null;
   catch_weight: boolean;
   ingredient_id: string | null;
@@ -126,7 +127,7 @@ async function loadReview() {
     const { data, error } = await client
       .from("pr_vendor_items")
       .select(
-        "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_qty,pack_size,pack_uom,pack_state,pack_override,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen,flagged,flag_note,flagged_by,flagged_at,price_estimate,grade"
+        "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_qty,pack_size,pack_uom,pack_state,pack_override,pack_note,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen,flagged,flag_note,flagged_by,flagged_at,price_estimate,grade"
       )
       .eq("link_status", "proposed")
       .in("status", ["active", "resale"])
@@ -368,6 +369,9 @@ async function loadReview() {
             pe?.match_score != null && Number.isFinite(Number(pe.match_score))
               ? Number(pe.match_score)
               : null,
+          // Q2 §4: pack-note (evidence-strength phrase from the P1/P2
+          // backfill). Pass through verbatim; null for most items.
+          packNote: it.pack_note ?? null,
         });
       }
       groups.set(key, g);
@@ -487,6 +491,9 @@ async function loadReview() {
             pe?.match_score != null && Number.isFinite(Number(pe.match_score))
               ? Number(pe.match_score)
               : null,
+          // Q2 §4: pack-note (evidence-strength phrase from the P1/P2
+          // backfill). Pass through verbatim; null for most items.
+          packNote: it.pack_note ?? null,
         });
       }
       groups.set(key, g);

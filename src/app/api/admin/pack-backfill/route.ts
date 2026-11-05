@@ -6,6 +6,11 @@ import { DIM_BY_UOM, TO_BASE, normUom, isSlashlessWeightPack, parsePack } from "
 import { bestTrigramMatch } from "@/lib/ingredients/trigram";
 
 export const dynamic = "force-dynamic";
+// Q2 §5.2: Vercel serverless timeout. /api/match and /api/intake both
+// set 300. This route had no cap and live batches measured 44-53s each,
+// so the current ceiling is unknown rather than proven. Setting 300
+// explicitly so the cap matches the shape of what the batch takes.
+export const maxDuration = 300;
 
 // Cursor-batched backfill of pack_qty / pack_size / pack_uom /
 // pack_state / price_estimate on pr_vendor_items for food items in
@@ -892,7 +897,10 @@ export async function POST(req: NextRequest) {
     // so estimatePerUnit treats it the same way it would treat any
     // other catalog hit - the only difference is pack_source gets
     // stamped 'catalog_sibling' after estimation to keep the origin
-    // traceable. Requires >=2 corroborators unanimous (built above).
+    // traceable. The per-vendor threshold (1, 2, or Infinity per P2
+    // §2.2) is applied upstream when siblingExpansions is built, so
+    // reaching this point means the expansion already cleared the
+    // vendor's reliability gate.
     let siblingExpansionApplied: { qty: number; size: number; uom: string; corroborators: number } | null = null;
     if (!cat && !matchSource && isSlashlessWeightPack(it.pack_text)) {
       const sKey = `${it.vendor_id}#${it.pack_text!.toUpperCase().trim()}`;
@@ -1235,6 +1243,12 @@ export async function POST(req: NextRequest) {
     else if (packState === "check") counts.check += 1;
     else counts.none += 1;
     if (matchSource === "catalog_name") counts.nameMatched += 1;
+    // Q2 §5.1: the siblingMatched counter was only bumped inside the
+    // dryRun branch (at :1174), so a live run reported siblingMatched=0
+    // while 115 fills landed on first production run. Same shape as
+    // the other counters (ok/check/none/nameMatched) which were
+    // already incremented on both paths. Live now matches dry-run.
+    if (siblingExpansionApplied) counts.siblingMatched += 1;
 
     // P1 §5: emit pack_filled event with BOTH before and after
     // populated. Only when the fill actually CHANGED something - no

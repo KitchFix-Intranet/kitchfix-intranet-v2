@@ -527,6 +527,15 @@ function ItemFacts({ item }: { item: ReviewGroupItem }) {
                 Review
               </span>
             ) : null}
+            {item.packNote ? (
+              // Q2 §4: evidence-strength phrase from the P1/P2
+              // backfill ("inferred from N similar items at this
+              // vendor; verify"). Pre-Q2 the backfill wrote this and
+              // nothing read it - 115 sibling-filled items were
+              // flagged for review without a way to see HOW many
+              // siblings backed each inference. Now it reads.
+              <div className="kf-facts__packnote">{item.packNote}</div>
+            ) : null}
           </dd>
         </div>
         <div>

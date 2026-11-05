@@ -9,7 +9,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, X as XIcon, Plus, Scissors, Ban, Search, ShoppingBag, Archive, Loader2, Flag } from "lucide-react";
+import { Check, X as XIcon, Plus, Scissors, Ban, Search, ShoppingBag, Archive, Loader2, Flag, Clock } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { SUPER_CATEGORIES, categoryForParent, type SuperCategory } from "@/lib/ingredients/categories";
@@ -59,7 +59,7 @@ type Props = {
   onLeaveStart?: (itemIds: string[]) => void;
 };
 
-type Op = null | "confirming" | "relinking" | "creating" | "notfood" | "resale" | "archived" | "keepsep" | "flag";
+type Op = null | "confirming" | "relinking" | "creating" | "notfood" | "resale" | "archived" | "oneoff" | "keepsep" | "flag";
 
 async function postJson(url: string, body: unknown): Promise<{ ok: boolean; status: number; data: unknown }> {
   const res = await fetch(url, {
@@ -127,6 +127,12 @@ export function ReviewActions({
   const [subPick, setSubPick] = useState<string>(proposedParent ?? "");
   const [subNew, setSubNew] = useState<string>("");
   const [showNew, setShowNew] = useState(false);
+  // Q2 §1: default CHECKED. Pre-Q2 shape was create -> find new card ->
+  // confirm (two round trips). Checked makes the one action do both;
+  // unchecked preserves today's two-step behaviour exactly. Setting
+  // state lives in the create panel and does not persist across
+  // panel open/close - reset-on-open is intentional (R-112 pattern).
+  const [createAndConfirm, setCreateAndConfirm] = useState(true);
 
   // Parents available for the sub dropdown: distinct parents from the
   // active ingredients list. Deduped + sorted.
@@ -240,17 +246,44 @@ export function ReviewActions({
       parent: effectiveSub || null,
       category: newSuper || null,
       itemIds: checkedIds,
+      // Q2 §1: when the checkbox is on, the server runs confirm in the
+      // same request, through the same confirmItems() path a normal
+      // confirm uses. If the box is off, server behaviour is exactly
+      // today's (create + split, link_status stays 'proposed'). Both
+      // paths return {ingredientId, moved}; the atomic path also
+      // returns {confirmed, usd, movedToResale?} from confirmItems.
+      confirm: createAndConfirm,
     });
     if (!r.ok) {
       toast(errMsg(r.data, `Create failed (${r.status})`), { tone: "block" });
       setOp(null);
       return;
     }
-    const d = r.data as { ingredientId?: string; moved?: number };
-    toast(
-      `Created "${name}" - ${fmtCount(d.moved ?? checkedCount)} items moved; confirm them on the new card.`
-    );
+    const d = r.data as {
+      ingredientId?: string;
+      moved?: number;
+      confirmed?: number;
+      movedToResale?: number;
+    };
+    const moved = d.moved ?? checkedCount;
+    if (createAndConfirm) {
+      // Partial-atomicity note: the create -> move -> confirm sequence
+      // runs as three successive statements in new-ingredient/route.ts;
+      // if confirm fails after create+move lands, the ingredient
+      // exists and the items sit on it in link_status='proposed' -
+      // i.e. the same state the no-confirm path produces. Not a new
+      // failure mode; the user just has to open the new card and
+      // retry confirm. Toast on partial failure is already blocked by
+      // the !r.ok branch above.
+      const confirmed = d.confirmed ?? moved;
+      toast(`Created "${name}" and confirmed ${fmtCount(confirmed)} item${confirmed === 1 ? "" : "s"}`);
+    } else {
+      toast(
+        `Created "${name}" - ${fmtCount(moved)} items moved; confirm them on the new card.`
+      );
+    }
     setShowNew(false);
+    setCreateAndConfirm(true);
     setOp(null);
     setLastDone(Date.now());
     router.refresh();
@@ -266,6 +299,28 @@ export function ReviewActions({
       return;
     }
     toast(`Marked ${fmtCount(checkedCount)} as not food`);
+    setOp(null);
+    setLastDone(Date.now());
+    router.refresh();
+  }
+
+  // Q2 §2: One-off purchase disposition. Real food bought once that
+  // doesn't deserve its own master (160 items in the current
+  // queue). Same write set as markNotFood BUT with a 'oneoff:' reason
+  // prefix instead of 'notfood:' so later analysis can find the
+  // population. is_food stays true (it IS food) - this is a DISPOSITION,
+  // not a re-classification. Reuses the archive-and-reject path to stay
+  // out of the coverage meters without inventing a new column.
+  async function markOneOff() {
+    if (op || noneChecked) return;
+    setOp("oneoff");
+    const r = await postJson("/api/review/one-off", { itemIds: checkedIds });
+    if (!r.ok) {
+      toast(errMsg(r.data, `Mark failed (${r.status})`), { tone: "block" });
+      setOp(null);
+      return;
+    }
+    toast(`Marked ${fmtCount(checkedCount)} as one-off purchase${checkedCount === 1 ? "" : "s"}`);
     setOp(null);
     setLastDone(Date.now());
     router.refresh();
@@ -455,6 +510,13 @@ export function ReviewActions({
           <span>{op === "flag" ? "Saving..." : "Flag"}</span>
         </button>
 
+        {/* Q2 §2 addition: divider between "adjust this group" (Keep
+            separate, Flag) and "remove from queue" (Retail, Archive,
+            One-off, Not food). Six near-identical ghost buttons was
+            too many without a cluster break. The split reads as
+            intent, not just chrome. */}
+        <span className="kf-rvc__dispo-divider" aria-hidden />
+
         <button
           type="button"
           className={`kf-btn kf-btn--ghost kf-btn--sm${op === "resale" ? " is-busy" : ""}`}
@@ -471,10 +533,24 @@ export function ReviewActions({
           className={`kf-btn kf-btn--ghost kf-btn--sm${op === "archived" ? " is-busy" : ""}`}
           disabled={op !== null || noneChecked}
           onClick={markArchived}
-          title="One-off / irrelevant food purchase; parked and not tracked in recipe coverage or retail"
+          title="Mistake or dead item; parked and not tracked in recipe coverage or retail"
         >
           <Archive size={14} strokeWidth={1.5} />
           <span>{op === "archived" ? "Saving..." : "Archive"}</span>
+        </button>
+
+        {/* Q2 §2: One-off purchase. Sibling of Archive and Not food,
+            not a competitor to Confirm. Clock icon reads as "bought
+            once". */}
+        <button
+          type="button"
+          className={`kf-btn kf-btn--ghost kf-btn--sm${op === "oneoff" ? " is-busy" : ""}`}
+          disabled={op !== null || noneChecked}
+          onClick={markOneOff}
+          title="Real food bought once that doesn't deserve a master (parked, not tracked in recipe coverage or retail)"
+        >
+          <Clock size={14} strokeWidth={1.5} />
+          <span>{op === "oneoff" ? "Saving..." : "One-off"}</span>
         </button>
 
         <button
@@ -491,8 +567,9 @@ export function ReviewActions({
 
       <div className="kf-rvc__dispo-help" role="note">
         <strong>Confirm</strong> = recipe ingredient &middot; <strong>Retail</strong> = sold as-is
-        (water, snacks, sandwiches) &middot; <strong>Archive</strong> = one-off / not tracked
-        &middot; <strong>Not food</strong> = not a consumable (fees, freight).
+        (water, snacks, sandwiches) &middot; <strong>Archive</strong> = mistake / dead item
+        &middot; <strong>One-off</strong> = bought once &middot; <strong>Not food</strong> =
+        fees / supplies.
       </div>
 
       {showRelink ? (
@@ -532,7 +609,11 @@ export function ReviewActions({
         <div className="kf-rvc__panel kf-newing">
           <div className="kf-newing__intro">
             Create a new ingredient from the {fmtCount(checkedCount)} selected item{checkedCount === 1 ? "" : "s"}.
-            It&rsquo;ll land in the queue under its own card so you can confirm there.
+            {createAndConfirm ? (
+              ""
+            ) : (
+              <> It&rsquo;ll land in the queue under its own card so you can confirm there.</>
+            )}
           </div>
 
           <label className="kf-dpn__label">
@@ -612,6 +693,18 @@ export function ReviewActions({
             </div>
           ) : null}
 
+          {/* Q2 §1: create-and-confirm checkbox. Default checked.
+              Unchecking reproduces the pre-Q2 two-step flow exactly. */}
+          <label className="kf-newing__confirm" title="Create the ingredient and confirm the selected items on it in one action">
+            <input
+              type="checkbox"
+              checked={createAndConfirm}
+              onChange={(e) => setCreateAndConfirm(e.target.checked)}
+              disabled={op !== null}
+            />
+            <span>Confirm these items on the new ingredient</span>
+          </label>
+
           <div className="kf-rvc__panel-btns">
             <button
               type="button"
@@ -619,7 +712,11 @@ export function ReviewActions({
               disabled={op !== null || !newFormReady}
               onClick={doCreateSplit}
             >
-              Create ingredient
+              {op === "creating"
+                ? "Saving..."
+                : createAndConfirm
+                  ? "Create and confirm"
+                  : "Create ingredient"}
             </button>
             <button
               type="button"

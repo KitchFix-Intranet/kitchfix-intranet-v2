@@ -97,6 +97,13 @@ export type ReviewGroupItem = {
   // to label the row in plain words.
   matchSource: "sku" | "catalog_name" | null;
   matchScore: number | null;
+  // Q2 §4: free-text pack-note written by the P1/P2 backfill on
+  // sibling-filled rows ('inferred from N similar items at this
+  // vendor; verify') or derived-pack rows ('pack derived: ...'). Null
+  // everywhere else. The panel surfaces this verbatim next to the
+  // pack-source label so the reviewer can tell weak corroboration
+  // from strong at a glance.
+  packNote: string | null;
 };
 
 // Does this pack_override payload actually represent a human-set

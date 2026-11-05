@@ -63,7 +63,7 @@ export async function GET(req: NextRequest) {
   const { data: itRow, error: itErr } = await client
     .from("pr_vendor_items")
     .select(
-      "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_qty,pack_size,pack_uom,pack_state,pack_override,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen,flagged,flag_note,flagged_by,flagged_at,price_estimate,grade"
+      "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_qty,pack_size,pack_uom,pack_state,pack_override,pack_note,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen,flagged,flag_note,flagged_by,flagged_at,price_estimate,grade"
     )
     .eq("id", id)
     .maybeSingle();
@@ -83,6 +83,7 @@ export async function GET(req: NextRequest) {
     pack_uom: string | null;
     pack_state: string;
     pack_override: unknown;
+    pack_note: string | null;
     billed_unit: string | null;
     catch_weight: boolean;
     ingredient_id: string | null;
@@ -259,6 +260,13 @@ export async function GET(req: NextRequest) {
     // G1: tier on the item. Null is standard; 'premium' is the only
     // sanctioned non-null value today.
     grade: it.grade ?? null,
+    // Q2 §4: packNote is written by the P1/P2 backfill with evidence-
+    // strength copy ("inferred from N similar items at this vendor;
+    // verify"). Pre-Q2 this field was written and never read - the
+    // panel had no reader. Now surfaced to the panel so a reviewer
+    // can see whether a sibling-filled pack was backed by 1 similar
+    // item or 12.
+    packNote: it.pack_note ?? null,
     // P1 §5: catalog match provenance. The panel's ItemFacts reads
     // this alongside packSource to label the pack's origin in plain
     // words ("from catalog", "from catalog (name match)", etc.).

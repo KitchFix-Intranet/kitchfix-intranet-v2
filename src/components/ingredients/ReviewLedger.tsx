@@ -46,6 +46,7 @@ export async function ReviewLedger({ ingredients }: { ingredients: Ingredient[] 
       "review_confirm",
       "review_undo",
       "review_notfood",
+      "review_oneoff",
       "review_keep_separate",
       "review_relink",
       "ingredient_created",
@@ -252,6 +253,7 @@ function LedgerRow({
 
   const kindLabels: Record<string, string> = {
     review_notfood: "Marked not food",
+    review_oneoff: "Marked one-off purchase",
     review_keep_separate: "Held separate",
     review_relink: "Relinked",
   };

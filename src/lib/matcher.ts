@@ -265,20 +265,73 @@ async function writeDecisions(
         counts.proposed_new += 1;
       }
     } else {
-      // not_food - don't flip is_food (that's intake's job). Just surface
-      // the model's view via link_reason so the queue can show it.
+      // Q2 §3 (2026-11-04): a not_food verdict now PRODUCES a
+      // disposition. Pre-Q2 this write set link_reason only and left
+      // link_status='none', so 87 items of matcher-identified
+      // non-food (service charges, fuel surcharges, packaging, cleaning
+      // products) stayed in the queue - the matcher said "not food"
+      // and the item sat there anyway. Now: link_status='rejected' in
+      // the same write + one pr_events row, matching markNotFood's
+      // shape in reviewWrites.ts (just with a 'matcher' actor).
+      //
+      // We still do NOT flip is_food. That's intake's call and a
+      // matcher disagreement with intake shouldn't retro-rewrite the
+      // classification. The 'ai-notfood:' link_reason prefix stays so
+      // every surface that parses it (ReviewQueue.tsx:107,
+      // review/item/route.ts:45, ReviewLedger.tsx:48) continues to
+      // read the reason text.
       const { error } = await client
         .from("pr_vendor_items")
-        .update({ link_reason: `ai-notfood:${decision.reason}` })
+        .update({
+          link_status: "rejected",
+          link_reason: `ai-notfood:${decision.reason}`,
+        })
         .eq("id", item.id)
         .eq("link_status", "none");
       if (error) {
         counts.write_errors += 1;
       } else {
         counts.marked_not_food += 1;
+        await client.from("pr_events").insert({
+          entity_type: "vendor_item",
+          entity_id: item.id,
+          kind: "review_notfood",
+          actor: "matcher",
+          after: { reason: decision.reason, source: "ai-notfood" },
+        });
       }
     }
   }
+}
+
+// Q2 §3 fee-keyword guard. The classifier has consistently missed one
+// class the matcher sees: line items whose NAME is a fee token. The
+// list below is deliberately narrow - EXACT word-boundary matches on
+// the item name, nothing fancy, no substring shenanigans that would
+// eat "CHEESE, FETA" on a stray "fe" substring. Every token here is
+// a non-food billing concept, not a food word.
+//
+// When the guard fires the item ships straight to
+// link_status='rejected' with reason 'ai-notfood:fee keyword:<token>'
+// so the ledger shows which keyword caught it. No is_food flip (see
+// above).
+const FEE_KEYWORDS: readonly string[] = [
+  "fee",
+  "surcharge",
+  "freight",
+  "delivery charge",
+  "fuel charge",
+  "service charge",
+];
+const FEE_RE = new RegExp(
+  `\\b(${FEE_KEYWORDS.map((k) => k.replace(/ /g, "\\s+")).join("|")})\\b`,
+  "i"
+);
+
+export function matchesFeeKeyword(itemName: string | null | undefined): string | null {
+  if (!itemName) return null;
+  const m = itemName.match(FEE_RE);
+  return m ? m[0].toLowerCase() : null;
 }
 
 export async function runMatcher(
@@ -327,9 +380,51 @@ export async function runMatcher(
     log(`Loaded ${ingredients.length} ingredients.`);
 
     log("Reading unlinked food items (dollar-ordered)...");
-    const items = await readUnlinkedItems(client, options.limit, log);
-    counts.items_read = items.length;
-    log(`Read ${items.length} items.`);
+    const allItems = await readUnlinkedItems(client, options.limit, log);
+    counts.items_read = allItems.length;
+    log(`Read ${allItems.length} items.`);
+
+    // Q2 §3 fee-keyword guard. Kuna's 'DISTRIBUTION FEE' and
+    // vendor-side 'FUEL CHARGE' / 'SERVICE CHARGE' lines all pass the
+    // intake food-classifier (they look like billable products) and
+    // then sit in the matcher queue because the model politely returns
+    // nothing. Short-circuit before we spend a model call on them.
+    // Whole-word match on a narrow conservative list (FEE_KEYWORDS
+    // above); nothing here collides with a real food word. Marks the
+    // row rejected + emits a pr_events row so the ledger carries the
+    // specific keyword that matched.
+    const feeHits: Array<{ item: ItemForMatch; token: string }> = [];
+    const items: ItemForMatch[] = [];
+    for (const it of allItems) {
+      const tok = matchesFeeKeyword(it.name);
+      if (tok) feeHits.push({ item: it, token: tok });
+      else items.push(it);
+    }
+    if (feeHits.length > 0) {
+      log(`Fee-keyword guard caught ${feeHits.length} items; marking rejected.`);
+      for (const { item, token } of feeHits) {
+        const { error } = await client
+          .from("pr_vendor_items")
+          .update({
+            link_status: "rejected",
+            link_reason: `ai-notfood:fee keyword:${token}`,
+          })
+          .eq("id", item.id)
+          .eq("link_status", "none");
+        if (error) {
+          counts.write_errors += 1;
+          continue;
+        }
+        counts.marked_not_food += 1;
+        await client.from("pr_events").insert({
+          entity_type: "vendor_item",
+          entity_id: item.id,
+          kind: "review_notfood",
+          actor: "matcher",
+          after: { reason: `fee keyword:${token}`, source: "fee-keyword-guard" },
+        });
+      }
+    }
 
     log("Reading matching catalog rows...");
     const catalog = await readCatalogFor(client, items);

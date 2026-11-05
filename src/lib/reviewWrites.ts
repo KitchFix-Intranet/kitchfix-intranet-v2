@@ -233,6 +233,50 @@ export async function markNotFood(
   return { marked, errors };
 }
 
+// Q2 §2: One-off purchase disposition. Real food bought once that
+// doesn't deserve its own master (160 items in the Nov
+// queue were one-off ai-new proposals). Shape mirrors markNotFood
+// deliberately: same statuses (status='archived', link_status='rejected')
+// so the item drops cleanly out of coverage meters, retail totals and
+// the proposed queue. The DIFFERENT bit is link_reason 'oneoff:' -
+// that tag is what makes the one-off population findable later and
+// distinguishes it from 'notfood:' (fees/supplies) and 'archived' /
+// no-prefix rejections (mistakes/dead items).
+//
+// is_food stays true because the item IS food - this is a DISPOSITION,
+// not a re-classification. Same reasoning as markNotFood.
+export async function markOneOff(
+  client: SupabaseClient,
+  args: { itemIds: string[]; actorEmail: string }
+): Promise<{ marked: number; errors: string[] }> {
+  const { itemIds, actorEmail } = args;
+  const errors: string[] = [];
+  let marked = 0;
+  for (const id of itemIds) {
+    const { error } = await client
+      .from("pr_vendor_items")
+      .update({
+        status: "archived",
+        link_status: "rejected",
+        link_reason: `oneoff:${actorEmail}`,
+      })
+      .eq("id", id)
+      .in("link_status", ["proposed", "none"]);
+    if (error) {
+      errors.push(`${id}: ${error.message}`);
+      continue;
+    }
+    marked += 1;
+    await client.from("pr_events").insert({
+      entity_type: "vendor_item",
+      entity_id: id,
+      kind: "review_oneoff",
+      actor: actorEmail,
+    });
+  }
+  return { marked, errors };
+}
+
 // Retail disposition. Retail = sold as-is to players (bottled water,
 // snacks, pre-made sandwiches) - real spend but not a recipe
 // ingredient. The overview views read status='resale' (the DB column
