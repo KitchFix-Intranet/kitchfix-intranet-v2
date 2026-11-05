@@ -115,6 +115,7 @@ type AiLine = {
   item_number: string | null;
   pack_size: string | null;
   uom_raw: string | null;
+  parsed_pack_qty: number | null;
   catch_weight_marker: boolean | null;
 };
 
@@ -594,7 +595,7 @@ export async function POST(req: NextRequest) {
     const { data: aiData, error: aiErr } = await client
       .from("ai_line_items")
       .select(
-        "id,vendor_name,invoice_number,invoice_date,line_num,description,quantity,unit,unit_price,extended_price,item_number,pack_size,uom_raw,catch_weight_marker"
+        "id,vendor_name,invoice_number,invoice_date,line_num,description,quantity,unit,unit_price,extended_price,item_number,pack_size,uom_raw,parsed_pack_qty,catch_weight_marker"
       )
       .eq("invoice_number", baseInv);
     if (aiErr) {
@@ -878,10 +879,15 @@ export async function POST(req: NextRequest) {
           gated: true,
         },
         {
+          // pack_count is the count-per-case (the `4` in `4/10 LB`). It lands
+          // in ai_line_items.parsed_pack_qty, which is empty on all 9,271
+          // no-SKU lines - measured 2026-11-05. pack_size_text goes to
+          // pack_size separately, so the two halves of the pack land in two
+          // columns and neither overwrites the other.
           field: "pack_count",
-          column: "pack_size", // combined with pack_size_text below
+          column: "parsed_pack_qty",
           stagedValue: staged.pack_count,
-          storedValue: null,
+          storedValue: stored.parsed_pack_qty,
           gated: false,
         },
         {
@@ -1199,13 +1205,16 @@ export async function POST(req: NextRequest) {
             );
             if (shippedFill) continue;
           }
-          // pack_count combines with pack_size_text into ai_line_items.pack_size.
-          // Prefer the pack_size_text write; pack_count without text alone has
-          // nowhere to land on ai_line_items (it stays on the staging row).
-          if (f.field === "pack_count") continue;
           aiUpdate[f.column] = f.after;
           beforeAi[f.field] = f.before;
           afterAi[f.field] = f.after;
+          // uom_raw is the newer unit column (populated on only 197 of the
+          // 9,271 no-SKU lines, against 9,255 for `unit`). `unit` stays the
+          // primary target; mirror into uom_raw so both are consistent
+          // rather than leaving a second column to drift.
+          if (f.field === "uom") {
+            aiUpdate.uom_raw = f.after;
+          }
         }
         if (Object.keys(aiUpdate).length > 0) {
           const { error: aiUpErr } = await client
