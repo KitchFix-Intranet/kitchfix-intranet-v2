@@ -149,7 +149,6 @@ type FieldName =
   | "pack_count"
   | "pack_size_text"
   | "uom"
-  | "qty_ordered"
   | "qty_shipped"
   | "unit_price_seen"
   | "extended_price_seen";
@@ -933,12 +932,18 @@ export async function POST(req: NextRequest) {
         return String(a).trim().toUpperCase() === String(b).trim().toUpperCase();
       };
 
+      // L4: `fillOnly` means a populated stored column is NEVER overwritten
+      // from the staged value. Used when ours is composed/normalised and CC's
+      // value is a strict subset in a different representation - overwriting
+      // would degrade the column. `pack_size` is the current case
+      // ('4/250CT' composed vs '250CT' size-half-only).
       const fieldSpecs: Array<{
         field: FieldName;
         column: string;
         stagedValue: unknown;
         storedValue: unknown;
         gated: boolean;
+        fillOnly?: boolean;
       }> = [
         {
           field: "item_number",
@@ -960,26 +965,39 @@ export async function POST(req: NextRequest) {
           gated: false,
         },
         {
+          // FILL ONLY. Our pack_size holds the COMPOSED pack ('4/250CT');
+          // CC's pack_size_text holds only the size half ('250CT') because
+          // the count goes to pack_count -> parsed_pack_qty. Overwriting a
+          // populated pack_size therefore DELETES the count: 140 of 750
+          // matched lines, measured 2026-11-05. Filling an empty one is
+          // correct, because parsed_pack_qty carries the count alongside.
           field: "pack_size_text",
           column: "pack_size",
           stagedValue: staged.pack_size_text,
           storedValue: stored.pack_size,
           gated: false,
+          fillOnly: true,
         },
         {
+          // Our `unit` column is normalised long-form ('case', 'each', 'pound')
+          // and populated on 9,255 of 9,271 lines. CC reports the invoice's
+          // printed abbreviation ('CS', 'EA', 'LB') because the spec forbids
+          // normalising. Writing CC's value into `unit` would de-normalise 431
+          // of 750 matched lines - measured 2026-11-05. `uom_raw` is the column
+          // for a printed abbreviation and is empty on 9,074 lines, so that is
+          // the only target.
           field: "uom",
-          column: "unit",
+          column: "uom_raw",
           stagedValue: staged.uom,
-          storedValue: stored.unit,
+          storedValue: stored.uom_raw,
           gated: false,
         },
-        {
-          field: "qty_ordered",
-          column: "quantity", // §2.4 lists qty_* but ai_line_items has one quantity column; see prioritisation below
-          stagedValue: staged.qty_ordered,
-          storedValue: null,
-          gated: false,
-        },
+        // qty_ordered is deliberately NOT in this list. ai_line_items has one
+        // quantity column and it holds the SHIPPED/billed figure, which is
+        // qty_shipped's target below. Ordered and shipped differ on partial
+        // deliveries (28 lines in the 2026-11-05 batch), and writing ordered
+        // over shipped would have corrupted 50 of 750 matched lines. The value
+        // is preserved on pr_rescan_lines.qty_ordered and in `raw`.
         {
           field: "qty_shipped",
           column: "quantity",
@@ -1036,6 +1054,22 @@ export async function POST(req: NextRequest) {
             after: spec.stagedValue,
             outcome: "filled",
             reason: null,
+          });
+          continue;
+        }
+        // L4: fill-only field whose stored value is populated. Our column
+        // holds a composed/normalised representation and CC's value is a
+        // strict subset in a different shape; overwriting would degrade
+        // the column. Skip without ever entering the correct/conflict
+        // branches below, regardless of corroboration.
+        if (spec.fillOnly) {
+          fills.push({
+            field: spec.field,
+            column: spec.column,
+            before: spec.storedValue,
+            after: spec.stagedValue,
+            outcome: "skipped",
+            reason: "fill-only field; stored value already composed",
           });
           continue;
         }
@@ -1263,27 +1297,14 @@ export async function POST(req: NextRequest) {
         const afterAi: Record<string, unknown> = {};
         for (const f of fills) {
           if (f.outcome !== "filled" && f.outcome !== "corrected") continue;
-          // qty_ordered vs qty_shipped both map to `quantity` -
-          // prefer shipped as the authoritative billed figure. If
-          // only ordered is set, fall back to it.
-          if (f.field === "qty_ordered") {
-            const shippedFill = fills.find(
-              (x) =>
-                x.field === "qty_shipped" &&
-                (x.outcome === "filled" || x.outcome === "corrected")
-            );
-            if (shippedFill) continue;
-          }
+          // (L4: qty_ordered no longer has a fieldSpec, so no prioritisation
+          // is needed - qty_shipped is the only writer of `quantity`.)
           aiUpdate[f.column] = f.after;
           beforeAi[f.field] = f.before;
           afterAi[f.field] = f.after;
-          // uom_raw is the newer unit column (populated on only 197 of the
-          // 9,271 no-SKU lines, against 9,255 for `unit`). `unit` stays the
-          // primary target; mirror into uom_raw so both are consistent
-          // rather than leaving a second column to drift.
-          if (f.field === "uom") {
-            aiUpdate.uom_raw = f.after;
-          }
+          // (L4: `uom` now targets uom_raw directly via its fieldSpec. `unit`
+          // is normalised and must never be written from CC's printed
+          // abbreviation.)
         }
         if (Object.keys(aiUpdate).length > 0) {
           const { error: aiUpErr } = await client
