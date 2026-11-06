@@ -581,15 +581,42 @@ export async function POST(req: NextRequest) {
   // range fetch cap); retryableRowCount surfaces separately below as
   // a second independent signal.
   const remaining = Math.max(0, distinctBases.length - basesInBatch.length);
-  // M1 R2 + M2 R7: done is "nothing retryable remains across the whole
-  // table", not "nothing visible this call". retryableRowCount is
-  // authoritative because it does not depend on the range fetch window.
-  const done = (retryableRowCount ?? 0) === 0;
+  // M3 R8: terminate on PROGRESS, not an absolute count.
+  //
+  // Pre-M3 done was `retryableRowCount === 0`. That cannot fire under
+  // dryRun (no status ever writes, so the count is a constant), so a
+  // paged dry run looped forever: six identical pages on 2026-11-05
+  // before Kevin's own guard killed it. And a LIVE run is not safe
+  // either - any row that stays retryable after being attempted (e.g.
+  // the 110 conflict rows from the first live run) keeps the count
+  // non-zero and the route re-selects the same invoices, hammering
+  // ai_line_items and pr_events in a tight loop.
+  //
+  // Two conditions, both needed:
+  //
+  //   (1) sawLessThanBatch: this call selected fewer bases than the
+  //       batch size, so it has seen every retryable base there is.
+  //       True in dryRun and live alike; needs no writes.
+  //
+  //   (2) stalled: a full batch with no status transitions. Under
+  //       dryRun this is structural (nothing writes), so the first
+  //       full-batch call terminates - the caller is not told "no
+  //       progress" twice. Under live it catches a batch where every
+  //       attempted row stayed retryable. Reported in the response.
+  //
+  // retryableRows stays in the response - it is exact and useful
+  // signal. It just does not decide termination.
+  const sawLessThanBatch = basesInBatch.length < BATCH;
+  // rowsStatusTransitioned is counted during per-invoice processing
+  // below; it is the number of pr_rescan_lines rows whose status was
+  // actually written away from a retryable state this call. Under
+  // dryRun it stays 0 by construction.
+  let rowsStatusTransitioned = 0;
 
   // Accumulators for the response.
   const counts = {
     invoices: { considered: 0, corroborated: 0, notCorroborated: 0 },
-    lines: { matched: 0, unmatched: 0, annotation: 0 },
+    lines: { matched: 0, unmatched: 0, annotation: 0, addedByCorrection: 0 },
     fields: {
       filled: {} as Record<string, number>,
       corrected: {} as Record<string, number>,
@@ -669,8 +696,37 @@ export async function POST(req: NextRequest) {
       effectiveLines.push(effective);
       stagedIdsFor.set(effective.id, [effective.id, ...applied]);
     }
+    // M3 R10: discriminate orphan corrections by page, not order.
+    // A correction whose page has NO base records at all is an ADDITION
+    // (the base read missed a whole page), not a mis-keyed correction.
+    // Promote it into effectiveLines so it matches and applies like any
+    // other base row. If the page has base records but this exact
+    // (page, visual_order) has none, keep the old behaviour - unmatched
+    // with reason - because guessing which base line it was meant to
+    // amend would be worse than skipping.
+    //
+    // Measured 2026-11-05: a vendor invoice had 14 page-2 records
+    // emitted on the -R2 suffix while the original base covered only
+    // page 1. Pre-M3 those records were silently discarded.
+    const basePages = new Set<number>();
+    for (const base of baseByOrder.values()) {
+      if (base.page != null) basePages.add(base.page);
+    }
     for (const c of corrections) {
-      if (!baseByOrder.has(`${c.page}::${c.visual_order}`)) orphanCorrections.push(c);
+      if (baseByOrder.has(`${c.page}::${c.visual_order}`)) continue;
+      // c.page null is treated as "page-level unknown"; keep as orphan
+      // rather than promote. The annotation path already removed the
+      // reconciliation rows upstream, so this is a defensive branch.
+      if (c.page != null && !basePages.has(c.page)) {
+        // New page with no base records - treat the correction as a
+        // base. Matches like any base line; status comes from the
+        // correction row itself.
+        effectiveLines.push(c);
+        stagedIdsFor.set(c.id, [c.id]);
+        counts.lines.addedByCorrection += 1;
+      } else {
+        orphanCorrections.push(c);
+      }
     }
 
     // Record annotations and orphan corrections immediately (they do
@@ -1361,18 +1417,44 @@ export async function POST(req: NextRequest) {
       else if (overallHas.rejected) outcome.status = "rejected";
       else outcome.status = "skipped";
 
-      // --- L1 §2.5: pr_vendor_items merge. Only triggered when we
-      // are about to write item_number onto a pr_vendor_items row AND
-      // writing it would re-key the row onto a dedup_key already held
-      // by another row for this vendor. MergePlan type is hoisted at
-      // file top so the live executor and the dry-run rehearsal share
-      // one resolver.
+      // --- L1 §2.5 + M3 R9: pr_vendor_items merge planning.
+      //
+      // Pre-M3, the collision check only fired when the route was ABOUT
+      // TO WRITE a SKU (filled or corrected). After the first live run
+      // on 2026-11-05, 149 collision plans were built; the live write
+      // then succeeded on ai_line_items for those 149 fields, so the
+      // second run classifies them 'skipped' (stored already equals
+      // staged) and the collision path never fires. The 149 duplicate
+      // pr_vendor_items rows are still there, still needing a merge,
+      // and the only code path that saw them has gone dark.
+      //
+      // M3 R9 decouples: a line whose item_number is 'skipped BECAUSE
+      // stored equals staged' (both non-null, equal) is just as much
+      // evidence of a catalog duplicate as a line that would have
+      // written. Run the collision check for that case too. Only the
+      // ai_line_items write is redundant; the catalog reconciliation
+      // is not.
+      //
+      // R9.4 (noted, not built): state-based duplicate reconciliation
+      // belongs in its own pass over pr_vendor_items, independent of
+      // whether any invoice was re-read. This loader-driven version
+      // is a recovery path; the durable shape is a separate work item.
       let mergePlan: MergePlan | null = null;
       const itemNumberFill = fills.find((f) => f.field === "item_number");
+      const storedSku = normaliseSku(stored.item_number);
       const willWriteSku =
         itemNumberFill != null &&
         (itemNumberFill.outcome === "filled" || itemNumberFill.outcome === "corrected");
-      if (willWriteSku && vendorItem && stagedSku && vendorId) {
+      // R9 branch: outcome was skipped because stored equals staged. Not
+      // 'skipped because null' and not 'skipped because fillOnly'; the
+      // equal-and-non-null case specifically.
+      const skuMatchSkipped =
+        itemNumberFill != null &&
+        itemNumberFill.outcome === "skipped" &&
+        stagedSku != null &&
+        storedSku != null &&
+        stagedSku === storedSku;
+      if ((willWriteSku || skuMatchSkipped) && vendorItem && stagedSku && vendorId) {
         // Does any OTHER row at this vendor already hold this SKU?
         // (vendor_id, item_number_norm) is covered by the dedup_key
         // n: branch which is UNIQUE per (vendor_id, dedup_key).
@@ -1529,81 +1611,89 @@ export async function POST(req: NextRequest) {
         }
 
         // (b) pr_vendor_items corrections (item_number re-key + merge).
-        if (willWriteSku && vendorItem && stagedSku) {
-          // §2.5 collision check happens AGAIN here immediately
-          // before the write, defense against another writer having
-          // inserted between the planning query and this point.
-          if (!mergePlan) {
-            // No collision was observed earlier - verify and write.
-            const { data: raceData, error: raceErr } = await client
-              .from("pr_vendor_items")
-              .select("id")
-              .eq("vendor_id", vendorItem.vendor_id)
-              .eq("item_number_norm", stagedSku)
-              .neq("id", vendorItem.id)
-              .limit(1);
-            if (raceErr) {
-              return NextResponse.json({ error: raceErr.message }, { status: 500 });
-            }
-            if ((raceData ?? []).length > 0) {
+        // M3 R9: execute the planned merge regardless of whether a
+        // SKU write is also warranted. Pre-M3 this sat INSIDE the
+        // `if (willWriteSku)` branch, so a skuMatchSkipped line
+        // that revealed a catalog collision at planning time never
+        // triggered the merge. §2.5 order of operations unchanged:
+        //   1. carry human curation onto the survivor (never clobber
+        //      pack_override; carry flagged/flag_note/flagged_by,
+        //      grade, and ingredient_id when the survivor lacks them)
+        //   2. re-point pr_price_observations.vendor_item_id,
+        //      pr_golden_links.vendor_item_id, and
+        //      pr_vendor_item_aliases.vendor_item_id from absorbed
+        //      to survivor
+        //   3. mark absorbed row duplicate_of_id + status +
+        //      link_status so it leaves the queue
+        //   4. re-aggregate survivor counters from
+        //      pr_price_observations (never sum the two cached
+        //      counters - that double-counts if both have run)
+        //   5. emit pr_events('rescan_merge') with both rows'
+        //      pre-write state in `before`
+        if (
+          mergePlan &&
+          !mergePlan.differsOnIngredient &&
+          vendorItem &&
+          stagedSku
+        ) {
+          // M1 R1: resolve participants from the plan via the shared
+          // resolver. Both rows are set at plan-build time; the pre-M1
+          // code reached into a batch-level vendorItemById map that
+          // never cached the collision candidate and so returned
+          // undefined on all 149 plans.
+          const participants = resolveMergeParticipants(mergePlan);
+          if (!participants.ok) {
+            outcome.status = "conflict";
+            outcome.reason = `merge participants not loaded: ${participants.reason}`;
+          } else {
+            const { survivor, absorbed } = participants;
+            const mergeOk = await executeMergePlan(client, survivor, absorbed);
+            if (!mergeOk.ok) {
               outcome.status = "conflict";
-              outcome.reason = "pr_vendor_items collision detected at write time (race)";
-            } else {
-              // Safe to re-key.
-              const { error: viUpErr } = await client
+              outcome.reason = `merge failed: ${mergeOk.error}`;
+            } else if (willWriteSku) {
+              // M3 R9: only re-key the survivor when a fresh SKU
+              // write was warranted. skuMatchSkipped lines already
+              // carry the SKU on both sides; the merge collapsed the
+              // duplicate rows, nothing to re-key.
+              const { error: survUpErr } = await client
                 .from("pr_vendor_items")
                 .update({ item_number: staged.item_number })
-                .eq("id", vendorItem.id);
-              if (viUpErr) {
+                .eq("id", survivor.id);
+              if (survUpErr) {
                 outcome.status = "conflict";
-                outcome.reason = `pr_vendor_items re-key failed: ${viUpErr.message}`;
+                outcome.reason = `survivor re-key failed after merge: ${survUpErr.message}`;
               }
             }
-          } else if (!mergePlan.differsOnIngredient) {
-            // §2.5 merge. Order of operations:
-            //   1. carry human curation onto the survivor (never
-            //      clobber pack_override; carry flagged/flag_note/
-            //      flagged_by, grade, and ingredient_id when the
-            //      survivor lacks them).
-            //   2. re-point pr_price_observations.vendor_item_id,
-            //      pr_golden_links.vendor_item_id, and
-            //      pr_vendor_item_aliases.vendor_item_id from the
-            //      absorbed row to the survivor.
-            //   3. mark absorbed row duplicate_of_id + status +
-            //      link_status so it leaves the queue.
-            //   4. re-aggregate the survivor's counters from
-            //      pr_price_observations (never sum the two cached
-            //      counters - that double-counts if both have run).
-            //   5. emit pr_events('rescan_merge') with both rows'
-            //      pre-write state in `before`.
-            // M1 R1: resolve participants from the plan via the shared
-            // resolver. Both rows are set at plan-build time; the pre-M1
-            // code reached into a batch-level vendorItemById map that
-            // never cached the collision candidate and so returned
-            // undefined on all 149 plans.
-            const participants = resolveMergeParticipants(mergePlan);
-            if (!participants.ok) {
+          }
+        } else if (willWriteSku && vendorItem && stagedSku) {
+          // No collision at plan time. §2.5 race recheck immediately
+          // before the write (defence against another writer having
+          // inserted between the planning query and this point) and
+          // direct pr_vendor_items re-key. Only fires when the field
+          // outcome was fill or correct; a skuMatchSkipped line with
+          // no collision has nothing to do here.
+          const { data: raceData, error: raceErr } = await client
+            .from("pr_vendor_items")
+            .select("id")
+            .eq("vendor_id", vendorItem.vendor_id)
+            .eq("item_number_norm", stagedSku)
+            .neq("id", vendorItem.id)
+            .limit(1);
+          if (raceErr) {
+            return NextResponse.json({ error: raceErr.message }, { status: 500 });
+          }
+          if ((raceData ?? []).length > 0) {
+            outcome.status = "conflict";
+            outcome.reason = "pr_vendor_items collision detected at write time (race)";
+          } else {
+            const { error: viUpErr } = await client
+              .from("pr_vendor_items")
+              .update({ item_number: staged.item_number })
+              .eq("id", vendorItem.id);
+            if (viUpErr) {
               outcome.status = "conflict";
-              outcome.reason = `merge participants not loaded: ${participants.reason}`;
-            } else {
-              const { survivor, absorbed } = participants;
-              const mergeOk = await executeMergePlan(client, survivor, absorbed);
-              if (!mergeOk.ok) {
-                outcome.status = "conflict";
-                outcome.reason = `merge failed: ${mergeOk.error}`;
-              } else {
-                // After merge, write the SKU onto the survivor (it
-                // may already hold it if survivor = other, which is
-                // a no-op by equality but harmless).
-                const { error: survUpErr } = await client
-                  .from("pr_vendor_items")
-                  .update({ item_number: staged.item_number })
-                  .eq("id", survivor.id);
-                if (survUpErr) {
-                  outcome.status = "conflict";
-                  outcome.reason = `survivor re-key failed after merge: ${survUpErr.message}`;
-                }
-              }
+              outcome.reason = `pr_vendor_items re-key failed: ${viUpErr.message}`;
             }
           }
         }
@@ -1635,6 +1725,14 @@ export async function POST(req: NextRequest) {
             where: `per-pair-status staged=${staged.id}`,
             error: stagedUpErr.message,
           });
+        } else if (outcome.status !== "conflict") {
+          // M3 R8: count transitions away from retryable. Outcome.status
+          // produced here is one of filled | corrected | skipped |
+          // rejected | conflict | annotation | unmatched - RETRYABLE_STATUSES
+          // at the DB level is pending|conflict; outcomes never yield
+          // 'pending', so 'conflict' is the only retryable value. Every
+          // other outcome retires the row.
+          rowsStatusTransitioned += stagedIds.length;
         }
       }
     }
@@ -1668,6 +1766,9 @@ export async function POST(req: NextRequest) {
             where: "annotation-batch-stamp",
             error: annErr.message,
           });
+        } else {
+          // M3 R8: annotation is terminal.
+          rowsStatusTransitioned += annotationUpdates.length;
         }
       }
       const unmatchedUpdates = outcomes.filter((o) => o.status === "unmatched");
@@ -1694,6 +1795,9 @@ export async function POST(req: NextRequest) {
               where: `unmatched-batch-stamp (reason=${reason})`,
               error: unmErr.message,
             });
+          } else {
+            // M3 R8: unmatched is terminal.
+            rowsStatusTransitioned += ids.length;
           }
         }
       }
@@ -1736,6 +1840,8 @@ export async function POST(req: NextRequest) {
             where: "defensive-sweep",
             error: `${ids.length} row(s) stamped unmatched after being left pending`,
           });
+          // M3 R8: sweep writes 'unmatched' which is terminal.
+          rowsStatusTransitioned += ids.length;
         }
       }
     }
@@ -1795,18 +1901,32 @@ export async function POST(req: NextRequest) {
     })
   );
 
+  // M3 R8: compute done from progress (not retryableRowCount, which
+  // cannot fire under dryRun). Two terminating conditions:
+  //   (1) sawLessThanBatch - every retryable base has been offered to
+  //       this call, there is no next page to fetch.
+  //   (2) stalled - this call saw a full batch and produced zero
+  //       status transitions. Under dryRun this is structural (the
+  //       `if (!dryRun)` guard around the writes makes
+  //       rowsStatusTransitioned 0), so the first full-batch dry-run
+  //       call terminates. Under live it means every attempted row
+  //       stayed retryable; the caller should stop rather than loop.
+  const stalled = !sawLessThanBatch && rowsStatusTransitioned === 0;
+  const done = sawLessThanBatch || stalled;
+
   const response = {
     dryRun,
     offset,
     nextOffset: offset + basesInBatch.length,
-    // M1 R2 + M2 R7: done is true only when zero retryable rows
-    // remain across the whole table (authoritative count query, not
-    // derived from the range fetch window). `remaining` is the
-    // distinct retryable bases this call saw but did not process
-    // (useful for progress reporting); `retryableRows` is the exact
-    // row-level count that drives `done` and will continue to work
-    // as the staged set scales past 2,000 rows.
+    // M3 R8: done terminates on PROGRESS. See computation above.
+    // `remaining` is the distinct retryable bases this call saw but
+    // did not process (progress reporting); `retryableRows` is the
+    // authoritative table-wide count (independent signal); `stalled`
+    // surfaces the second termination branch so the caller can tell
+    // "finished the queue" (sawLessThanBatch) apart from "live run
+    // made no progress" (stalled && !sawLessThanBatch).
     done,
+    stalled,
     remaining,
     retryableRows: retryableRowCount ?? 0,
     invoices: counts.invoices,
