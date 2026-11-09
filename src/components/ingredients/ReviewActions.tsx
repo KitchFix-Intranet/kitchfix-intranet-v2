@@ -133,6 +133,16 @@ export function ReviewActions({
   // state lives in the create panel and does not persist across
   // panel open/close - reset-on-open is intentional (R-112 pattern).
   const [createAndConfirm, setCreateAndConfirm] = useState(true);
+  // N3: why the user opened the create panel. "confirm" is the plain
+  // + Create flow (default). "retail" is set only by the markResale
+  // fallback below when it cannot post directly (name < 2 chars or
+  // the proposed parent is not in CATEGORY_BY_PARENT). In the retail
+  // intent the panel's primary button reads "Create and mark retail",
+  // the create-and-confirm checkbox is hidden, and doCreateSplit
+  // posts { confirm: true, resale: true }. Reset to "confirm"
+  // wherever setShowNew(false) runs so a stale intent cannot leak
+  // into the next plain Create.
+  const [createIntent, setCreateIntent] = useState<"confirm" | "retail">("confirm");
 
   // Parents available for the sub dropdown: distinct parents from the
   // active ingredients list. Deduped + sorted.
@@ -241,6 +251,11 @@ export function ReviewActions({
       return;
     }
     setOp("creating");
+    // N3: in the retail intent the panel's payload forces confirm +
+    // resale regardless of the checkbox state (the checkbox is hidden
+    // in that intent, see the panel render below). In the default
+    // "confirm" intent the payload is byte-identical to pre-N3.
+    const isRetail = createIntent === "retail";
     const r = await postJson("/api/review/new-ingredient", {
       name,
       parent: effectiveSub || null,
@@ -252,7 +267,12 @@ export function ReviewActions({
       // today's (create + split, link_status stays 'proposed'). Both
       // paths return {ingredientId, moved}; the atomic path also
       // returns {confirmed, usd, movedToResale?} from confirmItems.
-      confirm: createAndConfirm,
+      //
+      // N3: retail intent implies confirm=true and additionally sends
+      // resale=true, so the server picks markResale() instead of
+      // confirmItems() and the items land as status='resale'.
+      confirm: isRetail ? true : createAndConfirm,
+      resale: isRetail,
     });
     if (!r.ok) {
       toast(errMsg(r.data, `Create failed (${r.status})`), { tone: "block" });
@@ -263,10 +283,19 @@ export function ReviewActions({
       ingredientId?: string;
       moved?: number;
       confirmed?: number;
+      marked?: number;
       movedToResale?: number;
     };
     const moved = d.moved ?? checkedCount;
-    if (createAndConfirm) {
+    if (isRetail) {
+      // N3 retail intent: the fallback form path. Partial-atomicity
+      // is the same as the confirm path - if markResale throws after
+      // create+move landed, the ingredient exists and the items sit
+      // on it in link_status='proposed', so the user retries from
+      // the new card. Already blocked by the !r.ok branch above.
+      const n = d.marked ?? d.confirmed ?? moved;
+      toast(`Created "${name}" and marked ${fmtCount(n)} item${n === 1 ? "" : "s"} as retail`);
+    } else if (createAndConfirm) {
       // Partial-atomicity note: the create -> move -> confirm sequence
       // runs as three successive statements in new-ingredient/route.ts;
       // if confirm fails after create+move lands, the ingredient
@@ -284,6 +313,7 @@ export function ReviewActions({
     }
     setShowNew(false);
     setCreateAndConfirm(true);
+    setCreateIntent("confirm");
     setOp(null);
     setLastDone(Date.now());
     router.refresh();
@@ -335,6 +365,71 @@ export function ReviewActions({
   // the user isn't left wondering why the ingredient didn't move.
   async function markResale() {
     if (op || noneChecked) return;
+
+    // N3: ai-new one-click path. There is no ingredient yet, but the
+    // matcher has already supplied everything the create form would
+    // have asked for - its initial state at lines 116, 121, 127 reads
+    // exactly these three values. Post them straight to
+    // /api/review/new-ingredient with { confirm: true, resale: true }
+    // so the server creates the master, confirms the items onto it,
+    // and stamps status='resale' in one action. The master's own
+    // resale flag stays off (B7 ruling, honoured on the server too).
+    // No undo: undoConfirm only reverts link_status, not status, so a
+    // control here would half-work and mislead (same reason the
+    // existing-ingredient Retail path has none).
+    if (kind === "new") {
+      const name = (proposedName ?? "").trim();
+      const parent = proposedParent;
+      const category = categoryForParent(parent);
+      // Fallback: open the create panel with retail intent when name
+      // or category is missing. Measured frequency on live Postgres
+      // 2026-11-09 is zero (every ai-new group carries a proposed_name
+      // and PR #18 mapped the last two parents, so categoryForParent
+      // resolves on 893 of 893), but a future matcher run can emit a
+      // parent not yet in CATEGORY_BY_PARENT and the user must get a
+      // form rather than a silent failure or a junk master with a null
+      // category. The form, when opened this way, writes
+      // { confirm: true, resale: true } through doCreateSplit.
+      if (name.length < 2 || category == null) {
+        setCreateIntent("retail");
+        setShowNew(true);
+        return;
+      }
+      setOp("resale");
+      const r = await postJson("/api/review/new-ingredient", {
+        name,
+        parent,
+        category,
+        itemIds: checkedIds,
+        confirm: true,
+        resale: true,
+      });
+      if (!r.ok) {
+        toast(errMsg(r.data, `Mark failed (${r.status})`), { tone: "block" });
+        setOp(null);
+        return;
+      }
+      const d = r.data as { confirmed?: number; marked?: number };
+      const n = d.marked ?? d.confirmed ?? checkedCount;
+      // Name the master in the toast - the user did not see a form.
+      toast(
+        `Created "${name}" and marked ${fmtCount(n)} item${n === 1 ? "" : "s"} as retail`,
+        { tone: "good" }
+      );
+      setOp(null);
+      setLastDone(Date.now());
+      if (onLeaveStart) {
+        onLeaveStart(checkedIds);
+      } else {
+        router.refresh();
+      }
+      return;
+    }
+
+    // Existing-ingredient path - unchanged. Guard still protects it:
+    // kind === "existing" without a currentIngredientId would be a
+    // corrupt group shape and should block, not silently create a new
+    // master.
     if (!currentIngredientId) {
       toast("No ingredient target for this group", { tone: "block" });
       return;
@@ -694,16 +789,21 @@ export function ReviewActions({
           ) : null}
 
           {/* Q2 §1: create-and-confirm checkbox. Default checked.
-              Unchecking reproduces the pre-Q2 two-step flow exactly. */}
-          <label className="kf-newing__confirm" title="Create the ingredient and confirm the selected items on it in one action">
-            <input
-              type="checkbox"
-              checked={createAndConfirm}
-              onChange={(e) => setCreateAndConfirm(e.target.checked)}
-              disabled={op !== null}
-            />
-            <span>Confirm these items on the new ingredient</span>
-          </label>
+              Unchecking reproduces the pre-Q2 two-step flow exactly.
+              N3: hidden in the retail intent - the payload is forced
+              to confirm=true, resale=true in doCreateSplit, and
+              showing an unchecked-able checkbox would mislead. */}
+          {createIntent !== "retail" && (
+            <label className="kf-newing__confirm" title="Create the ingredient and confirm the selected items on it in one action">
+              <input
+                type="checkbox"
+                checked={createAndConfirm}
+                onChange={(e) => setCreateAndConfirm(e.target.checked)}
+                disabled={op !== null}
+              />
+              <span>Confirm these items on the new ingredient</span>
+            </label>
+          )}
 
           <div className="kf-rvc__panel-btns">
             <button
@@ -714,14 +814,16 @@ export function ReviewActions({
             >
               {op === "creating"
                 ? "Saving..."
-                : createAndConfirm
-                  ? "Create and confirm"
-                  : "Create ingredient"}
+                : createIntent === "retail"
+                  ? "Create and mark retail"
+                  : createAndConfirm
+                    ? "Create and confirm"
+                    : "Create ingredient"}
             </button>
             <button
               type="button"
               className="kf-btn kf-btn--ghost kf-btn--sm"
-              onClick={() => setShowNew(false)}
+              onClick={() => { setShowNew(false); setCreateIntent("confirm"); }}
               disabled={op !== null}
             >
               <XIcon size={14} strokeWidth={1.5} />

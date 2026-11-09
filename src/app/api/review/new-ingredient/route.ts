@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireOwnerApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
-import { splitToNewIngredient, confirmItems } from "@/lib/reviewWrites";
+import { splitToNewIngredient, confirmItems, markResale } from "@/lib/reviewWrites";
 import { SUPER_CATEGORIES, type SuperCategory } from "@/lib/ingredients/categories";
 
 export const dynamic = "force-dynamic";
@@ -32,6 +32,12 @@ export async function POST(req: NextRequest) {
     // user does not have to find the new card and confirm there.
     // Default false preserves pre-Q2 behaviour exactly.
     confirm?: boolean;
+    // N3: Retail one-click on a new-ingredient group. When true, the
+    // same-request follow-up uses markResale() instead of
+    // confirmItems() so the items also land as status='resale'. The
+    // master's own retail flag stays off (B7). Treated as implying
+    // confirm=true. Default false preserves pre-N3 behaviour exactly.
+    resale?: boolean;
   };
   try { body = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }
 
@@ -60,15 +66,40 @@ export async function POST(req: NextRequest) {
       actorEmail: gate.email,
     });
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
-    // Q2 §1: run confirm in the same request when asked. Partial-
-    // atomicity: if confirmItems throws, the create+move already
-    // landed and the items sit as link_status='proposed' on the new
-    // master - identical to the no-confirm path's success state, so
-    // the user can retry confirm by opening the new card. We return
+    // Q2 §1 (+ N3 retail path): run the same-request follow-up when
+    // asked. body.resale === true picks markResale() (confirms the
+    // items AND stamps status='resale' on each one, per B7 - the
+    // master's own retail flag is NOT set here); otherwise
+    // body.confirm === true picks confirmItems() exactly as today.
+    //
+    // Partial-atomicity: if the follow-up throws, the create+move
+    // already landed and the items sit as link_status='proposed' on
+    // the new master - identical to the no-follow-up path's success
+    // state, so the user can retry from the new card. We return
     // ok:false with the error so the panel toasts; the new master is
-    // NOT rolled back (that's the pre-Q2 behaviour).
-    if (body.confirm === true && result.ingredientId && result.moved > 0) {
+    // NOT rolled back (pre-Q2 behaviour). The error-message wording
+    // adjusts to "confirm" vs "mark retail" so the user knows which
+    // step to retry.
+    if ((body.confirm === true || body.resale === true) && result.ingredientId && result.moved > 0) {
+      const isRetail = body.resale === true;
       try {
+        if (isRetail) {
+          const retailResult = await markResale(client, {
+            ingredientId: result.ingredientId,
+            itemIds,
+            actorEmail: gate.email,
+          });
+          return NextResponse.json({
+            ok: true,
+            ingredientId: result.ingredientId,
+            moved: result.moved,
+            confirmed: retailResult.confirmed,
+            marked: retailResult.marked,
+            usd: retailResult.usd,
+            ingredientIsRetail: retailResult.ingredientIsRetail,
+            confirmErrors: retailResult.errors.length > 0 ? retailResult.errors : undefined,
+          });
+        }
         const confirmResult = await confirmItems(client, {
           ingredientId: result.ingredientId,
           itemIds,
@@ -85,8 +116,9 @@ export async function POST(req: NextRequest) {
         });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
+        const step = isRetail ? "mark retail" : "confirm";
         return NextResponse.json({
-          error: `Created "${name}" but confirm failed: ${msg}. Open the new card in the queue to confirm manually.`,
+          error: `Created "${name}" but ${step} failed: ${msg}. Open the new card in the queue to retry.`,
         }, { status: 500 });
       }
     }
