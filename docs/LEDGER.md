@@ -7,30 +7,18 @@ code that changed it - never in a separate pass, never from a chat's memory.
 Canonical for STATE only. For design standards see docs/GOVERNANCE.md and the design master;
 for values see docs/DESIGN.md and src/app/tokens.css.
 
+The Shipped section is current state per lane, not a commit log. Git is the history; this is
+the summary. The seed below is the only bulk fill; each new train appends its own one-line
+entry in its PR (the ledger-in-PR convention, see GOVERNANCE.md).
+
 ## Production
-- prod SHA: 9ab6640 (merged 2026-11-05) - `fix(stockpot m3): progress-based termination, state-based collision, page additions`
-- served by Vercel deployment `dpl_7nmr1YdpTW4iA1YVX2emNw54VjKK` (target=production, state=READY)
+- prod SHA: 9ab6640 - `fix(stockpot m3): progress-based termination, state-based collision, page additions`
+- Vercel deployment `dpl_7nmr1YdpTW4iA1YVX2emNw54VjKK`, target=production, state=READY
 
-## Shipped (merged to step-1, newest first)
-Projection of `git log --first-parent --merges origin/step-1-shell-and-ingredients` - regenerate from git, do not hand-curate. Recent direct-to-step-1 commits (not via PR) are not merge trains and are not listed here; read them from git when needed.
-
-- PR #16 (cb8ba14) feat(academy F3): Team + Admin lead with the answer
-- PR #15 (c45c83f) fix(academy F1): topbar reads x-pathname first so routes resolve
-- PR #14 (14a1ccb) feat(academy F2): Library finished against render V7
-- PR #13 (47f4cf9) fix(academy F1): head-wash was flattening the band
-- PR #12 (9681e8b) feat(academy F1): learner surfaces finished against render V7
-- PR #11 (5b00b16) feat(academy E4): Team - leads' review page (read-only)
-- PR #10 (760475c) feat(v2): release-controlled app-access gate (default CLOSED)
-- PR #9 (74a31cb) feat(academy E3): Admin / People - roster + compliance + region leads
-- branch merge (fc23cbe) potrack-row-flag-toggle
-- PR #8 (d1433bf) feat(academy E1): Admin shell (owner-only) + Cycles (create / preview / publish / close)
-- PR #7 (c71b679) feat(library D2): Find landing + Shelves moved + doc-reader TOC side-rail
-- PR #6 (69f9edb) feat(library D1): shelves browse + read-only document viewer
-- PR #5 (ccd910f) fix(academy): sign preview matches stored sentence (one source of truth)
-- PR #4 (43a6916) fix(academy): multi-section attestation sentence + cert 503
-- PR #3 (ec62cf1) Academy train C: reader + checks + sign + Receipt (the loop closes)
-- PR #2 (f28d820) Academy train B: To do + Done + reader stub + Academy nav in shell
-- PR #1 (1f1c1d0) Academy train A: engine port (lib + routes + parity harness + ACADEMY.md)
+## Shipped (current state per lane)
+- Academy + Library - engine, learner loop, Library, admin (Cycles / People / Team), release-controlled access gate, F1-F3. Live. (PRs #1-#16.)
+- Stockpot / Ingredients - craft bar + Ingredients, then the Oct 30 - Nov 5 run: allergens (b1), grade model (g1-g3), pack recovery (p1-p2), vendor-reliability gate, queue throughput (q2), rescan loader (l1-l4), observation-countability (n0 series), through m-series to m3. Live.
+- Shared foundation - tokens, components, shell, sign-in. Live.
 
 ## In flight
 - F4 - shared promotion: head wash + earned-column system move from academy.css into the shell (tokens.css/components.css). Was gated on the Stockpot lane vacating shared CSS; that lane is inactive, so re-confirm nothing is uncommitted there, then it can proceed.
