@@ -6,6 +6,7 @@
 
 import { serviceClient } from "@/lib/supabase/service";
 import { COUNTABLE_OBSERVATIONS_VIEW, applyCountableFilter } from "@/lib/ingredients/countability";
+import { categoryForParent } from "@/lib/ingredients/categories";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { Tabs } from "./Tabs";
 import { IdentBand } from "@/components/ui/IdentBand";
@@ -599,11 +600,21 @@ function toFilterGroup(g: ReviewCardGroup): ReviewFilterGroup {
     kind: g.kind,
     ingredientName: g.ingredient?.name ?? null,
     ingredientParent: g.ingredient?.parent ?? null,
-    // category + resale carry the ingredient's super-category and
-    // resale flag to the client-side filters. ai-new groups have no
-    // ingredient yet so both read null/false; those surface under
-    // "Needs category" in the filter chips.
-    category: g.ingredient?.category ?? null,
+    // category + resale carry the super-category and resale flag to the
+    // client-side filters.
+    //
+    // For an existing-ingredient group the category is the ingredient's
+    // own. For an ai-new group there is no ingredient yet, so derive the
+    // would-be super-category from the matcher's proposed parent - the
+    // SAME derivation the create form already uses to pre-fill its two
+    // dropdowns (ReviewActions.tsx newSuper/subPick).
+    //
+    // Reading the absent ingredient instead made EVERY ai-new group count
+    // as "Needs category" - 750 groups on 2026-11-09 when zero of them
+    // actually lacked a derivable one - and left the seven super-category
+    // chips blind to three quarters of the queue. The chip must mean "no
+    // category is derivable", never "no ingredient exists yet".
+    category: g.ingredient?.category ?? categoryForParent(g.proposedParent),
     resale: g.ingredient?.resale ?? false,
     proposedName: g.proposedName,
     proposedParent: g.proposedParent,

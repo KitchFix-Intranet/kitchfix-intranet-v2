@@ -27,7 +27,10 @@ export type ReviewFilterGroup = {
   ingredientName: string | null;
   ingredientParent: string | null;
   // Super-category (null = "Needs category") and resale flag feed the
-  // category chips + the resale / needs-category quick filters.
+  // category chips + the resale / needs-category quick filters. For an
+  // existing-ingredient group this is the ingredient's own category; for
+  // an ai-new group it is derived from the matcher's proposed parent via
+  // categoryForParent (see ReviewQueue.toFilterGroup).
   category: string | null;
   resale: boolean;
   proposedName: string | null;
@@ -95,8 +98,9 @@ export function ReviewFilter({
   // Per-super counts over the FULL group list (not the search-filtered
   // one), so the chip label always shows the total available under that
   // super. "All" matches every group; "Needs category" counts groups
-  // with category=null (regardless of resale); "Resale" counts groups
-  // with resale=true.
+  // with no derivable super-category (the proposed parent is absent
+  // from CATEGORY_BY_PARENT, or there is no proposed parent); "Resale"
+  // counts groups with resale=true.
   const perSuperCount = useMemo(() => {
     const m = new Map<string, number>();
     m.set("all", groups.length);
@@ -297,17 +301,24 @@ export function ReviewFilter({
         </div>
 
         <div className="kf-review__toolbar-group" role="radiogroup" aria-label="Kind filter">
-          <button
-            type="button"
-            role="radio"
-            aria-checked={kindFilter === "needs"}
-            aria-pressed={kindFilter === "needs"}
-            className={`kf-chip kf-chip--warn${kindFilter === "needs" ? " kf-chip--on" : ""}`}
-            onClick={() => setKindFilter((v) => (v === "needs" ? "all" : "needs"))}
-            title="Groups whose ingredient has no super-category yet"
-          >
-            Needs category <span className="kf-chip__count">{fmtCount(needsCount)}</span>
-          </button>
+          {/* Polish 3 rule, applied to the kind chips: a zero-count chip is
+              noise and cannot be clicked to anything useful. Kept visible
+              while it is the ACTIVE filter so the user always has a control
+              to leave the filtered view. A group with an unmapped parent
+              makes it reappear on the next router.refresh. */}
+          {(needsCount > 0 || kindFilter === "needs") && (
+            <button
+              type="button"
+              role="radio"
+              aria-checked={kindFilter === "needs"}
+              aria-pressed={kindFilter === "needs"}
+              className={`kf-chip kf-chip--warn${kindFilter === "needs" ? " kf-chip--on" : ""}`}
+              onClick={() => setKindFilter((v) => (v === "needs" ? "all" : "needs"))}
+              title="Groups with no derivable super-category - the proposed parent is not in the category map"
+            >
+              Needs category <span className="kf-chip__count">{fmtCount(needsCount)}</span>
+            </button>
+          )}
           <button
             type="button"
             role="radio"
