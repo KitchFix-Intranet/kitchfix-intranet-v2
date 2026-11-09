@@ -14,6 +14,15 @@
 // change to one is a change to the other in the SAME PR. Every ingredient
 // insert, every ingredient-admin dropdown, every "Needs category" filter
 // reads from here; do not inline a copy of the map anywhere else.
+//
+// 2026-11-09: added `Spices` and `Baking` in code only. 0008 is a one-time
+// backfill and has already run; every pr_ingredients row with those
+// parents already carries category='Pantry / Dry goods' (verified live),
+// and zero rows have a null category. Editing an applied migration file
+// would not change the database. A FUTURE parent addition still needs a
+// fresh migration if any existing row would change; this exemption
+// applies only when the live rows already carry the value the code is
+// catching up to.
 
 export const SUPER_CATEGORIES = [
   "Proteins",
@@ -42,6 +51,8 @@ export const CATEGORY_BY_PARENT: Readonly<Record<string, SuperCategory>> = {
   "Rice and grains": "Pantry / Dry goods",
   "Sweeteners": "Pantry / Dry goods",
   "Nuts and snacks": "Pantry / Dry goods",
+  "Spices": "Pantry / Dry goods",
+  "Baking": "Pantry / Dry goods",
   "Frozen and prepared": "Prepared & frozen",
   "Bakery": "Bakery",
   "Beverages": "Beverages",
