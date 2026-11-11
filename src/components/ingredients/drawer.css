@@ -682,13 +682,16 @@
 }
 
 /* Pack + price summary line fragments. Rendered inside the value
- * column of the Pack and price row at rest. */
+ * column of the Pack and price row at rest. Segments are nowrap so
+ * wraps happen only BETWEEN them; pack + Review chip stay as one
+ * block, and the "·" always starts a segment so no dot orphans. */
 .kf-ipanel__pack-summary {
   font-family: var(--sp-ui);
   font-size: var(--sp-t-table);
   color: var(--sp-body);
 }
 .kf-ipanel__pack-summary strong { font-weight: 800; color: var(--sp-ink); }
+.kf-ipanel__pack-seg { white-space: nowrap; }
 
 /* --- One control style ---
  * Every text input, number input, and select inside the panel uses
@@ -876,17 +879,31 @@
   color: var(--sp-muted);
 }
 
-/* N8 fix 5: Category row - two selects side-by-side, sublink
- * underneath inside the same value column, 8 px below (sp-2). */
-.kf-ipanel__cat-selects {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+/* N8 round 2 fix 5 + round 3 fix 3 + fix 7:
+ * Category row renders as 150 / 1fr / 1fr (split). The two selects
+ * occupy cols 2 and 3 so the second select ends FLUSH with the row's
+ * right edge; the sublink + SaveFlash sit beneath in their own grid
+ * cell spanning cols 2 to -1. Label top-aligns with the selects
+ * instead of centring against the whole value stack.
+ * Phone: the split collapses to 1fr; the selects stack full width
+ * via the base media rule; the foot follows underneath. */
+.kf-ipanel__row--cat {
+  align-items: start;
+}
+.kf-ipanel__row--cat > .kf-ipanel__row-label {
+  padding-top: var(--sp-sp-3);
+}
+.kf-ipanel__cat-foot {
+  grid-column: 2 / -1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: var(--sp-sp-3);
+  padding-top: var(--sp-sp-2);
 }
 .kf-ipanel__cat-link {
   display: inline-flex;
   align-items: center;
-  margin-top: var(--sp-sp-2);
   min-height: 44px;
   padding: 0;
   background: transparent;
@@ -896,19 +913,20 @@
   color: var(--sp-navy);
   text-decoration: underline;
   cursor: pointer;
-  align-self: flex-start;
 }
 .kf-ipanel__cat-link:hover { color: var(--sp-navy-deep); }
 .kf-ipanel__cat-link:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
 
-/* N8 fix 4: Item One each row - checkbox + label | qty + unit (wrap
- * together) | Saved flash or inherit hint. Nested flex so the number
- * and unit cannot be separated by a flex wrap. */
+/* N8 fix 4 (round 2) + fix 5 (round 3): Item One each row.
+ * Checkbox + label | qty (96) + unit (96) kept together | Saved
+ * flash or inherit hint. One line at 1100 (660 px drawer); only
+ * wraps when it must, and when it wraps the number + unit wrap
+ * together. Tight gap (sp-2) so the trio actually fits. */
 .kf-ipanel__itemmeasure {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--sp-sp-3);
+  gap: var(--sp-sp-2);
   min-height: 44px;
 }
 .kf-ipanel__itemmeasure-check {
@@ -919,11 +937,12 @@
   font-family: var(--sp-ui);
   font-size: var(--sp-t-table);
   color: var(--sp-ink);
+  white-space: nowrap;
 }
 .kf-ipanel__itemmeasure-fields {
   display: inline-flex;
   align-items: center;
-  gap: var(--sp-sp-2);
+  gap: var(--sp-sp-1);
   flex-wrap: nowrap;
 }
 .kf-ipanel__itemmeasure-hint {
@@ -933,20 +952,21 @@
 }
 
 /* --- Measure feedback sentence on the ingredient One each row.
- * N8 fix 3: its own class; help text, not a link. --sp-t-micro,
- * --sp-body, no underline. Starts in column 2 under the controls. */
+ * N8 fix 3 (round 2) + fix 4 (round 3): its own class; help text,
+ * not a link. --sp-t-micro, --sp-body, no underline. Starts in
+ * column 2 under the controls. NO bottom border - the next row's
+ * top border is the only hairline between them. */
 .kf-ipanel__measure-note {
   grid-column: 2 / -1;
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
   gap: var(--sp-sp-2);
-  padding: 0 0 var(--sp-sp-3);
+  padding: 0;
   font-family: var(--sp-ui);
   font-size: var(--sp-t-micro);
   line-height: 1.6;
   color: var(--sp-body);
-  border-bottom: 1px solid var(--sp-sky-line);
 }
 .kf-ipanel__row--measure-wrap { border-top: 0; }
 
@@ -1025,6 +1045,14 @@
     gap: var(--sp-sp-2);
     /* padding already inherited from the base rule */
   }
+  /* Every direct child of a stacked row spans the single column.
+   * Guards against intrinsic-min-content shrinkage that would leave
+   * the label on a slim track or a select showing its chevron only. */
+  .kf-ipanel__row > *,
+  .kf-ipanel__row--split > * {
+    grid-column: 1 / -1;
+    min-width: 0;
+  }
   .kf-ipanel__row-label { font-size: var(--sp-t-micro); text-transform: none; }
   .kf-ipanel__row-action { justify-content: flex-start; }
   .kf-ipanel__editor-grid--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1039,4 +1067,22 @@
   .kf-ipanel__drow-label { grid-row: 1; grid-column: 1; }
   .kf-ipanel__drow-chev  { grid-row: 1; grid-column: 2; }
   .kf-ipanel__drow-sub   { grid-row: 2; grid-column: 1 / -1; }
+
+  /* N8 round 3 fix 7: Category - the split row collapses via the
+   * base stack rule, so the two selects stack full width. The foot
+   * follows beneath because its grid-column changes from 2/-1 to
+   * 1/-1 on a one-column grid implicitly (spans the whole row).
+   * Reset the label's top padding on phone since the row no longer
+   * aligns against a taller column. */
+  .kf-ipanel__row--cat > .kf-ipanel__row-label {
+    padding-top: 0;
+  }
+
+  /* N8 round 3 fix 2: ingredient One each row - label takes its
+   * own line; number + unit share line 2; source select is full
+   * width on line 3; note follows. All grid-column 1 so the base
+   * stack rule keeps the label visible. */
+  .kf-ipanel__measure-note {
+    grid-column: 1 / -1;
+  }
 }

@@ -228,11 +228,11 @@ export function PanelIngredientZone({
 
   const allergenState = allergenStatus(ingredient.allergens ?? [], ingredient.allergens_reviewed_at ?? null);
 
-  // Measure note under One each. N8 fix 3: when an item is in scope
-  // and a measure is present, state the derived price explicitly
-  // ("Recipes will use $0.91 / lb for this item ($3.18 each ÷ 3.5 lb).
-  // The stored price stays per each."). Ingredient-only mode keeps the
-  // generic sentence.
+  // N8 round 3 fix 1: the ingredient's One each row describes the
+  // INGREDIENT's own measure, so call deriveRecipePrice with
+  // itemMeasure: null. The item's own measure (when it has one) wins
+  // in the strip; here we append a short "This item uses its own
+  // measure." clause so it is clear which number the engine will use.
   const measureFoot = (() => {
     const stored = ingredient.each_measure_qty;
     const draftN = Number(measureQtyDraft);
@@ -246,17 +246,22 @@ export function PanelIngredientZone({
     }
     const u = measureUomDraft.toUpperCase();
     if (item && item.perBaseUom === "EA" && item.perBase != null) {
-      const derived = deriveRecipePrice({
+      const derivedFromIngredient = deriveRecipePrice({
         perBase: item.perBase,
         perBaseUom: item.perBaseUom,
-        itemMeasure: item.eachMeasure,
+        itemMeasure: null,
         ingredientMeasure: { qty: n, uom: u },
       });
-      if (derived) {
+      if (derivedFromIngredient) {
+        const itemHasOwnMeasure = item.eachMeasure != null;
+        const suffix = itemHasOwnMeasure ? " This item uses its own measure." : "";
         return {
           tone: "good" as const,
           label: "Saved",
-          body: `Recipes will use ${fmtUsd(derived.per)} / ${uomLabel(derived.uom)} for this item (${fmtUsd(item.perBase)} each ÷ ${derived.qty} ${uomLabel(derived.measureUom)}). The stored price stays per each.`,
+          body:
+            `Recipes will use ${fmtUsd(derivedFromIngredient.per)} / ${uomLabel(derivedFromIngredient.uom)} ` +
+            `(${fmtUsd(item.perBase)} each ÷ ${derivedFromIngredient.qty} ${uomLabel(derivedFromIngredient.measureUom)}).` +
+            ` The stored price stays per each.${suffix}`,
         };
       }
     }
@@ -304,90 +309,90 @@ export function PanelIngredientZone({
         </div>
       </div>
 
-      {/* Row 2: Category - N8 fix 5: sublink inside the value column
-          under the selects. Action column stays empty. */}
-      <div className="kf-ipanel__row">
+      {/* Row 2: Category - N8 round 3 fix 3 + 7: split 150/1fr/1fr
+          grid; selects occupy cols 2 and 3 so the second ends flush
+          with the row's right edge; sublink + flash sit in cat-foot
+          spanning cols 2 to -1 underneath. Top-aligned via --cat. */}
+      <div className="kf-ipanel__row kf-ipanel__row--split kf-ipanel__row--cat">
         <div className="kf-ipanel__row-label">
           <span>Category</span>
           {(!ingredient.category || !ingredient.parent) ? (
             <span className="kf-pill kf-pill--warn">Needs category</span>
           ) : null}
         </div>
-        <div className="kf-ipanel__row-value">
-          <div className="kf-ipanel__cat-selects">
-            <select
-              className="kf-ipanel__ctl"
-              value={superDraft}
-              disabled={catBusy}
-              onChange={(e) => {
-                const v = e.target.value;
-                setSuperDraft(v);
-                const nextSub =
-                  subMode === "new" ? subNew.trim() || null : (subPick === "" ? null : subPick);
+        <select
+          className="kf-ipanel__ctl"
+          value={superDraft}
+          disabled={catBusy}
+          onChange={(e) => {
+            const v = e.target.value;
+            setSuperDraft(v);
+            const nextSub =
+              subMode === "new" ? subNew.trim() || null : (subPick === "" ? null : subPick);
+            void doCategory({
+              nextSuper: v === "" ? null : (v as SuperCategory),
+              nextSub,
+            });
+          }}
+          aria-label="Category"
+        >
+          <option value="">Needs category</option>
+          {SUPER_CATEGORIES.map((c) => (
+            <option key={c} value={c}>{c}</option>
+          ))}
+        </select>
+        {subMode === "pick" ? (
+          <select
+            className="kf-ipanel__ctl"
+            value={subPick}
+            disabled={catBusy}
+            onChange={(e) => {
+              const v = e.target.value;
+              setSubPick(v);
+              void doCategory({
+                nextSuper: superDraft === "" ? null : (superDraft as SuperCategory),
+                nextSub: v === "" ? null : v,
+              });
+            }}
+            aria-label="Sub-category"
+          >
+            <option value="">(none)</option>
+            {parentOptions.map((p) => (
+              <option key={p} value={p}>{p}</option>
+            ))}
+          </select>
+        ) : (
+          <input
+            className="kf-ipanel__ctl"
+            type="text"
+            value={subNew}
+            onChange={(e) => setSubNew(e.target.value)}
+            onBlur={() => {
+              const next = subNew.trim();
+              if (!next) return;
+              void doCategory({
+                nextSuper: superDraft === "" ? null : (superDraft as SuperCategory),
+                nextSub: next,
+              });
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                const next = subNew.trim();
+                if (!next) return;
                 void doCategory({
-                  nextSuper: v === "" ? null : (v as SuperCategory),
-                  nextSub,
+                  nextSuper: superDraft === "" ? null : (superDraft as SuperCategory),
+                  nextSub: next,
                 });
-              }}
-              aria-label="Category"
-            >
-              <option value="">Needs category</option>
-              {SUPER_CATEGORIES.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-            {subMode === "pick" ? (
-              <select
-                className="kf-ipanel__ctl"
-                value={subPick}
-                disabled={catBusy}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setSubPick(v);
-                  void doCategory({
-                    nextSuper: superDraft === "" ? null : (superDraft as SuperCategory),
-                    nextSub: v === "" ? null : v,
-                  });
-                }}
-                aria-label="Sub-category"
-              >
-                <option value="">(none)</option>
-                {parentOptions.map((p) => (
-                  <option key={p} value={p}>{p}</option>
-                ))}
-              </select>
-            ) : (
-              <input
-                className="kf-ipanel__ctl"
-                type="text"
-                value={subNew}
-                onChange={(e) => setSubNew(e.target.value)}
-                onBlur={() => {
-                  const next = subNew.trim();
-                  if (!next) return;
-                  void doCategory({
-                    nextSuper: superDraft === "" ? null : (superDraft as SuperCategory),
-                    nextSub: next,
-                  });
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    const next = subNew.trim();
-                    if (!next) return;
-                    void doCategory({
-                      nextSuper: superDraft === "" ? null : (superDraft as SuperCategory),
-                      nextSub: next,
-                    });
-                  }
-                }}
-                placeholder="New sub-category"
-                disabled={catBusy}
-                aria-label="New sub-category"
-                autoFocus
-              />
-            )}
-          </div>
+              }
+            }}
+            placeholder="New sub-category"
+            disabled={catBusy}
+            aria-label="New sub-category"
+            autoFocus
+          />
+        )}
+        <div className="kf-ipanel__cat-foot">
           <button
             type="button"
             className="kf-ipanel__cat-link"
@@ -397,7 +402,6 @@ export function PanelIngredientZone({
           </button>
           <SaveFlash savedAt={catSavedAt} error={catError} />
         </div>
-        <div className="kf-ipanel__row-action" />
       </div>
 
       {/* Row 3: Costed per --------------------------------------- */}

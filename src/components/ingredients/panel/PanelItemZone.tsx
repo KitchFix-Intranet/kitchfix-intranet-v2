@@ -126,11 +126,31 @@ export function PanelItemZone({
           <div className="kf-ipanel__pack-summary">
             {packSeg ? (
               <>
-                {packSeg}
-                {caseSeg ? <> {" · "} {caseSeg}</> : null}
-                {perUnitSeg ? <> {" · "} <strong>{perUnitSeg}</strong></> : null}
-                {isCheck ? (
-                  <> {" · "} <span className="kf-pill kf-pill--warn" title={chipTitle}>Review</span></>
+                {/* N8 round 3 fix 6: each segment is nowrap; wraps
+                    only happen BETWEEN them. Pack + Review chip stay
+                    together so the chip never trails the price. "·"
+                    sits at the START of case + per-unit segments so
+                    no dot dangles at a line end. */}
+                <span className="kf-ipanel__pack-seg">
+                  {packSeg}
+                  {isCheck ? (
+                    <>
+                      {" "}
+                      <span className="kf-pill kf-pill--warn" title={chipTitle}>Review</span>
+                    </>
+                  ) : null}
+                </span>
+                {caseSeg ? (
+                  <>
+                    {" "}
+                    <span className="kf-ipanel__pack-seg">&middot; {caseSeg}</span>
+                  </>
+                ) : null}
+                {perUnitSeg ? (
+                  <>
+                    {" "}
+                    <span className="kf-ipanel__pack-seg"><strong>&middot; {perUnitSeg}</strong></span>
+                  </>
                 ) : null}
               </>
             ) : (
