@@ -103,6 +103,39 @@ export function timeAgo(iso: string): string {
   return `${d}d ago`;
 }
 
+// Whole calendar months elapsed between `iso` and "today" (Chicago).
+// Uses the same Chicago-aware `parts()` helper that `fmtDate` uses, so
+// a lastSeen of Jun 3 reads 5 months before Nov 11 regardless of local
+// clock. 0 for a future date or a parse failure. Pure.
+//
+// Policy: whole months - the date 2025-11-11 relative to today
+// 2026-11-11 returns 12; 2026-10-12 returns 0 (less than a month);
+// 2026-10-11 returns 1 (same day-of-month at the one-month boundary).
+export function monthsAgo(iso: string | null): number {
+  if (!iso) return 0;
+  const past = partsIn(iso);
+  if (!past) return 0;
+  const now = partsIn(new Date().toISOString());
+  if (!now) return 0;
+  let m = (now.y - past.y) * 12 + (now.m - past.m);
+  if (now.d < past.d) m -= 1;
+  return m < 0 ? 0 : m;
+}
+
+// Shared Chicago-aware (y, m, d) extractor. `parts()` above only
+// accepts an ISO with a time component; this one normalises date-only
+// strings the same way `fmtDate` does so both callers stay in sync.
+function partsIn(iso: string): { y: number; m: number; d: number } | null {
+  if (isDateOnly(iso)) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+    if (!m) return null;
+    const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    if (!y || !mo || !d) return null;
+    return { y, m: mo, d };
+  }
+  return parts(iso);
+}
+
 const NUM_FMT = new Intl.NumberFormat("en-US");
 
 export function fmtCount(n: number): string {

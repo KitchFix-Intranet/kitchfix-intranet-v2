@@ -134,7 +134,7 @@ export function ItemEachMeasureBlock({
               onChange={(e) => setQtyDraft(e.target.value)}
               onBlur={trySave}
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); trySave(); } }}
-              placeholder="e.g. 5"
+              placeholder=""
               aria-label="This item's each weighs"
               disabled={busy}
             />

@@ -150,6 +150,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--sp-navy); }
   background: var(--sp-good);
 }
 .kf-pill--info { background: var(--sp-info-bg); color: var(--sp-link); }
+/* N9 §2a: New ingredient kind pill - navy fill (vs. Existing match's soft info). */
+.kf-pill--new { background: var(--sp-navy); color: var(--sp-on-navy); }
 .kf-pill--good { background: var(--sp-good-bg); color: var(--sp-good); }
 .kf-pill--warn { background: var(--sp-warn-bg); color: var(--sp-warn); }
 .kf-pill--block { background: var(--sp-block-bg); color: var(--sp-block); }

@@ -9,7 +9,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, X as XIcon, Plus, Scissors, Ban, Search, ShoppingBag, Archive, Loader2, Flag, Clock } from "lucide-react";
+import { Check, X as XIcon, Ban, ShoppingBag, Archive, Loader2, Clock } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { SUPER_CATEGORIES, categoryForParent, type SuperCategory } from "@/lib/ingredients/categories";
@@ -57,6 +57,11 @@ type Props = {
   // router.refresh(). Fires BEFORE the undo toast lands so the two
   // animations overlap. Receives the item ids that just left the queue.
   onLeaveStart?: (itemIds: string[]) => void;
+  // N9 §2d: the "moves to Linked" / "Select items to confirm" line
+  // moves out of the separate <footer> strip into the action bar's
+  // second row. Computed by the parent so it already knows the
+  // selected count + usd sum.
+  movesLine?: string;
 };
 
 type Op = null | "confirming" | "relinking" | "creating" | "notfood" | "resale" | "archived" | "oneoff" | "keepsep" | "flag";
@@ -105,6 +110,7 @@ export function ReviewActions({
   checkedCount,
   memberCount,
   onLeaveStart,
+  movesLine,
 }: Props) {
   const router = useRouter();
   const [op, setOp] = useState<Op>(null);
@@ -553,40 +559,24 @@ export function ReviewActions({
 
   return (
     <div className="kf-rvc__actions">
-      <div className="kf-rvc__actions-summary">
-        <span>
-          <strong>{fmtCount(checkedCount)}</strong> of {fmtCount(memberCount)} selected
-        </span>
-        {op !== null ? (
-          <span className="kf-rvc__status kf-rvc__status--busy" aria-live="polite">
-            <Loader2 size={12} strokeWidth={2.5} className="kf-rvc__spin" aria-hidden />
-            Saving...
-          </span>
-        ) : showDone ? (
-          <span className="kf-rvc__status kf-rvc__status--done" aria-live="polite">
-            <Check size={12} strokeWidth={2.5} aria-hidden />
-            Done
-          </span>
-        ) : null}
-      </div>
-
-      <div className="kf-rvc__btns">
+      {/* N9 §2d: three button groups on one row. Groups 1 and 2 lose
+          their icons; group 3 keeps them. The selected count is NOT
+          here - it lives in the head (§2a), once. */}
+      <div className="kf-rvc__actions-row">
+        {/* Group 1: Confirm + Relink + New ingredient. */}
         <button
           type="button"
           className={`kf-btn kf-btn--primary kf-btn--sm${op === "confirming" ? " is-busy" : ""}`}
           disabled={op !== null || noneChecked}
           onClick={confirmChecked}
         >
-          <Check size={14} strokeWidth={1.5} />
-          <span>
-            {op === "confirming"
-              ? "Saving..."
-              : kind === "new"
-                ? "Create ingredient"
-                : ingredientResale
-                  ? "Confirm as retail"
-                  : "Confirm"}
-          </span>
+          {op === "confirming"
+            ? "Saving..."
+            : kind === "new"
+              ? "Create ingredient"
+              : ingredientResale
+                ? "Confirm as retail"
+                : "Confirm"}
         </button>
 
         <button
@@ -595,8 +585,7 @@ export function ReviewActions({
           disabled={op !== null || noneChecked}
           onClick={() => setShowRelink((v) => !v)}
         >
-          <Search size={14} strokeWidth={1.5} />
-          <span>Relink</span>
+          Relink
         </button>
 
         {kind === "existing" ? (
@@ -606,11 +595,11 @@ export function ReviewActions({
             disabled={op !== null || noneChecked}
             onClick={() => setShowNew((v) => !v)}
           >
-            <Plus size={14} strokeWidth={1.5} />
-            <span>New ingredient</span>
+            New ingredient
           </button>
         ) : null}
 
+        {/* Group 2: Keep separate + Flag. */}
         <button
           type="button"
           className={`kf-btn kf-btn--ghost kf-btn--sm${op === "keepsep" ? " is-busy" : ""}`}
@@ -618,8 +607,7 @@ export function ReviewActions({
           onClick={keepSeparate}
           title="Hold these items out of this group permanently"
         >
-          <Scissors size={14} strokeWidth={1.5} />
-          <span>{op === "keepsep" ? "Saving..." : "Keep separate"}</span>
+          {op === "keepsep" ? "Saving..." : "Keep separate"}
         </button>
 
         <button
@@ -629,70 +617,78 @@ export function ReviewActions({
           onClick={flagChecked}
           title="Mark for a second look (optional note); stays in the queue, shows on the Overview flagged panel"
         >
-          <Flag size={14} strokeWidth={1.5} />
-          <span>{op === "flag" ? "Saving..." : "Flag"}</span>
+          {op === "flag" ? "Saving..." : "Flag"}
         </button>
 
-        {/* Q2 §2 addition: divider between "adjust this group" (Keep
-            separate, Flag) and "remove from queue" (Retail, Archive,
-            One-off, Not food). Six near-identical ghost buttons was
-            too many without a cluster break. The split reads as
-            intent, not just chrome. */}
-        <span className="kf-rvc__dispo-divider" aria-hidden />
+        {/* Divider before "not for recipes" group. */}
+        <span className="kf-rvc__actions-sep" aria-hidden />
 
+        {/* Group 3: Retail + Archive + One-off + Not food. Soft chrome;
+            keep the icons - the four are the "not for recipes" cluster
+            and the icon is how the eye sorts them. */}
         <button
           type="button"
-          className={`kf-btn kf-btn--ghost kf-btn--sm${op === "resale" ? " is-busy" : ""}`}
+          className={`kf-btn kf-btn--soft kf-btn--sm${op === "resale" ? " is-busy" : ""}`}
           disabled={op !== null || noneChecked}
           onClick={markResale}
           title="Sold as-is to players (water, snacks, sandwiches); tracked as retail spend, not a recipe ingredient"
         >
-          <ShoppingBag size={14} strokeWidth={1.5} />
+          <ShoppingBag size={14} strokeWidth={1.5} aria-hidden />
           <span>{op === "resale" ? "Saving..." : "Retail"}</span>
         </button>
 
         <button
           type="button"
-          className={`kf-btn kf-btn--ghost kf-btn--sm${op === "archived" ? " is-busy" : ""}`}
+          className={`kf-btn kf-btn--soft kf-btn--sm${op === "archived" ? " is-busy" : ""}`}
           disabled={op !== null || noneChecked}
           onClick={markArchived}
           title="Mistake or dead item; parked and not tracked in recipe coverage or retail"
         >
-          <Archive size={14} strokeWidth={1.5} />
+          <Archive size={14} strokeWidth={1.5} aria-hidden />
           <span>{op === "archived" ? "Saving..." : "Archive"}</span>
         </button>
 
-        {/* Q2 §2: One-off purchase. Sibling of Archive and Not food,
-            not a competitor to Confirm. Clock icon reads as "bought
-            once". */}
         <button
           type="button"
-          className={`kf-btn kf-btn--ghost kf-btn--sm${op === "oneoff" ? " is-busy" : ""}`}
+          className={`kf-btn kf-btn--soft kf-btn--sm${op === "oneoff" ? " is-busy" : ""}`}
           disabled={op !== null || noneChecked}
           onClick={markOneOff}
           title="Real food bought once that doesn't deserve a master (parked, not tracked in recipe coverage or retail)"
         >
-          <Clock size={14} strokeWidth={1.5} />
+          <Clock size={14} strokeWidth={1.5} aria-hidden />
           <span>{op === "oneoff" ? "Saving..." : "One-off"}</span>
         </button>
 
         <button
           type="button"
-          className={`kf-btn kf-btn--ghost kf-btn--sm${op === "notfood" ? " is-busy" : ""}`}
+          className={`kf-btn kf-btn--soft kf-btn--sm${op === "notfood" ? " is-busy" : ""}`}
           disabled={op !== null || noneChecked}
           onClick={markNotFood}
           title="Not a consumable product (fees, freight, supplies)"
         >
-          <Ban size={14} strokeWidth={1.5} />
+          <Ban size={14} strokeWidth={1.5} aria-hidden />
           <span>{op === "notfood" ? "Saving..." : "Not food"}</span>
         </button>
+
+        {op !== null ? (
+          <span className="kf-rvc__actions-status kf-rvc__actions-status--busy" aria-live="polite">
+            <Loader2 size={12} strokeWidth={2.5} className="kf-rvc__spin" aria-hidden />
+            Saving...
+          </span>
+        ) : showDone ? (
+          <span className="kf-rvc__actions-status kf-rvc__actions-status--done" aria-live="polite">
+            <Check size={12} strokeWidth={2.5} aria-hidden />
+            Done
+          </span>
+        ) : null}
       </div>
 
-      <div className="kf-rvc__dispo-help" role="note">
-        <strong>Confirm</strong> = recipe ingredient &middot; <strong>Retail</strong> = sold as-is
-        (water, snacks, sandwiches) &middot; <strong>Archive</strong> = mistake / dead item
-        &middot; <strong>One-off</strong> = bought once &middot; <strong>Not food</strong> =
-        fees / supplies.
+      <div className="kf-rvc__actions-foot">
+        <span className="kf-rvc__actions-foot-defs">
+          Not for recipes: <b>Retail</b> sold as-is &middot; <b>Archive</b> mistake or dead item
+          {" "}&middot; <b>One-off</b> bought once &middot; <b>Not food</b> fees and supplies
+        </span>
+        <span className="kf-rvc__actions-foot-moves">{movesLine}</span>
       </div>
 
       {showRelink ? (

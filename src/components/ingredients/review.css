@@ -93,49 +93,56 @@
 }
 .kf-rvc--new { border-left: 4px solid var(--sp-warn-strong); }
 
+/* N9 §2a head. One flex row: select-all, title (+ pencil), kind pill,
+ * Retail pill, {n} low confidence pill, crumb, spread. The totals
+ * block is pushed to the right via margin-left: auto. */
 .kf-rvc__head {
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
+  flex-wrap: wrap;
   gap: var(--sp-sp-3);
-  padding: var(--sp-sp-4);
+  padding: var(--sp-sp-4) var(--sp-sp-5);
   border-bottom: 1px solid var(--sp-line-soft);
-  flex-wrap: wrap;
-}
-.kf-rvc__title-wrap {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: var(--sp-sp-2);
 }
 .kf-rvc__title {
+  margin: 0;
   color: var(--sp-navy);
   font-family: var(--sp-disp);
   font-weight: 800;
-  font-size: var(--sp-t-h3);
-  margin: 0;
-}
-.kf-rvc__parent {
-  color: var(--sp-muted);
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-micro);
+  font-size: var(--sp-t-title);
+  line-height: 1;
   text-transform: uppercase;
-  letter-spacing: 1px;
+  letter-spacing: .2px;
 }
+.kf-rvc__title-btn {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-sp-2);
+  cursor: pointer;
+}
+.kf-rvc__title-btn:hover > span { text-decoration: underline; }
+.kf-rvc__title-btn:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
 .kf-rvc__totals {
+  margin-left: auto;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 2px;
+  gap: 3px;
+  text-align: right;
 }
 .kf-rvc__totals strong {
   font-family: var(--sp-disp);
   font-weight: 800;
-  font-size: var(--sp-t-h3);
+  font-size: var(--sp-t-num);
+  line-height: 1;
   color: var(--sp-ink);
   font-variant-numeric: tabular-nums;
 }
-.kf-rvc__totals span { color: var(--sp-muted); font-size: var(--sp-t-micro); }
+.kf-rvc__totals span { color: var(--sp-body); font-size: var(--sp-t-micro); }
+.kf-rvc__totals span b { color: var(--sp-ink); font-weight: 800; }
 
 /* Items table inside the card.
  *
@@ -185,19 +192,18 @@
   text-align: right;
 }
 
-/* Phone / narrow-tablet: hide heavy columns. Column order on the thead
- * matches the tbody order so nth-child targets both header and cells. */
+/* N9 §2b column order rewrites the nth-child targets.
+ * New columns: 1 select, 2 Item, 3 Vendor, 4 Pack, 5 Unit price,
+ * 6 Annual $, 7 Sites, 8 Activity.
+ * Below 760 px the card hides the same information as before:
+ * Vendor, Sites, Activity. Unit price + Annual $ stay visible. */
 @media (max-width: 760px) {
-  .kf-rvc__items thead th:nth-child(3),  /* Vendor / # */
+  .kf-rvc__items thead th:nth-child(3),  /* Vendor */
   .kf-rvc__items tbody td:nth-child(3),
-  .kf-rvc__items thead th:nth-child(7),  /* Lines */
+  .kf-rvc__items thead th:nth-child(7),  /* Sites */
   .kf-rvc__items tbody td:nth-child(7),
-  .kf-rvc__items thead th:nth-child(8),  /* Sites */
-  .kf-rvc__items tbody td:nth-child(8),
-  .kf-rvc__items thead th:nth-child(9),  /* Last purchase */
-  .kf-rvc__items tbody td:nth-child(9),
-  .kf-rvc__items thead th:nth-child(10), /* Conf */
-  .kf-rvc__items tbody td:nth-child(10) {
+  .kf-rvc__items thead th:nth-child(8),  /* Activity */
+  .kf-rvc__items tbody td:nth-child(8) {
     display: none;
   }
 }
@@ -247,49 +253,156 @@
   .kf-rvc__row--leaving td { transition: opacity var(--sp-fast) linear; }
   .kf-rvc__leaving-overlay { animation: none; }
 }
-.kf-rvc__desc {
+/* N9 §2c: item-name row - the name button (never truncated) + flag
+ * icon and catch-weight marker. Replaces the old .kf-rvc__desc stack. */
+.kf-rvc__nm {
   display: flex;
   align-items: center;
-  gap: var(--sp-sp-1);
+  gap: var(--sp-sp-2);
   min-width: 0;
 }
-/* Lets the item-name button ellipsize inside the flex row; without
- * min-width:0 the button overflows and pushes the row wider than its
- * fixed column, defeating the colgroup. */
-.kf-rvc__desc > .kf-rvc__row-btn { flex: 1 1 auto; min-width: 0; max-width: 100%; }
-.kf-rvc__desc > .kf-flag,
-.kf-rvc__desc > .kf-rvc__flagbtn { flex: 0 0 auto; }
-/* One muted meta line (OCR identifier + matcher reason) under the
- * item name. Both children inline so the row stays two lines; title
- * on the wrapper carries the full text when the line ellipsizes. */
-.kf-rvc__meta {
-  margin-top: 2px;
-  font-size: var(--sp-t-micro);
-  color: var(--sp-muted);
+.kf-rvc__nm > .kf-rvc__row-btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  font-family: var(--sp-ui);
+  font-weight: 600;
+  font-size: var(--sp-t-table);
+  color: var(--sp-ink);
   line-height: 1.3;
+  cursor: pointer;
+  /* Never truncated - wraps to as many lines as the content needs. */
+  white-space: normal;
+  word-break: break-word;
 }
-.kf-rvc__meta .kf-rvc__ocrname,
-.kf-rvc__meta .kf-rvc__reason { display: inline; margin: 0; white-space: nowrap; }
-.kf-rvc__meta-dot { color: var(--sp-line); }
-.kf-rvc__reason {
-  color: var(--sp-muted);
+.kf-rvc__nm > .kf-rvc__row-btn:hover { color: var(--sp-navy); }
+.kf-rvc__nm > .kf-rvc__row-btn:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
+.kf-rvc__nm > .kf-flag,
+.kf-rvc__nm > .kf-rvc__flagbtn { flex: 0 0 auto; }
+
+/* N9 §2c sub-lines under the item name + under the Vendor / Pack /
+ * Activity cells. One primitive, one color, no italics, no warn. */
+.kf-rvc__sublabel {
+  margin-top: 3px;
+  font-family: var(--sp-ui);
   font-size: var(--sp-t-micro);
-  margin-top: 2px;
-  font-style: italic;
-}
-/* Price + chip share a line in UnitPriceCell: the gap uses an inline
- * spacer instead of margin so the baseline stays with the number. */
-.kf-rvc__chip-gap { display: inline-block; width: var(--sp-sp-2); }
-.kf-rvc__items td.kf-table__num .kf-conf-chip { vertical-align: 1px; }
-/* The price cell's second line must never wrap - a wrap costs the whole
- * row a third line. Truncates instead; the cell title carries the full
- * wording. */
-.kf-rvc__secondary {
-  display: block;
+  color: var(--sp-body);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.kf-rvc__strong { font-weight: 800; color: var(--sp-ink); }
+
+.kf-rvc__ocr-line {
+  margin-top: 3px;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-body);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* N9 §2c: when confidence is low or medium, a small warn pill +
+ * matcher reason on its own line beneath the name. */
+.kf-rvc__low-line {
+  margin-top: 5px;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-sp-2);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-body);
+  line-height: 1.5;
+}
+.kf-rvc__low-line .kf-pill { padding: 2px 8px; }
+
+/* N9 §2c Unit price cell - exactly two lines, right-aligned, no chips.
+ * Line 1 holds the per-each price, the derived $/lb (in 800 navy),
+ * and the optional "own measure" tag. Line 2 is the muted sub-line
+ * with case figure + confidence word. */
+.kf-rvc__price {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+.kf-rvc__price-main {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: nowrap;
+  gap: var(--sp-sp-2);
+  white-space: nowrap;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  color: var(--sp-ink);
+}
+.kf-rvc__price-main > strong { font-weight: 800; color: var(--sp-ink); }
+.kf-rvc__price-derived {
+  font-weight: 800;
+  color: var(--sp-navy);
+  font-variant-numeric: tabular-nums;
+}
+.kf-rvc__own-measure {
+  font-weight: 400;
+  font-size: var(--sp-t-micro);
+  color: var(--sp-body);
+}
+.kf-rvc__price-sub {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-body);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* N9 §2e: neutral `lowest` / `highest` row tag beside the row's min
+ * or max price. Plain line pill - distinct from the warn / good pills. */
+.kf-rvc__row-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: var(--sp-r-pill);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 800;
+  letter-spacing: .5px;
+  text-transform: uppercase;
+  color: var(--sp-body);
+  background: var(--sp-line-soft);
+  white-space: nowrap;
+}
+
+/* N9 §2f: `{n} mo ago` warn marker in the Activity cell's sub-line.
+ * Keeps the date itself visible; this is the signal that the price
+ * is from a stale invoice (90+ days). */
+.kf-rvc__activity-stale {
+  font-weight: 800;
+  color: var(--sp-warn);
+}
+
+/* N9 §2a: head crumb + spread live inline in the head flex row. */
+.kf-rvc__head-crumb {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  color: var(--sp-body);
+}
+.kf-rvc__head-spread {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  color: var(--sp-body);
+  padding-left: var(--sp-sp-3);
+  border-left: 1px solid var(--sp-line);
+}
+.kf-rvc__head-spread strong { color: var(--sp-ink); font-weight: 800; }
 
 /* Actions */
 /* Deliberately NOT sticky. `position: sticky; bottom: 0` clamps to the
@@ -307,26 +420,26 @@
   flex-direction: column;
   gap: var(--sp-sp-3);
 }
-/*
- * The old "Pick individual items" expander is gone. Every row carries
- * its own checkbox in a leading column; a group-level select-all lives
- * in the card header. These rules style the new layout.
- */
-.kf-rvc__actions-summary {
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-micro);
-  color: var(--sp-body);
+/* N9 §2d: three button groups on one row + a foot line of micro text.
+ * Confirm/Relink/New ingredient (group 1), Keep separate/Flag
+ * (group 2), divider, Retail/Archive/One-off/Not food (group 3). The
+ * selected count is NOT in the bar - it lives in the head (§2a). */
+.kf-rvc__actions-row {
   display: flex;
   align-items: center;
-  gap: var(--sp-sp-3);
   flex-wrap: wrap;
+  gap: var(--sp-sp-2);
 }
-/* Shared save-status strip sits next to the "N of M selected" line.
- * "Saving..." while an op is in flight; "Done" with a check for 2.5s
- * after the write returns. Matches the DetailPanel SaveFlash pattern
- * so every save point in the review surface has a consistent in-flight
- * + success indicator. */
-.kf-rvc__status {
+.kf-rvc__actions-sep {
+  display: inline-block;
+  width: 1px;
+  height: 28px;
+  margin: 0 var(--sp-sp-1);
+  background: var(--sp-line);
+  align-self: center;
+}
+.kf-rvc__actions-status {
+  margin-left: auto;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -335,46 +448,31 @@
   font-family: var(--sp-ui);
   font-size: var(--sp-t-label);
   font-weight: 700;
-  letter-spacing: .3px;
 }
-.kf-rvc__status--busy { background: var(--sp-sky-tint); color: var(--sp-navy); }
-.kf-rvc__status--done { background: var(--sp-good-bg); color: var(--sp-good); }
+.kf-rvc__actions-status--busy { background: var(--sp-sky-tint); color: var(--sp-navy); }
+.kf-rvc__actions-status--done { background: var(--sp-good-bg); color: var(--sp-good); }
 .kf-rvc__spin { animation: kf-rvc-spin var(--sp-spin) linear infinite; }
-@keyframes kf-rvc-spin {
-  to { transform: rotate(360deg); }
-}
+@keyframes kf-rvc-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
   .kf-rvc__spin { animation: none; }
 }
-/* Three-way disposition helper line under the action buttons.
- * Confirm / Retail / Not food - distinct wordings so Kevin can tell
- * them apart at a glance; prevents the retail-vs-not-food mix-up that
- * cost us 12 water/PB&J items. */
-.kf-rvc__dispo-help {
-  color: var(--sp-muted);
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-label);
-  line-height: 1.4;
-  padding-top: var(--sp-sp-1);
-}
-.kf-rvc__dispo-help strong { color: var(--sp-ink); font-weight: 700; }
 
-/* Q2 §2 addition: cluster-break between "adjust this group" (Keep
- * separate, Flag) and "remove from queue" (Retail, Archive, One-off,
- * Not food). Thin vertical rule that sits in the button row and
- * reads as a semantic pause, not just extra whitespace. */
-.kf-rvc__dispo-divider {
-  display: inline-block;
-  width: 1px;
-  height: 18px;
-  margin: 0 var(--sp-sp-1);
-  background: var(--sp-line);
-  align-self: center;
+.kf-rvc__actions-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--sp-sp-5);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-body);
+  line-height: 1.5;
 }
-.kf-rvc__actions-summary strong {
+.kf-rvc__actions-foot-defs b { color: var(--sp-ink); font-weight: 800; }
+.kf-rvc__actions-foot-moves {
+  flex: 0 0 auto;
+  text-align: right;
+  font-weight: 700;
   color: var(--sp-ink);
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
 }
 
 /* Header select-all checkbox. The <label> provides the 44px click
@@ -460,12 +558,6 @@
 .kf-rvc__flagbtn--on:hover { color: var(--sp-warn-strong); }
 .kf-rvc__flagbtn.is-busy { opacity: 0.4; cursor: default; }
 
-.kf-rvc__btns {
-  display: flex;
-  gap: var(--sp-sp-2);
-  flex-wrap: wrap;
-}
-
 .kf-rvc__panel {
   background: var(--sp-card);
   border: 1px solid var(--sp-line);
@@ -500,14 +592,8 @@
   flex-wrap: wrap;
 }
 
-.kf-rvc__foot {
-  padding: var(--sp-sp-2) var(--sp-sp-4);
-  background: var(--sp-card);
-  border-top: 1px solid var(--sp-line-soft);
-  color: var(--sp-muted);
-  font-size: var(--sp-t-micro);
-  text-align: right;
-}
+/* N9: .kf-rvc__foot deleted. The right-side moves/select line now
+ * lives as the second row of the action bar (.kf-rvc__actions-foot). */
 
 /* ---------- Recent decisions ledger ---------- */
 .kf-review__ledger {
@@ -805,26 +891,13 @@
 /* ---------------------------------------------------------------------
  * Catalog enrichment + Kevin's casing rule.
  *
- * .kf-rvc__ocrname: the verbatim invoice OCR description shown as a
- *   second line under the clean catalog name. Smaller, lighter, never
- *   text-transform (OCR text is already BEEF SHORT RIB CHUCK FLAT in
- *   caps - don't Title-case it, just de-emphasize).
  * .kf-cell-sub--dim: a dimmer variant of the pack/price "source" sub.
- * .kf-site-pills: inline-flex wrap of account-code pills. Sentence-case
- *   is not applicable; account codes are stable short identifiers.
+ * .kf-site-pills: inline-flex wrap of account-code pills.
  * .kf-dpn__ocr: the detail-panel equivalent of the OCR secondary line.
  * .kf-dpn__gtin: tabular-nums + muted for the GTIN row.
+ * (N9: .kf-rvc__ocrname renamed to .kf-rvc__ocr-line and moved
+ * upstream alongside the other card sub-line primitives.)
  * --------------------------------------------------------------------- */
-.kf-rvc__ocrname {
-  color: var(--sp-muted);
-  font-size: var(--sp-t-micro);
-  font-weight: 400;
-  margin-top: 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-transform: none;
-}
 .kf-cell-sub--dim { color: var(--sp-muted); font-size: var(--sp-t-label); font-weight: 400; }
 
 .kf-site-pills {
@@ -1240,47 +1313,10 @@
   font-size: var(--sp-t-micro);
 }
 
-/* ---------------------------------------------------------------------
- * Per-unit confidence chip for the Unit Price column (step 5 Phase 1).
- * .ok = quiet green check, .low = amber "est."
- * --------------------------------------------------------------------- */
-.kf-conf-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 1px 5px;
-  border-radius: var(--sp-r-pill);
-  font-family: var(--sp-ui);
-  /* Sentence case at micro: "from spend" measured 116px uppercase at
-   * 13px with tracking, which forced the chip onto its own line inside
-   * the price column. 12px, no tracking, no caps is ~87px and reads as
-   * a label rather than a shout. */
-  font-size: var(--sp-t-micro);
-  font-weight: 700;
-  letter-spacing: 0;
-  white-space: nowrap;
-}
-.kf-conf-chip--ok { color: var(--sp-good); background: var(--sp-good-bg); }
-.kf-conf-chip--low { color: var(--sp-warn); background: var(--sp-warn-bg); }
-/* Override = human-attested; distinct from auto 'high' so Kevin can
- * tell "this was set by hand" at a glance. */
-.kf-conf-chip--override {
-  color: var(--sp-navy);
-  background: color-mix(in srgb, var(--sp-navy) 10%, var(--sp-card));
-  border: 1px solid color-mix(in srgb, var(--sp-navy) 25%, transparent);
-  padding: 0 5px;
-}
-/* Derived = blended from real invoice spend (Prompt B, PR35). It is the
- * most trusted machine tier and sits on most priced rows, so it must
- * NOT wear the warn hue - amber is for est. and needs-pack only.
- * Sky-tint / navy reads as "system fact"; override keeps its navy
- * outline so "set by hand" still stands apart. */
-.kf-conf-chip--derived {
-  color: var(--sp-navy);
-  background: var(--sp-sky-tint);
-  border: 1px solid transparent;
-  padding: 0 5px;
-}
+/* N9: .kf-conf-chip family deleted. The confidence word is now plain
+ * micro text on the Unit price cell's sub-line (override / from spend
+ * / per-unit (high) / est. (low)); the per-row Low/Medium confidence
+ * pill reuses .kf-pill--warn. */
 
 /* ---------------------------------------------------------------------
  * Admin surface: /stockpot/ingredients/admin PackBackfillButton.

@@ -908,7 +908,7 @@ function EachMeasureControl({ row }: { row: MasterRow }) {
           onChange={(e) => setQtyDraft(e.target.value)}
           onBlur={() => onCommit(qtyDraft, uomDraft)}
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onCommit(qtyDraft, uomDraft); } }}
-          placeholder="qty"
+          placeholder=""
           aria-label="One each, quantity"
           disabled={busy}
           className="kf-dt__unitsel"
