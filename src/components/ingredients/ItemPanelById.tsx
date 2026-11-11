@@ -29,6 +29,8 @@ export function ItemPanelById({
     | { phase: "ready"; id: string; data: Fetched }
     | { phase: "error"; id: string; message: string }
   >({ phase: "idle" });
+  // N7 B6: bumped by onInvalidate to re-fetch without closing the panel.
+  const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
     if (!itemId) {
@@ -36,7 +38,11 @@ export function ItemPanelById({
       return;
     }
     const current = itemId;
-    setState({ phase: "loading", id: current });
+    // Only move to loading on the initial fetch; nonce bumps keep the
+    // panel visible while the next fetch resolves.
+    if (state.phase !== "ready" || state.id !== current) {
+      setState({ phase: "loading", id: current });
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -71,7 +77,8 @@ export function ItemPanelById({
     return () => {
       cancelled = true;
     };
-  }, [itemId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemId, nonce]);
 
   if (!itemId || state.phase === "idle") return null;
 
@@ -86,6 +93,7 @@ export function ItemPanelById({
         parents={parents}
         proposedName={null}
         proposedParent={null}
+        onInvalidate={() => setNonce((n) => n + 1)}
       />
     );
   }

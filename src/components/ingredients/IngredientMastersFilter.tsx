@@ -30,6 +30,7 @@ import { ItemPanelById } from "./ItemPanelById";
 import { IngredientPanelById } from "./IngredientPanelById";
 import { IngredientAllergens } from "./IngredientAllergens";
 import { SUPER_CATEGORIES } from "@/lib/ingredients/categories";
+import { BaseUnitControl } from "./panel/BaseUnitControl";
 import {
   WEIGHT_UOMS,
   VOLUME_UOMS,
@@ -830,55 +831,9 @@ function errText(data: unknown, fallback: string): string {
   return fallback;
 }
 
-// Writes pr_ingredients.base_unit. The blend is computed from this on
-// every render, so a successful save + router.refresh() is the whole
-// story: the pane's per-unit price, spread, coverage and issue badges
-// all re-derive. Reversible by picking the old value back.
-function BaseUnitControl({ row }: { row: MasterRow }) {
-  const router = useRouter();
-  const [busy, setBusy] = useState(false);
-
-  async function save(next: string) {
-    if (next === row.baseUnit || busy) return;
-    setBusy(true);
-    const r = await postJson("/api/review/set-base-unit", {
-      ingredientId: row.id,
-      baseUnit: next,
-    });
-    if (!r.ok) {
-      toast(errText(r.data, `Save failed (${r.status})`), { tone: "block" });
-      setBusy(false);
-      return;
-    }
-    toast(`${row.name} is now costed per ${next}`);
-    setBusy(false);
-    router.refresh();
-  }
-
-  return (
-    <span className="kf-dt__unitctl">
-      <Scale size={13} strokeWidth={1.5} aria-hidden />
-      <label className="kf-dt__unitctl-l" htmlFor={`bu-${row.id}`}>
-        Costed per
-      </label>
-      <select
-        id={`bu-${row.id}`}
-        className="kf-dt__unitsel"
-        value={row.baseUnit}
-        disabled={busy}
-        onChange={(e) => save(e.target.value)}
-      >
-        {BASE_UNIT_GROUPS.map((g) => (
-          <optgroup key={g.label} label={g.label}>
-            {g.options.map((u) => (
-              <option key={u} value={u}>{uomLabel(u)}</option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
-    </span>
-  );
-}
+// N7 B6: BaseUnitControl moved to ./panel/BaseUnitControl.tsx so the
+// item panel's ingredient zone can mount the same writer. Markup and
+// behaviour unchanged.
 
 // N6: usual measure of one each. Writes the pr_ingredients.each_measure_*
 // trio via POST /api/review/set-each-measure. Row control carries qty +

@@ -41,6 +41,8 @@ export function IngredientPanelById({
   // vulnerable to and lets abandoned/errored requests retry on
   // reopen (requestedFor cleared in cleanup when !done).
   const requestedFor = useRef<string | null>(null);
+  // N7 B6: bumped by onInvalidate to force a re-fetch without closing.
+  const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
     if (!ingredientId) {
@@ -48,11 +50,17 @@ export function IngredientPanelById({
       setState({ phase: "idle" });
       return;
     }
-    if (requestedFor.current === ingredientId) return;
-    requestedFor.current = ingredientId;
+    // Compose id+nonce so that a bumped nonce triggers a re-fetch.
+    const requestKey = `${ingredientId}#${nonce}`;
+    if (requestedFor.current === requestKey) return;
+    requestedFor.current = requestKey;
     let cancelled = false;
     let done = false;
-    setState({ phase: "loading", id: ingredientId });
+    // Only show loading on the first fetch for this id; re-fetches
+    // keep the panel visible.
+    if (state.phase !== "ready" || state.id !== ingredientId) {
+      setState({ phase: "loading", id: ingredientId });
+    }
     (async () => {
       try {
         const res = await fetch(`/api/review/ingredient?id=${encodeURIComponent(ingredientId)}`, {
@@ -94,7 +102,8 @@ export function IngredientPanelById({
       cancelled = true;
       if (!done) requestedFor.current = null;
     };
-  }, [ingredientId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ingredientId, nonce]);
 
   if (!ingredientId || state.phase === "idle") return null;
 
@@ -109,6 +118,7 @@ export function IngredientPanelById({
         parents={parents}
         proposedName={null}
         proposedParent={null}
+        onInvalidate={() => setNonce((n) => n + 1)}
       />
     );
   }
