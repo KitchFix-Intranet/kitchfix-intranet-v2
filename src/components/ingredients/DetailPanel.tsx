@@ -2,34 +2,29 @@
 
 // Right-side slide-in detail panel for the review queue.
 //
-// N7 commit 1 (structure):
-//   head (§3a)
-//   summary strip (§3b, item modes)
-//   attention (§3c, item modes - only when there is something)
-//   item editor blocks (§3d - PackOverrideBlock, ItemGradeBlock,
-//                       PriceOverrideBlock, EvidenceSection)
-//   ingredient editor (§3e - rename, category, Costed per [N7],
-//                      each measure, resale, allergens, merge)
-//   closed rows (§3f - Change history, lazy on first open)
+// N7 composition (final):
+//   head          §3a  PanelHead
+//   summary strip §3b  PanelStrip                (item modes only)
+//   attention     §3c  PanelAttention            (item modes only)
+//   this item     §3d  PanelItemZone             (item modes only)
+//   ingredient    §3e  PanelIngredientZone[Pending]
+//   closed rows   §3f  PanelClosedRows           (retail / merge /
+//                                                  evidence / history)
 //
 // Shell owns: drawer chrome (backdrop, slide-in, focus trap, Escape).
-// All sub-blocks live in ./panel/*. B4: PackOverride/ItemGrade/
-// PriceOverride/EvidenceBody/LedgerBlock keep their internal markup
-// and classes; only their wrapper changed.
+// B4: editor internals (PackOverrideBlock, PriceOverrideBlock,
+// ItemGradeBlock, EvidenceBody, IngredientAllergens, ledger list)
+// keep their inner markup + classes.
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { X } from "lucide-react";
 import type { ReviewCardIngredient, ReviewGroupItem } from "./itemTypes";
-import { IngredientBlock } from "./panel/IngredientBlock";
-import { PendingIngredientBlock } from "./panel/PendingIngredientBlock";
-import { ItemGradeBlock } from "./panel/ItemGradeBlock";
-import { PackOverrideBlock } from "./panel/PackOverrideBlock";
-import { PriceOverrideBlock } from "./panel/PriceOverrideBlock";
-import { EvidenceSection } from "./panel/EvidenceSection";
 import { PanelHead } from "./panel/PanelHead";
 import { PanelStrip } from "./panel/PanelStrip";
 import { PanelAttention, computeAttentionCounts } from "./panel/PanelAttention";
+import { PanelItemZone } from "./panel/PanelItemZone";
+import { PanelIngredientZone, PanelIngredientZonePending } from "./panel/PanelIngredientZone";
 import { PanelClosedRows } from "./panel/PanelClosedRows";
 import type { PackHint } from "./panel/packHelpers";
 import "./drawer.css";
@@ -62,8 +57,7 @@ export function DetailPanel({
   // N7 B6: callers that fetch panel data themselves (ItemPanelById /
   // IngredientPanelById) pass a refetch fn; it fires after any panel
   // write that would change the data the wrapper fetched. ReviewCard
-  // leaves it undefined and router.refresh() handles the server-side
-  // path.
+  // leaves it undefined and router.refresh() handles the server path.
   onInvalidate?: () => void;
 }) {
   const router = useRouter();
@@ -71,8 +65,8 @@ export function DetailPanel({
   const asideRef = useRef<HTMLDivElement>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
   const [closing, setClosing] = useState(false);
-  // N7: pack-hint fed from PanelAttention's "Fix the pack" button into
-  // PackOverrideBlock (same mechanism as the pre-N7 ItemPanelBody).
+  // Pack-hint from PanelAttention's "Fix the pack" button; threaded
+  // into PanelItemZone which forces the Pack and price row open.
   const [packHint, setPackHint] = useState<PackHint | null>(null);
 
   const parentOptions = useMemo(() => {
@@ -85,7 +79,6 @@ export function DetailPanel({
 
   const item = open.kind === "item" ? items.find((i) => i.id === open.itemId) ?? null : null;
 
-  // N7 B6: any onDone from a sub-block invalidates the parent's view.
   const onDone = () => {
     router.refresh();
     if (onInvalidate) onInvalidate();
@@ -131,8 +124,6 @@ export function DetailPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Head status pill count (shared with PanelAttention via
-  // computeAttentionCounts).
   const attentionCounts = open.kind === "item" && item
     ? computeAttentionCounts(item, ingredient)
     : { total: 0, hasNoIngredient: false, provenance: { packHandSet: false, priceHandSet: false } };
@@ -183,32 +174,32 @@ export function DetailPanel({
         ) : null}
 
         {open.kind === "item" && item ? (
-          <>
-            <ItemGradeBlock item={item} onDone={onDone} />
-            <PackOverrideBlock item={item} ingredient={ingredient} hint={packHint} onDone={onDone} />
-            <PriceOverrideBlock item={item} ingredient={ingredient} onDone={onDone} />
-          </>
+          <PanelItemZone
+            item={item}
+            ingredient={ingredient}
+            packHint={packHint}
+            onDone={onDone}
+          />
         ) : null}
 
         {ingredient ? (
-          <IngredientBlock
+          <PanelIngredientZone
             ingredient={ingredient}
             parentOptions={parentOptions}
-            parents={parents}
             onDone={onDone}
           />
         ) : (
-          <PendingIngredientBlock
+          <PanelIngredientZonePending
             proposedName={proposedName ?? null}
             proposedParent={proposedParent ?? null}
           />
         )}
 
-        {open.kind === "item" && item ? <EvidenceSection item={item} /> : null}
-
         <PanelClosedRows
-          ingredientId={ingredient?.id ?? null}
-          itemId={open.kind === "item" ? open.itemId : null}
+          item={item}
+          ingredient={ingredient}
+          parents={parents}
+          onDone={onDone}
         />
       </aside>
     </>

@@ -17,7 +17,6 @@ import { convertPer, uomLabel } from "@/lib/ingredients/pack";
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 import { SaveFlash } from "./SaveFlash";
 import { postJson, errMsg } from "./common";
-import { ItemEachMeasureBlock } from "./ItemEachMeasureBlock";
 import {
   UOM_GROUPS,
   BILLED_UNIT_GROUPS,
@@ -532,14 +531,13 @@ export function PackOverrideBlock({
   }
 
   return (
-    <section className="kf-drawer__block kf-dpn__block" aria-label="Pack size">
-      <header className="kf-drawer__block-head">
-        <h4>Pack size</h4>
-        <small>
-          How the invoice reads it, what to change it to, and whether the result will join the
-          blend. Copies to twins with the same item number.
-        </small>
-      </header>
+    <div className="kf-dpn__block" aria-label="Pack and price editor">
+      {/* N7 §3d: GTIN surfaces inside the open editor, per B3 ruling. */}
+      {item.gtin ? (
+        <div className="kf-dpn__hint kf-dpn__gtin">
+          <span className="kf-muted">GTIN</span> {item.gtin}
+        </div>
+      ) : null}
 
       {/* Mode switch - decides which `Change to` controls render below.
           aria-pressed on each button; corp floor via .kf-chain__mode-btn. */}
@@ -820,15 +818,10 @@ export function PackOverrideBlock({
             ) : null}
           </div>
         </div>
-        {/* N6 frame C right: a per-item each measure override. Shown
-            only when the item is priced per EA, because deriveRecipePrice
-            refuses to convert anything else - a measure on an LB- or
-            GAL-priced item would be a control that does nothing. */}
-        {item.perBaseUom === "EA" ? (
-          <ItemEachMeasureBlock item={item} ingredient={ingredient} onDone={onDone} />
-        ) : null}
+        {/* N7 §3d: ItemEachMeasureBlock lifted OUT of the pack editor
+            and promoted to its own row in PanelItemZone. */}
       </div>
-    </section>
+    </div>
   );
 }
 

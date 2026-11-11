@@ -1,10 +1,12 @@
 "use client";
 
-// Evidence - lazy-loaded on first expand. Fetches /api/review/item-evidence.
-// Lifted verbatim from DetailPanel.tsx in N7 commit 0.
+// Evidence body. N7 §3f: the disclosure row (chevron + label + sub)
+// lives in PanelClosedRows; this file provides the lazy-fetching body
+// and renders it when the caller's `open` is true. The fetch effect
+// gates on `open` so no request fires until the user expands the row.
 
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Check, ChevronDown, Info } from "lucide-react";
+import { AlertTriangle, Check, Info } from "lucide-react";
 import { fmtCount, fmtDate, fmtUsd } from "@/lib/fmt";
 import type { ReviewGroupItem } from "../itemTypes";
 import { fmtUsdCents } from "./packHelpers";
@@ -51,8 +53,15 @@ type EvidencePayload = {
   variants: EvidenceVariant[];
 };
 
-export function EvidenceSection({ item }: { item: ReviewGroupItem }) {
-  const [open, setOpen] = useState(false);
+// N7 §3f: body-only; the caller owns the disclosure row and passes
+// `open`. Fetch effect gates on it.
+export function EvidenceSection({
+  item,
+  open,
+}: {
+  item: ReviewGroupItem;
+  open: boolean;
+}) {
   const [state, setState] = useState<
     | { phase: "idle" }
     | { phase: "loading" }
@@ -116,46 +125,23 @@ export function EvidenceSection({ item }: { item: ReviewGroupItem }) {
     };
   }, [open, item.id]);
 
-  const summary =
-    state.phase === "ready"
-      ? `${fmtCount(state.data.invoiceLines.length)} line${state.data.invoiceLines.length === 1 ? "" : "s"} · ${fmtCount(state.data.bySite.length)} site${state.data.bySite.length === 1 ? "" : "s"}`
-      : "";
-
+  if (!open) return null;
   return (
-    <section className="kf-drawer__block kf-dpn__block" aria-label="Evidence">
-      <button
-        type="button"
-        className="kf-attn__head"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-      >
-        <ChevronDown
-          size={16}
-          strokeWidth={1.75}
-          aria-hidden
-          className={`kf-attn__chev${open ? " is-open" : ""}`}
-        />
-        <h4 className="kf-attn__title">Evidence</h4>
-        <span className="kf-attn__count">{summary || "expand to load"}</span>
-      </button>
-      {open ? (
-        <div className="kf-evidence">
-          {state.phase === "loading" ? (
-            <div className="kf-muted">Loading...</div>
-          ) : state.phase === "error" ? (
-            <div className="kf-attn__note kf-attn__note--bad">
-              <AttentionIcon tone="bad" />
-              <div>
-                <b>Could not load evidence</b>
-                <span>{state.message}</span>
-              </div>
-            </div>
-          ) : state.phase === "ready" ? (
-            <EvidenceBody data={state.data} highlightItemId={item.id} />
-          ) : null}
+    <div className="kf-evidence">
+      {state.phase === "loading" ? (
+        <div className="kf-muted">Loading...</div>
+      ) : state.phase === "error" ? (
+        <div className="kf-attn__note kf-attn__note--bad">
+          <AttentionIcon tone="bad" />
+          <div>
+            <b>Could not load evidence</b>
+            <span>{state.message}</span>
+          </div>
         </div>
+      ) : state.phase === "ready" ? (
+        <EvidenceBody data={state.data} highlightItemId={item.id} />
       ) : null}
-    </section>
+    </div>
   );
 }
 

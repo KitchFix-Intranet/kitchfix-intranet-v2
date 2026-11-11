@@ -78,13 +78,11 @@ export function LedgerBlock({
     };
   }, [open, ingredientId, itemId]);
 
+  // N7 §3f: body-only; the disclosure row + sub-line live on the caller
+  // (PanelClosedRows). No kf-drawer__block wrapper, no h4.
+  if (!open) return null;
   return (
-    <section className="kf-drawer__block kf-dpn__block" aria-label="Change history">
-      <header className="kf-drawer__block-head">
-        <h4>Change history</h4>
-        <small>last 10 actions, newest first</small>
-      </header>
-
+    <div className="kf-dpn__ledger" aria-label="Change history">
       {events === null ? (
         <div className="kf-dpn__ledger-loading">Loading history...</div>
       ) : error ? (
@@ -100,7 +98,7 @@ export function LedgerBlock({
           ))}
         </ul>
       )}
-    </section>
+    </div>
   );
 }
 

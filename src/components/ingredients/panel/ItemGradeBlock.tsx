@@ -46,49 +46,33 @@ export function ItemGradeBlock({
   }
 
   return (
-    <section className="kf-drawer__block kf-dpn__block" aria-label="Grade">
-      <header className="kf-drawer__block-head">
-        <h4>Grade</h4>
-        <small>
-          Quality tier of this vendor item. Standard is the default.
-          Premium names a dearer sourcing (Coleman, Bell &amp; Evans,
-          prime grade, etc.) so the master's rollup can separate the
-          two.
-        </small>
-      </header>
-      <div className="kf-grade">
-        <div className="kf-grade__ctl" role="radiogroup" aria-label="Item grade">
-          <button
-            type="button"
-            role="radio"
-            aria-checked={current === "standard"}
-            aria-pressed={current === "standard"}
-            className={`kf-grade__btn${current === "standard" ? " kf-grade__btn--on" : ""}`}
-            onClick={() => setGrade("standard")}
-            disabled={busy}
-          >
-            Standard
-          </button>
-          <button
-            type="button"
-            role="radio"
-            aria-checked={current === "premium"}
-            aria-pressed={current === "premium"}
-            className={`kf-grade__btn kf-grade__btn--premium${current === "premium" ? " kf-grade__btn--on" : ""}`}
-            onClick={() => setGrade("premium")}
-            disabled={busy}
-          >
-            Premium
-          </button>
-          <SaveFlash savedAt={savedAt} error={error} />
-        </div>
-        <div className="kf-dpn__hint">
-          Grade is a property of this vendor item, not its ingredient.
-          A master can hold a mix - the detail pane rolls up blended,
-          standard and premium prices separately.
-        </div>
+    <div className="kf-grade" aria-label="Grade">
+      <div className="kf-grade__ctl" role="radiogroup" aria-label="Item grade">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={current === "standard"}
+          aria-pressed={current === "standard"}
+          className={`kf-grade__btn${current === "standard" ? " kf-grade__btn--on" : ""}`}
+          onClick={() => setGrade("standard")}
+          disabled={busy}
+        >
+          Standard
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={current === "premium"}
+          aria-pressed={current === "premium"}
+          className={`kf-grade__btn kf-grade__btn--premium${current === "premium" ? " kf-grade__btn--on" : ""}`}
+          onClick={() => setGrade("premium")}
+          disabled={busy}
+        >
+          Premium
+        </button>
+        <SaveFlash savedAt={savedAt} error={error} />
       </div>
-    </section>
+    </div>
   );
 }
 

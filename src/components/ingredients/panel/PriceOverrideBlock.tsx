@@ -92,15 +92,7 @@ export function PriceOverrideBlock({
   }
 
   return (
-    <section className="kf-drawer__block kf-dpn__block" aria-label="Price override">
-      <header className="kf-drawer__block-head">
-        <h4>Price override</h4>
-        <small>
-          Use this when the pack is right and the number is not. Fixing the pack above corrects
-          the cause; this one covers the symptom.
-        </small>
-      </header>
-
+    <div className="kf-dpn__block" aria-label="Price override editor">
       <div className="kf-dpn__row kf-newing__row">
         <label className="kf-dpn__label">
           <span>$ per unit</span>
@@ -169,7 +161,7 @@ export function PriceOverrideBlock({
         </button>
         <SaveFlash savedAt={savedAt} error={error} />
       </div>
-    </section>
+    </div>
   );
 }
 
