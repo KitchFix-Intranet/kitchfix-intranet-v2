@@ -12,7 +12,7 @@ import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 import { DIM_BY_UOM } from "@/lib/ingredients/pack";
 import { ingredientBaseUom, ingredientBaseDim } from "./packHelpers";
 
-type AttentionIssue =
+export type AttentionIssue =
   | { kind: "no_price"; tone: "bad"; head: string; body: string; fix?: "pack" }
   | { kind: "pack_unreadable"; tone: "info"; head: string; body: string; fix: "pack" }
   | { kind: "unit_mismatch"; tone: "bad"; head: string; body: string; fix: "pack"; targetUom: string }
@@ -28,7 +28,7 @@ type AttentionIssue =
 // directly. deriveAttention's issue kinds, tones, copy and order are
 // unchanged - only the lookup moved.
 
-function deriveAttention(
+export function deriveAttention(
   item: ReviewGroupItem,
   ingredient: ReviewCardIngredient | null
 ): AttentionIssue[] {

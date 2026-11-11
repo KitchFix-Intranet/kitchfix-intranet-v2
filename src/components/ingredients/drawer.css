@@ -526,3 +526,241 @@
 .kf-evi__t th.kf-evi__num { text-align: right; }
 .kf-evi__row--self { background: var(--sp-sky-tint); }
 .kf-evi__row--self td { font-weight: 700; }
+
+/* ======================================================================
+ * N7: one-piece item panel.
+ *
+ * kf-ipanel__* primitives cover the five rules:
+ *   1. Read, then problem, then fix.
+ *   2. Two zones, never mixed (item = white card, ingredient = sky).
+ *   3. One row shape: 150px label, value, one action; stacks at 520.
+ *   4. One filled button at rest; simple fields self-save.
+ *   5. Rare + heavy stays closed.
+ *
+ * Classes extend the existing kf-drawer chrome. All numbers in tokens.
+ * ---------------------------------------------------------------------- */
+
+.kf-ipanel__strip {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0;
+  background: var(--sp-raise);
+  border-top: 1px solid var(--sp-line-soft);
+  border-bottom: 1px solid var(--sp-line-soft);
+}
+.kf-ipanel__strip-cell {
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  border-right: 1px solid var(--sp-line-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.kf-ipanel__strip-cell:last-child { border-right: none; }
+.kf-ipanel__strip-label {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+  color: var(--sp-muted);
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+.kf-ipanel__strip-value {
+  font-family: var(--sp-num);
+  font-size: var(--sp-t-num);
+  font-weight: 800;
+  color: var(--sp-ink);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.kf-ipanel__strip-sub {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-sp-1);
+  align-items: baseline;
+}
+.kf-ipanel__strip-sub strong { color: var(--sp-ink); font-weight: 700; }
+
+.kf-ipanel__zone {
+  padding: var(--sp-sp-5) var(--sp-sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+}
+.kf-ipanel__zone--item {
+  background: var(--sp-card);
+}
+.kf-ipanel__zone--ing {
+  background: var(--sp-sky-soft);
+}
+.kf-ipanel__zone-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-sp-3);
+  padding-bottom: var(--sp-sp-2);
+  border-bottom: 2px solid var(--sp-navy);
+  margin-bottom: var(--sp-sp-3);
+}
+.kf-ipanel__zone--ing .kf-ipanel__zone-head { border-bottom-color: var(--sp-sky-line); }
+.kf-ipanel__zone-head h4 {
+  margin: 0;
+  font-family: var(--sp-display);
+  font-size: var(--sp-t-h4);
+  font-weight: 800;
+  color: var(--sp-ink);
+}
+.kf-ipanel__zone-head-right {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  display: flex;
+  gap: var(--sp-sp-2);
+  align-items: center;
+}
+
+.kf-ipanel__row {
+  display: grid;
+  grid-template-columns: 150px 1fr auto;
+  gap: var(--sp-sp-4);
+  align-items: center;
+  min-height: 64px;
+  padding: var(--sp-sp-3) 0;
+  border-top: 1px solid var(--sp-line-soft);
+}
+.kf-ipanel__zone--ing .kf-ipanel__row { border-top-color: var(--sp-sky-line); }
+.kf-ipanel__row:first-of-type { border-top: 0; }
+.kf-ipanel__row-label {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  font-weight: 800;
+  color: var(--sp-ink);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+}
+.kf-ipanel__row-label-sub {
+  font-weight: 500;
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+}
+.kf-ipanel__row-value {
+  min-width: 0;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  color: var(--sp-ink);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+}
+.kf-ipanel__row-value-flex {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-sp-2);
+  align-items: center;
+}
+.kf-ipanel__row-action {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-sp-2);
+}
+.kf-ipanel__row-help {
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  grid-column: 2 / 3;
+}
+
+/* Disclosure row (56px, bold label + muted line + chevron). */
+.kf-ipanel__drow {
+  display: grid;
+  grid-template-columns: 150px 1fr auto;
+  gap: var(--sp-sp-4);
+  align-items: center;
+  min-height: 56px;
+  padding: var(--sp-sp-2) var(--sp-sp-5);
+  background: var(--sp-card);
+  border: 0;
+  border-top: 1px solid var(--sp-line-soft);
+  width: 100%;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+.kf-ipanel__drow:hover { background: var(--sp-raise); }
+.kf-ipanel__drow:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: -2px; }
+.kf-ipanel__drow-label {
+  font-weight: 800;
+  color: var(--sp-ink);
+  font-size: var(--sp-t-table);
+}
+.kf-ipanel__drow-sub {
+  color: var(--sp-muted);
+  font-size: var(--sp-t-micro);
+  justify-self: start;
+  min-width: 0;
+}
+.kf-ipanel__drow-chev {
+  color: var(--sp-muted);
+  transition: transform .18s;
+}
+.kf-ipanel__drow-chev.is-open { transform: rotate(180deg); }
+.kf-ipanel__drow-body {
+  padding: var(--sp-sp-3) var(--sp-sp-5) var(--sp-sp-4);
+  background: var(--sp-card);
+  border-top: 1px dashed var(--sp-line-soft);
+}
+
+/* Attention block - always open (no chevron). */
+.kf-ipanel__attn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+  padding: var(--sp-sp-3) var(--sp-sp-5);
+  background: var(--sp-raise);
+  border-top: 1px solid var(--sp-line-soft);
+  border-bottom: 1px solid var(--sp-line-soft);
+}
+.kf-ipanel__attn-item {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: var(--sp-sp-3);
+  align-items: start;
+  padding: var(--sp-sp-2) var(--sp-sp-3);
+  background: var(--sp-card);
+  border-radius: var(--sp-r-md);
+  border: 1px solid var(--sp-line-soft);
+}
+.kf-ipanel__attn-item--bad   { border-color: var(--sp-block); background: var(--sp-block-bg); }
+.kf-ipanel__attn-item--info  { border-color: var(--sp-info); background: var(--sp-info-bg); }
+.kf-ipanel__attn-item > svg { color: var(--sp-ink); margin-top: 2px; }
+.kf-ipanel__attn-item--bad  > svg { color: var(--sp-block); }
+.kf-ipanel__attn-item--info > svg { color: var(--sp-info); }
+.kf-ipanel__attn-item-text  { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.kf-ipanel__attn-item-head  { font-weight: 800; color: var(--sp-ink); font-size: var(--sp-t-table); }
+.kf-ipanel__attn-item-body  { color: var(--sp-muted); font-size: var(--sp-t-micro); }
+
+/* Provenance notes inline inside item-zone rows. */
+.kf-ipanel__provenance {
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  font-style: italic;
+}
+
+/* Phone: strip two-by-two; rows stack. */
+@media (max-width: 520px) {
+  .kf-ipanel__strip { grid-template-columns: repeat(2, 1fr); }
+  .kf-ipanel__strip-cell:nth-child(2) { border-right: none; }
+  .kf-ipanel__strip-cell:nth-child(-n+2) { border-bottom: 1px solid var(--sp-line-soft); }
+  .kf-ipanel__row,
+  .kf-ipanel__drow {
+    grid-template-columns: 1fr;
+    gap: var(--sp-sp-2);
+  }
+  .kf-ipanel__row-label { font-size: var(--sp-t-micro); }
+  .kf-ipanel__row-action { justify-content: flex-start; }
+}

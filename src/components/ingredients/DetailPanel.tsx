@@ -1,37 +1,37 @@
 "use client";
 
-// Right-side slide-in detail panel for the review queue. One instance
-// per ReviewCard; opens via local useState from the card's row buttons
-// (kind: "item") or the header title button (kind: "ingredient").
+// Right-side slide-in detail panel for the review queue.
 //
-// Shape:
-//   - Ingredient section (always, when ingredient exists): rename,
-//     category (super) + sub (parent), resale toggle. Each sub-form has
-//     its own Save; successful writes router.refresh() so the pre-
-//     rendered server cards re-read the DB.
-//   - Item section (only when kind=item): item facts (name, vendor, #,
-//     pack, unit, 12m $, lines, sites, last seen, confidence, unit
-//     price) + pack-override form.
+// N7 commit 1 (structure):
+//   head (§3a)
+//   summary strip (§3b, item modes)
+//   attention (§3c, item modes - only when there is something)
+//   item editor blocks (§3d - PackOverrideBlock, ItemGradeBlock,
+//                       PriceOverrideBlock, EvidenceSection)
+//   ingredient editor (§3e - rename, category, Costed per [N7],
+//                      each measure, resale, allergens, merge)
+//   closed rows (§3f - Change history, lazy on first open)
 //
-// Reuses the kf-drawer* CSS from drawer.css for the backdrop + slide-in
-// mechanics; the panel-internal form styles live in review.css under
-// kf-dpn__*. Owns its own Esc / backdrop / focus-trap handling - not
-// coupled to a URL param (unlike the vendor-item DrawerFrame).
-//
-// N7 commit 0: the block-by-block guts of the panel have been extracted
-// verbatim to ./panel/*.tsx so the file reads as a shell. Markup,
-// classes, save triggers and fetch semantics are unchanged - only the
-// file layout moved. Follow-up commits re-chrome the composition.
+// Shell owns: drawer chrome (backdrop, slide-in, focus trap, Escape).
+// All sub-blocks live in ./panel/*. B4: PackOverride/ItemGrade/
+// PriceOverride/EvidenceBody/LedgerBlock keep their internal markup
+// and classes; only their wrapper changed.
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { X } from "lucide-react";
 import type { ReviewCardIngredient, ReviewGroupItem } from "./itemTypes";
-import { ItemFacts } from "./panel/ItemFacts";
 import { IngredientBlock } from "./panel/IngredientBlock";
 import { PendingIngredientBlock } from "./panel/PendingIngredientBlock";
-import { ItemPanelBody } from "./panel/ItemPanelBody";
-import { LedgerBlock } from "./panel/LedgerBlock";
+import { ItemGradeBlock } from "./panel/ItemGradeBlock";
+import { PackOverrideBlock } from "./panel/PackOverrideBlock";
+import { PriceOverrideBlock } from "./panel/PriceOverrideBlock";
+import { EvidenceSection } from "./panel/EvidenceSection";
+import { PanelHead } from "./panel/PanelHead";
+import { PanelStrip } from "./panel/PanelStrip";
+import { PanelAttention, computeAttentionCounts } from "./panel/PanelAttention";
+import { PanelClosedRows } from "./panel/PanelClosedRows";
+import type { PackHint } from "./panel/packHelpers";
 import "./drawer.css";
 
 export type DetailPanelOpen =
@@ -49,27 +49,32 @@ export function DetailPanel({
   parents,
   proposedName,
   proposedParent,
+  onInvalidate,
 }: {
   open: Exclude<DetailPanelOpen, null>;
   onClose: () => void;
   // null for ai-new groups where the ingredient doesn't exist yet.
-  // The item facts section still renders; the ingredient-edit section
-  // shows a "create ingredient first" placeholder instead.
   ingredient: ReviewCardIngredient | null;
   items: ReviewGroupItem[];
   parents: ReviewCardIngredient[];
   proposedName?: string | null;
   proposedParent?: string | null;
+  // N7 B6: callers that fetch panel data themselves (ItemPanelById /
+  // IngredientPanelById) pass a refetch fn; it fires after any panel
+  // write that would change the data the wrapper fetched. ReviewCard
+  // leaves it undefined and router.refresh() handles the server-side
+  // path.
+  onInvalidate?: () => void;
 }) {
   const router = useRouter();
   const labelId = useId();
   const asideRef = useRef<HTMLDivElement>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
   const [closing, setClosing] = useState(false);
+  // N7: pack-hint fed from PanelAttention's "Fix the pack" button into
+  // PackOverrideBlock (same mechanism as the pre-N7 ItemPanelBody).
+  const [packHint, setPackHint] = useState<PackHint | null>(null);
 
-  // Unique parents from the ingredients list, sorted. Used by the
-  // sub-category dropdown. New parents are allowed via the inline
-  // "add new sub-category" input.
   const parentOptions = useMemo(() => {
     const set = new Set<string>();
     for (const p of parents) {
@@ -80,6 +85,12 @@ export function DetailPanel({
 
   const item = open.kind === "item" ? items.find((i) => i.id === open.itemId) ?? null : null;
 
+  // N7 B6: any onDone from a sub-block invalidates the parent's view.
+  const onDone = () => {
+    router.refresh();
+    if (onInvalidate) onInvalidate();
+  };
+
   const close = () => {
     if (closing) return;
     setClosing(true);
@@ -88,7 +99,6 @@ export function DetailPanel({
 
   useEffect(() => {
     closeBtnRef.current?.focus();
-    // Lock the page behind the modal panel; restore whatever it was.
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const onKey = (e: KeyboardEvent) => {
@@ -121,6 +131,12 @@ export function DetailPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Head status pill count (shared with PanelAttention via
+  // computeAttentionCounts).
+  const attentionCounts = open.kind === "item" && item
+    ? computeAttentionCounts(item, ingredient)
+    : { total: 0, hasNoIngredient: false, provenance: { packHandSet: false, priceHandSet: false } };
+
   return (
     <>
       <div
@@ -145,38 +161,33 @@ export function DetailPanel({
           <X size={20} strokeWidth={1.5} />
         </button>
 
-        <div className="kf-drawer__head">
-          <span className="kf-eyebrow kf-eyebrow--plain">
-            {open.kind === "item" ? "Vendor item" : "Ingredient"}
-          </span>
-          <h3 id={labelId} className="kf-drawer__name">
-            {open.kind === "item" && item
-              ? item.displayName
-              : ingredient
-                ? ingredient.name
-                : proposedName ?? "New ingredient"}
-          </h3>
-          <div className="kf-drawer__chips">
-            {ingredient ? (
-              <>
-                {ingredient.category ? (
-                  <span className="kf-pill kf-pill--muted">{ingredient.category}</span>
-                ) : (
-                  <span className="kf-pill kf-pill--warn">Needs category</span>
-                )}
-                {ingredient.parent ? (
-                  <span className="kf-pill kf-pill--muted">{ingredient.parent}</span>
-                ) : null}
-                {ingredient.resale ? <span className="kf-pill kf-pill--muted">Retail</span> : null}
-              </>
-            ) : (
-              <span className="kf-pill kf-pill--warn">Not yet created</span>
-            )}
-          </div>
-        </div>
+        <PanelHead
+          labelId={labelId}
+          kind={open.kind}
+          item={item}
+          ingredient={ingredient}
+          proposedName={proposedName}
+          attentionCount={attentionCounts.total}
+        />
 
         {open.kind === "item" && item ? (
-          <ItemFacts item={item} />
+          <PanelStrip item={item} ingredient={ingredient} />
+        ) : null}
+
+        {open.kind === "item" && item ? (
+          <PanelAttention
+            item={item}
+            ingredient={ingredient}
+            onFixPack={(uom) => setPackHint({ uom, nonce: Date.now() })}
+          />
+        ) : null}
+
+        {open.kind === "item" && item ? (
+          <>
+            <ItemGradeBlock item={item} onDone={onDone} />
+            <PackOverrideBlock item={item} ingredient={ingredient} hint={packHint} onDone={onDone} />
+            <PriceOverrideBlock item={item} ingredient={ingredient} onDone={onDone} />
+          </>
         ) : null}
 
         {ingredient ? (
@@ -184,7 +195,7 @@ export function DetailPanel({
             ingredient={ingredient}
             parentOptions={parentOptions}
             parents={parents}
-            onDone={() => router.refresh()}
+            onDone={onDone}
           />
         ) : (
           <PendingIngredientBlock
@@ -193,11 +204,9 @@ export function DetailPanel({
           />
         )}
 
-        {open.kind === "item" && item ? (
-          <ItemPanelBody item={item} ingredient={ingredient} onDone={() => router.refresh()} />
-        ) : null}
+        {open.kind === "item" && item ? <EvidenceSection item={item} /> : null}
 
-        <LedgerBlock
+        <PanelClosedRows
           ingredientId={ingredient?.id ?? null}
           itemId={open.kind === "item" ? open.itemId : null}
         />

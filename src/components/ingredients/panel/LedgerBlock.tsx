@@ -25,11 +25,23 @@ export type LedgerEvent = {
   after: Record<string, unknown> | null;
 };
 
-export function LedgerBlock({ ingredientId, itemId }: { ingredientId: string | null; itemId: string | null }) {
+export function LedgerBlock({
+  ingredientId,
+  itemId,
+  // N7 §3f: history fetches on first open, not on mount. Caller passes
+  // `open` when it wires the block into a disclosure row. Defaults to
+  // true so any standalone use of the block (none today) still works.
+  open = true,
+}: {
+  ingredientId: string | null;
+  itemId: string | null;
+  open?: boolean;
+}) {
   const [events, setEvents] = useState<LedgerEvent[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!open) return;
     if (!ingredientId && !itemId) {
       setEvents([]);
       return;
@@ -64,7 +76,7 @@ export function LedgerBlock({ ingredientId, itemId }: { ingredientId: string | n
     return () => {
       cancelled = true;
     };
-  }, [ingredientId, itemId]);
+  }, [open, ingredientId, itemId]);
 
   return (
     <section className="kf-drawer__block kf-dpn__block" aria-label="Change history">

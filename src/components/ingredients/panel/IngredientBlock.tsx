@@ -17,6 +17,7 @@ import { IngredientTypeahead } from "../IngredientTypeahead";
 import type { ReviewCardIngredient } from "../itemTypes";
 import { SaveFlash } from "./SaveFlash";
 import { postJson, errMsg } from "./common";
+import { BaseUnitControl } from "./BaseUnitControl";
 
 export function IngredientBlock({
   ingredient,
@@ -73,7 +74,12 @@ export function IngredientBlock({
   // Fetched once on mount per ingredient; refreshed after a save so
   // the next toggle shows the new state.
   const [resalePreview, setResalePreview] = useState<{ active: number; resale: number } | null>(null);
+  // N7 B7: the preview GET is one of the two requests the panel used
+  // to fire on mount. Defer to the first time the user touches the
+  // Mark as retail row (focus / hover / click). Same endpoint, later.
+  const [resalePreviewArmed, setResalePreviewArmed] = useState(false);
   useEffect(() => {
+    if (!resalePreviewArmed) return;
     let cancelled = false;
     (async () => {
       try {
@@ -95,7 +101,7 @@ export function IngredientBlock({
     return () => {
       cancelled = true;
     };
-  }, [ingredient.id, resaleSavedAt]);
+  }, [resalePreviewArmed, ingredient.id, resaleSavedAt]);
 
   const [mergeTarget, setMergeTarget] = useState<string>("");
   const [mergeBusy, setMergeBusy] = useState(false);
@@ -382,6 +388,19 @@ export function IngredientBlock({
         </div>
       </div>
 
+      {/* N7 §3e: Costed per. Reuses the shared BaseUnitControl from
+          ./BaseUnitControl.tsx so the Ingredients tab and the panel
+          cannot drift. B6: onSaved fires onDone() so the panel's
+          mount site (ReviewCard via router.refresh, or the ById
+          wrappers via onInvalidate) picks up the new base_unit and
+          the One-each row appears or disappears without closing. */}
+      <div className="kf-dpn__row">
+        <BaseUnitControl
+          row={{ id: ingredient.id, name: ingredient.name, baseUnit: ingredient.base_unit }}
+          onSaved={onDone}
+        />
+      </div>
+
       {/* N6 frame C left: usual measure of one each. Weight OR volume
           in any supported unit, qty stored exactly as typed. Rendered
           only for each-costed masters; changing the master's unit
@@ -466,7 +485,11 @@ export function IngredientBlock({
         </div>
       ) : null}
 
-      <div className="kf-dpn__row">
+      <div
+        className="kf-dpn__row"
+        onFocus={() => setResalePreviewArmed(true)}
+        onMouseEnter={() => setResalePreviewArmed(true)}
+      >
         <div className="kf-dpn__toggle">
           <label className="kf-dpn__toggle-label">
             <input
