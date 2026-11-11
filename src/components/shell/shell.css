@@ -142,6 +142,17 @@
 }
 .kf-shell--slim .kf-rail__section { display: none; }
 
+/* -------- Rail divider (People lane, T0a) -------- */
+.kf-rail__divider {
+  list-style: none;
+  height: 0;
+  margin: var(--sp-sp-2) var(--sp-sp-3);
+  border-top: 1px solid var(--sp-navy-line);
+}
+.kf-shell--slim .kf-rail__divider {
+  margin: var(--sp-sp-2) var(--sp-sp-4);
+}
+
 /* -------- Rail nav items -------- */
 .kf-rail__nav {
   padding: var(--sp-sp-1) var(--sp-sp-3);

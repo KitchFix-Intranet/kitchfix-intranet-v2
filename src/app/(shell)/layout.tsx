@@ -14,6 +14,16 @@ type Hit = { title: string; crumb?: string };
 function titleFor(pathname: string, dateLong: string, periodTag: string | null): { title: string; crumb?: React.ReactNode } {
   const map: Array<{ test: (p: string) => boolean; v: Hit }> = [
     { test: (p) => p === "/people",   v: { title: "People Portal",     crumb: "On the current intranet" } },
+    // People Portal T0a. Specificity order: incidents/new (and under) wins
+    // over /people/incidents/:id, which wins over the /incidents index.
+    // Array.find stops at the first match, so the test order is the rule.
+    { test: (p) => p === "/people/incidents/new" || p.startsWith("/people/incidents/new/"), v: { title: "Incident Report", crumb: "People Portal" } },
+    { test: (p) => p === "/people/incidents",                                 v: { title: "Incidents",       crumb: "People Portal" } },
+    { test: (p) => p.startsWith("/people/incidents/"),                        v: { title: "Incident",        crumb: "People Portal" } },
+    { test: (p) => p === "/people/inbox",                                     v: { title: "Inbox",           crumb: "People Portal" } },
+    { test: (p) => p === "/people/new-hire",                                  v: { title: "New Hire",        crumb: "People Portal" } },
+    { test: (p) => p === "/people/paf" || p.startsWith("/people/paf/"),       v: { title: "PAF",             crumb: "People Portal" } },
+    { test: (p) => p === "/people/review",                                    v: { title: "Review",          crumb: "People Portal" } },
     { test: (p) => p === "/ops",      v: { title: "Ops Hub",           crumb: "On the current intranet" } },
     { test: (p) => p === "/service",  v: { title: "Service Calendar",  crumb: "On the current intranet" } },
     { test: (p) => p === "/kpi",      v: { title: "KPI Dashboard",     crumb: "On the current intranet" } },

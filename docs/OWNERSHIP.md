@@ -18,7 +18,8 @@ and hand Kevin a patch, they never edit it in their own PR.
   src/components/academy/**, src/components/library/**, src/lib/academy/**, docs/ACADEMY.md
 - Stockpot / Ingredients: src/app/(shell)/stockpot/**, src/components/ingredients/**,
   src/lib/ingredients/**  (component dir is `ingredients/`, not `stockpot (potrack)/` as the template guessed)
-- People Portal: (added when its fence is set in PEOPLE_PORTAL_V2_MASTER.md)
+- People Portal: src/app/(shell)/people/**, src/app/(shell)/@topbar/people/**,
+  src/components/people/**, src/lib/people/**, src/app/api/people/**, docs/PEOPLE.md
 
 ## When a lane is inactive
 Ownership does not evaporate. A needed edit to an inactive lane's files is handed to Kevin, who
