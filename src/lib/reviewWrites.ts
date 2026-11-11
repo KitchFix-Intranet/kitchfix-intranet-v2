@@ -6,7 +6,7 @@
 // pr_v_overview_totals.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { categoryForParent, type SuperCategory } from "@/lib/ingredients/categories";
+import { categoryForParent, inferBaseUnit, type SuperCategory } from "@/lib/ingredients/categories";
 import { estimateFromOverride } from "@/lib/ingredients/estimate";
 import { parsePack } from "@/lib/ingredients/pack";
 import { COUNTABLE_OBSERVATIONS_VIEW, applyCountableFilter } from "@/lib/ingredients/countability";
@@ -718,6 +718,14 @@ export async function createIngredient(
     // omitted or undefined, fall back to the parent map default. null
     // is a valid explicit value - "Needs category".
     category?: SuperCategory | null;
+    // N4: the base measurement the ingredient is counted and priced
+    // in. Caller supplies it (splitToNewIngredient infers from the
+    // vendor items' pack uoms + parent via inferBaseUnit). Omitted =
+    // the pre-N4 default "each", which is still the safest fallback -
+    // 95% of masters created from the review queue are single-serve
+    // items (24 x 12 OZ Coca-Cola, protein bars, yogurt cups) and
+    // belong on "each".
+    baseUnit?: "lb" | "each" | "gal" | "dozen";
   }
 ): Promise<{ id: string }> {
   const trimmed = args.name.trim();
@@ -725,6 +733,10 @@ export async function createIngredient(
   const nameNorm = trimmed.toLowerCase().replace(/\s+/g, " ");
 
   // Try to find an existing active ingredient by name_norm first.
+  // N4: when a match is found this returns it AS-IS - the caller's
+  // baseUnit is deliberately NOT applied to an existing ingredient.
+  // 85 masters carry a unit Kevin set by hand; retrofitting them on
+  // every re-create would silently clobber that work.
   const { data: existing } = await client
     .from("pr_ingredients")
     .select("id")
@@ -733,13 +745,15 @@ export async function createIngredient(
     .maybeSingle();
   if (existing) return { id: (existing as { id: string }).id };
 
-  // base_unit is required by the schema (lb|each|gal|dozen). "each" is the
-  // safest default - the ingredient admin surface in a later step lets
-  // the user refine it. category is EXPLICIT: use the user's chosen
-  // value when supplied (step 5 new-ingredient form), else derive from
-  // parent. Null is a valid explicit value - the new form prevents it,
-  // but legacy callers (e.g. matcher auto-create) may still produce
-  // null if the parent is unmapped.
+  // base_unit is required by the schema (lb|each|gal|dozen). N4: the
+  // caller supplies it; when omitted we fall back to "each" because
+  // that is the right answer for the common case (single-serve items,
+  // retail packaged goods), and the ingredient admin surface still
+  // lets the user refine it later. category is EXPLICIT: use the
+  // user's chosen value when supplied (step 5 new-ingredient form),
+  // else derive from parent. Null is a valid explicit value - the new
+  // form prevents it, but legacy callers (e.g. matcher auto-create)
+  // may still produce null if the parent is unmapped.
   const parent = args.parent?.trim() || null;
   const category =
     args.category !== undefined ? args.category : categoryForParent(parent);
@@ -748,7 +762,7 @@ export async function createIngredient(
     name_norm: nameNorm,
     parent,
     category,
-    base_unit: "each",
+    base_unit: args.baseUnit ?? "each",
     status: "active",
     created_by: args.actorEmail,
   };
@@ -791,10 +805,30 @@ export async function splitToNewIngredient(
     itemIds: string[];
     actorEmail: string;
   }
-): Promise<{ ok: boolean; error?: string; ingredientId: string | null; moved: number }> {
+): Promise<{ ok: boolean; error?: string; ingredientId: string | null; moved: number; baseUnit: "lb" | "each" | "gal" | "dozen" }> {
   const { name, parent, category, itemIds, actorEmail } = args;
   if (name.trim().length < 2) {
-    return { ok: false, error: "Ingredient name is required", ingredientId: null, moved: 0 };
+    return { ok: false, error: "Ingredient name is required", ingredientId: null, moved: 0, baseUnit: "each" };
+  }
+
+  // N4: infer base_unit from the vendor items' pack uoms before the
+  // insert. inferBaseUnit returns "each" by default, so a read error
+  // or an empty itemIds list keeps us on today's behaviour - a failed
+  // read must not block a create. The matcher-auto-create path (no
+  // itemIds) also lands on "each", which is the right common-case
+  // default.
+  let baseUnit: "lb" | "each" | "gal" | "dozen" = "each";
+  if (itemIds.length > 0) {
+    const { data: packRows, error: packErr } = await client
+      .from("pr_vendor_items")
+      .select("pack_uom")
+      .in("id", itemIds);
+    if (!packErr && packRows) {
+      const uoms = (packRows as Array<{ pack_uom: string | null }>).map((r) => r.pack_uom);
+      baseUnit = inferBaseUnit(parent, uoms);
+    }
+    // On a read error we keep baseUnit = "each" and carry on; the
+    // create succeeds and the user refines on the admin surface.
   }
 
   let ingredientId: string;
@@ -803,16 +837,17 @@ export async function splitToNewIngredient(
       name,
       parent,
       category,
+      baseUnit,
       actorEmail,
     });
     ingredientId = id;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { ok: false, error: msg, ingredientId: null, moved: 0 };
+    return { ok: false, error: msg, ingredientId: null, moved: 0, baseUnit };
   }
 
   if (itemIds.length === 0) {
-    return { ok: true, ingredientId, moved: 0 };
+    return { ok: true, ingredientId, moved: 0, baseUnit };
   }
 
   // Reassign in one UPDATE guarded on current proposed state so a race
@@ -827,7 +862,7 @@ export async function splitToNewIngredient(
     .eq("link_status", "proposed")
     .select("id");
   if (error) {
-    return { ok: false, error: error.message, ingredientId, moved: 0 };
+    return { ok: false, error: error.message, ingredientId, moved: 0, baseUnit };
   }
   const movedIds = ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
 
@@ -836,11 +871,14 @@ export async function splitToNewIngredient(
     entity_id: ingredientId,
     kind: "ingredient_split_create",
     before: { item_ids: itemIds },
-    after: { moved_item_ids: movedIds, name, parent, category },
+    // N4: base_unit carried on the create event so the audit trail
+    // matches what landed on pr_ingredients. A later unit change by a
+    // human emits a separate ingredient_base_unit_set event.
+    after: { moved_item_ids: movedIds, name, parent, category, base_unit: baseUnit },
     actor: actorEmail,
   });
 
-  return { ok: true, ingredientId, moved: movedIds.length };
+  return { ok: true, ingredientId, moved: movedIds.length, baseUnit };
 }
 
 // ---------------------------------------------------------------------------

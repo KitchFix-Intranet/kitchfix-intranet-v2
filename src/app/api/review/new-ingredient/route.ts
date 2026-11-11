@@ -93,6 +93,7 @@ export async function POST(req: NextRequest) {
             ok: true,
             ingredientId: result.ingredientId,
             moved: result.moved,
+            baseUnit: result.baseUnit,
             confirmed: retailResult.confirmed,
             marked: retailResult.marked,
             usd: retailResult.usd,
@@ -109,6 +110,7 @@ export async function POST(req: NextRequest) {
           ok: true,
           ingredientId: result.ingredientId,
           moved: result.moved,
+          baseUnit: result.baseUnit,
           confirmed: confirmResult.confirmed,
           usd: confirmResult.usd,
           movedToResale: confirmResult.movedToResale,
@@ -126,6 +128,7 @@ export async function POST(req: NextRequest) {
       ok: true,
       ingredientId: result.ingredientId,
       moved: result.moved,
+      baseUnit: result.baseUnit,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

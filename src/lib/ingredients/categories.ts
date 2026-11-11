@@ -65,3 +65,62 @@ export function categoryForParent(parent: string | null | undefined): SuperCateg
   if (!parent) return null;
   return CATEGORY_BY_PARENT[parent] ?? null;
 }
+
+// Parents whose items are generally bought and sold by weight. Narrow by
+// design: `each` is the right default for most of what the review queue
+// creates (24 x 12 OZ Coca-Cola, protein bars, chips, string cheese,
+// yogurt cups are all single-serve items packed in ounces), so Dairy,
+// Bakery, Beverages, and Nuts and snacks are deliberately absent.
+// Measured on live Postgres 2026-11-11: of the 170 masters created
+// between 2026-11-09 and 2026-11-11 that all landed as `each`, only 14
+// were wrong (11 lb, 3 gal) and all 14 sit under parents in this list
+// or ship in GAL / QT. Widening the list past these seven would
+// re-introduce the mis-tagging it is meant to prevent.
+export const WEIGHT_PARENTS: ReadonlySet<string> = new Set([
+  "Beef",
+  "Chicken",
+  "Pork",
+  "Lamb and game",
+  "Seafood",
+  "Vegetables and herbs",
+  "Fruit",
+]);
+
+// Decide the base_unit for a newly-created ingredient from its parent
+// and the pack units of the vendor items it was split from. Returns
+// one of three values:
+//
+//   "lb"   - every non-null pack uom is LB or OZ AND parent is a
+//            WEIGHT_PARENTS member. Any disagreement, or any uom
+//            outside {LB, OZ}, or a parent outside the set, falls
+//            through to "each". OZ belongs here because catch-weight
+//            and avg-weight items from meat/seafood commonly ship as
+//            "8 OZ portions" but are still priced per lb.
+//   "gal"  - every non-null pack uom is GAL or QT (any parent). This
+//            is parent-agnostic by design: 4/1 GAL sanitizer, 4/1 GAL
+//            olive oil, and 1 GAL milk are all correctly `gal`.
+//   "each" - everything else, including an empty pack-uom list, any
+//            null-only input, and any parent/uom disagreement. This
+//            is the deliberate common case: Coca-Cola, protein bars,
+//            chips, yogurt cups, string cheese.
+//
+// Pack uoms are compared case-insensitively. Null pack uoms are
+// ignored (they come from pack strings the parser could not resolve,
+// e.g. "ONLY" or a service line - they are not evidence either way).
+// A null parent falls through to "each" by the WEIGHT_PARENTS check.
+export function inferBaseUnit(
+  parent: string | null,
+  packUoms: Array<string | null>
+): "lb" | "each" | "gal" {
+  const normalized: string[] = [];
+  for (const u of packUoms) {
+    if (u == null) continue;
+    normalized.push(u.toUpperCase());
+  }
+  if (normalized.length === 0) return "each";
+  const allGalQt = normalized.every((u) => u === "GAL" || u === "QT");
+  if (allGalQt) return "gal";
+  const allLbOz = normalized.every((u) => u === "LB" || u === "OZ");
+  if (allLbOz && parent != null && WEIGHT_PARENTS.has(parent)) return "lb";
+  return "each";
+}
