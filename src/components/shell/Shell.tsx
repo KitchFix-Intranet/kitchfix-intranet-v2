@@ -26,6 +26,11 @@ import {
   Search as SearchIcon,
   SlidersHorizontal,
   CalendarRange,
+  Inbox,
+  UserPlus,
+  ClipboardList,
+  TriangleAlert,
+  ShieldCheck,
 } from "lucide-react";
 import { AccountMenu } from "./AccountMenu";
 import "./shell.css";
@@ -57,6 +62,21 @@ const STOCKPOT_NAV: NavItem[] = [
   { href: "/stockpot/recipes", label: "Recipes", Icon: FileText },
   { href: "/stockpot/menus", label: "Menus", Icon: LayoutGrid },
   { href: "/stockpot/signs", label: "Signs & labels", Icon: ImageIcon },
+];
+
+// People Portal-level nav. T0a: order is a ruling - My team, Inbox,
+// New Hire, PAF, Incidents, divider, Review. No counts yet; Inbox
+// and Review counts arrive with their own trains. R-AC5: the shell-
+// level phone tabbar stays Home / Stockpot / People / Ops / Menu
+// even inside /people/* (no People tab bar).
+const PEOPLE_NAV: Array<NavItem | { divider: true }> = [
+  { href: "/people",            label: "My team",   Icon: Users },
+  { href: "/people/inbox",      label: "Inbox",     Icon: Inbox },
+  { href: "/people/new-hire",   label: "New Hire",  Icon: UserPlus },
+  { href: "/people/paf",        label: "PAF",       Icon: ClipboardList },
+  { href: "/people/incidents",  label: "Incidents", Icon: TriangleAlert },
+  { divider: true },
+  { href: "/people/review",     label: "Review",    Icon: ShieldCheck },
 ];
 
 // Academy-level nav. Train B ships To do + Done. Train E1 adds the
@@ -133,6 +153,9 @@ function isLibraryRoute(pathname: string): boolean {
 function isAdminRoute(pathname: string): boolean {
   return pathname === "/academy/admin" || pathname.startsWith("/academy/admin/");
 }
+function isPeopleRoute(pathname: string): boolean {
+  return pathname === "/people" || pathname.startsWith("/people/");
+}
 function isActive(pathname: string, href: string): boolean {
   if (href === "/") return pathname === "/";
   return pathname === href || pathname.startsWith(href + "/");
@@ -179,6 +202,7 @@ export function Shell({
   const inAcademy = isAcademyRoute(pathname);
   const inAdmin = isAdminRoute(pathname);
   const inLibrary = isLibraryRoute(pathname);
+  const inPeople = isPeopleRoute(pathname);
   // Academy rail composition. Base entries for everyone who reaches
   // the Academy. Owners also see the Admin door; owners + leads see
   // the Team door. Learners see only the base entries. The access
@@ -191,15 +215,17 @@ export function Shell({
   // the rail swaps to Cycles/etc. when the owner is in /academy/
   // admin, and shows the Academy items (incl. Admin link) elsewhere
   // inside Academy.
-  const nav = inStockpot
+  const nav: Array<NavItem | { divider: true }> = inStockpot
     ? STOCKPOT_NAV
-    : inAdmin
-      ? ADMIN_NAV
-      : inAcademy
-        ? academyNav
-        : inLibrary
-          ? LIBRARY_NAV
-          : SHELL_NAV;
+    : inPeople
+      ? PEOPLE_NAV
+      : inAdmin
+        ? ADMIN_NAV
+        : inAcademy
+          ? academyNav
+          : inLibrary
+            ? LIBRARY_NAV
+            : SHELL_NAV;
   // R-AC5: phone tabbar stays shell-level even inside Academy / Library.
   const phoneTabs = inStockpot ? PHONE_STOCKPOT_TABS : PHONE_SHELL_TABS;
 
@@ -288,7 +314,7 @@ export function Shell({
           </button>
         </div>
 
-        {inStockpot || inAcademy || inLibrary ? (
+        {inStockpot || inAcademy || inLibrary || inPeople ? (
           <>
             <Link href="/" className="kf-rail__back" onClick={() => markNavStart("/")}>
               <span className="kf-rail__back-ico" aria-hidden>
@@ -300,11 +326,13 @@ export function Shell({
               <span>
                 {inStockpot
                   ? "Stockpot"
-                  : inAdmin
-                    ? "Admin"
-                    : inAcademy
-                      ? "Academy"
-                      : "Library"}
+                  : inPeople
+                    ? "People"
+                    : inAdmin
+                      ? "Admin"
+                      : inAcademy
+                        ? "Academy"
+                        : "Library"}
               </span>
             </div>
           </>
@@ -312,7 +340,20 @@ export function Shell({
 
         <nav className="kf-rail__nav">
           <ul>
-            {nav.map(({ href, label, Icon, liveDot }) => {
+            {nav.map((item, idx) => {
+              // Divider slot (People rail). Class lives in shell.css
+              // (.kf-rail__divider); slim-mode variant lives there too.
+              if ("divider" in item) {
+                return (
+                  <li
+                    key={`divider-${idx}`}
+                    className="kf-rail__divider"
+                    role="separator"
+                    aria-hidden
+                  />
+                );
+              }
+              const { href, label, Icon, liveDot } = item;
               // Rail count badge: Academy To do only, when > 0.
               const showCount =
                 inAcademy && href === "/academy" && typeof todoCount === "number" && todoCount > 0;
@@ -335,6 +376,11 @@ export function Shell({
                 // "To do" is the Academy index; the Done, Team, Admin
                 // and read sub-pages must not also light this item.
                 active = pathname === "/academy";
+              } else if (inPeople && href === "/people") {
+                // "My team" is the People index; must not light up
+                // when a sub-page (/inbox, /new-hire, /paf, /incidents,
+                // /review) is active. T0a ruling.
+                active = pathname === "/people";
               } else {
                 active = isActive(pathname, href);
               }

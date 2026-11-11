@@ -152,6 +152,13 @@ Review queue and Ingredients-naming tabs render but disabled with a `Lock size={
 
 The twelve-item roster lives in `docs/GOTCHAS.md`. Add a new item there whenever a build-pass acceptance turns out to have a non-obvious cause. Items we have already lived through on `step-1-shell-and-ingredients` are listed under the branch-specific section at the end of that file.
 
+## 15. Palette contrast rulings
+
+Values live in `src/app/tokens.css`; this section carries the rulings that bind them.
+
+- `--sp-muted: #5C6778` (R-PP63, 2026-11-11). Was `#6B7686`, which measured 4.26:1 on `--sp-sky-soft` and failed WCAG AA (needs 4.5). The new value is 5.29 on `--sp-sky-soft` and 5.73 on white.
+- `--sp-line-field: #7F8B9A` (R-PP63, 2026-11-11). For form control borders only - do not point cards, tables or dividers at it. `--sp-line` is 1.29:1 on white (too faint for a form-control edge; needs 3). `--sp-line-field` is 3.46. People uses it in its own lane; a cross-lane adoption is a follow-up ruling, not an implicit retrofit.
+
 ---
 
 ## Scope carve-outs for step 1
