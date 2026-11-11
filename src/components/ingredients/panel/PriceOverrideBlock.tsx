@@ -36,9 +36,11 @@ export function PriceOverrideBlock({
       ? item.perBaseUom
       : "LB");
 
-  const [perBaseStr, setPerBaseStr] = useState<string>(
-    item.perBase != null ? Number(item.perBase).toFixed(4) : ""
-  );
+  // N7 B4 + commit 2: "the two editors gain Cancel". Baseline values
+  // are captured once from the mount-time item snapshot and restored
+  // by resetDrafts().
+  const initialPerBaseStr = item.perBase != null ? Number(item.perBase).toFixed(4) : "";
+  const [perBaseStr, setPerBaseStr] = useState<string>(initialPerBaseStr);
   // N6: the select widens to every weight / volume / EA unit. Stored
   // state is any of those strings; the route converts the typed value
   // to the dimension base before writing, so downstream still reads
@@ -48,6 +50,17 @@ export function PriceOverrideBlock({
   const [busy, setBusy] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  function resetDrafts() {
+    setPerBaseStr(initialPerBaseStr);
+    setBaseUom(seedBaseUom);
+    setReason("");
+    setError(null);
+  }
+  const dirty =
+    perBaseStr !== initialPerBaseStr ||
+    baseUom !== seedBaseUom ||
+    reason.trim().length > 0;
 
   const perBaseN = Number(perBaseStr);
   const perBaseValid = Number.isFinite(perBaseN) && perBaseN > 0;
@@ -145,6 +158,14 @@ export function PriceOverrideBlock({
           onClick={save}
         >
           {busy ? "Saving..." : "Save price"}
+        </button>
+        <button
+          type="button"
+          className="kf-btn kf-btn--line kf-btn--sm"
+          disabled={busy || !dirty}
+          onClick={resetDrafts}
+        >
+          Cancel
         </button>
         <SaveFlash savedAt={savedAt} error={error} />
       </div>

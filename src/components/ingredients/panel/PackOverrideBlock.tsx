@@ -54,20 +54,23 @@ export function PackOverrideBlock({
   // UI suggestion only: no stored data is rewritten; the user still
   // has to confirm.
   const can10Hint = /#10\b/.test(item.pack ?? "");
-  const [catchWeight, setCatchWeight] = useState<boolean>(item.catchWeight);
+  // N7 commit 2: initial drafts captured here so Cancel can restore.
+  const initialCatchWeight = item.catchWeight;
+  const initialQtyStr = seededPack ? String(seededPack.qty) : "";
+  const initialSizeStr = seededPack ? String(seededPack.size) : "";
+  const initialUomStr = can10Hint
+    ? "CAN10"
+    : seededPack?.uom && uomToBase(seededPack.uom)
+      ? seededPack.uom
+      : "LB";
+  const [catchWeight, setCatchWeight] = useState<boolean>(initialCatchWeight);
   // S4: tracks whether the user has toggled the mode button. Toggling
   // is an edit for display purposes (the chain switches to recomputed
   // from a different formula), so it must flip showStored off.
   const [catchWeightEdited, setCatchWeightEdited] = useState<boolean>(false);
-  const [qtyStr, setQtyStr] = useState<string>(seededPack ? String(seededPack.qty) : "");
-  const [sizeStr, setSizeStr] = useState<string>(seededPack ? String(seededPack.size) : "");
-  const [uom, setUom] = useState<string>(
-    can10Hint
-      ? "CAN10"
-      : seededPack?.uom && uomToBase(seededPack.uom)
-        ? seededPack.uom
-        : "LB"
-  );
+  const [qtyStr, setQtyStr] = useState<string>(initialQtyStr);
+  const [sizeStr, setSizeStr] = useState<string>(initialSizeStr);
+  const [uom, setUom] = useState<string>(initialUomStr);
   const qtyInputRef = useRef<HTMLInputElement | null>(null);
   const resultRef = useRef<HTMLDivElement | null>(null);
   // Fix-the-pack hint from Attention: set UOM, focus Qty, scroll
@@ -83,10 +86,11 @@ export function PackOverrideBlock({
   }, [hint?.nonce, hint?.uom]);
   // Display seed only: two decimals, like every other money field. What
   // the user types is what saves - this does not touch the write.
-  const [perLbStr, setPerLbStr] = useState<string>(
-    item.perBase != null && item.catchWeight ? Number(item.perBase).toFixed(2) : ""
-  );
-  const [billedUnit, setBilledUnit] = useState<string>(item.billedUnit ?? "");
+  const initialPerLbStr =
+    item.perBase != null && item.catchWeight ? Number(item.perBase).toFixed(2) : "";
+  const initialBilledUnit = item.billedUnit ?? "";
+  const [perLbStr, setPerLbStr] = useState<string>(initialPerLbStr);
+  const [billedUnit, setBilledUnit] = useState<string>(initialBilledUnit);
   const [note, setNote] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -126,7 +130,36 @@ export function PackOverrideBlock({
   const defaultCaseSrc: "catalog" | "billed" | "avg" | null =
     storedSrc ??
     (bigGap ? "billed" : catalogV != null ? "catalog" : billedV != null ? "billed" : null);
-  const [caseSrc, setCaseSrc] = useState<"catalog" | "billed" | "avg" | null>(defaultCaseSrc);
+  const initialCaseSrc = defaultCaseSrc;
+  const [caseSrc, setCaseSrc] = useState<"catalog" | "billed" | "avg" | null>(initialCaseSrc);
+
+  // N7 commit 2: Cancel restores every editor draft to its mount-time
+  // seed. Catch-weight mode, pack qty/size/uom, perLb display, billed
+  // unit, case-price source, note, and the catchWeightEdited flag all
+  // snap back. Error + lastTwins also clear so the surface reads fresh.
+  function resetDrafts() {
+    setCatchWeight(initialCatchWeight);
+    setCatchWeightEdited(false);
+    setQtyStr(initialQtyStr);
+    setSizeStr(initialSizeStr);
+    setUom(initialUomStr);
+    setPerLbStr(initialPerLbStr);
+    setBilledUnit(initialBilledUnit);
+    setNote("");
+    setCaseSrc(initialCaseSrc);
+    setError(null);
+    setLastTwins(null);
+  }
+  const dirty =
+    catchWeight !== initialCatchWeight ||
+    catchWeightEdited ||
+    qtyStr !== initialQtyStr ||
+    sizeStr !== initialSizeStr ||
+    uom !== initialUomStr ||
+    perLbStr !== initialPerLbStr ||
+    billedUnit !== initialBilledUnit ||
+    note.trim().length > 0 ||
+    caseSrc !== initialCaseSrc;
   const previewCasePrice =
     caseSrc === "catalog" && catalogV != null
       ? { v: catalogV, src: "catalog" as const }
@@ -769,6 +802,14 @@ export function PackOverrideBlock({
                   : !catchWeight && packPristine && caseSrcChanged && !catchWeightChanged
                     ? "Save price"
                     : "Save pack"}
+              </button>
+              <button
+                type="button"
+                className="kf-btn kf-btn--line kf-btn--sm"
+                disabled={busy || !dirty}
+                onClick={resetDrafts}
+              >
+                Cancel
               </button>
               <SaveFlash savedAt={savedAt} error={error} />
             </div>

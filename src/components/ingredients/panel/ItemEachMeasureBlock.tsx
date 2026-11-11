@@ -37,55 +37,16 @@ export function ItemEachMeasureBlock({
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function save() {
+  // N7 B5: four behaviours.
+  //   (a) unit change saves when the number is valid (no Save click);
+  //   (b) unticking a saved value clears immediately + shows Saved;
+  //   (c) unticking with nothing saved only hides fields (no write);
+  //   (d) ticking writes nothing until a valid number lands.
+
+  async function saveValue(n: number, u: string) {
     if (busy) return;
     setBusy(true);
     setError(null);
-    if (!hasOwn) {
-      // Unticked + Save = clear.
-      const r = await postJson("/api/review/set-item-each-measure", {
-        itemId: item.id,
-        qty: null,
-      });
-      if (!r.ok) {
-        const msg = errMsg(r.data, `Clear failed (${r.status})`);
-        setError(msg);
-        toast(msg, { tone: "block" });
-        setBusy(false);
-        return;
-      }
-      toast("Item measure cleared");
-      setQtyDraft("");
-      setSavedAt(Date.now());
-      setBusy(false);
-      onDone();
-      return;
-    }
-    const trimmed = qtyDraft.trim();
-    if (trimmed === "") {
-      const msg = "Enter a quantity or untick the box.";
-      setError(msg);
-      toast(msg, { tone: "block" });
-      setBusy(false);
-      return;
-    }
-    const n = Number(trimmed);
-    if (!Number.isFinite(n) || n <= 0 || n > 100000) {
-      const msg = "Quantity must be greater than 0 and at most 100000.";
-      setError(msg);
-      toast(msg, { tone: "block" });
-      setBusy(false);
-      return;
-    }
-    const u = uomDraft.toUpperCase();
-    const dim = DIM_BY_UOM[u];
-    if (dim !== "weight" && dim !== "volume") {
-      const msg = "Pick a weight or volume unit.";
-      setError(msg);
-      toast(msg, { tone: "block" });
-      setBusy(false);
-      return;
-    }
     const r = await postJson("/api/review/set-item-each-measure", {
       itemId: item.id,
       qty: n,
@@ -95,6 +56,9 @@ export function ItemEachMeasureBlock({
       const msg = errMsg(r.data, `Save failed (${r.status})`);
       setError(msg);
       toast(msg, { tone: "block" });
+      // Revert drafts to the stored value on failure.
+      setQtyDraft(item.eachMeasure == null ? "" : String(item.eachMeasure.qty));
+      setUomDraft((item.eachMeasure?.uom ?? "LB").toUpperCase());
       setBusy(false);
       return;
     }
@@ -102,6 +66,56 @@ export function ItemEachMeasureBlock({
     setSavedAt(Date.now());
     setBusy(false);
     onDone();
+  }
+
+  async function clearStored() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    const r = await postJson("/api/review/set-item-each-measure", {
+      itemId: item.id,
+      qty: null,
+    });
+    if (!r.ok) {
+      const msg = errMsg(r.data, `Clear failed (${r.status})`);
+      setError(msg);
+      toast(msg, { tone: "block" });
+      // Revert tick state on failure.
+      setHasOwn(true);
+      setBusy(false);
+      return;
+    }
+    toast("Item measure cleared");
+    setQtyDraft("");
+    setSavedAt(Date.now());
+    setBusy(false);
+    onDone();
+  }
+
+  // Attempt to save the current drafts; silent no-op if the draft is
+  // empty / invalid / same-as-stored. Used by qty-blur and unit-change.
+  function trySave() {
+    if (!hasOwn) return;
+    const trimmed = qtyDraft.trim();
+    if (trimmed === "") return;
+    const n = Number(trimmed);
+    if (!Number.isFinite(n) || n <= 0 || n > 100000) return;
+    const u = uomDraft.toUpperCase();
+    const dim = DIM_BY_UOM[u];
+    if (dim !== "weight" && dim !== "volume") return;
+    const stored = item.eachMeasure;
+    if (stored != null && Number(stored.qty) === n && stored.uom.toUpperCase() === u) return;
+    void saveValue(n, u);
+  }
+
+  function onTickChange(next: boolean) {
+    setHasOwn(next);
+    if (!next) {
+      // B5(b): untick with a saved value clears immediately.
+      // B5(c): untick with nothing saved is a visual no-op.
+      if (item.eachMeasure != null) void clearStored();
+    }
+    // B5(d): ticking writes nothing until a valid number lands in trySave.
   }
 
   // Comparison lines: run deriveRecipePrice once with the item's measure
@@ -132,7 +146,7 @@ export function ItemEachMeasureBlock({
           <input
             type="checkbox"
             checked={hasOwn}
-            onChange={(e) => setHasOwn(e.currentTarget.checked)}
+            onChange={(e) => onTickChange(e.currentTarget.checked)}
             disabled={busy}
           />
           <span>This item&rsquo;s each has its own measure</span>
@@ -148,7 +162,8 @@ export function ItemEachMeasureBlock({
                 min="0"
                 value={qtyDraft}
                 onChange={(e) => setQtyDraft(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void save(); } }}
+                onBlur={trySave}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); trySave(); } }}
                 placeholder="e.g. 6"
                 aria-label="One each, quantity"
                 disabled={busy}
@@ -158,7 +173,12 @@ export function ItemEachMeasureBlock({
               <span>Unit</span>
               <select
                 value={uomDraft}
-                onChange={(e) => setUomDraft(e.target.value)}
+                onChange={(e) => {
+                  setUomDraft(e.target.value);
+                  // Read current qty for the save decision (state will
+                  // be updated by the time trySave runs on next tick).
+                  queueMicrotask(trySave);
+                }}
                 disabled={busy}
                 aria-label="One each, unit"
               >
@@ -177,14 +197,6 @@ export function ItemEachMeasureBlock({
           </div>
         ) : null}
         <div className="kf-dpn__btns">
-          <button
-            type="button"
-            className={`kf-btn kf-btn--primary kf-btn--sm${busy ? " is-busy" : ""}`}
-            disabled={busy}
-            onClick={save}
-          >
-            {busy ? "Saving..." : hasOwn ? "Save measure" : "Clear"}
-          </button>
           <SaveFlash savedAt={savedAt} error={error} />
         </div>
         {itemFromItem ? (

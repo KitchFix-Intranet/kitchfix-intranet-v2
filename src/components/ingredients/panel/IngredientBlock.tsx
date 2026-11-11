@@ -112,11 +112,16 @@ export function IngredientBlock({
     [parents, ingredient.id]
   );
 
+  // N7 commit 2: self-save on blur / Enter. Silently no-op on the same
+  // name or a too-short draft (blur fires every time the input loses
+  // focus, so a toast on no-op would spam). Save-is-best-effort: on
+  // server failure the draft reverts to the stored name and the inline
+  // error shows under the input - the toast is extra, not the signal.
   async function doRename() {
     const next = renameDraft.trim();
     if (renameBusy) return;
-    if (next.length < 2) { toast("Name is too short", { tone: "block" }); return; }
-    if (next === ingredient.name) { toast("Same name, nothing to save"); return; }
+    if (next.length < 2) return;
+    if (next === ingredient.name) return;
     setRenameBusy(true);
     setRenameError(null);
     const r = await postJson("/api/review/rename-ingredient", {
@@ -127,6 +132,7 @@ export function IngredientBlock({
       const msg = errMsg(r.data, `Rename failed (${r.status})`);
       setRenameError(msg);
       toast(msg, { tone: "block" });
+      setRenameDraft(ingredient.name);
       setRenameBusy(false);
       return;
     }
@@ -141,55 +147,62 @@ export function IngredientBlock({
     onDone();
   }
 
-  async function doCategory() {
+  // N7 commit 2: self-save on select change. Called with the next
+  // super + sub so we never read possibly-stale state after a setState.
+  // Revert-on-failure: drafts snap back to the stored category/parent
+  // and the inline error renders.
+  async function doCategory(opts: {
+    nextSuper: SuperCategory | null;
+    nextSub: string | null;
+  }) {
     if (catBusy) return;
-    const nextSuper: SuperCategory | null = superDraft === "" ? null : (superDraft as SuperCategory);
-    const nextSub =
-      subMode === "new" ? subNew.trim() || null : (subPick === "" ? null : subPick);
+    const current: SuperCategory | null = (ingredient.category as SuperCategory | null) ?? null;
+    const currentSub = ingredient.parent ?? null;
+    if (opts.nextSuper === current && opts.nextSub === currentSub) return;
     setCatBusy(true);
     setCatError(null);
     const r = await postJson("/api/review/set-category", {
       ingredientId: ingredient.id,
-      category: nextSuper,
-      parent: nextSub,
+      category: opts.nextSuper,
+      parent: opts.nextSub,
     });
     if (!r.ok) {
       const msg = errMsg(r.data, `Save failed (${r.status})`);
       setCatError(msg);
       toast(msg, { tone: "block" });
+      setSuperDraft(ingredient.category ?? "");
+      setSubPick(ingredient.parent ?? "");
+      setSubNew("");
       setCatBusy(false);
       return;
     }
-    toast(nextSuper ? `Saved: category ${nextSuper}` : "Saved: Needs category");
+    toast(opts.nextSuper ? `Saved: category ${opts.nextSuper}` : "Saved: Needs category");
     setCatSavedAt(Date.now());
     setCatBusy(false);
     onDone();
   }
 
-  // N6: save the usual measure of one each. Empty draft is a validation
-  // error, not a clear - use the dedicated doMeasureClear() for that.
+  // N7 commit 2 (B5 ingredient parity): save the usual measure of one
+  // each. Empty draft is now a no-op, not an error - the user cleared
+  // the input or hasn't filled it yet; Clear is the explicit path to
+  // null. Invalid number is also a no-op; the server-side validation
+  // still rejects garbage.
   async function doMeasureSave() {
     if (measureBusy) return;
     const trimmed = measureQtyDraft.trim();
-    if (trimmed === "") {
-      const msg = "Enter a quantity, or press Clear.";
-      setMeasureError(msg);
-      toast(msg, { tone: "block" });
-      return;
-    }
+    if (trimmed === "") return;
     const n = Number(trimmed);
-    if (!Number.isFinite(n) || n <= 0 || n > 100000) {
-      const msg = "Quantity must be greater than 0 and at most 100000.";
-      setMeasureError(msg);
-      toast(msg, { tone: "block" });
-      return;
-    }
+    if (!Number.isFinite(n) || n <= 0 || n > 100000) return;
     const u = measureUomDraft.toUpperCase();
     const dim = DIM_BY_UOM[u];
-    if (dim !== "weight" && dim !== "volume") {
-      const msg = "Pick a weight or volume unit.";
-      setMeasureError(msg);
-      toast(msg, { tone: "block" });
+    if (dim !== "weight" && dim !== "volume") return;
+    // Skip the write when draft equals the already-stored value.
+    if (
+      ingredient.each_measure_qty != null &&
+      Number(ingredient.each_measure_qty) === n &&
+      (ingredient.each_measure_uom ?? "").toUpperCase() === u &&
+      (ingredient.each_measure_source ?? "house_test") === measureSourceDraft
+    ) {
       return;
     }
     setMeasureBusy(true);
@@ -320,21 +333,17 @@ export function IngredientBlock({
             type="text"
             value={renameDraft}
             onChange={(e) => setRenameDraft(e.target.value)}
+            onBlur={() => { void doRename(); }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") { e.preventDefault(); void doRename(); }
+            }}
             placeholder="Ingredient name"
+            disabled={renameBusy}
+            aria-busy={renameBusy}
           />
         </label>
         <div className="kf-dpn__hint">
           The old name is kept as an alias, so linked items stay linked.
-        </div>
-        <div className="kf-dpn__btns">
-          <button
-            type="button"
-            className={`kf-btn kf-btn--primary kf-btn--sm${renameBusy ? " is-busy" : ""}`}
-            disabled={renameBusy || renameDraft.trim().length < 2 || renameDraft.trim() === ingredient.name}
-            onClick={doRename}
-          >
-            {renameBusy ? "Saving..." : "Save name"}
-          </button>
           <SaveFlash savedAt={renameSavedAt} error={renameError} />
         </div>
       </div>
@@ -342,7 +351,20 @@ export function IngredientBlock({
       <div className="kf-dpn__row">
         <label className="kf-dpn__label">
           <span>Category</span>
-          <select value={superDraft} onChange={(e) => setSuperDraft(e.target.value)}>
+          <select
+            value={superDraft}
+            disabled={catBusy}
+            onChange={(e) => {
+              const v = e.target.value;
+              setSuperDraft(v);
+              const nextSub =
+                subMode === "new" ? subNew.trim() || null : (subPick === "" ? null : subPick);
+              void doCategory({
+                nextSuper: v === "" ? null : (v as SuperCategory),
+                nextSub,
+              });
+            }}
+          >
             <option value="">Needs category</option>
             {SUPER_CATEGORIES.map((c) => (
               <option key={c} value={c}>{c}</option>
@@ -352,7 +374,18 @@ export function IngredientBlock({
         <label className="kf-dpn__label">
           <span>Sub-category</span>
           {subMode === "pick" ? (
-            <select value={subPick} onChange={(e) => setSubPick(e.target.value)}>
+            <select
+              value={subPick}
+              disabled={catBusy}
+              onChange={(e) => {
+                const v = e.target.value;
+                setSubPick(v);
+                void doCategory({
+                  nextSuper: superDraft === "" ? null : (superDraft as SuperCategory),
+                  nextSub: v === "" ? null : v,
+                });
+              }}
+            >
               <option value="">(none)</option>
               {parentOptions.map((p) => (
                 <option key={p} value={p}>{p}</option>
@@ -363,7 +396,27 @@ export function IngredientBlock({
               type="text"
               value={subNew}
               onChange={(e) => setSubNew(e.target.value)}
+              onBlur={() => {
+                const next = subNew.trim();
+                if (!next) return;
+                void doCategory({
+                  nextSuper: superDraft === "" ? null : (superDraft as SuperCategory),
+                  nextSub: next,
+                });
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  const next = subNew.trim();
+                  if (!next) return;
+                  void doCategory({
+                    nextSuper: superDraft === "" ? null : (superDraft as SuperCategory),
+                    nextSub: next,
+                  });
+                }
+              }}
               placeholder="New sub-category"
+              disabled={catBusy}
               autoFocus
             />
           )}
@@ -375,14 +428,6 @@ export function IngredientBlock({
             onClick={() => setSubMode((m) => (m === "pick" ? "new" : "pick"))}
           >
             {subMode === "pick" ? "+ add new sub-category" : "pick existing"}
-          </button>
-          <button
-            type="button"
-            className={`kf-btn kf-btn--primary kf-btn--sm${catBusy ? " is-busy" : ""}`}
-            disabled={catBusy}
-            onClick={doCategory}
-          >
-            {catBusy ? "Saving..." : "Save category"}
           </button>
           <SaveFlash savedAt={catSavedAt} error={catError} />
         </div>
@@ -419,6 +464,7 @@ export function IngredientBlock({
                 min="0"
                 value={measureQtyDraft}
                 onChange={(e) => setMeasureQtyDraft(e.target.value)}
+                onBlur={() => { void doMeasureSave(); }}
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void doMeasureSave(); } }}
                 placeholder="e.g. 6"
                 aria-label="One each, quantity"
@@ -429,7 +475,18 @@ export function IngredientBlock({
               <span>Unit</span>
               <select
                 value={measureUomDraft}
-                onChange={(e) => setMeasureUomDraft(e.target.value)}
+                onChange={(e) => {
+                  const u = e.target.value;
+                  setMeasureUomDraft(u);
+                  // N7 B5 (ingredient parity): unit change saves when
+                  // the qty draft is valid; otherwise just stores the
+                  // selection.
+                  const trimmed = measureQtyDraft.trim();
+                  if (trimmed === "") return;
+                  const n = Number(trimmed);
+                  if (!Number.isFinite(n) || n <= 0 || n > 100000) return;
+                  void doMeasureSave();
+                }}
                 disabled={measureBusy}
                 aria-label="One each, unit"
               >
@@ -461,14 +518,6 @@ export function IngredientBlock({
             </label>
           </div>
           <div className="kf-dpn__btns">
-            <button
-              type="button"
-              className={`kf-btn kf-btn--primary kf-btn--sm${measureBusy ? " is-busy" : ""}`}
-              disabled={measureBusy}
-              onClick={doMeasureSave}
-            >
-              {measureBusy ? "Saving..." : "Save measure"}
-            </button>
             <button
               type="button"
               className="kf-btn kf-btn--line kf-btn--sm"
