@@ -80,11 +80,17 @@
    * the page. */
   overflow: clip;
 }
-/* Below ~1100px the fixed table's min-width exceeds the card; scroll
- * inside the card (DESIGN.md section 3), never the page.
- * Polish 2: overscroll-behavior: contain so horizontal wheel at the
- * card edge does not scroll the page horizontally. */
-@media (max-width: 1100px) {
+/* N9 round 3 fix 3: card-scroll breakpoint follows the table's own
+ * min-width. The sum below must match --kf-rvc-table-min declared
+ * on .kf-rvc:
+ *   sel 52 + vendor 160 + pack 148 + price 256
+ *   + annual 88 + sites 112 + activity 144 + item floor 240 = 1200
+ * If any <col> width (or the 240 item floor) moves, update both
+ * this @media value AND the matching variable up top. Media
+ * queries cannot read CSS variables; the comment is the contract.
+ * Polish 2: overscroll-behavior: contain so horizontal wheel at
+ * the card edge does not scroll the page horizontally. */
+@media (max-width: 1200px) {
   .kf-rvc {
     overflow-x: auto;
     overflow-y: hidden;
@@ -126,13 +132,26 @@
   background: transparent;
   border: 0;
   padding: 0;
+  margin: 0;
   display: inline-flex;
   align-items: baseline;
   gap: var(--sp-sp-2);
   cursor: pointer;
+  text-align: left;
 }
 .kf-rvc__title-btn:hover > span { text-decoration: underline; }
-.kf-rvc__title-btn:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
+.kf-rvc__title-btn:focus-visible {
+  outline: 2px solid var(--sp-navy);
+  outline-offset: 2px;
+  border-radius: var(--sp-r-sm);
+}
+/* Pencil visible at rest in muted, navy on hover/focus. */
+.kf-rvc__title-btn svg {
+  color: var(--sp-muted);
+  transition: color var(--sp-fast) var(--sp-ease);
+}
+.kf-rvc__title-btn:hover svg,
+.kf-rvc__title-btn:focus-visible svg { color: var(--sp-navy); }
 .kf-rvc__totals {
   margin-left: auto;
   display: flex;
@@ -164,25 +183,51 @@
  * Pack/unit, Unit price, Annual $) stack cleanly in the narrow width;
  * the hidden details are still reachable via the DetailPanel.
  */
+/* N9 round 3 fix 3: col widths + item-floor in one place.
+ * The table's min-width is derived from these via calc() so the
+ * two numbers cannot drift. .kf-rvc inherits the variables and the
+ * card-scroll breakpoint at the bottom of this file keys off the
+ * same sum (hard-coded in the @media condition - media queries
+ * cannot read CSS variables - with a comment that the two must
+ * stay in step). */
+.kf-rvc {
+  --kf-rvc-col-sel: 52px;
+  --kf-rvc-col-vendor: 160px;
+  --kf-rvc-col-pack: 148px;
+  --kf-rvc-col-price: 256px;
+  --kf-rvc-col-annual: 88px;
+  --kf-rvc-col-sites: 112px;
+  --kf-rvc-col-activity: 144px;
+  /* Item column floor so a long name never wraps one character per
+   * line; the step-1 pre-N9 regression + round-2 regression came
+   * from the Item track getting < 240 px. */
+  --kf-rvc-col-item-min: 240px;
+  --kf-rvc-table-min: calc(
+    var(--kf-rvc-col-sel)
+    + var(--kf-rvc-col-vendor)
+    + var(--kf-rvc-col-pack)
+    + var(--kf-rvc-col-price)
+    + var(--kf-rvc-col-annual)
+    + var(--kf-rvc-col-sites)
+    + var(--kf-rvc-col-activity)
+    + var(--kf-rvc-col-item-min)
+  );
+}
 .kf-rvc__items {
   width: 100%;
-  min-width: 980px;            /* below this the card scrolls, see .kf-rvc media rule */
+  min-width: var(--kf-rvc-table-min);
   border-collapse: collapse;
-  table-layout: fixed;         /* widths from the <colgroup>; the item column absorbs the rest */
+  table-layout: fixed;
   font-family: var(--sp-ui);
   font-size: var(--sp-t-table);
 }
-/* N9 round 2 fix 1 + fix 4: <col> widths. Pack widens to 148 and
- * Unit price narrows to 256 (total unchanged at 404). The 760 px
- * media rule hides <col>s and matching cells together so the
- * remaining columns keep their widths under table-layout: fixed. */
-.kf-rvc__col--sel      { width: 52px;  }
-.kf-rvc__col--vendor   { width: 160px; }
-.kf-rvc__col--pack     { width: 148px; }
-.kf-rvc__col--price    { width: 256px; }
-.kf-rvc__col--annual   { width: 88px;  }
-.kf-rvc__col--sites    { width: 112px; }
-.kf-rvc__col--activity { width: 144px; }
+.kf-rvc__col--sel      { width: var(--kf-rvc-col-sel); }
+.kf-rvc__col--vendor   { width: var(--kf-rvc-col-vendor); }
+.kf-rvc__col--pack     { width: var(--kf-rvc-col-pack); }
+.kf-rvc__col--price    { width: var(--kf-rvc-col-price); }
+.kf-rvc__col--annual   { width: var(--kf-rvc-col-annual); }
+.kf-rvc__col--sites    { width: var(--kf-rvc-col-sites); }
+.kf-rvc__col--activity { width: var(--kf-rvc-col-activity); }
 .kf-rvc__items thead th {
   text-align: left;
   padding: 10px var(--sp-sp-3);
@@ -376,14 +421,18 @@
   font-size: var(--sp-t-micro);
   color: var(--sp-body);
 }
+/* N9 round 3 fix 2: line 2 wraps when it does not fit. No ellipsis,
+ * no nowrap - the matcher's reason and the case figure are facts,
+ * not decoration. Line 1 stays nowrap. */
 .kf-rvc__price-sub {
   font-family: var(--sp-ui);
   font-size: var(--sp-t-micro);
   color: var(--sp-body);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   max-width: 100%;
+  white-space: normal;
+  word-break: break-word;
+  text-align: right;
+  line-height: 1.4;
 }
 
 /* N9 §2e: neutral `lowest` / `highest` row tag beside the row's min
@@ -723,27 +772,11 @@
  * row/header affordances.
  * --------------------------------------------------------------------- */
 
-/* Ingredient title button in the card header. Looks like the plain h3
- * title but is a <button> so keyboard users can tab to it and press
- * Enter to open the detail panel. Pencil icon on hover makes the
- * "editable" affordance visible. */
-.kf-rvc__title-btn {
-  background: none;
-  border: none;
-  padding: 0;
-  margin: 0;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-sp-1);
-  text-align: left;
-}
-.kf-rvc__title-btn svg { opacity: 0; transition: opacity var(--sp-fast) var(--sp-ease); }
-.kf-rvc__title-btn:hover svg,
-.kf-rvc__title-btn:focus-visible svg { opacity: 1; }
-.kf-rvc__title-btn:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; border-radius: var(--sp-r-sm); }
+/* N9 round 3 fix 1: the duplicate .kf-rvc__title-btn block that lived
+ * here (font: inherit + color: inherit + hidden-until-hover svg) is
+ * merged into the shared .kf-rvc__title, .kf-rvc__title-btn rule near
+ * the head (line ~114). The pencil visibility rules moved there too:
+ * visible at rest in --sp-muted, --sp-navy on hover/focus. */
 
 /* Per-row item-name button. Looks like the plain cell text but is a
  * <button> so keyboard users can tab to it. The ellipsis + title tooltip

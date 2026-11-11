@@ -39,13 +39,14 @@ export type ReviewCardGroup = {
   items: ReviewGroupItem[];
 };
 
-// N9 §2c pack source phrases. Four sources per Note A; null -> "none".
-function packSourcePhrase(src: ReviewGroupItem["packSource"]): string {
+// N9 §2c pack source phrases. Four sources per Note A; when there
+// is no source the caller omits the sub-line entirely (round 3 fix 4).
+function packSourcePhrase(src: ReviewGroupItem["packSource"]): string | null {
   if (src === "override") return "by hand";
   if (src === "catalog") return "catalog";
   if (src === "invoice") return "invoice";
   if (src === "catalog_sibling") return "siblings";
-  return "none";
+  return null;
 }
 
 // N9 §2f: date is stale at 90+ days old. The trigger is days (so a
@@ -364,7 +365,12 @@ export function ReviewCard({
                       <span className="kf-muted">no pack read</span>
                     )}
                   </div>
-                  <div className="kf-rvc__sublabel">{packSourcePhrase(it.packSource)}</div>
+                  {(() => {
+                    const phrase = packSourcePhrase(it.packSource);
+                    return phrase ? (
+                      <div className="kf-rvc__sublabel">{phrase}</div>
+                    ) : null;
+                  })()}
                 </td>
                 <td className="kf-table__num">
                   <UnitPriceCell item={it} ingredient={group.ingredient ?? null} rowTag={rowTag} />
