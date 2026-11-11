@@ -58,7 +58,11 @@ export function IngredientAllergens({
   reviewedBy,
   reviewedAt,
   onSaved,
-}: Props) {
+  // N8 §1g: panel renders the chips + Confirm button only; the status
+  // pill lives beside the row label and the trailing hint is dropped.
+  // Ingredients tab (default) keeps the full head + hint block.
+  chrome = "tab",
+}: Props & { chrome?: "tab" | "bare" }) {
   const router = useRouter();
 
   // Seed selection + None from the saved values. The canonical-nine
@@ -147,22 +151,24 @@ export function IngredientAllergens({
 
   return (
     <div className="kf-allergens">
-      <div className="kf-allergens__head">
-        <span className="kf-allergens__label">Allergens</span>
-        {unreviewed ? (
-          <span className="kf-allergens__state kf-allergens__state--warn">
-            Check allergens
-          </span>
-        ) : (allergens ?? []).length === 0 ? (
-          <span className="kf-allergens__state kf-allergens__state--ok">
-            No Top 9 allergens
-          </span>
-        ) : (
-          <span className="kf-allergens__state kf-allergens__state--ok">
-            Confirmed
-          </span>
-        )}
-      </div>
+      {chrome === "tab" ? (
+        <div className="kf-allergens__head">
+          <span className="kf-allergens__label">Allergens</span>
+          {unreviewed ? (
+            <span className="kf-allergens__state kf-allergens__state--warn">
+              Check allergens
+            </span>
+          ) : (allergens ?? []).length === 0 ? (
+            <span className="kf-allergens__state kf-allergens__state--ok">
+              No Top 9 allergens
+            </span>
+          ) : (
+            <span className="kf-allergens__state kf-allergens__state--ok">
+              Confirmed
+            </span>
+          )}
+        </div>
+      ) : null}
       <div className="kf-allergens__grid" role="group" aria-label="Top 9 allergens">
         {ALLERGENS.map((a) => {
           const on = selected.has(a);
@@ -202,15 +208,30 @@ export function IngredientAllergens({
         {savedAt ? <span className="kf-allergens__flash">Saved</span> : null}
         {error ? <span className="kf-allergens__flash kf-allergens__flash--err">{error}</span> : null}
       </div>
-      {reviewedAt ? (
-        <div className="kf-allergens__hint">
-          Last confirmed by {reviewedBy ?? "someone"} on {fmtDate(reviewedAt, "short")}.
-        </div>
-      ) : (
-        <div className="kf-allergens__hint">
-          Unreviewed. Pick a tag or confirm &ldquo;None&rdquo; to clear this from the queue.
-        </div>
-      )}
+      {chrome === "tab" ? (
+        reviewedAt ? (
+          <div className="kf-allergens__hint">
+            Last confirmed by {reviewedBy ?? "someone"} on {fmtDate(reviewedAt, "short")}.
+          </div>
+        ) : (
+          <div className="kf-allergens__hint">
+            Unreviewed. Pick a tag or confirm &ldquo;None&rdquo; to clear this from the queue.
+          </div>
+        )
+      ) : null}
     </div>
   );
+}
+
+// Convenience helper for the panel: compute the status string that
+// replaces the component's own head pill. Keeps the three sanctioned
+// wordings in one place so the panel and tab cannot drift.
+export function allergenStatus(
+  allergens: readonly string[] | null,
+  reviewedAt: string | null,
+): { label: string; tone: "warn" | "good" } {
+  const list = allergens ?? [];
+  if (reviewedAt == null) return { label: "not reviewed", tone: "warn" };
+  if (list.length === 0) return { label: "no Top 9 allergens", tone: "good" };
+  return { label: "confirmed", tone: "good" };
 }

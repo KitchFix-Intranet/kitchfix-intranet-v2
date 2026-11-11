@@ -1162,17 +1162,6 @@
   font-style: italic;
 }
 
-/* ---------------------------------------------------------------------
- * Detail-panel "pending ingredient" block for ai-new rows.
- * --------------------------------------------------------------------- */
-.kf-dpn__pending-body {
-  margin: 0;
-  color: var(--sp-body);
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-body);
-  line-height: 1.5;
-}
-
 /* Inline "Saved" / error flash next to each DetailPanel Save button. */
 .kf-dpn__flash {
   display: inline-flex;

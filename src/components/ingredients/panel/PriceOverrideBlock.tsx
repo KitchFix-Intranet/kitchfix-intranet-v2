@@ -20,10 +20,13 @@ export function PriceOverrideBlock({
   item,
   ingredient,
   onDone,
+  onCancel,
 }: {
   item: ReviewGroupItem;
   ingredient: ReviewCardIngredient | null;
   onDone: () => void;
+  // N8 §1f: Cancel closes the row when the caller is a panel row.
+  onCancel?: () => void;
 }) {
   const router = useRouter();
   // Default baseUom to the ingredient's base_unit when there is one,
@@ -92,24 +95,26 @@ export function PriceOverrideBlock({
   }
 
   return (
-    <div className="kf-dpn__block" aria-label="Price override editor">
-      <div className="kf-dpn__row kf-newing__row">
-        <label className="kf-dpn__label">
-          <span>$ per unit</span>
+    <div className="kf-ipanel__editor" aria-label="Price override editor">
+      <div className="kf-ipanel__editor-grid kf-ipanel__editor-grid--2">
+        <label className="kf-ipanel__editor-field">
+          $ per unit
           <input
             type="number"
             inputMode="decimal"
             step="0.0001"
             min="0"
+            className="kf-ipanel__ctl"
             value={perBaseStr}
             onChange={(e) => setPerBaseStr(e.target.value)}
             placeholder="e.g. 0.73"
             disabled={busy}
           />
         </label>
-        <label className="kf-dpn__label">
-          <span>Unit</span>
+        <label className="kf-ipanel__editor-field">
+          Unit
           <select
+            className="kf-ipanel__ctl"
             value={baseUom}
             onChange={(e) => setBaseUom(e.target.value)}
             disabled={busy}
@@ -129,20 +134,30 @@ export function PriceOverrideBlock({
         </label>
       </div>
 
-      <div className="kf-dpn__row">
-        <label className="kf-dpn__label">
-          <span>Reason (required)</span>
-          <input
-            type="text"
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            placeholder="e.g. vendor-confirmed, invoice pricing error"
-            disabled={busy}
-          />
-        </label>
-      </div>
+      <label className="kf-ipanel__editor-field">
+        Reason (required)
+        <input
+          type="text"
+          className="kf-ipanel__ctl"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="e.g. vendor-confirmed, invoice pricing error"
+          disabled={busy}
+        />
+      </label>
 
-      <div className="kf-dpn__btns">
+      <div className="kf-ipanel__editor-actions">
+        <button
+          type="button"
+          className="kf-btn kf-btn--ghost kf-btn--sm"
+          disabled={busy}
+          onClick={() => {
+            if (dirty) resetDrafts();
+            if (onCancel) onCancel();
+          }}
+        >
+          Cancel
+        </button>
         <button
           type="button"
           className={`kf-btn kf-btn--primary kf-btn--sm${busy ? " is-busy" : ""}`}
@@ -150,14 +165,6 @@ export function PriceOverrideBlock({
           onClick={save}
         >
           {busy ? "Saving..." : "Save price"}
-        </button>
-        <button
-          type="button"
-          className="kf-btn kf-btn--line kf-btn--sm"
-          disabled={busy || !dirty}
-          onClick={resetDrafts}
-        >
-          Cancel
         </button>
         <SaveFlash savedAt={savedAt} error={error} />
       </div>

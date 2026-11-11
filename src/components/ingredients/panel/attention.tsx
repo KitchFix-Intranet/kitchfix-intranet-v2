@@ -53,10 +53,19 @@ export function deriveAttention(
   const itemBase = item.perBaseUom ? (DIM_BY_UOM[item.perBaseUom] ?? null) : null;
   if (ingBase && itemBase && itemBase !== ingBase && ingredient) {
     const targetUom = ingredientBaseUom(ingredient) ?? "EA";
+    // N8 §1h: head reads like a sentence.
+    const itemPhrase =
+      itemBase === "weight" ? "by weight"
+      : itemBase === "volume" ? "by volume"
+      : "by count";
+    const ingPhrase =
+      ingBase === "weight" ? "weighed"
+      : ingBase === "volume" ? "measured by volume"
+      : "counted";
     issues.push({
       kind: "unit_mismatch",
       tone: "bad",
-      head: `Priced in ${itemBase}, ingredient is ${ingBase}`,
+      head: `Priced ${itemPhrase}, ingredient is ${ingPhrase}`,
       body: `${ingredient.name} is costed per ${ingredient.base_unit}. This item will not blend until the pack is corrected to match.`,
       fix: "pack",
       targetUom,

@@ -5,7 +5,7 @@ import { setVendorItemPackOverride } from "@/lib/reviewWrites";
 
 export const dynamic = "force-dynamic";
 
-// Mirrors UOM_TO_BASE in DetailPanel.tsx and TO_BASE in pack.ts. CAN10
+// Mirrors UOM_GROUPS in packHelpers.tsx and TO_BASE in pack.ts. CAN10
 // (U1) is a UI-only weight unit (#10 can, 6.6 lb) that the pack chain
 // can emit; without it here the save path 400s on legitimate CAN10
 // overrides and the chain's blend-wiring is theatre.
@@ -15,7 +15,7 @@ const ALLOWED_UOMS = new Set([
   "EA", "CT", "DZ", "PC",
 ]);
 
-// N6: mirrors BILLED_UNIT_GROUPS in DetailPanel.tsx and BASE_BILLED in
+// N6: mirrors BILLED_UNIT_GROUPS in packHelpers.tsx and BASE_BILLED in
 // intake.ts. The per-unit list widened to every weight and volume unit
 // the engine prices natively via normUom + uomFactor; the per-container
 // list stayed as it was. Keeping the three in step is tested at build

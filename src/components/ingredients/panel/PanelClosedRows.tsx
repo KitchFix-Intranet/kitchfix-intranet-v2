@@ -248,27 +248,29 @@ export function PanelClosedRows({
   parents: ReviewCardIngredient[];
   onDone: () => void;
 }) {
+  // N8 §1i: closed-row sub copy comes from the render.
+  const ingredientName = ingredient?.name ?? "this ingredient";
   return (
-    <>
+    <div className="kf-ipanel__drows">
       {ingredient ? (
-        <DisclosureRow label="Mark as retail" sub="move to the retail bucket">
+        <DisclosureRow label="Mark as retail" sub={`Takes ${ingredientName} out of recipe coverage`}>
           {() => <RetailRow ingredient={ingredient} onDone={onDone} />}
         </DisclosureRow>
       ) : null}
 
       {ingredient ? (
-        <DisclosureRow label="Merge" sub="fold into another ingredient">
+        <DisclosureRow label="Merge" sub={`Fold ${ingredientName} into another ingredient`}>
           {() => <MergeRow ingredient={ingredient} parents={parents} onDone={onDone} />}
         </DisclosureRow>
       ) : null}
 
       {item ? (
-        <DisclosureRow label="Evidence" sub="invoice lines, by site, siblings, variants">
+        <DisclosureRow label="Evidence" sub="The invoice lines behind this price">
           {(open) => <EvidenceSection item={item} open={open} />}
         </DisclosureRow>
       ) : null}
 
-      <DisclosureRow label="Change history" sub="every change, newest first">
+      <DisclosureRow label="Change history" sub="Every change, newest first">
         {(open) => (
           <LedgerBlock
             ingredientId={ingredient?.id ?? null}
@@ -277,6 +279,6 @@ export function PanelClosedRows({
           />
         )}
       </DisclosureRow>
-    </>
+    </div>
   );
 }
