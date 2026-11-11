@@ -48,11 +48,21 @@ function packSourcePhrase(src: ReviewGroupItem["packSource"]): string {
   return "none";
 }
 
-// N9 §2f: date stale when 3+ whole months elapsed (>= 90 days).
+// N9 §2f: date is stale at 90+ days old. The trigger is days (so a
+// boundary like 90 days exactly fires), the DISPLAY is monthsAgo
+// (the "whole months elapsed" format the render shows: `5 mo ago`).
+// Boundary samples:
+//   30 days back  -> 0 (no marker)
+//   89 days back  -> 0 (no marker)
+//   90 days back  -> monthsAgo (2 or 3 depending on day-of-month)
+//   200 days back -> 6 (shown as "6 mo ago")
 function staleMonths(iso: string | null): number {
   if (!iso) return 0;
-  const m = monthsAgo(iso);
-  return m >= 3 ? m : 0;
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return 0;
+  const days = Math.floor((Date.now() - t) / 86_400_000);
+  if (days < 90) return 0;
+  return monthsAgo(iso);
 }
 
 export function ReviewCard({
