@@ -99,7 +99,7 @@ export function PanelAttention({
                   )
                 }
               >
-                Check the pack
+                Fix the pack
               </button>
             ) : null}
           </div>

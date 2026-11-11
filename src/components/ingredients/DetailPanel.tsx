@@ -176,6 +176,7 @@ export function DetailPanel({
         {ingredient ? (
           <PanelIngredientZone
             ingredient={ingredient}
+            item={item}
             parentOptions={parentOptions}
             onDone={onDone}
           />

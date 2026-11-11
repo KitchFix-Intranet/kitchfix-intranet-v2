@@ -111,58 +111,59 @@ export function ItemEachMeasureBlock({
   }
 
   return (
-    <div className="kf-ipanel__row-value-flex">
-      <label style={{ display: "flex", alignItems: "center", gap: "8px", minHeight: "44px" }}>
+    <div className="kf-ipanel__itemmeasure">
+      <label className="kf-ipanel__itemmeasure-check">
         <input
           type="checkbox"
           checked={hasOwn}
           onChange={(e) => onTickChange(e.currentTarget.checked)}
           disabled={busy}
-          style={{ width: "20px", height: "20px" }}
         />
         <span>Different from the ingredient</span>
       </label>
       {hasOwn ? (
         <>
-          <input
-            type="number"
-            inputMode="decimal"
-            step="0.0001"
-            min="0"
-            className="kf-ipanel__ctl kf-ipanel__ctl--qty"
-            value={qtyDraft}
-            onChange={(e) => setQtyDraft(e.target.value)}
-            onBlur={trySave}
-            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); trySave(); } }}
-            placeholder="e.g. 5"
-            aria-label="This item's each weighs"
-            disabled={busy}
-          />
-          <select
-            className="kf-ipanel__ctl kf-ipanel__ctl--uom"
-            value={uomDraft}
-            onChange={(e) => {
-              setUomDraft(e.target.value);
-              queueMicrotask(trySave);
-            }}
-            disabled={busy}
-            aria-label="Weight unit for this item"
-          >
-            <optgroup label="Weight">
-              {WEIGHT_UOMS.map((u) => (
-                <option key={u} value={u}>{uomLabel(u)}</option>
-              ))}
-            </optgroup>
-            <optgroup label="Volume">
-              {VOLUME_UOMS.map((u) => (
-                <option key={u} value={u}>{uomLabel(u)}</option>
-              ))}
-            </optgroup>
-          </select>
+          <div className="kf-ipanel__itemmeasure-fields">
+            <input
+              type="number"
+              inputMode="decimal"
+              step="0.0001"
+              min="0"
+              className="kf-ipanel__ctl kf-ipanel__ctl--uom"
+              value={qtyDraft}
+              onChange={(e) => setQtyDraft(e.target.value)}
+              onBlur={trySave}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); trySave(); } }}
+              placeholder="e.g. 5"
+              aria-label="This item's each weighs"
+              disabled={busy}
+            />
+            <select
+              className="kf-ipanel__ctl kf-ipanel__ctl--uom"
+              value={uomDraft}
+              onChange={(e) => {
+                setUomDraft(e.target.value);
+                queueMicrotask(trySave);
+              }}
+              disabled={busy}
+              aria-label="Weight unit for this item"
+            >
+              <optgroup label="Weight">
+                {WEIGHT_UOMS.map((u) => (
+                  <option key={u} value={u}>{uomLabel(u)}</option>
+                ))}
+              </optgroup>
+              <optgroup label="Volume">
+                {VOLUME_UOMS.map((u) => (
+                  <option key={u} value={u}>{uomLabel(u)}</option>
+                ))}
+              </optgroup>
+            </select>
+          </div>
           <SaveFlash savedAt={savedAt} error={error} />
         </>
       ) : (
-        <span className="kf-ipanel__row-hint">Tick if this case holds a different size</span>
+        <span className="kf-ipanel__itemmeasure-hint">Tick if this case holds a different size</span>
       )}
     </div>
   );

@@ -255,130 +255,10 @@
 /* Inline empty variant for ledger */
 .kf-empty--inline { padding: var(--sp-sp-3); gap: var(--sp-sp-2); }
 
-/* ----- Pack chain (A2) --------------------------------------------
- * Four-row chain: Invoice says / Read as / Change to / Result. Rows
- * are a two-column grid so the labels line up vertically regardless
- * of row content. Input + result rows tinted so the chain reads
- * top-down without needing eyebrow emphasis. Tokens only.
- */
-.kf-chain__mode {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--sp-sp-2);
-  margin: 0 0 var(--sp-sp-3);
-}
-.kf-chain__mode-btn {
-  min-height: var(--sp-floor-corp);
-  padding: 0 var(--sp-sp-3);
-  background: var(--sp-card);
-  color: var(--sp-ink);
-  border: 1px solid var(--sp-line);
-  border-radius: var(--sp-r-ctl);
-  font-family: var(--sp-ui);
-  font-weight: 700;
-  font-size: var(--sp-t-label);
-  cursor: pointer;
-  text-align: center;
-}
-.kf-chain__mode-btn:not(.is-on):hover:not(:disabled) { background: var(--sp-sky-tint); }
-/* On-state hover darkens the navy instead of flipping to sky-tint,
-   which collapses to ~1.1:1 against the white label (A2 live-check). */
-.kf-chain__mode-btn.is-on:hover:not(:disabled) { background: var(--sp-navy-deep); }
-.kf-chain__mode-btn:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
-.kf-chain__mode-btn.is-on {
-  background: var(--sp-navy);
-  color: var(--sp-on-navy);
-  border-color: var(--sp-navy);
-}
-.kf-chain__mode-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-
-.kf-chain {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-sp-1);
-  border: 1px solid var(--sp-line);
-  border-radius: var(--sp-r-ctl);
-  overflow: hidden;
-  background: var(--sp-card);
-}
-.kf-chain__row {
-  display: grid;
-  grid-template-columns: 128px 1fr;
-  gap: var(--sp-sp-3);
-  align-items: start;
-  padding: var(--sp-sp-3);
-  border-top: 1px solid var(--sp-line-soft);
-}
-.kf-chain__row:first-child { border-top: 0; }
-.kf-chain__row--input { background: var(--sp-sky-soft); }
-.kf-chain__row--result { background: var(--sp-sky-tint); }
-.kf-chain__label {
-  font-family: var(--sp-disp);
-  font-weight: 700;
-  font-size: var(--sp-t-micro);
-  letter-spacing: 1.5px;
-  text-transform: uppercase;
-  color: var(--sp-muted);
-  padding-top: 2px;
-}
-.kf-chain__value { min-width: 0; display: flex; flex-direction: column; gap: var(--sp-sp-2); }
-.kf-chain__mono {
-  display: inline-block;
-  padding: 2px var(--sp-sp-2);
-  background: var(--sp-card);
-  border: 1px solid var(--sp-line);
-  border-radius: var(--sp-r-xs);
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: var(--sp-t-label);
-  color: var(--sp-ink);
-}
-.kf-chain__sub {
-  font-size: var(--sp-t-micro);
-  color: var(--sp-muted);
-}
-.kf-chain__sub--warn { color: var(--sp-warn); }
-.kf-chain__big {
-  font-family: var(--sp-disp);
-  font-weight: 800;
-  font-size: var(--sp-t-num);
-  line-height: 1.15;
-  color: var(--sp-ink);
-}
-.kf-chain__verdict {
-  display: inline-block;
-  padding: var(--sp-sp-1) var(--sp-sp-2);
-  border-radius: var(--sp-r-sm);
-  font-family: var(--sp-ui);
-  font-weight: 700;
-  font-size: var(--sp-t-micro);
-}
-.kf-chain__verdict--good { background: var(--sp-good-bg); color: var(--sp-good); }
-.kf-chain__verdict--block { background: var(--sp-block-bg); color: var(--sp-block); }
-/* S2: out-of-band soft warning sits beside the dimension verdict. Not
-   a block - Kevin may be right and the save is still allowed. */
-.kf-chain__verdict--warn { background: var(--sp-warn-bg); color: var(--sp-warn); }
-
-/* S2: case-price source selector. When catalog and billed are both
-   on file we show them as options so Kevin can see the disagreement
-   before the Result row commits to a figure. */
-.kf-chain__caseprice {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--sp-sp-2);
-  font-size: var(--sp-t-micro);
-  color: var(--sp-muted);
-}
-.kf-chain__caseprice-label {
-  font-family: var(--sp-disp);
-  font-weight: 700;
-  letter-spacing: 1.5px;
-  text-transform: uppercase;
-}
-.kf-chain__caseprice-note {
-  font-style: italic;
-  color: var(--sp-warn);
-}
+/* N8: the kf-chain__* family (Pack editor four-row chain + mode
+ * toggle + caseprice + verdict) is gone. PackOverrideBlock now renders
+ * inside the .kf-ipanel__editor grid; the dim verdict + out-of-band
+ * warnings reuse .kf-pill with good / block / warn variants. */
 
 /* ----- Attention + Evidence section notes -----------------------
  * N8: .kf-attn__head / chev / title / count deleted - the collapsible
@@ -679,6 +559,8 @@
   font-size: var(--sp-t-table);
   color: var(--sp-ink);
 }
+/* N8 fix 6: the Fix-the-pack button must not wrap at 1100. */
+.kf-ipanel__attn-item .kf-btn { white-space: nowrap; }
 
 /* --- Zones ---
  * Two zones. Item zone on card; ingredient zone on sky-soft between
@@ -727,13 +609,19 @@
   grid-template-columns: 150px minmax(0, 1fr) auto;
   gap: var(--sp-sp-4);
   align-items: center;
+  /* N8 fix 2: vertical padding so content taller than 64 px does not
+   * sit flush against both hairlines. --sp-sp-3 = 12 px on the
+   * token scale. */
+  padding: var(--sp-sp-3) 0;
   min-height: 64px;
   border-top: 1px solid var(--sp-line-soft);
 }
 .kf-ipanel__zone--ing .kf-ipanel__row { border-top-color: var(--sp-sky-line); }
 .kf-ipanel__row:first-of-type { border-top: 0; }
 .kf-ipanel__row--split { grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr); }
-.kf-ipanel__row--allergens { align-items: start; padding: 14px 0 12px 0; }
+.kf-ipanel__row--allergens { align-items: start; }
+/* N8 fix 7: status pills in the label column hug their text. */
+.kf-ipanel__row-label > .kf-pill { align-self: flex-start; }
 .kf-ipanel__row-label {
   font-family: var(--sp-ui);
   font-size: var(--sp-t-table);
@@ -988,23 +876,86 @@
   color: var(--sp-muted);
 }
 
+/* N8 fix 5: Category row - two selects side-by-side, sublink
+ * underneath inside the same value column, 8 px below (sp-2). */
+.kf-ipanel__cat-selects {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-sp-3);
+}
+.kf-ipanel__cat-link {
+  display: inline-flex;
+  align-items: center;
+  margin-top: var(--sp-sp-2);
+  min-height: 44px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-navy);
+  text-decoration: underline;
+  cursor: pointer;
+  align-self: flex-start;
+}
+.kf-ipanel__cat-link:hover { color: var(--sp-navy-deep); }
+.kf-ipanel__cat-link:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
+
+/* N8 fix 4: Item One each row - checkbox + label | qty + unit (wrap
+ * together) | Saved flash or inherit hint. Nested flex so the number
+ * and unit cannot be separated by a flex wrap. */
+.kf-ipanel__itemmeasure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-sp-3);
+  min-height: 44px;
+}
+.kf-ipanel__itemmeasure-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  min-height: 44px;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  color: var(--sp-ink);
+}
+.kf-ipanel__itemmeasure-fields {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  flex-wrap: nowrap;
+}
+.kf-ipanel__itemmeasure-hint {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-body);
+}
+
 /* --- Measure feedback sentence on the ingredient One each row.
- * Spans the value columns under the fields; the Saved / not set yet
- * pill sits inline at the start. */
-.kf-ipanel__measure-foot {
+ * N8 fix 3: its own class; help text, not a link. --sp-t-micro,
+ * --sp-body, no underline. Starts in column 2 under the controls. */
+.kf-ipanel__measure-note {
   grid-column: 2 / -1;
   display: flex;
   align-items: baseline;
+  flex-wrap: wrap;
   gap: var(--sp-sp-2);
-  padding-bottom: var(--sp-sp-3);
+  padding: 0 0 var(--sp-sp-3);
   font-family: var(--sp-ui);
   font-size: var(--sp-t-micro);
   line-height: 1.6;
   color: var(--sp-body);
   border-bottom: 1px solid var(--sp-sky-line);
 }
-.kf-ipanel__row--measure-wrap {
-  border-top: 0;
+.kf-ipanel__row--measure-wrap { border-top: 0; }
+
+/* N8 fix 8: allergen chip meets the 44 px floor inside chrome="bare".
+ * The Ingredients tab (chrome="tab") keeps its own .kf-allergen rule
+ * via review.css untouched. */
+.kf-ipanel__row-value > .kf-allergens .kf-allergen,
+.kf-ipanel__row-value > .kf-allergens .kf-allergen--none {
+  min-height: 44px;
 }
 
 /* --- Closed disclosure rows (§3f) ---
@@ -1059,20 +1010,33 @@
 }
 
 /* --- Phone ---
- * Strip two-by-two; rows and split rows and editor grids collapse.
- * The sticky head stays opaque. */
+ * N8 fix 9: strip two-by-two; rows and split rows stack to one column.
+ * Disclosure rows put the chevron on the first line next to the label
+ * (NOT its own line) and the sub-line under both. The two selects on
+ * Category stack full width and the link sits beneath. Stacked rows
+ * keep the same vertical padding as item 2. */
 @media (max-width: 520px) {
   .kf-ipanel__strip { grid-template-columns: repeat(2, 1fr); }
   .kf-ipanel__strip-cell:nth-child(2) { border-right: none; }
   .kf-ipanel__strip-cell:nth-child(-n+2) { border-bottom: 1px solid var(--sp-line-soft); }
   .kf-ipanel__row,
-  .kf-ipanel__row--split,
-  .kf-ipanel__drow {
+  .kf-ipanel__row--split {
     grid-template-columns: 1fr;
     gap: var(--sp-sp-2);
+    /* padding already inherited from the base rule */
   }
   .kf-ipanel__row-label { font-size: var(--sp-t-micro); text-transform: none; }
   .kf-ipanel__row-action { justify-content: flex-start; }
   .kf-ipanel__editor-grid--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .kf-ipanel__editor-grid--2 { grid-template-columns: 1fr; }
+  /* Disclosure row at phone: label + chevron on line one, sub on
+   * line two underneath spanning the row. */
+  .kf-ipanel__drow {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto;
+    row-gap: var(--sp-sp-1);
+  }
+  .kf-ipanel__drow-label { grid-row: 1; grid-column: 1; }
+  .kf-ipanel__drow-chev  { grid-row: 1; grid-column: 2; }
+  .kf-ipanel__drow-sub   { grid-row: 2; grid-column: 1 / -1; }
 }

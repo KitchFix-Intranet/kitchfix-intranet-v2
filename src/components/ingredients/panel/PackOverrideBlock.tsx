@@ -576,265 +576,264 @@ export function PackOverrideBlock({
         ) : null}
       </div>
 
-      <div className="kf-chain">
-        {/* Row 1 - Invoice says: verbatim pack text in a mono chip. */}
-        <div className="kf-chain__row">
-          <div className="kf-chain__label">Invoice says</div>
-          <div className="kf-chain__value">
-            <code className="kf-chain__mono">{item.pack ?? "(none)"}</code>
-          </div>
-        </div>
-
-        {/* Row 2 - Read as / Set by hand / Could not read. */}
-        <div className="kf-chain__row">
-          <div className="kf-chain__label">{readAsLabel}</div>
-          <div className="kf-chain__value">
-            <span>{readAsBody}</span>
-            {readAsLabel === "Could not read" && item.perBaseNote ? (
-              <span className="kf-chain__sub">{item.perBaseNote}</span>
-            ) : null}
-          </div>
-        </div>
-
-        {/* Row 3 - Change to: inputs. Shape depends on mode. */}
-        <div className="kf-chain__row kf-chain__row--input">
-          <div className="kf-chain__label">Change to</div>
-          <div className="kf-chain__value">
-            {catchWeight ? (
-              <div className="kf-dpn__row">
-                <label className="kf-dpn__label">
-                  <span>$ / lb</span>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    step="0.01"
-                    min="0"
-                    value={perLbStr}
-                    onChange={(e) => setPerLbStr(e.target.value)}
-                    placeholder="e.g. 5.299"
-                    disabled={busy}
-                  />
-                </label>
-              </div>
-            ) : (
-              <div className="kf-dpn__row kf-newing__row">
-                <label className="kf-dpn__label">
-                  <span>Qty</span>
-                  <input
-                    ref={qtyInputRef}
-                    type="number"
-                    inputMode="numeric"
-                    step="1"
-                    min="0"
-                    value={qtyStr}
-                    onChange={(e) => setQtyStr(e.target.value)}
-                    placeholder="e.g. 6"
-                    disabled={busy}
-                  />
-                </label>
-                <label className="kf-dpn__label">
-                  <span>Size</span>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    step="0.01"
-                    min="0"
-                    value={sizeStr}
-                    onChange={(e) => setSizeStr(e.target.value)}
-                    placeholder="e.g. 5"
-                    disabled={busy}
-                  />
-                </label>
-                <label className="kf-dpn__label">
-                  <span>UOM</span>
-                  <select value={uom} onChange={(e) => setUom(e.target.value)} disabled={busy}>
-                    {UOM_GROUPS.map((g) => (
-                      <optgroup key={g.label} label={g.label}>
-                        {g.options.map((o) => (
-                          <option key={o} value={o}>
-                            {uomDisplay(o)}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ))}
-                  </select>
-                </label>
-              </div>
-            )}
-            <div className="kf-dpn__row kf-newing__row">
-              <label className="kf-dpn__label">
-                <span>Billed unit (optional)</span>
-                <select
-                  value={billedUnit}
-                  onChange={(e) => setBilledUnit(e.target.value)}
-                  disabled={busy}
-                >
-                  <option value="">(not set)</option>
-                  {billedUnit !== "" &&
-                    !BILLED_UNIT_GROUPS.some((g) => g.options.includes(billedUnit)) && (
-                      <option value={billedUnit}>{billedUnit} (existing)</option>
-                    )}
-                  {BILLED_UNIT_GROUPS.map((g) => (
-                    <optgroup key={g.label} label={g.label}>
-                      {g.options.map((o) => (
-                        <option key={o} value={o}>
-                          {o}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-              </label>
-              <label className="kf-dpn__label">
-                <span>Note (optional)</span>
-                <input
-                  type="text"
-                  value={note}
-                  onChange={(e) => setNote(e.target.value)}
-                  placeholder="e.g. confirmed with vendor rep"
-                  disabled={busy}
-                />
-              </label>
-            </div>
-            {!catchWeight ? (
-              <div className="kf-chain__caseprice">
-                <span className="kf-chain__caseprice-label">Case price</span>
-                {(() => {
-                  // S4: options come from whatever the item carries. The
-                  // engine's own case figure ("invoice average") joins
-                  // catalog and billed when the stored source was an
-                  // actuals_* tier - without it the dropdown would hide
-                  // the number that produced the saved per_base.
-                  const options: Array<{ src: "catalog" | "billed" | "avg"; label: string; v: number }> = [];
-                  if (catalogV != null) options.push({ src: "catalog", label: `${fmtUsd(catalogV)} - catalog`, v: catalogV });
-                  if (billedV != null) options.push({ src: "billed", label: `${fmtUsd(billedV)} - billed, latest invoice line`, v: billedV });
-                  if (avgV != null) options.push({ src: "avg", label: `${fmtUsd(avgV)} - invoice average`, v: avgV });
-                  if (options.length >= 2) {
-                    return (
-                      <>
-                        <select
-                          className="kf-dt__unitsel"
-                          value={caseSrc ?? options[0].src}
-                          onChange={(e) =>
-                            setCaseSrc(e.target.value as "catalog" | "billed" | "avg")
-                          }
-                          disabled={busy}
-                        >
-                          {options.map((o) => (
-                            <option key={o.src} value={o.src}>
-                              {o.label}
-                            </option>
-                          ))}
-                        </select>
-                        {bigGap ? (
-                          <span className="kf-chain__caseprice-note">
-                            catalog and billed disagree by more than 25%
-                          </span>
-                        ) : null}
-                      </>
-                    );
-                  }
-                  if (options.length === 1) {
-                    return <strong>{options[0].label}</strong>;
-                  }
-                  return <span className="kf-muted">none - pack will save, per-unit will be blank</span>;
-                })()}
-              </div>
-            ) : null}
-          </div>
-        </div>
-
-        {/* Row 4 - Result: derived $/unit + verdict. */}
-        <div ref={resultRef} className="kf-chain__row kf-chain__row--result">
-          <div className="kf-chain__label">Result</div>
-          <div className="kf-chain__value">
-            {preview.perBase != null ? (
-              <strong className="kf-chain__big">
-                {/* S4 + S5: label reads from preview.baseLabel, which
-                    the preview-building block above sets to the
-                    master's unit (via displayPerBase) in both the
-                    showStored branch and the recompute branches. One
-                    source of truth for the headline label. */}
-                {fmtUsd(preview.perBase)} / {preview.baseLabel ?? "unit"}
-              </strong>
-            ) : (
-              <strong className="kf-chain__big kf-muted">- / unit</strong>
-            )}
-            <span
-              className={`kf-chain__sub${
-                preview.dim === "no-price" ? " kf-chain__sub--warn" : ""
-              }`}
-            >
-              {preview.line}
-            </span>
-            {/* The price is a separate fact from the pack. Key off the
-                price flag directly - !packManualOverride suppressed
-                this line on merged rows that had both (A2.2 fix).
-                S5: convert the hand-set per_base into the master's
-                unit via displayPerBase so this line agrees with the
-                Result headline and the master list - without it the
-                "set by hand" chip reads /fl oz on a gal master. */}
-            {item.priceManualOverride && item.perBase != null && (item.perBaseUom === "LB" || item.perBaseUom === "FLOZ" || item.perBaseUom === "EA") ? (() => {
-              const disp = displayPerBase(item.perBase, item.perBaseUom, ingredient);
-              return (
-                <span className="kf-chain__sub">
-                  Price set by hand - {fmtUsd(disp.value)} / {disp.label}
-                </span>
-              );
-            })() : null}
-            {verdict ? (
-              <span className={`kf-chain__verdict kf-chain__verdict--${verdict.tone}`}>
-                {verdict.text}
-              </span>
-            ) : null}
-            {outOfBand && pricePerUserUom != null && band && userUom ? (
-              <span className="kf-chain__verdict kf-chain__verdict--warn">
-                {fmtUsd(pricePerUserUom)}/{userUom.toLowerCase()}{" "}
-                is far outside the usual range for per-{userUom.toLowerCase()} ingredients.
-                {bandCaseHint
-                  ? ` Check the pack - a case of ${bandCaseHint.n} would make this ${fmtUsd(bandCaseHint.perUnit)}/${userUom.toLowerCase()}.`
-                  : " Check the pack."}
-              </span>
-            ) : null}
-            <div className="kf-ipanel__editor-actions">
-              <button
-                type="button"
-                className="kf-btn kf-btn--ghost kf-btn--sm"
-                disabled={busy}
-                onClick={() => {
-                  if (dirty) resetDrafts();
-                  if (onCancel) onCancel();
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className={`kf-btn kf-btn--primary kf-btn--sm${busy ? " is-busy" : ""}`}
-                disabled={busy || !readyToSave}
-                onClick={save}
-              >
-                {/* S6: label follows the action. Pack pristine + source
-                    moved -> price-override write ("Save price"). Any
-                    other save path ("Save pack") keeps today's label. */}
-                {busy
-                  ? "Saving..."
-                  : !catchWeight && packPristine && caseSrcChanged && !catchWeightChanged
-                    ? "Save price"
-                    : "Save pack"}
-              </button>
-              <SaveFlash savedAt={savedAt} error={error} />
-            </div>
-            {lastTwins != null && lastTwins > 0 ? (
-              <div className="kf-ipanel__editor-foot">
-                Applied to <strong>{fmtCount(lastTwins + 1)}</strong> matching items (same vendor SKU).
-              </div>
-            ) : null}
-          </div>
-        </div>
-        {/* N7 §3d: ItemEachMeasureBlock lifted OUT of the pack editor
-            and promoted to its own row in PanelItemZone. */}
+      {/* N8 §1f: Read as - ONE muted line. */}
+      <div className="kf-ipanel__editor-read">
+        <strong>{readAsLabel}:</strong> {readAsBody}
+        {readAsLabel === "Could not read" && item.perBaseNote ? <> &mdash; {item.perBaseNote}</> : null}
       </div>
+
+      {/* N8 §1f: Fields grid.
+          Priced by case: 4-across Qty / Size / Unit / Billed by, then
+          2-across Case price / Note.
+          Catch weight: 2-across $/lb / Billed by, then Note full-width.
+          Logic, state, options, writes unchanged from N7 commit 0. */}
+      {catchWeight ? (
+        <>
+          <div className="kf-ipanel__editor-grid kf-ipanel__editor-grid--2">
+            <label className="kf-ipanel__editor-field">
+              $ / lb
+              <input
+                type="number"
+                inputMode="decimal"
+                step="0.01"
+                min="0"
+                value={perLbStr}
+                onChange={(e) => setPerLbStr(e.target.value)}
+                placeholder="e.g. 5.299"
+                disabled={busy}
+              />
+            </label>
+            <label className="kf-ipanel__editor-field">
+              Billed by
+              <select
+                value={billedUnit}
+                onChange={(e) => setBilledUnit(e.target.value)}
+                disabled={busy}
+              >
+                <option value="">(not set)</option>
+                {billedUnit !== "" &&
+                  !BILLED_UNIT_GROUPS.some((g) => g.options.includes(billedUnit)) && (
+                    <option value={billedUnit}>{billedUnit} (existing)</option>
+                  )}
+                {BILLED_UNIT_GROUPS.map((g) => (
+                  <optgroup key={g.label} label={g.label}>
+                    {g.options.map((o) => (
+                      <option key={o} value={o}>{o}</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </label>
+          </div>
+          <label className="kf-ipanel__editor-field">
+            Note (optional)
+            <input
+              type="text"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="e.g. confirmed with vendor rep"
+              disabled={busy}
+            />
+          </label>
+        </>
+      ) : (
+        <>
+          <div className="kf-ipanel__editor-grid kf-ipanel__editor-grid--4">
+            <label className="kf-ipanel__editor-field">
+              Qty
+              <input
+                ref={qtyInputRef}
+                type="number"
+                inputMode="numeric"
+                step="1"
+                min="0"
+                value={qtyStr}
+                onChange={(e) => setQtyStr(e.target.value)}
+                placeholder="e.g. 6"
+                disabled={busy}
+              />
+            </label>
+            <label className="kf-ipanel__editor-field">
+              Size
+              <input
+                type="number"
+                inputMode="decimal"
+                step="0.01"
+                min="0"
+                value={sizeStr}
+                onChange={(e) => setSizeStr(e.target.value)}
+                placeholder="e.g. 5"
+                disabled={busy}
+              />
+            </label>
+            <label className="kf-ipanel__editor-field">
+              Unit
+              <select value={uom} onChange={(e) => setUom(e.target.value)} disabled={busy}>
+                {UOM_GROUPS.map((g) => (
+                  <optgroup key={g.label} label={g.label}>
+                    {g.options.map((o) => (
+                      <option key={o} value={o}>{uomDisplay(o)}</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </label>
+            <label className="kf-ipanel__editor-field">
+              Billed by
+              <select
+                value={billedUnit}
+                onChange={(e) => setBilledUnit(e.target.value)}
+                disabled={busy}
+              >
+                <option value="">(not set)</option>
+                {billedUnit !== "" &&
+                  !BILLED_UNIT_GROUPS.some((g) => g.options.includes(billedUnit)) && (
+                    <option value={billedUnit}>{billedUnit} (existing)</option>
+                  )}
+                {BILLED_UNIT_GROUPS.map((g) => (
+                  <optgroup key={g.label} label={g.label}>
+                    {g.options.map((o) => (
+                      <option key={o} value={o}>{o}</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="kf-ipanel__editor-grid kf-ipanel__editor-grid--2">
+            <label className="kf-ipanel__editor-field">
+              Case price
+              {(() => {
+                const options: Array<{ src: "catalog" | "billed" | "avg"; label: string; v: number }> = [];
+                if (catalogV != null) options.push({ src: "catalog", label: `${fmtUsd(catalogV)} - catalog`, v: catalogV });
+                if (billedV != null) options.push({ src: "billed", label: `${fmtUsd(billedV)} - billed, latest invoice line`, v: billedV });
+                if (avgV != null) options.push({ src: "avg", label: `${fmtUsd(avgV)} - invoice average`, v: avgV });
+                if (options.length >= 2) {
+                  return (
+                    <select
+                      value={caseSrc ?? options[0].src}
+                      onChange={(e) =>
+                        setCaseSrc(e.target.value as "catalog" | "billed" | "avg")
+                      }
+                      disabled={busy}
+                    >
+                      {options.map((o) => (
+                        <option key={o.src} value={o.src}>{o.label}</option>
+                      ))}
+                    </select>
+                  );
+                }
+                if (options.length === 1) {
+                  return (
+                    <div className="kf-ipanel__editor-read" style={{ paddingTop: 6 }}>{options[0].label}</div>
+                  );
+                }
+                return (
+                  <div className="kf-ipanel__editor-read" style={{ paddingTop: 6 }}>
+                    none - pack will save, per-unit will be blank
+                  </div>
+                );
+              })()}
+            </label>
+            <label className="kf-ipanel__editor-field">
+              Note (optional)
+              <input
+                type="text"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="e.g. confirmed with vendor rep"
+                disabled={busy}
+              />
+            </label>
+          </div>
+          {bigGap ? (
+            <div className="kf-ipanel__editor-foot">catalog and billed disagree by more than 25%</div>
+          ) : null}
+        </>
+      )}
+
+      {/* Dim verdict + band warning - full-width micro lines above the
+          result band. Content unchanged from N7; only wrapper classes
+          moved onto the editor shell. */}
+      {verdict ? (
+        <div className={`kf-pill kf-pill--${verdict.tone === "block" ? "block" : "good"}`} style={{ width: "fit-content" }}>
+          {verdict.text}
+        </div>
+      ) : null}
+      {outOfBand && pricePerUserUom != null && band && userUom ? (
+        <div className="kf-pill kf-pill--warn" style={{ width: "fit-content" }}>
+          {fmtUsd(pricePerUserUom)}/{userUom.toLowerCase()}{" "}
+          is far outside the usual range for per-{userUom.toLowerCase()} ingredients.
+          {bandCaseHint
+            ? ` A case of ${bandCaseHint.n} would land at ${fmtUsd(bandCaseHint.perUnit)}/${userUom.toLowerCase()}.`
+            : ""}
+        </div>
+      ) : null}
+
+      {/* Result band - summary left, price right. */}
+      <div ref={resultRef} className="kf-ipanel__editor-band">
+        <div className="kf-ipanel__editor-band-l">
+          <div className="kf-ipanel__editor-band-label">Result</div>
+          <div className="kf-ipanel__editor-band-sum">{preview.line}</div>
+        </div>
+        <div className="kf-ipanel__editor-band-value">
+          {preview.perBase != null ? (
+            <>
+              {fmtUsd(preview.perBase)}{" "}
+              <span className="kf-ipanel__editor-band-value-unit">/ {preview.baseLabel ?? "unit"}</span>
+            </>
+          ) : (
+            <span className="kf-ipanel__editor-band-value-unit">&mdash; / unit</span>
+          )}
+        </div>
+      </div>
+
+      {/* Price-set-by-hand micro - unchanged math, carried as a foot. */}
+      {item.priceManualOverride && item.perBase != null &&
+        (item.perBaseUom === "LB" || item.perBaseUom === "FLOZ" || item.perBaseUom === "EA") ? (() => {
+          const disp = displayPerBase(item.perBase, item.perBaseUom, ingredient);
+          return (
+            <div className="kf-ipanel__editor-foot">
+              Price set by hand - {fmtUsd(disp.value)} / {disp.label}
+            </div>
+          );
+        })() : null}
+
+      {/* Actions - right-aligned Cancel + Save. */}
+      <div className="kf-ipanel__editor-actions">
+        <button
+          type="button"
+          className="kf-btn kf-btn--ghost kf-btn--sm"
+          disabled={busy}
+          onClick={() => {
+            if (dirty) resetDrafts();
+            if (onCancel) onCancel();
+          }}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          className={`kf-btn kf-btn--primary kf-btn--sm${busy ? " is-busy" : ""}`}
+          disabled={busy || !readyToSave}
+          onClick={save}
+        >
+          {/* S6: label follows the action. Pack pristine + source
+              moved -> price-override write ("Save price"). */}
+          {busy
+            ? "Saving..."
+            : !catchWeight && packPristine && caseSrcChanged && !catchWeightChanged
+              ? "Save price"
+              : "Save pack"}
+        </button>
+        <SaveFlash savedAt={savedAt} error={error} />
+      </div>
+
+      {lastTwins != null && lastTwins > 0 ? (
+        <div className="kf-ipanel__editor-foot">
+          Applied to <strong>{fmtCount(lastTwins + 1)}</strong> matching items (same vendor SKU).
+        </div>
+      ) : null}
       {item.gtin ? (
         <div className="kf-ipanel__editor-foot">GTIN {item.gtin}</div>
       ) : null}
