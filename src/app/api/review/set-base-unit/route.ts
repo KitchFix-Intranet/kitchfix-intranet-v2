@@ -2,12 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireOwnerApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
 import { setIngredientBaseUnit } from "@/lib/reviewWrites";
+import { BASE_UNIT_VALUES } from "@/lib/ingredients/pack";
 
 export const dynamic = "force-dynamic";
 
-// Matches the pr_ingredients CHECK constraint:
-//   base_unit = ANY (ARRAY['lb','each','gal','dozen'])
-const BASE_UNITS = new Set(["lb", "each", "gal", "dozen"]);
+// N6: matches the pr_ingredients CHECK constraint widened in migration
+// 0018 to accept every WEIGHT_UOMS + VOLUME_UOMS value plus each / dozen.
+// Shared with the writer and the client dropdown via pack.ts so the
+// three cannot drift.
+const BASE_UNITS: ReadonlySet<string> = BASE_UNIT_VALUES as ReadonlySet<string>;
 
 export async function POST(req: NextRequest) {
   const gate = await requireOwnerApi();

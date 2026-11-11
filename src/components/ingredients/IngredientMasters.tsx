@@ -45,10 +45,11 @@ type Ingredient = {
   allergens: string[];
   allergens_reviewed_by: string | null;
   allergens_reviewed_at: string | null;
-  // N5: usual weight of one each + where that figure came from.
-  // Only meaningful on each-costed masters; null everywhere else.
-  avg_weight_lb: number | null;
-  avg_weight_source: string | null;
+  // N6: usual measure of one each. Only meaningful on each-costed
+  // masters; null everywhere else.
+  each_measure_qty: number | null;
+  each_measure_uom: string | null;
+  each_measure_source: string | null;
 };
 
 type LinkedItemRow = {
@@ -71,8 +72,9 @@ type LinkedItemRow = {
   // sanctioned non-null value today. The master rolls up three
   // prices filtered by this field.
   grade: string | null;
-  // N5: per-item each weight override. Null for most rows.
-  each_weight_lb: number | null;
+  // N6: per-item each measure override. Null for most rows.
+  each_measure_qty: number | null;
+  each_measure_uom: string | null;
 };
 
 // S3: median-based outlier exclusion for the master blend. Rule:
@@ -230,7 +232,7 @@ const LIVE_STATUSES: readonly string[] = ["active", "resale"];
 // up with the same price displayed as $/gal in the item panel.
 // DIM_BY_UOM / normUom still needed below for the item-dim-vs-master-dim
 // mismatch classification (an orthogonal use the item panel does not share).
-import { DIM_BY_UOM, normUom, convertPer, canonicalFromBaseUnit } from "@/lib/ingredients/pack";
+import { DIM_BY_UOM, BASE_BY_DIM, normUom, convertPer, canonicalFromBaseUnit } from "@/lib/ingredients/pack";
 import { isPriceManualOverride } from "./itemTypes";
 
 // R2: this workbench powers two tabs. `mode="recipe"` is the Ingredients
@@ -250,9 +252,8 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
   // combined total (every master has `resale` set, defaults to false).
   const { data: ingData, error: ingErr } = await client
     .from("pr_ingredients")
-    // N5: avg_weight_lb + avg_weight_source added for the Ingredients
-    // tab row's derived per-lb (frame B).
-    .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,avg_weight_lb,avg_weight_source")
+    // N6: swap N5's avg_weight_lb/source for the N6 each-measure trio.
+    .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source")
     .eq("status", "active")
     .eq("resale", mode === "resale")
     .order("name");
@@ -266,10 +267,11 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
   for (;;) {
     const { data, error } = await client
       .from("pr_vendor_items")
-      // N5: each_weight_lb added so the linked-item lines show the
-      // item's own derived per-lb when an override is set. The row
-      // header figure itself still uses the ingredient's avg only.
-      .select("id,vendor_id,ingredient_id,name,usd_12m,price_estimate,pack_override,grade,each_weight_lb")
+      // N6: each_measure_qty + each_measure_uom. Linked-item lines go
+      // through deriveRecipePrice so the item's own measure shows next
+      // to its per-each. Row header figure still uses the ingredient's
+      // measure only (per go-message adjustment 2).
+      .select("id,vendor_id,ingredient_id,name,usd_12m,price_estimate,pack_override,grade,each_measure_qty,each_measure_uom")
       .eq("link_status", "confirmed")
       .in("status", LIVE_STATUSES) // B4: archived/not_food/duplicate/one_off never reach the rollup
       .not("ingredient_id", "is", null)
@@ -503,11 +505,38 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
     // B3 Rule 2: count units are never banded.
     const bandAllowedByUnit = bandKey != null && !BAND_SUPPRESS_UNITS.has(bandKey);
 
+    // N6 A2: BANDS covers LB, OZ, FLOZ, GAL, EA, DZ. A master costed in
+    // a new weight or volume unit (G, KG, PT, QT, L, ML) has no row of
+    // its own; convert its average into the dimension's base (LB for
+    // weight, FLOZ for volume) and test against that base's band. The
+    // six existing keys keep their exact numbers and their exact
+    // results - the key lookup below still picks BANDS[LB] / BANDS[OZ]
+    // / etc when the master is on one of those units, and convertPer
+    // returns the value unchanged.
+    let bandTestValue: number | null = null;
+    let bandTestKey: string | null = null;
+    if (avg != null && bandKey != null && bandAllowedByUnit) {
+      if (BANDS[bandKey]) {
+        bandTestValue = avg;
+        bandTestKey = bandKey;
+      } else {
+        // Unit outside the BANDS set; fall through to the dimension base.
+        const dim = DIM_BY_UOM[bandKey];
+        if (dim === "weight" || dim === "volume") {
+          const dimBase = BASE_BY_DIM[dim];
+          const converted = convertPer(avg, bandKey, dimBase);
+          if (converted != null && BANDS[dimBase]) {
+            bandTestValue = converted;
+            bandTestKey = dimBase;
+          }
+        }
+      }
+    }
     const bandFlag =
       bandAllowedByUnit &&
       !corroboratedByVendors &&
-      avg != null && bandKey != null && BANDS[bandKey]
-        ? avg < BANDS[bandKey].low || avg > BANDS[bandKey].high
+      bandTestValue != null && bandTestKey != null && BANDS[bandTestKey]
+        ? bandTestValue < BANDS[bandTestKey].low || bandTestValue > BANDS[bandTestKey].high
         : false;
     const mismatchFlag = mismatchedItemIds.size > 0;
     const flagged = ratioFlag || bandFlag || mismatchFlag;
@@ -571,10 +600,12 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
           // Null is standard; see src/lib/ingredients/grade.ts.
           grade: it.grade ?? null,
           usd12m: Number(it.usd_12m ?? 0),
-          // N5: per-item each weight override. Linked-item lines use
-          // this directly via derivePerLb; the row header figure keeps
-          // using only the ingredient's avg_weight_lb.
-          eachWeightLb: it.each_weight_lb == null ? null : Number(it.each_weight_lb),
+          // N6: per-item each measure override. Linked-item lines use
+          // this directly via deriveRecipePrice; the row header figure
+          // keeps using only the ingredient's measure.
+          eachMeasure: it.each_measure_qty != null && it.each_measure_uom
+            ? { qty: Number(it.each_measure_qty), uom: it.each_measure_uom }
+            : null,
         };
       })
       .sort((a, b) => b.usd12m - a.usd12m);
@@ -676,11 +707,12 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
       flagged,
       flagReason,
       linkedItems,
-      // N5: the master's own avg weight + where it came from. Snake
+      // N6: the master's own each measure + where it came from. Snake
       // field names on the fetch row get projected to camel here so
-      // the client type stays camel-only. Null + null when unknown.
-      avgWeightLb: m.avg_weight_lb == null ? null : Number(m.avg_weight_lb),
-      avgWeightSource: m.avg_weight_source ?? null,
+      // the client type stays camel-only. Null when unknown.
+      eachMeasureQty: m.each_measure_qty == null ? null : Number(m.each_measure_qty),
+      eachMeasureUom: m.each_measure_uom ?? null,
+      eachMeasureSource: m.each_measure_source ?? null,
     };
   });
 

@@ -30,7 +30,13 @@ import { ItemPanelById } from "./ItemPanelById";
 import { IngredientPanelById } from "./IngredientPanelById";
 import { IngredientAllergens } from "./IngredientAllergens";
 import { SUPER_CATEGORIES } from "@/lib/ingredients/categories";
-import { derivePerLb } from "@/lib/ingredients/eachWeight";
+import {
+  WEIGHT_UOMS,
+  VOLUME_UOMS,
+  uomLabel,
+  DIM_BY_UOM,
+} from "@/lib/ingredients/pack";
+import { deriveRecipePrice } from "@/lib/ingredients/eachMeasure";
 import { RowSendBackButton } from "./RowSendBackButton";
 import { RowGradeToggle } from "./RowGradeToggle";
 import { MasterSendAllBackButton } from "./MasterSendAllBackButton";
@@ -87,10 +93,10 @@ export type MasterLinkedItem = {
   // only sanctioned non-null value today.
   grade: string | null;
   usd12m: number;
-  // N5: per-item each weight override. Linked-item lines read this
-  // through derivePerLb so an override shows the item's own per-lb
-  // next to its per-each.
-  eachWeightLb: number | null;
+  // N6: per-item each measure override. Linked-item lines read this
+  // through deriveRecipePrice so an override shows the item's own
+  // derived price next to its per-each.
+  eachMeasure: { qty: number; uom: string } | null;
 };
 
 export type MasterRow = {
@@ -142,13 +148,14 @@ export type MasterRow = {
   // deviated from. Null when no priced items in-dim.
   medianBeforeExclusion: number | null;
   linkedItems: MasterLinkedItem[];
-  // N5: the master's own avg each weight + source. Only meaningful on
-  // each-costed masters; null everywhere else. The row's derived per-lb
-  // is avgPerBase through derivePerLb with itemEachWeightLb = null -
-  // the ingredient's weight only; item overrides live on the linked
+  // N6: the master's own each measure + source. Only meaningful on
+  // each-costed masters; null everywhere else. The row's derived price
+  // is avgPerBase through deriveRecipePrice with itemMeasure = null -
+  // the ingredient's measure only; item overrides live on the linked
   // item lines, not the row header.
-  avgWeightLb: number | null;
-  avgWeightSource: string | null;
+  eachMeasureQty: number | null;
+  eachMeasureUom: string | null;
+  eachMeasureSource: string | null;
 };
 
 type SortMode = "spend" | "name" | "links" | "spread";
@@ -165,12 +172,11 @@ const ISSUE_LABEL: Record<string, string> = {
   empty: "No vendor items",
 };
 
-function uomLabel(uom: string | null): string {
-  if (!uom) return "unit";
-  if (uom === "LB") return "lb";
-  if (uom === "FLOZ") return "fl oz";
-  if (uom === "EA") return "each";
-  return uom.toLowerCase();
+// N6: local uomLabel is deleted in favour of the shared one imported
+// from pack.ts above. Call sites pass empty string through uomLabel
+// which returns "" rather than "unit"; add the unit fallback here.
+function uomOrUnit(uom: string | null): string {
+  return uom ? uomLabel(uom) : "unit";
 }
 
 function matches(row: MasterRow, needle: string): boolean {
@@ -637,7 +643,7 @@ function MasterRowButton({
   onSelect: () => void;
   onOpen: () => void;
 }) {
-  const uom = uomLabel(row.baseUom);
+  const uom = uomOrUnit(row.baseUom);
   const lv = row.spreadRatio == null ? null : row.spreadRatio > 3 ? "hi" : row.spreadRatio > 2 ? "mid" : "ok";
   // A4 nests a real <button> for the master name inside the row.
   // HTML forbids button-in-button, so the row swaps to a role="button"
@@ -726,23 +732,28 @@ function MasterRowButton({
             <strong>{fmtUsd(row.avgPerBase)}</strong>
             <span className="kf-muted"> / {uom}</span>
             {(() => {
-              // N5: derived per lb on each-costed rows. Reads the
-              // ingredient's own avg weight only - per-item overrides
-              // appear on the linked-item lines, not the row header.
-              // baseUom === "EA" means the master is per-each; perLb
-              // is null when the row has no weight.
-              const perLb = derivePerLb({
+              // N6: derived recipe price on each-costed rows. Reads the
+              // ingredient's own measure only - per-item overrides
+              // appear on the linked-item lines, not the row header
+              // (go-message adjustment 2). baseUom === "EA" means the
+              // master is per-each; the helper returns null when there
+              // is no measure.
+              const ingMeasure =
+                row.eachMeasureQty != null && row.eachMeasureUom
+                  ? { qty: row.eachMeasureQty, uom: row.eachMeasureUom }
+                  : null;
+              const derived = deriveRecipePrice({
                 perBase: row.avgPerBase,
                 perBaseUom: row.baseUom,
-                itemEachWeightLb: null,
-                ingredientAvgWeightLb: row.avgWeightLb,
+                itemMeasure: null,
+                ingredientMeasure: ingMeasure,
               });
-              if (!perLb) return null;
+              if (!derived) return null;
               return (
                 <>
                   <span className="kf-muted"> · </span>
-                  <strong>{fmtUsd(perLb.perLb)}</strong>
-                  <span className="kf-muted"> / lb</span>
+                  <strong>{fmtUsd(derived.per)}</strong>
+                  <span className="kf-muted"> / {uomLabel(derived.uom)}</span>
                 </>
               );
             })()}
@@ -775,17 +786,29 @@ function MasterRowButton({
 // The schema's CHECK constraint, in the order a chef would scan them.
 // `dozen` is in the constraint and on exactly one master today; it stays
 // available but last.
-const BASE_UNITS: { value: string; label: string }[] = [
-  { value: "lb", label: "pound (lb)" },
-  { value: "each", label: "each" },
-  { value: "gal", label: "gallon (gal)" },
-  { value: "dozen", label: "dozen" },
+// N6: dropdown options come from the shared vocabulary. Weight and
+// volume groups are offered as <optgroup>s; count stays last.
+const BASE_UNIT_GROUPS: { label: string; options: string[] }[] = [
+  { label: "Weight", options: WEIGHT_UOMS.map((u) => u.toLowerCase()) },
+  { label: "Volume", options: VOLUME_UOMS.map((u) => u.toLowerCase()) },
+  { label: "Count",  options: ["each", "dozen"] },
 ];
 
+// N6: display word for the "Cost this per X" copy. Delegates to the
+// shared uomLabel; pluralises when the row's unit maps to a mass noun
+// (lb, kg) rather than a single-form noun (each, oz is both).
 const BASE_UNIT_WORD: Record<string, string> = {
   lb: "pounds",
-  each: "each",
+  oz: "ounces",
+  g: "grams",
+  kg: "kilograms",
+  floz: "fluid ounces",
+  pt: "pints",
+  qt: "quarts",
   gal: "gallons",
+  l: "liters",
+  ml: "milliliters",
+  each: "each",
   dozen: "dozens",
 };
 
@@ -845,67 +868,75 @@ function BaseUnitControl({ row }: { row: MasterRow }) {
         disabled={busy}
         onChange={(e) => save(e.target.value)}
       >
-        {BASE_UNITS.map((u) => (
-          <option key={u.value} value={u.value}>
-            {u.label}
-          </option>
+        {BASE_UNIT_GROUPS.map((g) => (
+          <optgroup key={g.label} label={g.label}>
+            {g.options.map((u) => (
+              <option key={u} value={u}>{uomLabel(u)}</option>
+            ))}
+          </optgroup>
         ))}
       </select>
     </span>
   );
 }
 
-// N5: usual weight of one each. Writes pr_ingredients.avg_weight_lb +
-// avg_weight_source via POST /api/review/set-avg-weight. The write
-// mirrors BaseUnitControl - one toast, one router.refresh, reversible
-// by picking the old value back. Empty draft + Save is refused with a
-// toast; clearing goes through the dedicated null-weightLb path.
-function AvgWeightControl({ row }: { row: MasterRow }) {
+// N6: usual measure of one each. Writes the pr_ingredients.each_measure_*
+// trio via POST /api/review/set-each-measure. Row control carries qty +
+// uom; source defaults to house_test when the row has no source yet,
+// else stays as-is (the detail panel is the place to change source).
+function EachMeasureControl({ row }: { row: MasterRow }) {
   const router = useRouter();
-  const [draft, setDraft] = useState<string>(
-    row.avgWeightLb == null ? "" : String(row.avgWeightLb)
+  const [qtyDraft, setQtyDraft] = useState<string>(
+    row.eachMeasureQty == null ? "" : String(row.eachMeasureQty)
+  );
+  const [uomDraft, setUomDraft] = useState<string>(
+    (row.eachMeasureUom ?? "LB").toUpperCase()
   );
   const [busy, setBusy] = useState(false);
 
-  async function saveNumber(n: number) {
+  async function saveNumber(n: number, u: string) {
     if (busy) return;
     setBusy(true);
-    const r = await postJson("/api/review/set-avg-weight", {
+    const r = await postJson("/api/review/set-each-measure", {
       ingredientId: row.id,
-      weightLb: n,
-      // Row-level control defaults the source to house_test when the
-      // row has no source yet. If a source already exists, keep it -
-      // the detail panel is the place to change the source.
-      source: row.avgWeightSource ?? "house_test",
+      qty: n,
+      uom: u,
+      source: row.eachMeasureSource ?? "house_test",
     });
     if (!r.ok) {
       toast(errText(r.data, `Save failed (${r.status})`), { tone: "block" });
       setBusy(false);
       return;
     }
-    toast(`${row.name}: one each weighs ${Math.round(n * 100) / 100} lb`);
+    toast(`${row.name}: one each is ${Math.round(n * 10000) / 10000} ${uomLabel(u)}`);
     setBusy(false);
     router.refresh();
   }
 
-  function onCommit() {
-    const trimmed = draft.trim();
-    if (trimmed === "") return; // empty = no-op on blur; Clear handles delete
+  function onCommit(nextQtyStr: string, nextUom: string) {
+    const trimmed = nextQtyStr.trim();
+    if (trimmed === "") return; // empty = no-op on blur; clear from the panel
     const n = Number(trimmed);
-    if (!Number.isFinite(n) || n <= 0 || n > 200) {
-      toast("Weight must be greater than 0 and at most 200 lb.", { tone: "block" });
+    if (!Number.isFinite(n) || n <= 0 || n > 100000) {
+      toast("Quantity must be greater than 0 and at most 100000.", { tone: "block" });
       return;
     }
-    const rounded = Math.round(n * 100) / 100;
-    if (rounded === row.avgWeightLb) return; // no-op
-    void saveNumber(rounded);
+    const u = nextUom.toUpperCase();
+    const dim = DIM_BY_UOM[u];
+    if (dim !== "weight" && dim !== "volume") {
+      toast("Pick a weight or volume unit.", { tone: "block" });
+      return;
+    }
+    const rounded = Math.round(n * 10000) / 10000;
+    if (rounded === row.eachMeasureQty && u === (row.eachMeasureUom ?? "").toUpperCase()) return; // no-op
+    void saveNumber(rounded, u);
   }
 
-  // Empty-state chip: when no weight is set yet, keep the warn style the
-  // row already uses for "Check allergens". A small matching chip in
-  // place of the input, so the user sees the gap without a disabled
-  // control floating next to a populated one.
-  if (row.avgWeightLb == null && draft === "") {
+  // Empty-state chip: when no measure is set yet, keep the warn style
+  // the row already uses for "Check allergens". Small matching chip in
+  // place of the control so the user sees the gap without a disabled
+  // input floating next to a populated one.
+  if (row.eachMeasureQty == null && qtyDraft === "") {
     return (
       <span className="kf-dt__unitctl">
         <Scale size={13} strokeWidth={1.5} aria-hidden />
@@ -916,20 +947,37 @@ function AvgWeightControl({ row }: { row: MasterRow }) {
           id={`avgw-${row.id}`}
           type="number"
           inputMode="decimal"
-          step="0.01"
+          step="0.0001"
           min="0"
-          max="200"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={onCommit}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onCommit(); } }}
-          placeholder="lb"
-          aria-label="One each weighs, in pounds"
+          value={qtyDraft}
+          onChange={(e) => setQtyDraft(e.target.value)}
+          onBlur={() => onCommit(qtyDraft, uomDraft)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onCommit(qtyDraft, uomDraft); } }}
+          placeholder="qty"
+          aria-label="One each, quantity"
           disabled={busy}
           className="kf-dt__unitsel"
           style={{ width: "6ch" }}
         />
-        <span className="kf-master__bdg kf-master__bdg--unreviewed">no weight yet</span>
+        <select
+          value={uomDraft}
+          onChange={(e) => setUomDraft(e.target.value)}
+          disabled={busy}
+          aria-label="One each, unit"
+          className="kf-dt__unitsel"
+        >
+          <optgroup label="Weight">
+            {WEIGHT_UOMS.map((u) => (
+              <option key={u} value={u}>{uomLabel(u)}</option>
+            ))}
+          </optgroup>
+          <optgroup label="Volume">
+            {VOLUME_UOMS.map((u) => (
+              <option key={u} value={u}>{uomLabel(u)}</option>
+            ))}
+          </optgroup>
+        </select>
+        <span className="kf-master__bdg kf-master__bdg--unreviewed">no measure yet</span>
       </span>
     );
   }
@@ -944,20 +992,36 @@ function AvgWeightControl({ row }: { row: MasterRow }) {
         id={`avgw-${row.id}`}
         type="number"
         inputMode="decimal"
-        step="0.01"
+        step="0.0001"
         min="0"
-        max="200"
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={onCommit}
-        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onCommit(); } }}
-        placeholder="lb"
-        aria-label="One each weighs, in pounds"
+        value={qtyDraft}
+        onChange={(e) => setQtyDraft(e.target.value)}
+        onBlur={() => onCommit(qtyDraft, uomDraft)}
+        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onCommit(qtyDraft, uomDraft); } }}
+        placeholder="qty"
+        aria-label="One each, quantity"
         disabled={busy}
         className="kf-dt__unitsel"
-        style={{ width: "7ch" }}
+        style={{ width: "6ch" }}
       />
-      <span className="kf-muted">lb</span>
+      <select
+        value={uomDraft}
+        onChange={(e) => { setUomDraft(e.target.value); onCommit(qtyDraft, e.target.value); }}
+        disabled={busy}
+        aria-label="One each, unit"
+        className="kf-dt__unitsel"
+      >
+        <optgroup label="Weight">
+          {WEIGHT_UOMS.map((u) => (
+            <option key={u} value={u}>{uomLabel(u)}</option>
+          ))}
+        </optgroup>
+        <optgroup label="Volume">
+          {VOLUME_UOMS.map((u) => (
+            <option key={u} value={u}>{uomLabel(u)}</option>
+          ))}
+        </optgroup>
+      </select>
     </span>
   );
 }
@@ -998,7 +1062,7 @@ function SuggestBaseUnitButton({ row }: { row: MasterRow }) {
 // Typed, plain-English reasons. The whole point of PR52: the badge names
 // the problem, this names the fix. Nothing here is hover-only.
 function IssueNote({ row }: { row: MasterRow }) {
-  const uom = uomLabel(row.baseUom);
+  const uom = uomOrUnit(row.baseUom);
   const notes: { tone: string; icon: ReactNode; head: string; body: ReactNode }[] = [];
 
   if (row.issues.includes("spread")) {
@@ -1161,7 +1225,7 @@ function MasterDetail({
   onBack: () => void;
   onOpenItem: (itemId: string) => void;
 }) {
-  const uom = uomLabel(row.baseUom);
+  const uom = uomOrUnit(row.baseUom);
   const [lens, setLens] = useState<PriceLens>("blended");
   // G3 §3: suppress the lens unless two grades are populated. 10 of
   // 230 masters currently qualify; the other 220 show one grade's
@@ -1199,7 +1263,7 @@ function MasterDetail({
               base-unit control. Rendered only on each-costed masters;
               dropping to lb / gal / dozen does not clear the stored
               weight, the control just stops showing. */}
-          {row.baseUnit === "each" ? <AvgWeightControl row={row} /> : null}
+          {row.baseUnit === "each" ? <EachMeasureControl row={row} /> : null}
           {/* G3 §1: lens is now a <select> matching BaseUnitControl's
               chrome and register. Native element - keyboard + SR
               behaviour comes free. Hidden entirely when only one

@@ -15,9 +15,17 @@ const ALLOWED_UOMS = new Set([
   "EA", "CT", "DZ", "PC",
 ]);
 
-// Mirrors BILLED_UNIT_GROUPS in DetailPanel.tsx and BASE_BILLED in intake.ts.
+// N6: mirrors BILLED_UNIT_GROUPS in DetailPanel.tsx and BASE_BILLED in
+// intake.ts. The per-unit list widened to every weight and volume unit
+// the engine prices natively via normUom + uomFactor; the per-container
+// list stayed as it was. Keeping the three in step is tested at build
+// time by the N6 acceptance (grep for the three lists).
 const ALLOWED_BILLED_UNITS = new Set([
-  "lb", "oz", "each", "gallon", "count", "dozen",
+  // per-unit - estimate.ts Tier A reads unit_price directly
+  "lb", "oz", "g", "kg",
+  "fl oz", "pt", "qt", "gallon", "l", "ml",
+  "each", "count", "dozen",
+  // per-container - estimate.ts divides case_price by pack
   "case", "bag", "box", "pack", "jar", "can", "other",
 ]);
 

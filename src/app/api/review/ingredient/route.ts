@@ -38,18 +38,18 @@ export async function GET(req: NextRequest) {
   const [ingRes, parentsRes] = await Promise.all([
     client
       .from("pr_ingredients")
-      // N5: avg_weight_lb + avg_weight_source added to the two SELECTs
-      // so the panel's Edit-ingredient block can read what is stored
-      // (same shape as ReviewCardIngredient).
-      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,avg_weight_lb,avg_weight_source")
+      // N6: each_measure_* trio replaces N5's avg_weight_lb/source on
+      // the two SELECTs so the panel's Edit-ingredient block reads the
+      // measure shape.
+      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source")
       .eq("id", id)
       .maybeSingle(),
     client
       .from("pr_ingredients")
-      // N5: avg_weight_lb + avg_weight_source added to the two SELECTs
-      // so the panel's Edit-ingredient block can read what is stored
-      // (same shape as ReviewCardIngredient).
-      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,avg_weight_lb,avg_weight_source")
+      // N6: each_measure_* trio replaces N5's avg_weight_lb/source on
+      // the two SELECTs so the panel's Edit-ingredient block reads the
+      // measure shape.
+      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source")
       .eq("status", "active")
       .order("name"),
   ]);

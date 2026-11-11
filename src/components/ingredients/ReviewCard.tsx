@@ -19,7 +19,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check, Pencil, Scale } from "lucide-react";
 import { fmtCount, fmtDate, fmtUsd, fmtUsdLong } from "@/lib/fmt";
-import { derivePerLb } from "@/lib/ingredients/eachWeight";
+import { deriveRecipePrice } from "@/lib/ingredients/eachMeasure";
+import { uomLabel } from "@/lib/ingredients/pack";
 import { ReviewActions } from "./ReviewActions";
 import { DetailPanel, type DetailPanelOpen } from "./DetailPanel";
 import { RowFlagToggle } from "./RowFlagToggle";
@@ -426,19 +427,23 @@ function UnitPriceCell({
   ingredient,
 }: {
   item: ReviewGroupItem;
-  // N5: the group's ingredient feeds avg_weight_lb into derivePerLb.
-  // Null for ai-new groups - the item's own each_weight_lb is the
-  // only possible source there.
+  // N6: the group's ingredient feeds its each_measure trio into
+  // deriveRecipePrice. Null for ai-new groups - the item's own
+  // eachMeasure is the only possible source there.
   ingredient: ReviewCardIngredient | null;
 }) {
-  // N5: derived per-lb for each-priced rows only. Returns null when
-  // perBaseUom !== "EA", when perBase is missing or zero, or when no
-  // weight is available from either side. Never invents a weight.
-  const perLb = derivePerLb({
+  // N6: derived recipe price for each-priced rows only. Returns null
+  // when perBaseUom !== "EA", when perBase is missing or zero, or when
+  // no measure is available from either side. Never invents a measure.
+  const ingredientMeasure =
+    ingredient?.each_measure_qty != null && ingredient?.each_measure_uom
+      ? { qty: Number(ingredient.each_measure_qty), uom: ingredient.each_measure_uom }
+      : null;
+  const perLb = deriveRecipePrice({
     perBase: item.perBase,
     perBaseUom: item.perBaseUom,
-    itemEachWeightLb: item.eachWeightLb,
-    ingredientAvgWeightLb: ingredient?.avg_weight_lb ?? null,
+    itemMeasure: item.eachMeasure,
+    ingredientMeasure,
   });
   const perUnitAvailable =
     item.perBase != null && item.perBaseUom != null && item.perBaseConfidence != null;
@@ -476,9 +481,9 @@ function UnitPriceCell({
             ? "Per-unit estimate from pack size + case price"
             : "Low-confidence estimate (range / catch-weight / soft parse)") +
       (item.perBaseNote ? ` - ${item.perBaseNote}` : "") +
-      // N5: show the math behind the derived per-lb line so the
-      // reviewer sees which weight sourced it.
-      (perLb ? ` · ${fmtUsd(item.perBase as number)} each ÷ ${perLb.weightLb} lb` : "")
+      // N6: show the math behind the derived price line in the typed
+      // unit so the reviewer sees which measure sourced it.
+      (perLb ? ` · ${fmtUsd(item.perBase as number)} each ÷ ${perLb.qty} ${uomLabel(perLb.measureUom)}` : "")
     : "Per-unit needs pack normalization - edit the pack in the detail panel";
 
   return (
@@ -518,12 +523,12 @@ function UnitPriceCell({
         <>
           <br />
           <span className="kf-cell-sub kf-rvc__secondary">
-            {fmtUsd(perLb.perLb)}
-            <span className="kf-muted"> / lb</span>
+            {fmtUsd(perLb.per)}
+            <span className="kf-muted"> / {uomLabel(perLb.uom)}</span>
             {perLb.from === "item" ? (
               <>
                 <span className="kf-rvc__chip-gap" aria-hidden> </span>
-                <span className="kf-conf-chip">own weight</span>
+                <span className="kf-conf-chip">own measure</span>
               </>
             ) : null}
           </span>

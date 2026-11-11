@@ -65,7 +65,7 @@ export async function GET(req: NextRequest) {
     .from("pr_vendor_items")
     .select(
       // N5: each_weight_lb added.
-      "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_qty,pack_size,pack_uom,pack_state,pack_override,pack_note,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen,flagged,flag_note,flagged_by,flagged_at,price_estimate,grade,each_weight_lb"
+      "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_qty,pack_size,pack_uom,pack_state,pack_override,pack_note,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen,flagged,flag_note,flagged_by,flagged_at,price_estimate,grade,each_measure_qty,each_measure_uom"
     )
     .eq("id", id)
     .maybeSingle();
@@ -112,8 +112,9 @@ export async function GET(req: NextRequest) {
       note?: string | null;
     } | null;
     grade: string | null;
-    // N5: per-item each weight override. Null for most rows.
-    each_weight_lb: number | null;
+    // N6: per-item each measure override. Both null for most rows.
+    each_measure_qty: number | null;
+    each_measure_uom: string | null;
   };
 
   // Enrichment reads: vendor name, catalog match (if the item has a
@@ -145,14 +146,14 @@ export async function GET(req: NextRequest) {
           .from("pr_ingredients")
           // N5: avg_weight_lb + avg_weight_source added to the two
           // ingredient SELECTs so the panel reads what is stored.
-          .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,avg_weight_lb,avg_weight_source")
+          .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source")
           .eq("id", it.ingredient_id)
           .maybeSingle()
       : Promise.resolve({ data: null as unknown, error: null }),
     client
       .from("pr_ingredients")
       // N5: avg_weight_lb + avg_weight_source on the parents list too.
-      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,avg_weight_lb,avg_weight_source")
+      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source")
       .eq("status", "active")
       .order("name"),
   ]);
@@ -275,8 +276,10 @@ export async function GET(req: NextRequest) {
     // can see whether a sibling-filled pack was backed by 1 similar
     // item or 12.
     packNote: it.pack_note ?? null,
-    // N5: per-item each weight override. Null for most rows.
-    eachWeightLb: it.each_weight_lb == null ? null : Number(it.each_weight_lb),
+    // N6: per-item each measure override. Null for most rows.
+    eachMeasure: it.each_measure_qty != null && it.each_measure_uom
+      ? { qty: Number(it.each_measure_qty), uom: it.each_measure_uom }
+      : null,
     // P1 §5: catalog match provenance. The panel's ItemFacts reads
     // this alongside packSource to label the pack's origin in plain
     // words ("from catalog", "from catalog (name match)", etc.).
