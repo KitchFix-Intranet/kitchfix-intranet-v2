@@ -434,7 +434,7 @@ export function PanelIngredientZone({
               onChange={(e) => setMeasureQtyDraft(e.target.value)}
               onBlur={onMeasureQtyBlur}
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onMeasureQtyBlur(); } }}
-              placeholder="e.g. 6"
+              placeholder=""
               aria-label="One each, quantity"
               disabled={measureBusy}
             />

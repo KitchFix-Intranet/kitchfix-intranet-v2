@@ -1,0 +1,166 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Review card render reference</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Mulish:wght@400;600;700;800&display=swap">
+<style>
+/* tokens used: navy #153968, ink #1B2637, body #48556A, line #DCE4EB, line-soft #EAEFF3, raise #F8FAFC, ground #F3F6F9,
+   sky-tint #E7F1F4, sky-soft #F1F7F9, warn #8A5A0E on #F8EDD6, good #1B7A55. Display = Barlow Condensed, UI = Mulish. */
+body{margin:0;background:#F3F6F9;font-family:Mulish,Verdana,sans-serif;color:#1B2637;font-variant-numeric:tabular-nums;font-size:14.5px}
+.wrap{width:1200px;padding:32px 40px 48px}
+.cap{font-size:13px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:#48556A;margin:0 0 12px}
+.card{background:#fff;border:1px solid #DCE4EB;border-radius:14px;box-shadow:0 1px 2px rgba(14,42,78,.06),0 4px 14px rgba(14,42,78,.06);overflow:hidden}
+.head{display:flex;align-items:center;gap:14px;padding:16px 20px}
+.head h3{margin:0;font-family:'Barlow Condensed','Arial Narrow',Arial,sans-serif;font-weight:800;font-size:24px;line-height:1;text-transform:uppercase;letter-spacing:.2px;color:#153968}
+.pill{font-size:12px;font-weight:700;border-radius:999px;padding:4px 10px;white-space:nowrap}
+.pill.info{color:#153968;background:#E7F1F4}
+.crumb{font-size:13px;color:#48556A}
+.tot{margin-left:auto;text-align:right}
+.tot .v{font-family:'Barlow Condensed','Arial Narrow',Arial,sans-serif;font-weight:800;font-size:28px;line-height:1;color:#1B2637}
+.tot .s{font-size:12px;color:#48556A;margin-top:3px}
+table{width:100%;border-collapse:collapse;table-layout:fixed}
+th{font-family:'Barlow Condensed','Arial Narrow',Arial,sans-serif;font-weight:700;font-size:12.5px;letter-spacing:1.5px;text-transform:uppercase;color:#48556A;text-align:left;padding:10px 12px;background:#F1F7F9;border-top:1px solid #EAEFF3;border-bottom:1px solid #EAEFF3}
+td{padding:12px;border-bottom:1px solid #EAEFF3;vertical-align:middle;height:64px;box-sizing:border-box}
+tr:last-child td{border-bottom:0}
+td.c,th.c{width:52px;padding-left:20px;padding-right:0}
+.r{text-align:right} .b{font-weight:800} .m{font-size:12px;color:#48556A;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.u{color:#48556A} .per{margin-left:10px;font-weight:800;color:#153968}
+.nm{display:flex;align-items:center;gap:8px} .nm span{font-weight:600;line-height:1.3}
+.ico{margin-left:auto;flex-shrink:0;width:44px;height:44px;margin-top:-10px;margin-bottom:-10px;border:0;background:transparent;color:#8794A6;border-radius:10px;display:flex;align-items:center;justify-content:center}
+tr.is-flag td:first-child{box-shadow:inset 3px 0 0 #C98A1A}
+tr.is-flag .ico{color:#8A5A0E}
+.warnline{font-size:12px;font-weight:700;color:#8A5A0E;margin-top:3px}
+.sites{display:flex;flex-wrap:wrap;gap:4px} .b+.m{white-space:normal} .site{font-size:12px;font-weight:700;letter-spacing:.5px;color:#153968;background:#E7F1F4;border-radius:999px;padding:3px 9px;white-space:nowrap}
+input[type=checkbox]{width:20px;height:20px;accent-color:#153968;margin:0}
+.bar{background:#F8FAFC;border-top:1px solid #DCE4EB;padding:14px 20px;display:flex;flex-direction:column;gap:12px}
+.bar .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.btn{height:44px;padding:0 16px;border-radius:10px;font-family:Mulish,Verdana,sans-serif;font-size:14.5px;font-weight:800;display:inline-flex;align-items:center;gap:8px;border:0;background:transparent;color:#153968}
+.btn.pri{background:#153968;color:#fff} .btn.line{border:1px solid #153968;background:#fff} .btn.soft{background:#E7F1F4}
+.sep{width:1px;height:28px;background:#DCE4EB;margin:0 6px}
+.ext{font-size:11px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:#48556A;background:#EAEFF3;border-radius:999px;padding:2px 7px;margin-right:8px}
+.stale{font-weight:800;color:#8A5A0E}
+.pill.warn{color:#8A5A0E;background:#F8EDD6} .pill.new{color:#fff;background:#153968}
+.lowline{font-size:12px;line-height:1.5;color:#48556A;margin-top:5px} .lowline .pill{padding:2px 8px;margin-right:8px}
+td.r>div:first-child{white-space:nowrap}
+.spread{font-size:13px;color:#48556A;padding-left:14px;border-left:1px solid #DCE4EB} .spread b{color:#1B2637}
+.card+.cap{margin-top:40px}
+.grp{font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#48556A;margin-right:2px}
+.count{font-size:13px;color:#48556A;margin-right:8px} .count b{color:#1B2637}
+.foot{display:flex;justify-content:space-between;gap:24px;font-size:12px;color:#48556A}
+</style></head><body><div class="wrap">
+<p class="cap">Review card · proposed · the Romaine hearts group from production</p>
+<section class="card">
+<header class="head"><input type="checkbox" checked aria-label="Select all items in this group">
+<h3>Romaine hearts</h3><span class="pill info">Existing match</span><span class="crumb">Produce · Vegetables and herbs</span><span class="spread"><b>$0.74 to $2.67</b> / each · 3.6x spread</span>
+<div class="tot"><div class="v">$2,429</div><div class="s"><b>8</b> of 8 selected · last 12 months</div></div></header>
+<table><colgroup><col style="width:52px"><col><col style="width:160px"><col style="width:124px"><col style="width:272px"><col style="width:88px"><col style="width:112px"><col style="width:144px"></colgroup>
+<thead><tr><th class="c"></th><th>Item</th><th>Vendor</th><th>Pack</th><th class="r">Unit price</th><th class="r">Annual $</th><th>Sites</th><th>Activity</th></tr></thead>
+<tbody><tr class="">
+<td class="c"><input type="checkbox" checked aria-label="Select item"></td>
+<td><div class="nm"><span>LETTUCE - ROMAINE HEARTS</span><button class="ico" aria-label="Flag this item"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4h11l-1.5 4L16 12H5"/></svg></button></div></td>
+<td><div class="b">What Chefs Want</div><div class="m">#20267</div></td>
+<td><div>12/3 PC <span class="u">/ case</span></div><div class="m">by hand</div></td>
+<td class="r"><div><b>$1.10</b> <span class="u">/ each</span><span class="per">$0.18 / lb</span></div><div class="m">$39.70 case (billed) · override</div></td>
+<td class="r b">$1,036</td>
+<td><div class="sites"><span class="site">CIN - OH</span><span class="site">STL - MO</span></div></td>
+<td><div>17 lines</div><div class="m">Sep 10</div></td></tr><tr class="">
+<td class="c"><input type="checkbox" checked aria-label="Select item"></td>
+<td><div class="nm"><span>Lettuce Romaine Artisan 24 Ct</span><button class="ico" aria-label="Flag this item"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4h11l-1.5 4L16 12H5"/></svg></button></div></td>
+<td><div class="b">Ben E Keith</div><div class="m">#198321</div></td>
+<td><div>24 CT <span class="u">/ case</span></div><div class="m">catalog</div></td>
+<td class="r"><div><b>$1.33</b> <span class="u">/ each</span><span class="per">$0.22 / lb</span></div><div class="m">$28.73 case (catalog) · from spend</div></td>
+<td class="r b">$350</td>
+<td><div class="sites"><span class="site">TXR - TX - H</span></div></td>
+<td><div>10 lines</div><div class="m">Sep 22</div></td></tr><tr class="">
+<td class="c"><input type="checkbox" checked aria-label="Select item"></td>
+<td><div class="nm"><span>SYFPNAT LETTUCE ROMAINE HEART</span><button class="ico" aria-label="Flag this item"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4h11l-1.5 4L16 12H5"/></svg></button></div></td>
+<td><div class="b">Sysco</div><div class="m">no item #</div></td>
+<td><div>12/3 CT <span class="u">/ case</span></div><div class="m">invoice</div></td>
+<td class="r"><div><b>$2.19</b> <span class="u">/ each</span><span class="per">$0.36 / lb</span></div><div class="m">$89.95 case (billed) · from spend</div></td>
+<td class="r b">$315</td>
+<td><div class="sites"><span class="site">TBR - FL</span></div></td>
+<td><div>4 lines</div><div class="m">Jun 3 · <span class="stale">5 mo ago</span></div></td></tr><tr class="is-flag">
+<td class="c"><input type="checkbox" checked aria-label="Select item"></td>
+<td><div class="nm"><span>IMPFRSH LETTUCE ROMAINE ARTISAN</span><button class="ico" aria-label="Flag this item"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4h11l-1.5 4L16 12H5"/></svg></button></div><div class="warnline">Flagged by price check: $0.28 / each vs $1.99 / each across 4 linked items</div></td>
+<td><div class="b">Sysco</div><div class="m">#1091168</div></td>
+<td><div>12/4 CT <span class="u">/ case</span></div><div class="m">by hand</div></td>
+<td class="r"><div><span class="ext">lowest</span><b>$0.74</b> <span class="u">/ each</span><span class="per">$0.12 / lb</span></div><div class="m">$35.59 case (billed) · override</div></td>
+<td class="r b">$176</td>
+<td><div class="sites"><span class="site">TBJ - FL</span></div></td>
+<td><div>4 lines</div><div class="m">Jul 4 · <span class="stale">4 mo ago</span></div></td></tr><tr class="">
+<td class="c"><input type="checkbox" checked aria-label="Select item"></td>
+<td><div class="nm"><span>ROMAINE HEARTS 12CT</span><button class="ico" aria-label="Flag this item"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4h11l-1.5 4L16 12H5"/></svg></button></div></td>
+<td><div class="b">Sunfresh Produce</div><div class="m">no item #</div></td>
+<td><div>12/3 CT <span class="u">/ case</span></div><div class="m">by hand</div></td>
+<td class="r"><div><b>$2.37</b> <span class="u">/ each</span><span class="per">$0.39 / lb</span></div><div class="m">$85.29 case (billed) · override</div></td>
+<td class="r b">$159</td>
+<td><div class="sites"><span class="site">TBR - FL</span></div></td>
+<td><div>2 lines</div><div class="m">May 28 · <span class="stale">5 mo ago</span></div></td></tr><tr class="">
+<td class="c"><input type="checkbox" checked aria-label="Select item"></td>
+<td><div class="nm"><span>SYFPNAT LETTUCE ROMAINE HEART 10074865311349</span><button class="ico" aria-label="Flag this item"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4h11l-1.5 4L16 12H5"/></svg></button></div></td>
+<td><div class="b">Sysco</div><div class="m">no item #</div></td>
+<td><div>12/3 CT <span class="u">/ case</span></div><div class="m">by hand</div></td>
+<td class="r"><div><b>$2.19</b> <span class="u">/ each</span><span class="per">$0.36 / lb</span></div><div class="m">$78.69 case (billed) · override</div></td>
+<td class="r b">$135</td>
+<td><div class="sites"><span class="site">TBR - FL</span></div></td>
+<td><div>2 lines</div><div class="m">May 20 · <span class="stale">5 mo ago</span></div></td></tr><tr class="">
+<td class="c"><input type="checkbox" checked aria-label="Select item"></td>
+<td><div class="nm"><span>LETTUCE ROMAINE HEARTS - 48 CT</span><button class="ico" aria-label="Flag this item"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4h11l-1.5 4L16 12H5"/></svg></button></div></td>
+<td><div class="b">Peddler's Son</div><div class="m">no item #</div></td>
+<td><div>48 CT <span class="u">/ case</span></div><div class="m">by hand</div></td>
+<td class="r"><div><b>$1.02</b> <span class="u">/ each</span><span class="per">$0.17 / lb</span></div><div class="m">$48.90 case (billed) · override</div></td>
+<td class="r b">$130</td>
+<td><div class="sites"><span class="site">CIN - AZ</span></div></td>
+<td><div>4 lines</div><div class="m">May 20 · <span class="stale">5 mo ago</span></div></td></tr><tr class="">
+<td class="c"><input type="checkbox" checked aria-label="Select item"></td>
+<td><div class="nm"><span>ROMAINE HEARTS 48 CT PROMARK</span><button class="ico" aria-label="Flag this item"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4h11l-1.5 4L16 12H5"/></svg></button></div></td>
+<td><div class="b">Kuna Foodservice</div><div class="m">#07373A</div></td>
+<td><div>48 CT <span class="u">/ case</span></div><div class="m">invoice</div></td>
+<td class="r"><div><span class="ext">highest</span><b>$2.67</b> <span class="u">/ each</span><span class="per">$0.44 / lb</span></div><div class="m">$64.00 case (billed) · from spend</div></td>
+<td class="r b">$128</td>
+<td><div class="sites"><span class="site">STL - MO</span></div></td>
+<td><div>1 line</div><div class="m">Jun 19 · <span class="stale">4 mo ago</span></div></td></tr></tbody></table>
+<div class="bar">
+<div class="row"><button class="btn pri">Confirm</button><button class="btn line">Relink</button><button class="btn line">New ingredient</button>
+<button class="btn">Keep separate</button><button class="btn">Flag</button>
+<span class="sep"></span>
+<button class="btn soft">Retail</button><button class="btn soft">Archive</button><button class="btn soft">One-off</button><button class="btn soft">Not food</button></div>
+<div class="foot"><span>Not for recipes: <b>Retail</b> sold as-is · <b>Archive</b> mistake or dead item · <b>One-off</b> bought once · <b>Not food</b> fees and supplies</span><span>$2K moves to Linked when the whole group is confirmed</span></div>
+</div></section>
+<p class="cap">New ingredient group · low confidence, mixed units, a pack that could not be read · sample rows</p>
+<section class="card">
+<header class="head"><input type="checkbox" aria-label="Select all items in this group">
+<h3>Pico de gallo</h3><span class="pill new">New ingredient</span><span class="pill warn">2 low confidence</span><span class="crumb">Prepared &amp; frozen · Sauces and bases</span><span class="spread">prices are in mixed units</span>
+<div class="tot"><div class="v">$1,338</div><div class="s"><b>0</b> of 3 selected · last 12 months</div></div></header>
+<table><colgroup><col style="width:52px"><col><col style="width:160px"><col style="width:124px"><col style="width:272px"><col style="width:88px"><col style="width:112px"><col style="width:144px"></colgroup>
+<thead><tr><th class="c"></th><th>Item</th><th>Vendor</th><th>Pack</th><th class="r">Unit price</th><th class="r">Annual $</th><th>Sites</th><th>Activity</th></tr></thead>
+<tbody><tr class="">
+<td class="c"><input type="checkbox" aria-label="Select item"></td>
+<td><div class="nm"><span>Pico De Gallo Fresh 5 Lb</span><button class="ico" aria-label="Flag this item"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4h11l-1.5 4L16 12H5"/></svg></button></div></td>
+<td><div class="b">Sysco</div><div class="m">#7204418</div></td>
+<td><div>2/5 LB <span class="u">/ case</span></div><div class="m">catalog</div></td>
+<td class="r"><div><b>$3.86</b> <span class="u">/ lb</span></div><div class="m">$38.60 case (catalog) · per-unit (high)</div></td>
+<td class="r b">$812</td>
+<td><div class="sites"><span class="site">TXR - AZ</span></div></td>
+<td><div>9 lines</div><div class="m">Oct 30</div></td></tr><tr class="">
+<td class="c"><input type="checkbox" aria-label="Select item"></td>
+<td><div class="nm"><span>PICO DE GALLO MILD TUB</span><button class="ico" aria-label="Flag this item"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4h11l-1.5 4L16 12H5"/></svg></button></div><div class="lowline"><span class="pill warn">Low confidence</span>Priced by volume while the others are by weight. Check this is the same product.</div></td>
+<td><div class="b">Cheney Brothers</div><div class="m">no item #</div></td>
+<td><div>4/1 GAL <span class="u">/ case</span></div><div class="m">invoice</div></td>
+<td class="r"><div><b>$0.21</b> <span class="u">/ fl oz</span></div><div class="m">$107.52 case (billed) · est. (low)</div></td>
+<td class="r b">$430</td>
+<td><div class="sites"><span class="site">TBJ - FL</span></div></td>
+<td><div>4 lines</div><div class="m">Oct 14</div></td></tr><tr class="">
+<td class="c"><input type="checkbox" aria-label="Select item"></td>
+<td><div class="nm"><span>SALSA PICO FRSH</span><button class="ico" aria-label="Flag this item"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4h11l-1.5 4L16 12H5"/></svg></button></div><div class="lowline"><span class="pill warn">Low confidence</span>Short invoice text; matched on two words.</div></td>
+<td><div class="b">Ben E Keith</div><div class="m">#551207</div></td>
+<td><div><span class="u">no pack read</span></div><div class="m">none</div></td>
+<td class="r"><div><b>-</b> <span class="u">/ unit</span></div><div class="m">needs pack</div></td>
+<td class="r b">$96</td>
+<td><div class="sites"><span class="site">TXR - TX - H</span></div></td>
+<td><div>1 line</div><div class="m">Aug 2 · <span class="stale">3 mo ago</span></div></td></tr></tbody></table>
+<div class="bar">
+<div class="row"><button class="btn pri">Confirm</button><button class="btn line">Relink</button><button class="btn line">New ingredient</button>
+<button class="btn">Keep separate</button><button class="btn">Flag</button>
+<span class="sep"></span>
+<button class="btn soft">Retail</button><button class="btn soft">Archive</button><button class="btn soft">One-off</button><button class="btn soft">Not food</button></div>
+<div class="foot"><span>Not for recipes: <b>Retail</b> sold as-is · <b>Archive</b> mistake or dead item · <b>One-off</b> bought once · <b>Not food</b> fees and supplies</span><span>Select items to confirm</span></div>
+</div></section></div></body></html>
