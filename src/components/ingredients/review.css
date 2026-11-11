@@ -104,7 +104,15 @@
   padding: var(--sp-sp-4) var(--sp-sp-5);
   border-bottom: 1px solid var(--sp-line-soft);
 }
-.kf-rvc__title {
+/* N9 round 2 fix 2: one title style, whether the title is an <h3>
+ * (new groups) or a <button> that opens the ingredient panel
+ * (existing groups). Buttons do NOT inherit font properties from
+ * their parent by default - the title styles applied directly on
+ * .kf-rvc__title-btn via the shared selector guarantee the button
+ * renders in the same display face + weight + size + colour as the
+ * h3. The button adds only the pencil layout + reset. */
+.kf-rvc__title,
+.kf-rvc__title-btn {
   margin: 0;
   color: var(--sp-navy);
   font-family: var(--sp-disp);
@@ -164,6 +172,17 @@
   font-family: var(--sp-ui);
   font-size: var(--sp-t-table);
 }
+/* N9 round 2 fix 1 + fix 4: <col> widths. Pack widens to 148 and
+ * Unit price narrows to 256 (total unchanged at 404). The 760 px
+ * media rule hides <col>s and matching cells together so the
+ * remaining columns keep their widths under table-layout: fixed. */
+.kf-rvc__col--sel      { width: 52px;  }
+.kf-rvc__col--vendor   { width: 160px; }
+.kf-rvc__col--pack     { width: 148px; }
+.kf-rvc__col--price    { width: 256px; }
+.kf-rvc__col--annual   { width: 88px;  }
+.kf-rvc__col--sites    { width: 112px; }
+.kf-rvc__col--activity { width: 144px; }
 .kf-rvc__items thead th {
   text-align: left;
   padding: 10px var(--sp-sp-3);
@@ -192,12 +211,15 @@
   text-align: right;
 }
 
-/* N9 §2b column order rewrites the nth-child targets.
- * New columns: 1 select, 2 Item, 3 Vendor, 4 Pack, 5 Unit price,
- * 6 Annual $, 7 Sites, 8 Activity.
- * Below 760 px the card hides the same information as before:
- * Vendor, Sites, Activity. Unit price + Annual $ stay visible. */
+/* N9 §2b + round 2 fix 1: below 760 px, hide Vendor, Sites, Activity.
+ * table-layout: fixed reads widths from <col>; hiding cells without
+ * their <col> shifts the remaining widths onto the wrong cells and
+ * the Item column collapses to zero. Hide both the <col> and its
+ * matching nth-child <td>/<th>. */
 @media (max-width: 760px) {
+  .kf-rvc__col--vendor,
+  .kf-rvc__col--sites,
+  .kf-rvc__col--activity,
   .kf-rvc__items thead th:nth-child(3),  /* Vendor */
   .kf-rvc__items tbody td:nth-child(3),
   .kf-rvc__items thead th:nth-child(7),  /* Sites */
@@ -468,11 +490,12 @@
   line-height: 1.5;
 }
 .kf-rvc__actions-foot-defs b { color: var(--sp-ink); font-weight: 800; }
+/* N9 round 2 fix 6: right-side moves line is plain micro in body
+ * colour, same weight as the left defs line. */
 .kf-rvc__actions-foot-moves {
   flex: 0 0 auto;
   text-align: right;
-  font-weight: 700;
-  color: var(--sp-ink);
+  color: var(--sp-body);
 }
 
 /* Header select-all checkbox. The <label> provides the 44px click
@@ -516,11 +539,15 @@
  * cell; they already carry the amber hue via kf-flag--warn. */
 .kf-rvc__row--flagged td:first-child { box-shadow: inset 3px 0 0 0 var(--sp-warn); }
 .kf-rvc__row--flagged.kf-rvc__row--on td:first-child { box-shadow: inset 3px 0 0 0 var(--sp-warn); }
+/* N9 §2c + round 2 fix 5: upright micro flag note. No inline icon
+ * (the row's flag toggle already carries the glyph). */
 .kf-rvc__flag-note {
   color: var(--sp-warn);
+  font-family: var(--sp-ui);
   font-size: var(--sp-t-micro);
-  font-style: italic;
-  margin-top: 2px;
+  font-weight: 700;
+  font-style: normal;
+  margin-top: 3px;
 }
 .kf-flag--flagged { color: var(--sp-warn); }
 
@@ -533,9 +560,10 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  /* 28px box on a 14px icon: clears WCAG 2.5.8 (24 minimum) without
-   * widening the row. Negative vertical margin keeps the line box the
-   * height it was. */
+  /* 28 px visual box on a 14 px icon; a ::before overlay extends the
+   * clickable area to 44 x 44 so N9's 44 px floor is met without
+   * widening the row (same technique the rail notch uses). */
+  position: relative;
   min-width: 28px;
   min-height: 28px;
   padding: 0;
@@ -551,6 +579,12 @@
   transition: opacity var(--sp-fast) var(--sp-ease),
               color var(--sp-fast) var(--sp-ease),
               background var(--sp-fast) var(--sp-ease);
+}
+.kf-rvc__flagbtn::before {
+  /* 28 + 16 = 44 on each side. Not visible; pure hit extension. */
+  content: "";
+  position: absolute;
+  inset: -8px;
 }
 .kf-rvc__flagbtn:hover { opacity: 1; color: var(--sp-warn); background: var(--sp-warn-bg); }
 .kf-rvc__flagbtn:focus-visible { outline: 2px solid var(--sp-warn-strong); outline-offset: 1px; opacity: 1; }

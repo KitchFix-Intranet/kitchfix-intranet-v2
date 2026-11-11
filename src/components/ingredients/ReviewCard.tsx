@@ -13,7 +13,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, Pencil, Scale, Flag } from "lucide-react";
+import { Check, Pencil, Scale } from "lucide-react";
 import { fmtCount, fmtDate, fmtUsd, fmtUsdLong, monthsAgo } from "@/lib/fmt";
 import { deriveRecipePrice } from "@/lib/ingredients/eachMeasure";
 import { uomLabel } from "@/lib/ingredients/pack";
@@ -218,17 +218,22 @@ export function ReviewCard({
       </header>
 
       <table className="kf-rvc__items">
-        {/* N9 §2b: fixed columns in this order. Widths quoted from the
-            render. "Conf", "Lines", "Last purchase" are gone. */}
+        {/* N9 §2b: fixed columns in this order. Widths quoted from
+            the render. "Conf", "Lines", "Last purchase" are gone.
+            Each <col> carries a class so the 760 px media rule can
+            hide the <col> ALONGSIDE the matching <td>/<th>; hiding
+            the cells without hiding the <col>s shifts every later
+            cell onto the wrong <col> width under table-layout:
+            fixed (round-2 regression). */}
         <colgroup>
-          <col style={{ width: 52 }} />
-          <col />
-          <col style={{ width: 160 }} />
-          <col style={{ width: 124 }} />
-          <col style={{ width: 272 }} />
-          <col style={{ width: 88 }} />
-          <col style={{ width: 112 }} />
-          <col style={{ width: 144 }} />
+          <col className="kf-rvc__col kf-rvc__col--sel" />
+          <col className="kf-rvc__col kf-rvc__col--item" />
+          <col className="kf-rvc__col kf-rvc__col--vendor" />
+          <col className="kf-rvc__col kf-rvc__col--pack" />
+          <col className="kf-rvc__col kf-rvc__col--price" />
+          <col className="kf-rvc__col kf-rvc__col--annual" />
+          <col className="kf-rvc__col kf-rvc__col--sites" />
+          <col className="kf-rvc__col kf-rvc__col--activity" />
         </colgroup>
         <thead>
           <tr>
@@ -256,8 +261,11 @@ export function ReviewCard({
             // OR when there's an OCR line to carry.
             const showOcr =
               it.displayNameSource === "catalog" && it.vendorOcrName !== it.displayName;
-            const showReason =
-              !!it.reason && (!isHigh || it.flagged);
+            // N9 round 2 fix 5: reason shows only when confidence
+            // is not high. A flagged high-confidence row carries
+            // the flag note as its message - the matcher's reason
+            // is not shown.
+            const showReason = !!it.reason && !isHigh;
             const rowTag = ((): "lowest" | "highest" | null => {
               if (spread.kind !== "range" || spread.ratio === 1) return null;
               if (spread.minId === it.id) return "lowest";
@@ -313,12 +321,12 @@ export function ReviewCard({
                     />
                   </div>
                   {it.flagged ? (
+                    // N9 round 2 fix 5: upright micro, no inline
+                    // icon - the row's flag toggle already carries
+                    // the flag glyph.
                     <div className="kf-rvc__flag-note" title={it.flaggedBy ?? ""}>
-                      <Flag size={12} strokeWidth={1.75} aria-hidden />
-                      <span>
-                        Flagged{it.flaggedBy ? ` by ${it.flaggedBy}` : ""}
-                        {it.flagNote ? `: "${it.flagNote}"` : ""}
-                      </span>
+                      Flagged{it.flaggedBy ? ` by ${it.flaggedBy}` : ""}
+                      {it.flagNote ? `: "${it.flagNote}"` : ""}
                     </div>
                   ) : null}
                   {showOcr ? (
@@ -341,12 +349,20 @@ export function ReviewCard({
                 </td>
                 <td>
                   <div>
-                    {it.packNormalized ?? it.pack ?? (
+                    {it.packNormalized || it.pack ? (
+                      <>
+                        {it.packNormalized ?? it.pack}
+                        {it.billedUnit ? (
+                          <span className="kf-muted"> / {it.billedUnit}</span>
+                        ) : null}
+                      </>
+                    ) : (
+                      // N9 round 2 fix 4: "no pack read" alone -
+                      // without the dangling "/ case" the billed-unit
+                      // fragment produced when there is no pack to
+                      // pair it with.
                       <span className="kf-muted">no pack read</span>
                     )}
-                    {it.billedUnit ? (
-                      <span className="kf-muted"> / {it.billedUnit}</span>
-                    ) : null}
                   </div>
                   <div className="kf-rvc__sublabel">{packSourcePhrase(it.packSource)}</div>
                 </td>
@@ -492,6 +508,7 @@ function UnitPriceCell({
       (derived ? ` · ${fmtUsd(item.perBase as number)} each ÷ ${derived.qty} ${uomLabel(derived.measureUom)}` : "")
     : "Per-unit needs pack normalization - edit the pack in the detail panel";
 
+  const ownMeasure = derived && derived.from === "item";
   return (
     <div className="kf-rvc__price" title={title}>
       <div className="kf-rvc__price-main">
@@ -501,14 +518,9 @@ function UnitPriceCell({
             <strong>{fmtUsd(item.perBase as number)}</strong>
             <span className="kf-muted"> / {uomLower}</span>
             {derived ? (
-              <>
-                <span className="kf-rvc__price-derived">
-                  {fmtUsd(derived.per)} / {uomLabel(derived.uom)}
-                </span>
-                {derived.from === "item" ? (
-                  <span className="kf-rvc__own-measure">own measure</span>
-                ) : null}
-              </>
+              <span className="kf-rvc__price-derived">
+                {fmtUsd(derived.per)} / {uomLabel(derived.uom)}
+              </span>
             ) : null}
           </>
         ) : (
@@ -519,6 +531,11 @@ function UnitPriceCell({
         )}
       </div>
       <div className="kf-rvc__price-sub">
+        {/* N9 round 2 fix 3: own-measure moves to the START of line 2
+            so line 1 stays tag + price + derived and never overlaps
+            the Pack cell. */}
+        {ownMeasure ? <span className="kf-rvc__own-measure">own measure</span> : null}
+        {ownMeasure && (secondary || confidenceWord) ? <> &middot; </> : null}
         {secondary ? (
           <>
             {fmtUsd(secondary.amount)} case ({secondary.label})
@@ -526,7 +543,7 @@ function UnitPriceCell({
           </>
         ) : confidenceWord ? (
           <>{confidenceWord}</>
-        ) : (
+        ) : ownMeasure ? null : (
           <>needs pack</>
         )}
       </div>
