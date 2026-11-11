@@ -81,9 +81,31 @@ function lineUsableForPricing(line: {
   // A unit that IS a base unit means unit_price feeds the base-unit and
   // catch-weight tiers directly. A suspect unit_price there would produce
   // a confident wrong $/lb, so those lines are never released on rule 3.
+  // N6: a billed unit is "base" when the invoice's unit_price already
+  // feeds a base-unit tier in estimate.ts (Tier A). Rule 3 skips these
+  // lines on `ep_qty_up_mismatch` because a suspect unit_price there
+  // would produce a confidently wrong $/base. Mirrors BILLED_UNIT_GROUPS
+  // in DetailPanel.tsx (per-unit group) and ALLOWED_BILLED_UNITS in
+  // set-pack-override/route.ts. Every string here must have
+  //   - normUom(string) returning a canonical uom in pack.ts, and
+  //   - uomFactor(canonical) returning a non-null base_uom + factor in
+  //     estimate.ts (both delegate to DIM_BY_UOM + TO_BASE).
+  // N6 added fl oz, pt/pint, qt/quart, l/liter, ml, kg, g - all already
+  // priced by estimate.ts Tier A once they arrive through normUom.
   const BASE_BILLED = new Set([
-    "lb", "lbs", "pound", "pounds", "oz", "each", "ea",
-    "gal", "gallon", "gallons", "ct", "count", "dz", "dozen",
+    "lb", "lbs", "pound", "pounds",
+    "oz", "ounce", "ounces",
+    "g", "gram", "grams",
+    "kg", "kilogram", "kilograms",
+    "fl oz", "floz", "fluid oz",
+    "pt", "pint", "pints",
+    "qt", "quart", "quarts",
+    "gal", "gallon", "gallons",
+    "l", "liter", "liters", "litre", "litres",
+    "ml", "milliliter", "milliliters",
+    "each", "ea",
+    "ct", "count",
+    "dz", "dozen",
   ]);
 
   // Rule 1 (from Prompt B1) - catch-weight line whose billed weight

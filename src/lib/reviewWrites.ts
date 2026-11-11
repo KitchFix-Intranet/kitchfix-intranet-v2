@@ -8,7 +8,13 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { categoryForParent, inferBaseUnit, type SuperCategory } from "@/lib/ingredients/categories";
 import { estimateFromOverride } from "@/lib/ingredients/estimate";
-import { parsePack } from "@/lib/ingredients/pack";
+import {
+  parsePack,
+  BASE_UNIT_VALUES as SHARED_BASE_UNIT_VALUES,
+  DIM_BY_UOM,
+  TO_BASE,
+  type BaseUnit,
+} from "@/lib/ingredients/pack";
 import { COUNTABLE_OBSERVATIONS_VIEW, applyCountableFilter } from "@/lib/ingredients/countability";
 import { isPackManualOverride } from "@/components/ingredients/itemTypes";
 
@@ -725,9 +731,9 @@ export async function createIngredient(
     // 95% of masters created from the review queue are single-serve
     // items (24 x 12 OZ Coca-Cola, protein bars, yogurt cups) and
     // belong on "each".
-    baseUnit?: "lb" | "each" | "gal" | "dozen";
+    baseUnit?: BaseUnit;
   }
-): Promise<{ id: string; baseUnit: "lb" | "each" | "gal" | "dozen" }> {
+): Promise<{ id: string; baseUnit: BaseUnit }> {
   const trimmed = args.name.trim();
   if (trimmed.length < 2) throw new Error("Ingredient name is required");
   const nameNorm = trimmed.toLowerCase().replace(/\s+/g, " ");
@@ -748,10 +754,20 @@ export async function createIngredient(
     .maybeSingle();
   if (existing) {
     const row = existing as { id: string; base_unit: string };
-    const existingUnit = (
-      row.base_unit === "lb" || row.base_unit === "each" ||
-      row.base_unit === "gal" || row.base_unit === "dozen"
-    ) ? row.base_unit : "each";
+    // N6 A3: validate the stored base_unit against the shared allow-set.
+    // The "each" fallback survives only for a value outside the set -
+    // every pre-N6 row is in it (lb, each, gal, dozen are all members),
+    // and any future row persisted by a route that bypassed validation
+    // lands here instead of propagating a stale string into the toast.
+    let existingUnit: BaseUnit;
+    if (SHARED_BASE_UNIT_VALUES.has(row.base_unit as BaseUnit)) {
+      existingUnit = row.base_unit as BaseUnit;
+    } else {
+      console.warn(
+        `[createIngredient] existing ingredient ${row.id} has out-of-set base_unit ${JSON.stringify(row.base_unit)}; defaulting caller view to "each"`
+      );
+      existingUnit = "each";
+    }
     return { id: row.id, baseUnit: existingUnit };
   }
 
@@ -783,7 +799,7 @@ export async function createIngredient(
     .single();
   if (error) throw error;
   const id = (data as { id: string }).id;
-  const insertedBaseUnit = insert.base_unit as "lb" | "each" | "gal" | "dozen";
+  const insertedBaseUnit = insert.base_unit as BaseUnit;
 
   await client.from("pr_events").insert({
     entity_type: "ingredient",
@@ -816,7 +832,7 @@ export async function splitToNewIngredient(
     itemIds: string[];
     actorEmail: string;
   }
-): Promise<{ ok: boolean; error?: string; ingredientId: string | null; moved: number; baseUnit: "lb" | "each" | "gal" | "dozen" }> {
+): Promise<{ ok: boolean; error?: string; ingredientId: string | null; moved: number; baseUnit: BaseUnit }> {
   const { name, parent, category, itemIds, actorEmail } = args;
   if (name.trim().length < 2) {
     return { ok: false, error: "Ingredient name is required", ingredientId: null, moved: 0, baseUnit: "each" };
@@ -828,7 +844,7 @@ export async function splitToNewIngredient(
   // read must not block a create. The matcher-auto-create path (no
   // itemIds) also lands on "each", which is the right common-case
   // default.
-  let baseUnit: "lb" | "each" | "gal" | "dozen" = "each";
+  let baseUnit: BaseUnit = "each";
   if (itemIds.length > 0) {
     const { data: packRows, error: packErr } = await client
       .from("pr_vendor_items")
@@ -848,7 +864,7 @@ export async function splitToNewIngredient(
   // matched by name_norm. Use it for the event + return so the caller's
   // toast names what is on disk, not what we proposed.
   let ingredientId: string;
-  let resolvedBaseUnit: "lb" | "each" | "gal" | "dozen" = baseUnit;
+  let resolvedBaseUnit: BaseUnit = baseUnit;
   try {
     const created = await createIngredient(client, {
       name,
@@ -1239,10 +1255,11 @@ export async function setIngredientAllergens(
 // master left on the created-by-default 'each' while its items are
 // priced per pound shows no price at all.
 //
-// The caller validates against the schema's CHECK constraint
-// (lb|each|gal|dozen); this helper re-checks rather than trusting it,
-// because a bad value here would surface as a 500 from Postgres.
-const BASE_UNIT_VALUES = new Set(["lb", "each", "gal", "dozen"]);
+// N6: the allowed set is the shared BaseUnit list from pack.ts. The DB
+// check constraint on pr_ingredients.base_unit was widened in migration
+// 0018 to match. Any new entry goes on the shared list and both sides
+// pick it up without another local edit.
+const BASE_UNIT_VALUES: ReadonlySet<string> = SHARED_BASE_UNIT_VALUES as ReadonlySet<string>;
 
 // G1: grade write. Grade is a per-item tier; null is standard;
 // 'premium' is the only sanctioned non-null value today. Writes only
@@ -1334,45 +1351,59 @@ export async function setIngredientBaseUnit(
   return { ok: true };
 }
 
-// N5: the usual weight of one each. Gated on base_unit === 'each' - a
-// weight on an lb / gal / dozen master cannot be read by derivePerLb
-// (which converts EA-priced items only) and would be a control that
-// does nothing. The DB check constraint is > 0 and <= 200; this helper
-// mirrors it so a bad value never reaches the insert. null clears
-// both the weight AND the source - they are co-nullable by constraint.
-const AVG_WEIGHT_SOURCES = new Set(["house_test", "book", "vendor_spec", "estimate"]);
+// N6: one measure of one each - qty + uom. The uom is any weight or
+// volume unit; a weight or volume measure is accepted. "each" masters
+// only; any other base_unit is refused with 400, same as N5's weight
+// write. All three columns move together: set or clear.
+const MEASURE_SOURCES = new Set(["house_test", "book", "vendor_spec", "estimate"]);
 
-export async function setIngredientAvgWeight(
+function roundMeasure(qty: number): number {
+  // At most 4 decimals stored. "exactly as typed" means we do not
+  // convert to a base unit before storing; the typed uom goes to disk
+  // verbatim and the qty with four decimals of precision.
+  return Math.round(qty * 10000) / 10000;
+}
+
+export async function setIngredientEachMeasure(
   client: SupabaseClient,
   args: {
     ingredientId: string;
-    weightLb: number | null;
+    qty: number | null;
+    uom: string | null;
     source: string | null;
     actorEmail: string;
   }
 ): Promise<{ ok: boolean; error?: string }> {
-  const { ingredientId, weightLb, source, actorEmail } = args;
+  const { ingredientId, qty, uom, source, actorEmail } = args;
 
-  // Shape-check the input before touching the row. Clearing: both must
-  // be null together; setting: weight must be > 0 and <= 200 with at
-  // most two stored decimals, source must be one of the four strings.
-  let roundedWeight: number | null = null;
+  // Clearing: all three must be null together. Setting: all three must
+  // be set. The route already validated range + uom membership; this
+  // helper mirrors the range check (defensive) and checks the source
+  // enumeration.
+  let roundedQty: number | null = null;
+  let normalizedUom: string | null = null;
   let normalizedSource: string | null = null;
-  if (weightLb == null && source == null) {
+  if (qty == null && uom == null && source == null) {
     // clear - no further validation
-  } else if (weightLb == null || source == null) {
-    return { ok: false, error: "weight and source must be set together or cleared together" };
+  } else if (qty == null || uom == null || source == null) {
+    return { ok: false, error: "qty, uom and source must be set together or cleared together" };
   } else {
-    if (!Number.isFinite(weightLb)) return { ok: false, error: "weight must be a finite number" };
-    if (weightLb <= 0 || weightLb > 200) return { ok: false, error: "weight must be greater than 0 and at most 200" };
-    if (!AVG_WEIGHT_SOURCES.has(source)) return { ok: false, error: "source must be one of house_test, book, vendor_spec, estimate" };
-    roundedWeight = Math.round(weightLb * 100) / 100;
+    if (!Number.isFinite(qty)) return { ok: false, error: "qty must be a finite number" };
+    if (qty <= 0 || qty > 100000) return { ok: false, error: "qty must be greater than 0 and at most 100000" };
+    const u = uom.toUpperCase();
+    const dim = DIM_BY_UOM[u];
+    const factor = TO_BASE[u];
+    if (dim == null || factor == null) return { ok: false, error: "uom must be a weight or volume unit" };
+    if (dim !== "weight" && dim !== "volume") return { ok: false, error: "uom must be a weight or volume unit" };
+    if (!MEASURE_SOURCES.has(source)) return { ok: false, error: "source must be one of house_test, book, vendor_spec, estimate" };
+    roundedQty = roundMeasure(qty);
+    normalizedUom = u;
     normalizedSource = source;
   }
 
   const { data: cur, error: curErr } = await client
     .from("pr_ingredients")
-    .select("id,base_unit,status,avg_weight_lb,avg_weight_source")
+    .select("id,base_unit,status,each_measure_qty,each_measure_uom,each_measure_source")
     .eq("id", ingredientId)
     .maybeSingle();
   if (curErr) return { ok: false, error: curErr.message };
@@ -1381,31 +1412,32 @@ export async function setIngredientAvgWeight(
     id: string;
     base_unit: string;
     status: string;
-    avg_weight_lb: number | null;
-    avg_weight_source: string | null;
+    each_measure_qty: number | null;
+    each_measure_uom: string | null;
+    each_measure_source: string | null;
   };
   if (row.status === "merged") return { ok: false, error: "Ingredient is merged" };
-  // Gate: a weight only means something on an each master. Refused
-  // regardless of whether the caller is setting or clearing, so a stale
-  // value cannot be edited post-hoc either. The DB columns are kept as
-  // nullable numeric because migration 0017 is a schema patch; the
-  // app-level gate here is the one that stops invalid writes.
+  // Gate: an each measure only means something on an each master.
+  // Refused regardless of set/clear so a stale value cannot be edited
+  // post-hoc either. The DB columns are kept nullable because migration
+  // 0018 is a schema patch; this app-level gate stops invalid writes.
   if (row.base_unit !== "each") {
-    return { ok: false, error: "weight applies only to ingredients costed per each" };
+    return { ok: false, error: "measure applies only to ingredients costed per each" };
   }
 
-  const curWeight = row.avg_weight_lb == null ? null : Number(row.avg_weight_lb);
-  const curSource = row.avg_weight_source ?? null;
-  if (curWeight === roundedWeight && curSource === normalizedSource) {
-    // No-op success - same shape as setIngredientBaseUnit.
+  const curQty = row.each_measure_qty == null ? null : Number(row.each_measure_qty);
+  const curUom = row.each_measure_uom ?? null;
+  const curSource = row.each_measure_source ?? null;
+  if (curQty === roundedQty && curUom === normalizedUom && curSource === normalizedSource) {
     return { ok: true };
   }
 
   const { error: upErr } = await client
     .from("pr_ingredients")
     .update({
-      avg_weight_lb: roundedWeight,
-      avg_weight_source: normalizedSource,
+      each_measure_qty: roundedQty,
+      each_measure_uom: normalizedUom,
+      each_measure_source: normalizedSource,
       updated_at: new Date().toISOString(),
     })
     .eq("id", ingredientId);
@@ -1414,55 +1446,66 @@ export async function setIngredientAvgWeight(
   await client.from("pr_events").insert({
     entity_type: "ingredient",
     entity_id: ingredientId,
-    kind: "ingredient_avg_weight_set",
-    before: { avg_weight_lb: curWeight, avg_weight_source: curSource },
-    after: { avg_weight_lb: roundedWeight, avg_weight_source: normalizedSource },
+    kind: "ingredient_each_measure_set",
+    before: { each_measure_qty: curQty, each_measure_uom: curUom, each_measure_source: curSource },
+    after: { each_measure_qty: roundedQty, each_measure_uom: normalizedUom, each_measure_source: normalizedSource },
     actor: actorEmail,
   });
 
   return { ok: true };
 }
 
-// N5: a vendor item's own each weight when its each is a different
-// size than the master's average (e.g. a 6 count cauliflower case
-// holds bigger heads than a 12). null clears the column. Mirrors the
-// DB check constraint > 0 and <= 200.
-export async function setVendorItemEachWeight(
+// N6: a vendor item's own each measure when its each is a different
+// size than the master's. Weight or volume; same unit vocabulary. Both
+// columns move together.
+export async function setVendorItemEachMeasure(
   client: SupabaseClient,
-  args: { itemId: string; weightLb: number | null; actorEmail: string }
+  args: { itemId: string; qty: number | null; uom: string | null; actorEmail: string }
 ): Promise<{ ok: boolean; error?: string }> {
-  const { itemId, weightLb, actorEmail } = args;
+  const { itemId, qty, uom, actorEmail } = args;
 
-  let roundedWeight: number | null = null;
-  if (weightLb != null) {
-    if (!Number.isFinite(weightLb)) return { ok: false, error: "weight must be a finite number" };
-    if (weightLb <= 0 || weightLb > 200) return { ok: false, error: "weight must be greater than 0 and at most 200" };
-    roundedWeight = Math.round(weightLb * 100) / 100;
+  let roundedQty: number | null = null;
+  let normalizedUom: string | null = null;
+  if (qty == null && uom == null) {
+    // clear
+  } else if (qty == null || uom == null) {
+    return { ok: false, error: "qty and uom must be set together or cleared together" };
+  } else {
+    if (!Number.isFinite(qty)) return { ok: false, error: "qty must be a finite number" };
+    if (qty <= 0 || qty > 100000) return { ok: false, error: "qty must be greater than 0 and at most 100000" };
+    const u = uom.toUpperCase();
+    const dim = DIM_BY_UOM[u];
+    const factor = TO_BASE[u];
+    if (dim == null || factor == null) return { ok: false, error: "uom must be a weight or volume unit" };
+    if (dim !== "weight" && dim !== "volume") return { ok: false, error: "uom must be a weight or volume unit" };
+    roundedQty = roundMeasure(qty);
+    normalizedUom = u;
   }
 
   const { data: cur, error: curErr } = await client
     .from("pr_vendor_items")
-    .select("id,each_weight_lb")
+    .select("id,each_measure_qty,each_measure_uom")
     .eq("id", itemId)
     .maybeSingle();
   if (curErr) return { ok: false, error: curErr.message };
   if (!cur) return { ok: false, error: "Item not found" };
-  const row = cur as { id: string; each_weight_lb: number | null };
-  const curWeight = row.each_weight_lb == null ? null : Number(row.each_weight_lb);
-  if (curWeight === roundedWeight) return { ok: true };
+  const row = cur as { id: string; each_measure_qty: number | null; each_measure_uom: string | null };
+  const curQty = row.each_measure_qty == null ? null : Number(row.each_measure_qty);
+  const curUom = row.each_measure_uom ?? null;
+  if (curQty === roundedQty && curUom === normalizedUom) return { ok: true };
 
   const { error: upErr } = await client
     .from("pr_vendor_items")
-    .update({ each_weight_lb: roundedWeight })
+    .update({ each_measure_qty: roundedQty, each_measure_uom: normalizedUom })
     .eq("id", itemId);
   if (upErr) return { ok: false, error: upErr.message };
 
   await client.from("pr_events").insert({
     entity_type: "vendor_item",
     entity_id: itemId,
-    kind: "vendor_item_each_weight_set",
-    before: { each_weight_lb: curWeight },
-    after: { each_weight_lb: roundedWeight },
+    kind: "vendor_item_each_measure_set",
+    before: { each_measure_qty: curQty, each_measure_uom: curUom },
+    after: { each_measure_qty: roundedQty, each_measure_uom: normalizedUom },
     actor: actorEmail,
   });
 
@@ -2246,6 +2289,12 @@ export async function setVendorItemPriceOverride(
     baseUom: string;
     reason: string;
     actorEmail: string;
+    // N6: the route widened to accept any weight / volume / EA unit
+    // and convert to the dimension base before calling in. These carry
+    // the user's TYPED value + uom through to the event row so history
+    // can read "$4 / gal" back, not just the stored "$0.03125 / FLOZ".
+    typedPerBase?: number;
+    typedBaseUom?: string;
   }
 ): Promise<{ ok: boolean; error?: string; twins: number }> {
   const { itemId, actorEmail } = args;
@@ -2381,12 +2430,22 @@ export async function setVendorItemPriceOverride(
     }
     if (t.id === item.id) mainWritten = true;
 
+    // N6: when the route widened the typed uom, record both the typed
+    // and the stored values so "$4 / gal" is recoverable from the
+    // event log even though the stored shape is {per_base, base_uom in
+    // LB/FLOZ/EA}. Omitted entirely when caller didn't supply - the
+    // old shape stays byte-identical to today.
+    const afterPayload: Record<string, unknown> = { price_estimate: newPe, pack_override: t.stamp };
+    if (args.typedPerBase != null && args.typedBaseUom) {
+      afterPayload.typed_per_base = args.typedPerBase;
+      afterPayload.typed_base_uom = args.typedBaseUom;
+    }
     await client.from("pr_events").insert({
       entity_type: "vendor_item",
       entity_id: t.id,
       kind: "price_override_set",
       before: t.before,
-      after: { price_estimate: newPe, pack_override: t.stamp },
+      after: afterPayload,
       actor: actorEmail,
     });
   }

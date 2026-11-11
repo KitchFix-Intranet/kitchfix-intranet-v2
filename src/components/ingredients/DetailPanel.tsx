@@ -24,7 +24,20 @@ import { AlertTriangle, Check, ChevronDown, Info, X } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtDate, fmtUsd, fmtUsdLong, timeAgo } from "@/lib/fmt";
 import { SUPER_CATEGORIES, type SuperCategory } from "@/lib/ingredients/categories";
-import { CAN10_LB_PER_UNIT, canonicalFromBaseUnit, convertPer } from "@/lib/ingredients/pack";
+import {
+  CAN10_LB_PER_UNIT,
+  canonicalFromBaseUnit,
+  convertPer,
+  DIM_BY_UOM,
+  TO_BASE,
+  BASE_BY_DIM,
+  WEIGHT_UOMS,
+  VOLUME_UOMS,
+  uomLabel,
+  type Dim,
+  type BaseUom,
+} from "@/lib/ingredients/pack";
+import { deriveRecipePrice } from "@/lib/ingredients/eachMeasure";
 import { IngredientAllergens } from "./IngredientAllergens";
 import { humanizeKind } from "@/lib/humanizeKind";
 import { IngredientTypeahead } from "./IngredientTypeahead";
@@ -672,18 +685,21 @@ function IngredientBlock({
   const [resaleSavedAt, setResaleSavedAt] = useState<number | null>(null);
   const [resaleError, setResaleError] = useState<string | null>(null);
 
-  // N5: usual-weight-per-each. Only rendered for each-costed masters
-  // (frame C left). Keeps its own draft + busy + saved/error, same
-  // pattern as rename / category / resale.
-  const [weightDraft, setWeightDraft] = useState<string>(
-    ingredient.avg_weight_lb == null ? "" : String(ingredient.avg_weight_lb)
+  // N6: usual measure of one each. Qty + uom + source, where the uom is
+  // any weight or volume unit (N5's pounds-only shape is retired). Only
+  // rendered for each-costed masters.
+  const [measureQtyDraft, setMeasureQtyDraft] = useState<string>(
+    ingredient.each_measure_qty == null ? "" : String(ingredient.each_measure_qty)
   );
-  const [weightSourceDraft, setWeightSourceDraft] = useState<string>(
-    ingredient.avg_weight_source ?? "house_test"
+  const [measureUomDraft, setMeasureUomDraft] = useState<string>(
+    (ingredient.each_measure_uom ?? "LB").toUpperCase()
   );
-  const [weightBusy, setWeightBusy] = useState(false);
-  const [weightSavedAt, setWeightSavedAt] = useState<number | null>(null);
-  const [weightError, setWeightError] = useState<string | null>(null);
+  const [measureSourceDraft, setMeasureSourceDraft] = useState<string>(
+    ingredient.each_measure_source ?? "house_test"
+  );
+  const [measureBusy, setMeasureBusy] = useState(false);
+  const [measureSavedAt, setMeasureSavedAt] = useState<number | null>(null);
+  const [measureError, setMeasureError] = useState<string | null>(null);
 
   // B1: allergen state + handlers moved to the shared
   // IngredientAllergens component (used here AND in the workbench's
@@ -780,65 +796,72 @@ function IngredientBlock({
     onDone();
   }
 
-  // N5: save the usual weight + its source. Empty draft is a validation
-  // error, not a clear - use the dedicated doWeightClear() for that.
-  async function doWeightSave() {
-    if (weightBusy) return;
-    const trimmed = weightDraft.trim();
+  // N6: save the usual measure of one each. Empty draft is a validation
+  // error, not a clear - use the dedicated doMeasureClear() for that.
+  async function doMeasureSave() {
+    if (measureBusy) return;
+    const trimmed = measureQtyDraft.trim();
     if (trimmed === "") {
-      const msg = "Enter a weight, or press Clear.";
-      setWeightError(msg);
+      const msg = "Enter a quantity, or press Clear.";
+      setMeasureError(msg);
       toast(msg, { tone: "block" });
       return;
     }
     const n = Number(trimmed);
-    if (!Number.isFinite(n) || n <= 0 || n > 200) {
-      const msg = "Weight must be greater than 0 and at most 200 lb.";
-      setWeightError(msg);
+    if (!Number.isFinite(n) || n <= 0 || n > 100000) {
+      const msg = "Quantity must be greater than 0 and at most 100000.";
+      setMeasureError(msg);
       toast(msg, { tone: "block" });
       return;
     }
-    setWeightBusy(true);
-    setWeightError(null);
-    const r = await postJson("/api/review/set-avg-weight", {
+    const u = measureUomDraft.toUpperCase();
+    const dim = DIM_BY_UOM[u];
+    if (dim !== "weight" && dim !== "volume") {
+      const msg = "Pick a weight or volume unit.";
+      setMeasureError(msg);
+      toast(msg, { tone: "block" });
+      return;
+    }
+    setMeasureBusy(true);
+    setMeasureError(null);
+    const r = await postJson("/api/review/set-each-measure", {
       ingredientId: ingredient.id,
-      weightLb: n,
-      source: weightSourceDraft,
+      qty: n,
+      uom: u,
+      source: measureSourceDraft,
     });
     if (!r.ok) {
       const msg = errMsg(r.data, `Save failed (${r.status})`);
-      setWeightError(msg);
+      setMeasureError(msg);
       toast(msg, { tone: "block" });
-      setWeightBusy(false);
+      setMeasureBusy(false);
       return;
     }
-    toast(`Saved: one each weighs ${Math.round(n * 100) / 100} lb`);
-    setWeightSavedAt(Date.now());
-    setWeightBusy(false);
+    toast(`Saved: one each is ${Math.round(n * 10000) / 10000} ${uomLabel(u)}`);
+    setMeasureSavedAt(Date.now());
+    setMeasureBusy(false);
     onDone();
   }
 
-  // N5: clear both columns together (they are co-nullable by the DB
-  // check; the writer enforces the same).
-  async function doWeightClear() {
-    if (weightBusy) return;
-    setWeightBusy(true);
-    setWeightError(null);
-    const r = await postJson("/api/review/set-avg-weight", {
+  async function doMeasureClear() {
+    if (measureBusy) return;
+    setMeasureBusy(true);
+    setMeasureError(null);
+    const r = await postJson("/api/review/set-each-measure", {
       ingredientId: ingredient.id,
-      weightLb: null,
+      qty: null,
     });
     if (!r.ok) {
       const msg = errMsg(r.data, `Clear failed (${r.status})`);
-      setWeightError(msg);
+      setMeasureError(msg);
       toast(msg, { tone: "block" });
-      setWeightBusy(false);
+      setMeasureBusy(false);
       return;
     }
-    toast("Weight cleared");
-    setWeightDraft("");
-    setWeightSavedAt(Date.now());
-    setWeightBusy(false);
+    toast("Measure cleared");
+    setMeasureQtyDraft("");
+    setMeasureSavedAt(Date.now());
+    setMeasureBusy(false);
     onDone();
   }
 
@@ -995,40 +1018,59 @@ function IngredientBlock({
         </div>
       </div>
 
-      {/* N5 frame C left: usual weight of one each. Rendered only for
-          each-costed masters. Changing the master's unit away from
-          each (via the workbench's BaseUnitControl) does NOT clear the
-          stored weight; the block simply stops showing. derivePerLb
-          still refuses to convert non-EA items, so the weight is
-          harmless to leave on disk. */}
+      {/* N6 frame C left: usual measure of one each. Weight OR volume
+          in any supported unit, qty stored exactly as typed. Rendered
+          only for each-costed masters; changing the master's unit
+          elsewhere does NOT clear the stored measure, the block just
+          stops showing. deriveRecipePrice refuses to convert non-EA
+          items, so the measure is harmless to leave on disk. */}
       {ingredient.base_unit === "each" ? (
         <div className="kf-dpn__row">
           <div className="kf-dpn__row kf-newing__row">
             <label className="kf-dpn__label">
-              <span>One each weighs</span>
+              <span>One each of {ingredient.name} is</span>
               <input
                 type="number"
                 inputMode="decimal"
-                step="0.01"
+                step="0.0001"
                 min="0"
-                max="200"
-                value={weightDraft}
-                onChange={(e) => setWeightDraft(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void doWeightSave(); } }}
-                placeholder="e.g. 3.5"
-                aria-label="One each weighs, in pounds"
-                disabled={weightBusy}
+                value={measureQtyDraft}
+                onChange={(e) => setMeasureQtyDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void doMeasureSave(); } }}
+                placeholder="e.g. 6"
+                aria-label="One each, quantity"
+                disabled={measureBusy}
               />
+            </label>
+            <label className="kf-dpn__label">
+              <span>Unit</span>
+              <select
+                value={measureUomDraft}
+                onChange={(e) => setMeasureUomDraft(e.target.value)}
+                disabled={measureBusy}
+                aria-label="One each, unit"
+              >
+                <optgroup label="Weight">
+                  {WEIGHT_UOMS.map((u) => (
+                    <option key={u} value={u}>{uomLabel(u)}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="Volume">
+                  {VOLUME_UOMS.map((u) => (
+                    <option key={u} value={u}>{uomLabel(u)}</option>
+                  ))}
+                </optgroup>
+              </select>
             </label>
             <label className="kf-dpn__label">
               <span>Source</span>
               <select
-                value={weightSourceDraft}
-                onChange={(e) => setWeightSourceDraft(e.target.value)}
-                disabled={weightBusy}
-                aria-label="Weight source"
+                value={measureSourceDraft}
+                onChange={(e) => setMeasureSourceDraft(e.target.value)}
+                disabled={measureBusy}
+                aria-label="Measure source"
               >
-                <option value="house_test">Weighed in house</option>
+                <option value="house_test">Measured in house</option>
                 <option value="book">Book value</option>
                 <option value="vendor_spec">Vendor spec</option>
                 <option value="estimate">Estimate</option>
@@ -1038,24 +1080,24 @@ function IngredientBlock({
           <div className="kf-dpn__btns">
             <button
               type="button"
-              className={`kf-btn kf-btn--primary kf-btn--sm${weightBusy ? " is-busy" : ""}`}
-              disabled={weightBusy}
-              onClick={doWeightSave}
+              className={`kf-btn kf-btn--primary kf-btn--sm${measureBusy ? " is-busy" : ""}`}
+              disabled={measureBusy}
+              onClick={doMeasureSave}
             >
-              {weightBusy ? "Saving..." : "Save weight"}
+              {measureBusy ? "Saving..." : "Save measure"}
             </button>
             <button
               type="button"
               className="kf-btn kf-btn--line kf-btn--sm"
-              disabled={weightBusy || (weightDraft.trim() === "" && ingredient.avg_weight_lb == null)}
-              onClick={doWeightClear}
+              disabled={measureBusy || (measureQtyDraft.trim() === "" && ingredient.each_measure_qty == null)}
+              onClick={doMeasureClear}
             >
               Clear
             </button>
-            <SaveFlash savedAt={weightSavedAt} error={weightError} />
+            <SaveFlash savedAt={measureSavedAt} error={measureError} />
           </div>
           <div className="kf-dpn__hint">
-            Recipes that read per lb will use this weight. The stored price stays per each.
+            Recipes that read per lb, fl oz or gal will use this measure. The stored price stays per each.
           </div>
         </div>
       ) : null}
@@ -1140,39 +1182,61 @@ function IngredientBlock({
 // preview from the same base-unit table as the server (OVERRIDE_TO_BASE
 // in estimate.ts; mirrored here for the client preview). On save,
 // propagates to same-SKU twins.
+// N6: the pack editor's UOM groups come from the shared vocabulary.
+// CAN10 stays appended to Weight as a pack-editor-only unit (U1).
+// Count options stay as-is (EA / CT / DZ / PC); the dropdown exists in
+// the pack editor only.
 const UOM_GROUPS: Array<{ label: string; options: string[] }> = [
-  { label: "Weight", options: ["LB", "OZ", "G", "KG", "CAN10"] },
-  { label: "Volume", options: ["FLOZ", "GAL", "QT", "L", "ML", "PT"] },
+  { label: "Weight", options: [...WEIGHT_UOMS, "CAN10"] },
+  { label: "Volume", options: [...VOLUME_UOMS] },
   { label: "Count", options: ["EA", "CT", "DZ", "PC"] },
 ];
-const UOM_TO_BASE: Record<string, { base: "LB" | "FLOZ" | "EA"; factor: number }> = {
-  LB: { base: "LB", factor: 1 },
-  OZ: { base: "LB", factor: 1 / 16 },
-  G: { base: "LB", factor: 1 / 453.592 },
-  KG: { base: "LB", factor: 2.20462 },
-  // U1: #10 can treated as a weight unit; the shared factor is in
-  // pack.ts (CAN10_LB_PER_UNIT) so client preview and server estimate
-  // never drift.
-  CAN10: { base: "LB", factor: CAN10_LB_PER_UNIT },
-  FLOZ: { base: "FLOZ", factor: 1 },
-  L: { base: "FLOZ", factor: 33.814 },
-  ML: { base: "FLOZ", factor: 0.033814 },
-  GAL: { base: "FLOZ", factor: 128 },
-  QT: { base: "FLOZ", factor: 32 },
-  PT: { base: "FLOZ", factor: 16 },
-  EA: { base: "EA", factor: 1 },
-  CT: { base: "EA", factor: 1 },
-  DZ: { base: "EA", factor: 12 },
-  PC: { base: "EA", factor: 1 },
-};
-const UOM_LABEL: Record<"LB" | "FLOZ" | "EA", string> = {
-  LB: "lb",
-  FLOZ: "fl oz",
-  EA: "each",
-};
-// Display label for the UOM dropdown. CAN10 is a user-facing option
-// but the token is a code; render it as "#10 can" in the <select>
-// and anywhere the chosen uom is echoed back on the Result row.
+
+// N6: local view onto the shared TO_BASE / DIM_BY_UOM / BASE_BY_DIM.
+// Returns { base, factor } the same way the old UOM_TO_BASE did; the
+// numbers come from pack.ts so this file can never drift from the
+// server estimator. Null when the uom is unknown.
+function uomToBase(uom: string | null | undefined): { base: BaseUom; factor: number } | null {
+  if (!uom) return null;
+  const u = uom.toUpperCase();
+  const dim = DIM_BY_UOM[u];
+  const factor = TO_BASE[u];
+  if (!dim || factor == null) return null;
+  return { base: BASE_BY_DIM[dim], factor };
+}
+
+// N6 A1: one path for "what dimension + base uom does this ingredient
+// cost in". Replaces INGREDIENT_BASE_TO_UOM, INGREDIENT_BASE_DIM, and
+// INGREDIENT_BASE_UOM - all three were hand-written and all three
+// collapsed any unit outside { lb, each, gal, dozen } to undefined /
+// LB / each silently. The single path is:
+//   canonicalFromBaseUnit(base_unit) -> DIM_BY_UOM -> BASE_BY_DIM
+// Returns LB / FLOZ / EA; null when the ingredient has no base_unit
+// yet (ai-new group that hasn't been created).
+function ingredientBaseUom(
+  ingredient: { base_unit?: string | null } | null
+): BaseUom | null {
+  if (!ingredient) return null;
+  const canon = canonicalFromBaseUnit(ingredient.base_unit ?? null);
+  if (!canon) return null;
+  const dim = DIM_BY_UOM[canon];
+  if (!dim) return null;
+  return BASE_BY_DIM[dim];
+}
+
+function ingredientBaseDim(
+  ingredient: { base_unit?: string | null } | null
+): Dim | null {
+  if (!ingredient) return null;
+  const canon = canonicalFromBaseUnit(ingredient.base_unit ?? null);
+  if (!canon) return null;
+  return DIM_BY_UOM[canon] ?? null;
+}
+
+// Display label for the UOM dropdown. Delegates to shared uomLabel;
+// renders CAN10 as "#10 can" and FLOZ as uppercase "FL OZ" in the
+// pack-editor dropdown specifically (kept uppercase here to match the
+// existing option-list visual register).
 function uomDisplay(u: string): string {
   if (u === "FLOZ") return "FL OZ";
   if (u === "CAN10") return "#10 can";
@@ -1196,11 +1260,11 @@ function displayPerBase(
   dimBase: "LB" | "FLOZ" | "EA",
   ingredient: ReviewCardIngredient | null,
 ): { value: number; label: string } {
-  if (!ingredient) return { value: perBaseInDim, label: UOM_LABEL[dimBase] };
+  if (!ingredient) return { value: perBaseInDim, label: uomLabel(dimBase) };
   const target = canonicalFromBaseUnit(ingredient.base_unit);
-  if (!target) return { value: perBaseInDim, label: UOM_LABEL[dimBase] };
+  if (!target) return { value: perBaseInDim, label: uomLabel(dimBase) };
   const converted = convertPer(perBaseInDim, dimBase, target);
-  if (converted == null) return { value: perBaseInDim, label: UOM_LABEL[dimBase] };
+  if (converted == null) return { value: perBaseInDim, label: uomLabel(dimBase) };
   return { value: converted, label: ingredient.base_unit };
 }
 
@@ -1212,20 +1276,22 @@ function displayPerBase(
 // branch silently and the item's price ends up divided by its pack.
 // Mirrors BASE_BILLED in src/lib/intake.ts and normUom in pack.ts; the
 // server re-validates against ALLOWED_BILLED_UNITS.
+// N6: billed unit dropdown. Per-unit group now carries every weight +
+// volume unit that estimate.ts Tier A prices natively via normUom +
+// uomFactor. Mirrors ALLOWED_BILLED_UNITS in set-pack-override/route.ts
+// and BASE_BILLED in intake.ts - the three lists share the same word
+// list and are linked by a comment at each site.
 const BILLED_UNIT_GROUPS: { label: string; options: string[] }[] = [
-  { label: "Priced per unit - price used as-is", options: ["lb", "oz", "each", "gallon", "count", "dozen"] },
+  { label: "Priced per unit - price used as-is", options: [
+    "lb", "oz", "g", "kg",
+    "fl oz", "pt", "qt", "gallon", "l", "ml",
+    "each", "count", "dozen",
+  ] },
   { label: "Priced per container - price divided by pack", options: ["case", "bag", "box", "pack", "jar", "can", "other"] },
 ];
 
-// Map an ingredient's base_unit (R1 vocabulary) to the base UOM
-// dimension the pack editor emits. Used by the Result row's verdict
-// to say whether the edit will actually make the item join the blend.
-const INGREDIENT_BASE_TO_UOM: Record<string, "LB" | "FLOZ" | "EA"> = {
-  lb: "LB",
-  each: "EA",
-  gal: "FLOZ",
-  dozen: "EA",
-};
+// N6 A1: INGREDIENT_BASE_TO_UOM is deleted. Call sites use the shared
+// ingredientBaseUom() helper above, which resolves through pack.ts.
 
 // Parse the server's packNormalized ("50 LB" or "6/1 LB") back into
 // qty/size/uom so the "Read as" row can show the total conversion.
@@ -1307,7 +1373,7 @@ function PackOverrideBlock({
   const [uom, setUom] = useState<string>(
     can10Hint
       ? "CAN10"
-      : seededPack?.uom && UOM_TO_BASE[seededPack.uom]
+      : seededPack?.uom && uomToBase(seededPack.uom)
         ? seededPack.uom
         : "LB"
   );
@@ -1453,8 +1519,8 @@ function PackOverrideBlock({
       preview = { line: "enter $/lb to preview", dim: null, perBase: null, baseLabel: null };
     }
   } else {
-    if (qtyValid && sizeValid && uom && UOM_TO_BASE[uom]) {
-      const b = UOM_TO_BASE[uom];
+    if (qtyValid && sizeValid && uom && uomToBase(uom)) {
+      const b = uomToBase(uom)!;
       const total = qty * size * b.factor;
       if (previewCasePrice) {
         // Compute perBase in the DIMENSION base (what the backfill
@@ -1466,17 +1532,17 @@ function PackOverrideBlock({
         const perBaseInDim = previewCasePrice.v / total;
         const disp = displayPerBase(perBaseInDim, b.base, ingredient);
         preview = {
-          line: `${qty} x ${size} ${uomDisplay(uom)} = ${total.toFixed(2)} ${UOM_LABEL[b.base]} -> ${fmtUsd(disp.value)} / ${disp.label}  (case ${fmtUsd(previewCasePrice.v)} ${previewCasePrice.src})`,
+          line: `${qty} x ${size} ${uomDisplay(uom)} = ${total.toFixed(2)} ${uomLabel(b.base)} -> ${fmtUsd(disp.value)} / ${disp.label}  (case ${fmtUsd(previewCasePrice.v)} ${previewCasePrice.src})`,
           dim: "math",
           perBase: disp.value,
           baseLabel: disp.label,
         };
       } else {
         preview = {
-          line: `${qty} x ${size} ${uomDisplay(uom)} = ${total.toFixed(2)} ${UOM_LABEL[b.base]}  (no case price on file - per-unit will be blank)`,
+          line: `${qty} x ${size} ${uomDisplay(uom)} = ${total.toFixed(2)} ${uomLabel(b.base)}  (no case price on file - per-unit will be blank)`,
           dim: "no-price",
           perBase: null,
-          baseLabel: UOM_LABEL[b.base],
+          baseLabel: uomLabel(b.base),
         };
       }
     } else {
@@ -1526,15 +1592,16 @@ function PackOverrideBlock({
   // S4: on pristine open, band-check the stored price (converted into
   // the user's declared uom) rather than a recomputed hypothetical.
   // Out-of-band saves should fire the warning on open too.
-  const userUom = catchWeight ? "LB" : uom && UOM_TO_BASE[uom] ? uom : null;
+  const userUom = catchWeight ? "LB" : uom && uomToBase(uom) ? uom : null;
   const band = userUom ? PACK_BANDS[userUom] : null;
   let pricePerUserUom: number | null = catchWeight
     ? perLbValid ? perLb : null
     : qtyValid && sizeValid && previewCasePrice
       ? previewCasePrice.v / (qty * size)
       : null;
-  if (showStored && item.perBase != null && userUom && UOM_TO_BASE[userUom]) {
-    pricePerUserUom = item.perBase * UOM_TO_BASE[userUom].factor;
+  if (showStored && item.perBase != null && userUom) {
+    const b = uomToBase(userUom);
+    if (b) pricePerUserUom = item.perBase * b.factor;
   }
   const outOfBand =
     pricePerUserUom != null && band != null &&
@@ -1573,7 +1640,7 @@ function PackOverrideBlock({
   const readyToSave =
     (catchWeight
       ? perLbValid && !perLbPristine
-      : qtyValid && sizeValid && !!UOM_TO_BASE[uom] && (!packPristine || caseSrcChanged || catchWeightChanged));
+      : qtyValid && sizeValid && uomToBase(uom) != null && (!packPristine || caseSrcChanged || catchWeightChanged));
 
   async function save() {
     if (busy || !readyToSave) return;
@@ -1595,7 +1662,7 @@ function PackOverrideBlock({
     // pack-override recompute (new tier), not a price pin. Same "one
     // save, one effect" rule.
     if (!catchWeight && packPristine && caseSrcChanged && !catchWeightChanged && previewCasePrice) {
-      const b = UOM_TO_BASE[uom];
+      const b = uomToBase(uom)!;
       const total = qty * size * b.factor;
       const perBaseInDim = previewCasePrice.v / total;
       const srcLabel = previewCasePrice.src;
@@ -1680,12 +1747,12 @@ function PackOverrideBlock({
   // two numbers can be compared directly.
   let readAsBody: string;
   if (parsedBack) {
-    const b = UOM_TO_BASE[parsedBack.uom];
+    const b = uomToBase(parsedBack.uom);
     const total = b ? parsedBack.qty * parsedBack.size * b.factor : null;
     const base = total != null && b
       ? parsedBack.qty === 1
-        ? `${parsedBack.size} ${uomDisplay(parsedBack.uom)} = ${total.toFixed(2)} ${UOM_LABEL[b.base]}`
-        : `${parsedBack.qty} x ${parsedBack.size} ${uomDisplay(parsedBack.uom)} = ${total.toFixed(2)} ${UOM_LABEL[b.base]}`
+        ? `${parsedBack.size} ${uomDisplay(parsedBack.uom)} = ${total.toFixed(2)} ${uomLabel(b.base)}`
+        : `${parsedBack.qty} x ${parsedBack.size} ${uomDisplay(parsedBack.uom)} = ${total.toFixed(2)} ${uomLabel(b.base)}`
       : item.packNormalized ?? item.pack ?? "(not available)";
     // S4 + S5: showStored branch displays the item's stored per-unit
     // when the chain is pristine; the else branch recomputes from the
@@ -1715,8 +1782,13 @@ function PackOverrideBlock({
   }
 
   // Result row: derived $/unit + verdict against the ingredient's base_unit.
-  const ingredientBase = ingredient ? INGREDIENT_BASE_TO_UOM[ingredient.base_unit?.toLowerCase() ?? ""] ?? null : null;
-  const enteredBase = catchWeight ? "LB" : uom && UOM_TO_BASE[uom] ? UOM_TO_BASE[uom].base : null;
+  // N6 A1: resolve ingredient dimension and base uom through the shared
+  // helpers so an `oz` or `qt` ingredient reaches the verdict correctly
+  // (pre-N6 the hand map INGREDIENT_BASE_TO_UOM returned null and the
+  // verdict silently didn't render). One path everywhere:
+  // canonicalFromBaseUnit -> DIM_BY_UOM -> BASE_BY_DIM.
+  const ingredientBase = ingredientBaseUom(ingredient);
+  const enteredBase = catchWeight ? "LB" : uom && uomToBase(uom) ? uomToBase(uom)!.base : null;
   let verdict: { tone: "good" | "block"; text: string } | null = null;
   if (ingredient && ingredientBase && enteredBase && readyToSave) {
     if (enteredBase === ingredientBase) {
@@ -2016,24 +2088,25 @@ function PackOverrideBlock({
             ) : null}
           </div>
         </div>
-        {/* N5 frame C right: a per-item each weight override. Shown
-            only when the item is priced per EA, because derivePerLb
-            refuses to convert anything else - a weight on an LB- or
+        {/* N6 frame C right: a per-item each measure override. Shown
+            only when the item is priced per EA, because deriveRecipePrice
+            refuses to convert anything else - a measure on an LB- or
             GAL-priced item would be a control that does nothing. */}
         {item.perBaseUom === "EA" ? (
-          <ItemEachWeightBlock item={item} ingredient={ingredient} onDone={onDone} />
+          <ItemEachMeasureBlock item={item} ingredient={ingredient} onDone={onDone} />
         ) : null}
       </div>
     </section>
   );
 }
 
-// N5: this item's own each_weight_lb when it differs from the master's
-// average. A checkbox reveals the input; unticking + Save clears the
-// column. The sentence under it shows this item's math and, when the
-// ingredient also has a weight, what the ingredient's weight would
-// have given.
-function ItemEachWeightBlock({
+// N6: this item's own each measure when its each is a different size
+// than the master's average. qty + uom, any weight or volume. A
+// checkbox reveals the inputs; unticking + Save clears both columns.
+// The sentence under it goes through deriveRecipePrice (same math the
+// headline uses) rather than a local division - that's the PR #21 P2
+// fix in A1.
+function ItemEachMeasureBlock({
   item,
   ingredient,
   onDone,
@@ -2042,9 +2115,12 @@ function ItemEachWeightBlock({
   ingredient: ReviewCardIngredient | null;
   onDone: () => void;
 }) {
-  const [hasOwn, setHasOwn] = useState<boolean>(item.eachWeightLb != null);
-  const [draft, setDraft] = useState<string>(
-    item.eachWeightLb == null ? "" : String(item.eachWeightLb)
+  const [hasOwn, setHasOwn] = useState<boolean>(item.eachMeasure != null);
+  const [qtyDraft, setQtyDraft] = useState<string>(
+    item.eachMeasure == null ? "" : String(item.eachMeasure.qty)
+  );
+  const [uomDraft, setUomDraft] = useState<string>(
+    (item.eachMeasure?.uom ?? "LB").toUpperCase()
   );
   const [busy, setBusy] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -2056,9 +2132,9 @@ function ItemEachWeightBlock({
     setError(null);
     if (!hasOwn) {
       // Unticked + Save = clear.
-      const r = await postJson("/api/review/set-item-each-weight", {
+      const r = await postJson("/api/review/set-item-each-measure", {
         itemId: item.id,
-        weightLb: null,
+        qty: null,
       });
       if (!r.ok) {
         const msg = errMsg(r.data, `Clear failed (${r.status})`);
@@ -2067,32 +2143,42 @@ function ItemEachWeightBlock({
         setBusy(false);
         return;
       }
-      toast("Item weight cleared");
-      setDraft("");
+      toast("Item measure cleared");
+      setQtyDraft("");
       setSavedAt(Date.now());
       setBusy(false);
       onDone();
       return;
     }
-    const trimmed = draft.trim();
+    const trimmed = qtyDraft.trim();
     if (trimmed === "") {
-      const msg = "Enter a weight or untick the box.";
+      const msg = "Enter a quantity or untick the box.";
       setError(msg);
       toast(msg, { tone: "block" });
       setBusy(false);
       return;
     }
     const n = Number(trimmed);
-    if (!Number.isFinite(n) || n <= 0 || n > 200) {
-      const msg = "Weight must be greater than 0 and at most 200 lb.";
+    if (!Number.isFinite(n) || n <= 0 || n > 100000) {
+      const msg = "Quantity must be greater than 0 and at most 100000.";
       setError(msg);
       toast(msg, { tone: "block" });
       setBusy(false);
       return;
     }
-    const r = await postJson("/api/review/set-item-each-weight", {
+    const u = uomDraft.toUpperCase();
+    const dim = DIM_BY_UOM[u];
+    if (dim !== "weight" && dim !== "volume") {
+      const msg = "Pick a weight or volume unit.";
+      setError(msg);
+      toast(msg, { tone: "block" });
+      setBusy(false);
+      return;
+    }
+    const r = await postJson("/api/review/set-item-each-measure", {
       itemId: item.id,
-      weightLb: n,
+      qty: n,
+      uom: u,
     });
     if (!r.ok) {
       const msg = errMsg(r.data, `Save failed (${r.status})`);
@@ -2101,19 +2187,35 @@ function ItemEachWeightBlock({
       setBusy(false);
       return;
     }
-    toast(`Saved: this each weighs ${Math.round(n * 100) / 100} lb`);
+    toast(`Saved: this each is ${Math.round(n * 10000) / 10000} ${uomLabel(u)}`);
     setSavedAt(Date.now());
     setBusy(false);
     onDone();
   }
 
-  const perBaseNumber = item.perBase != null && Number.isFinite(item.perBase) && item.perBase > 0 ? item.perBase : null;
-  const itemWeight = item.eachWeightLb != null && Number.isFinite(item.eachWeightLb) && item.eachWeightLb > 0 ? item.eachWeightLb : null;
-  const ingWeight = ingredient?.avg_weight_lb != null && Number.isFinite(ingredient.avg_weight_lb) && ingredient.avg_weight_lb > 0 ? ingredient.avg_weight_lb : null;
+  // Comparison lines: run deriveRecipePrice once with the item's measure
+  // and once with the ingredient's (when it has one) so both numbers
+  // come out the same math the headline uses. No inline division here.
+  const ingredientMeasure =
+    ingredient?.each_measure_qty != null && ingredient?.each_measure_uom
+      ? { qty: Number(ingredient.each_measure_qty), uom: ingredient.each_measure_uom }
+      : null;
+  const itemFromItem = deriveRecipePrice({
+    perBase: item.perBase,
+    perBaseUom: item.perBaseUom,
+    itemMeasure: item.eachMeasure,
+    ingredientMeasure: null,
+  });
+  const itemFromIngredient = deriveRecipePrice({
+    perBase: item.perBase,
+    perBaseUom: item.perBaseUom,
+    itemMeasure: null,
+    ingredientMeasure,
+  });
 
   return (
     <div className="kf-chain__row">
-      <div className="kf-chain__label">Each weight</div>
+      <div className="kf-chain__label">Each measure</div>
       <div className="kf-chain__value">
         <label className="kf-dpn__toggle-label">
           <input
@@ -2122,25 +2224,44 @@ function ItemEachWeightBlock({
             onChange={(e) => setHasOwn(e.currentTarget.checked)}
             disabled={busy}
           />
-          <span>This item&rsquo;s each has its own weight</span>
+          <span>This item&rsquo;s each has its own measure</span>
         </label>
         {hasOwn ? (
-          <div className="kf-dpn__row">
+          <div className="kf-dpn__row kf-newing__row">
             <label className="kf-dpn__label">
-              <span>lb</span>
+              <span>Qty</span>
               <input
                 type="number"
                 inputMode="decimal"
-                step="0.01"
+                step="0.0001"
                 min="0"
-                max="200"
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
+                value={qtyDraft}
+                onChange={(e) => setQtyDraft(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void save(); } }}
-                placeholder="e.g. 5"
-                aria-label="One each weighs, in pounds"
+                placeholder="e.g. 6"
+                aria-label="One each, quantity"
                 disabled={busy}
               />
+            </label>
+            <label className="kf-dpn__label">
+              <span>Unit</span>
+              <select
+                value={uomDraft}
+                onChange={(e) => setUomDraft(e.target.value)}
+                disabled={busy}
+                aria-label="One each, unit"
+              >
+                <optgroup label="Weight">
+                  {WEIGHT_UOMS.map((u) => (
+                    <option key={u} value={u}>{uomLabel(u)}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="Volume">
+                  {VOLUME_UOMS.map((u) => (
+                    <option key={u} value={u}>{uomLabel(u)}</option>
+                  ))}
+                </optgroup>
+              </select>
             </label>
           </div>
         ) : null}
@@ -2151,22 +2272,22 @@ function ItemEachWeightBlock({
             disabled={busy}
             onClick={save}
           >
-            {busy ? "Saving..." : hasOwn ? "Save weight" : "Clear"}
+            {busy ? "Saving..." : hasOwn ? "Save measure" : "Clear"}
           </button>
           <SaveFlash savedAt={savedAt} error={error} />
         </div>
-        {perBaseNumber != null && itemWeight != null ? (
+        {itemFromItem ? (
           <span className="kf-chain__sub">
-            {fmtUsd(perBaseNumber)} each ÷ {itemWeight} lb = {fmtUsd(perBaseNumber / itemWeight)} / lb
-            {ingWeight != null ? (
+            {fmtUsd(item.perBase as number)} each ÷ {itemFromItem.qty} {uomLabel(itemFromItem.measureUom)} = {fmtUsd(itemFromItem.per)} / {uomLabel(itemFromItem.uom)}
+            {itemFromIngredient ? (
               <>
-                {" "}· the ingredient&rsquo;s {ingWeight} lb would give {fmtUsd(perBaseNumber / ingWeight)} / lb.
+                {" "}· the ingredient&rsquo;s {itemFromIngredient.qty} {uomLabel(itemFromIngredient.measureUom)} would give {fmtUsd(itemFromIngredient.per)} / {uomLabel(itemFromIngredient.uom)}.
               </>
             ) : null}
           </span>
-        ) : perBaseNumber != null && ingWeight != null && !hasOwn ? (
+        ) : itemFromIngredient && !hasOwn ? (
           <span className="kf-chain__sub">
-            Without an item-level override, {fmtUsd(perBaseNumber)} each ÷ {ingWeight} lb = {fmtUsd(perBaseNumber / ingWeight)} / lb.
+            Without an item-level override, {fmtUsd(item.perBase as number)} each ÷ {itemFromIngredient.qty} {uomLabel(itemFromIngredient.measureUom)} = {fmtUsd(itemFromIngredient.per)} / {uomLabel(itemFromIngredient.uom)}.
           </span>
         ) : null}
       </div>
@@ -2282,9 +2403,7 @@ function PriceOverrideBlock({
   // Default baseUom to the ingredient's base_unit when there is one,
   // else to the item's existing perBaseUom, else LB. All three are
   // valid first picks; LB is the dominant case.
-  const ingBase = ingredient
-    ? INGREDIENT_BASE_TO_UOM[ingredient.base_unit?.toLowerCase() ?? ""] ?? null
-    : null;
+  const ingBase = ingredientBaseUom(ingredient);
   const seedBaseUom =
     ingBase ??
     (item.perBaseUom === "LB" || item.perBaseUom === "FLOZ" || item.perBaseUom === "EA"
@@ -2294,7 +2413,11 @@ function PriceOverrideBlock({
   const [perBaseStr, setPerBaseStr] = useState<string>(
     item.perBase != null ? Number(item.perBase).toFixed(4) : ""
   );
-  const [baseUom, setBaseUom] = useState<"LB" | "FLOZ" | "EA">(seedBaseUom);
+  // N6: the select widens to every weight / volume / EA unit. Stored
+  // state is any of those strings; the route converts the typed value
+  // to the dimension base before writing, so downstream still reads
+  // { per_base in LB/FLOZ/EA }.
+  const [baseUom, setBaseUom] = useState<string>(seedBaseUom);
   const [reason, setReason] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -2357,11 +2480,19 @@ function PriceOverrideBlock({
           <span>Unit</span>
           <select
             value={baseUom}
-            onChange={(e) => setBaseUom(e.target.value as "LB" | "FLOZ" | "EA")}
+            onChange={(e) => setBaseUom(e.target.value)}
             disabled={busy}
           >
-            <option value="LB">pound (lb)</option>
-            <option value="FLOZ">fluid ounce (fl oz)</option>
+            <optgroup label="Weight">
+              {WEIGHT_UOMS.map((u) => (
+                <option key={u} value={u}>{uomLabel(u)}</option>
+              ))}
+            </optgroup>
+            <optgroup label="Volume">
+              {VOLUME_UOMS.map((u) => (
+                <option key={u} value={u}>{uomLabel(u)}</option>
+              ))}
+            </optgroup>
             <option value="EA">each</option>
           </select>
         </label>
@@ -2407,23 +2538,13 @@ type AttentionIssue =
   | { kind: "price_hand_set"; tone: "warn"; head: string; body: string }
   | { kind: "no_ingredient"; tone: "info"; head: string; body: string };
 
-const UOM_BASE_DIM: Record<string, "weight" | "volume" | "count"> = {
-  LB: "weight",
-  FLOZ: "volume",
-  EA: "count",
-};
-const INGREDIENT_BASE_DIM: Record<string, "weight" | "volume" | "count"> = {
-  lb: "weight",
-  each: "count",
-  dozen: "count",
-  gal: "volume",
-};
-const INGREDIENT_BASE_UOM: Record<string, "LB" | "FLOZ" | "EA"> = {
-  lb: "LB",
-  each: "EA",
-  dozen: "EA",
-  gal: "FLOZ",
-};
+// N6 A1: the three hand maps UOM_BASE_DIM, INGREDIENT_BASE_DIM and
+// INGREDIENT_BASE_UOM are deleted. Every call site below resolves
+// dimension and base uom through the shared helpers ingredientBaseDim
+// + ingredientBaseUom (which in turn call canonicalFromBaseUnit ->
+// DIM_BY_UOM -> BASE_BY_DIM). item.perBaseUom goes through DIM_BY_UOM
+// directly. deriveAttention's issue kinds, tones, copy and order are
+// unchanged - only the lookup moved.
 
 function deriveAttention(
   item: ReviewGroupItem,
@@ -2461,10 +2582,10 @@ function deriveAttention(
   // Unit mismatch (item side only - see spec acceptance 5): we only
   // claim this when the ingredient has a known base dimension AND the
   // item's own uom resolves to a different one.
-  const ingBase = ingredient ? INGREDIENT_BASE_DIM[ingredient.base_unit?.toLowerCase() ?? ""] : null;
-  const itemBase = item.perBaseUom ? UOM_BASE_DIM[item.perBaseUom] : null;
+  const ingBase = ingredientBaseDim(ingredient);
+  const itemBase = item.perBaseUom ? (DIM_BY_UOM[item.perBaseUom] ?? null) : null;
   if (ingBase && itemBase && itemBase !== ingBase && ingredient) {
-    const targetUom = INGREDIENT_BASE_UOM[ingredient.base_unit?.toLowerCase() ?? ""] ?? "EA";
+    const targetUom = ingredientBaseUom(ingredient) ?? "EA";
     issues.push({
       kind: "unit_mismatch",
       tone: "bad",
@@ -2507,7 +2628,9 @@ function deriveAttention(
 // because that is the dimension the panel is trying to join.
 function fixPackDefaultUom(ingredient: ReviewCardIngredient | null): string {
   if (!ingredient) return "LB";
-  return INGREDIENT_BASE_UOM[ingredient.base_unit?.toLowerCase() ?? ""] ?? "LB";
+  // N6 A1: shared helper replaces the hand map. An ingredient costed
+  // per oz now returns LB (its dimension's base), per qt returns FLOZ.
+  return ingredientBaseUom(ingredient) ?? "LB";
 }
 
 function AttentionIcon({ tone }: { tone: "bad" | "warn" | "info" | "good" }) {

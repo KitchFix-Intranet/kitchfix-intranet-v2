@@ -86,6 +86,64 @@ export const TO_BASE: Record<string, number> = {
   PC: 1,
 };
 
+// N6: the single unit vocabulary every dropdown and allow-list in
+// Stockpot reads. Order is the order a US kitchen reaches for first
+// (lb before oz before metric; fl oz before pint before quart before
+// gallon before metric). CAN10 is a pack-editor-only unit; CT, PC, DZ,
+// EA are count units - neither family is a "measure of one each", so
+// they are not included in these lists. New units may be added only
+// after DIM_BY_UOM + TO_BASE + normUom are also updated above.
+export const WEIGHT_UOMS = ["LB", "OZ", "G", "KG"] as const;
+export const VOLUME_UOMS = ["FLOZ", "PT", "QT", "GAL", "L", "ML"] as const;
+
+// One display label per unit. uomLabel is the only place a unit's
+// display word is defined - duplicates in DetailPanel (uomDisplay) and
+// IngredientMastersFilter (BASE_UNIT_WORD) are folded in.
+export function uomLabel(uom: string | null | undefined): string {
+  if (!uom) return "";
+  const u = uom.toUpperCase();
+  switch (u) {
+    case "LB": return "lb";
+    case "OZ": return "oz";
+    case "G": return "g";
+    case "KG": return "kg";
+    case "FLOZ": return "fl oz";
+    case "PT": return "pt";
+    case "QT": return "qt";
+    case "GAL": return "gal";
+    case "L": return "L";
+    case "ML": return "mL";
+    case "CAN10": return "#10 can";
+    case "EA": return "each";
+    case "CT": return "ct";
+    case "DZ": return "dozen";
+    case "PC": return "pc";
+    default: return uom.toLowerCase();
+  }
+}
+
+// N6 A3: the ingredient's base_unit on disk is lowercase and belongs
+// to the set { WEIGHT_UOMS ∪ VOLUME_UOMS ∪ each | dozen }. The type is
+// derived from the shared lists so a new dropdown entry cannot drift
+// from the writer's allow-list. Count units stay as the two business
+// names (each / dozen); the three count uoms CT / PC / EA / DZ are
+// invoice tokens, not master vocabulary.
+export type BaseUnit =
+  | Lowercase<(typeof WEIGHT_UOMS)[number]>
+  | Lowercase<(typeof VOLUME_UOMS)[number]>
+  | "each"
+  | "dozen";
+
+export const BASE_UNIT_VALUES: ReadonlySet<BaseUnit> = new Set<BaseUnit>([
+  "lb", "oz", "g", "kg",
+  "floz", "pt", "qt", "gal", "l", "ml",
+  "each", "dozen",
+]);
+
+export function isBaseUnit(v: unknown): v is BaseUnit {
+  return typeof v === "string" && (BASE_UNIT_VALUES as ReadonlySet<string>).has(v);
+}
+
 // Normalize a raw uom token into one of the canonical uoms above, or
 // null if we don't recognize it. Case-insensitive; strips periods.
 export function normUom(raw: string | null | undefined): string | null {

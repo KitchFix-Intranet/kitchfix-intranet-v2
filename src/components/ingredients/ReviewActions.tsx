@@ -83,8 +83,13 @@ function errMsg(data: unknown, fallback: string): string {
 // unit when it is not the common-case default "each". Keeps the usual
 // case (single-serve items, retail packaged goods) quiet and makes
 // the inferred cases visible.
+//
+// N6: widened to every non-"each" base_unit (weight, volume, count).
+// A null / missing value also prints nothing - callers that didn't
+// thread baseUnit through don't accidentally show "undefined".
 function unitSuffix(baseUnit: unknown): string {
-  if (baseUnit !== "lb" && baseUnit !== "gal" && baseUnit !== "dozen") return "";
+  if (typeof baseUnit !== "string") return "";
+  if (baseUnit === "" || baseUnit === "each") return "";
   return ` (per ${baseUnit})`;
 }
 
