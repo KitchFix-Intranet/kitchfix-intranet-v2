@@ -1,12 +1,12 @@
 "use client";
 
-// N7 §3c: the panel's Needs attention block. deriveAttention is NOT
-// rewritten; this wrapper re-homes its issue kinds per the prompt:
-//   no_price, pack_unreadable, unit_mismatch -> here
-//   pack_hand_set, price_hand_set            -> provenance, not attention
-//   no_ingredient                            -> ingredient zone pending
+// N8 §3c + §1h: Needs attention. Warn-tinted ground (bad/info variants
+// override), icon left + head/body + Fix the pack button right. Not a
+// red rule. deriveAttention's kinds/tones/order unchanged; only the
+// mismatch head copy moved to a natural sentence (in attention.tsx).
+//
 // Rendered only when there is something; the head pill drives the
-// count. Always open (no chevron). "Fix the pack" opens the Pack and
+// count. Always open, no chevron. "Fix the pack" opens the Pack and
 // price row via the parent's onFixPack(uom).
 
 import { AlertTriangle, Info } from "lucide-react";
@@ -23,7 +23,6 @@ export type PanelAttentionCounts = {
   };
 };
 
-// Shared with PanelHead so the head pill and the block agree on count.
 export function computeAttentionCounts(
   item: ReviewGroupItem,
   ingredient: ReviewCardIngredient | null
@@ -42,9 +41,9 @@ export function computeAttentionCounts(
   return { total, hasNoIngredient, provenance: { packHandSet, priceHandSet } };
 }
 
-function AttentionIcon({ tone }: { tone: "bad" | "info" }) {
-  if (tone === "info") return <Info size={16} strokeWidth={1.75} aria-hidden />;
-  return <AlertTriangle size={16} strokeWidth={1.75} aria-hidden />;
+function AttentionIcon({ tone }: { tone: "bad" | "info" | "warn" }) {
+  if (tone === "info") return <Info size={22} strokeWidth={1.75} aria-hidden />;
+  return <AlertTriangle size={22} strokeWidth={1.75} aria-hidden />;
 }
 
 export function PanelAttention({
@@ -57,7 +56,6 @@ export function PanelAttention({
   onFixPack: (uom: string) => void;
 }) {
   const issues = deriveAttention(item, ingredient);
-  // Filter to the three kinds that are actually attention.
   const rendered = issues.filter(
     (i) =>
       i.kind === "no_price" ||
@@ -66,8 +64,6 @@ export function PanelAttention({
   );
   if (rendered.length === 0) return null;
 
-  // One Fix the pack button on the most severe fixable issue, same
-  // priority as the pre-N7 AttentionSection (bad > info).
   const toneRank: Record<string, number> = { bad: 3, info: 2, warn: 1 };
   const fixable = rendered
     .filter((i) => "fix" in i && i.fix === "pack")
@@ -77,13 +73,16 @@ export function PanelAttention({
   return (
     <div className="kf-ipanel__attn" aria-label="What needs attention">
       {rendered.map((issue) => {
-        const tone: "bad" | "info" = issue.tone === "bad" ? "bad" : "info";
+        const tone: "bad" | "info" | "warn" =
+          issue.tone === "bad" ? "bad" : issue.tone === "info" ? "info" : "warn";
         return (
           <div
             key={issue.kind}
-            className={`kf-ipanel__attn-item kf-ipanel__attn-item--${tone}`}
+            className={`kf-ipanel__attn-item${tone === "bad" ? " kf-ipanel__attn-item--bad" : tone === "info" ? " kf-ipanel__attn-item--info" : ""}`}
           >
-            <AttentionIcon tone={tone} />
+            <span className="kf-ipanel__attn-icon">
+              <AttentionIcon tone={tone} />
+            </span>
             <div className="kf-ipanel__attn-item-text">
               <span className="kf-ipanel__attn-item-head">{issue.head}</span>
               <span className="kf-ipanel__attn-item-body">{issue.body}</span>
@@ -100,7 +99,7 @@ export function PanelAttention({
                   )
                 }
               >
-                Fix the pack
+                Check the pack
               </button>
             ) : null}
           </div>

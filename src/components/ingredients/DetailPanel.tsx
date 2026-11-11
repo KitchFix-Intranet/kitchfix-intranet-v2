@@ -18,7 +18,6 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { X } from "lucide-react";
 import type { ReviewCardIngredient, ReviewGroupItem } from "./itemTypes";
 import { PanelHead } from "./panel/PanelHead";
 import { PanelStrip } from "./panel/PanelStrip";
@@ -142,23 +141,15 @@ export function DetailPanel({
         aria-modal="true"
         aria-labelledby={labelId}
       >
-        <button
-          type="button"
-          ref={closeBtnRef}
-          className="kf-drawer__close"
-          onClick={close}
-          aria-label="Close"
-        >
-          <X size={20} strokeWidth={1.5} />
-        </button>
-
         <PanelHead
+          ref={closeBtnRef}
           labelId={labelId}
           kind={open.kind}
           item={item}
           ingredient={ingredient}
           proposedName={proposedName}
           attentionCount={attentionCounts.total}
+          onClose={close}
         />
 
         {open.kind === "item" && item ? (

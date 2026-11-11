@@ -29,16 +29,30 @@ import {
   type PackHint,
 } from "./packHelpers";
 
+// N8 §1f + DESIGN.md 11: plain phrase for every item.caseSource value.
+function caseSourcePhrase(src: string | null): string {
+  if (src === "catalog") return "the catalog price";
+  if (src === "billed") return "the billed price on the last invoice";
+  if (src === "actuals_case") return "the average case paid";
+  if (src === "actuals_unit") return "the average per-unit paid";
+  if (src === "actuals_blended") return "the blended average paid";
+  if (src === "override") return "the override you set";
+  return "the stored estimate";
+}
+
 export function PackOverrideBlock({
   item,
   ingredient,
   hint,
+  onCancel,
   onDone,
 }: {
   item: ReviewGroupItem;
   ingredient: ReviewCardIngredient | null;
   hint: PackHint | null;
   onDone: () => void;
+  // N8 §1f: Cancel closes the row when the caller is a panel row.
+  onCancel?: () => void;
 }) {
   // S2: pre-fill qty/size/uom from the item's own stored pack so
   // correcting one field is one keystroke, not a retype. When
@@ -299,7 +313,9 @@ export function PackOverrideBlock({
         ? displayPerBase(item.perBase, item.perBaseUom, ingredient)
         : { value: item.perBase, label: storedBaseLabel };
     preview = {
-      line: `${packStr} - saved per-unit from ${item.caseSource ?? "stored estimate"}`,
+      // N8 §1f: DESIGN.md 11 - no raw enum in UI. Every caseSource gets
+      // a plain phrase.
+      line: `${packStr} - saved per-unit from ${caseSourcePhrase(item.caseSource)}`,
       dim: "math",
       perBase: canonical.value,
       baseLabel: canonical.label,
@@ -531,20 +547,14 @@ export function PackOverrideBlock({
   }
 
   return (
-    <div className="kf-dpn__block" aria-label="Pack and price editor">
-      {/* N7 §3d: GTIN surfaces inside the open editor, per B3 ruling. */}
-      {item.gtin ? (
-        <div className="kf-dpn__hint kf-dpn__gtin">
-          <span className="kf-muted">GTIN</span> {item.gtin}
-        </div>
-      ) : null}
-
-      {/* Mode switch - decides which `Change to` controls render below.
-          aria-pressed on each button; corp floor via .kf-chain__mode-btn. */}
-      <div className="kf-chain__mode" role="group" aria-label="Pricing mode">
+    <div className="kf-ipanel__editor" aria-label="Pack and price editor">
+      {/* N8 §1f: segmented mode toggle on the left, invoice-reads on
+          the right, same baseline. */}
+      <div className="kf-ipanel__editor-toprow">
+      <div className="kf-ipanel__seg" role="group" aria-label="Pricing mode">
         <button
           type="button"
-          className={`kf-chain__mode-btn${!catchWeight ? " is-on" : ""}`}
+          className="kf-ipanel__seg-btn"
           aria-pressed={!catchWeight}
           onClick={() => { setCatchWeight(false); setCatchWeightEdited(true); }}
           disabled={busy}
@@ -553,13 +563,17 @@ export function PackOverrideBlock({
         </button>
         <button
           type="button"
-          className={`kf-chain__mode-btn${catchWeight ? " is-on" : ""}`}
+          className="kf-ipanel__seg-btn"
           aria-pressed={catchWeight}
           onClick={() => { setCatchWeight(true); setCatchWeightEdited(true); }}
           disabled={busy}
         >
-          Catch weight - priced by actual weight
+          Catch weight
         </button>
+      </div>
+        {item.pack ? (
+          <div className="kf-ipanel__editor-read">Invoice reads &ldquo;{item.pack}&rdquo;</div>
+        ) : null}
       </div>
 
       <div className="kf-chain">
@@ -782,7 +796,18 @@ export function PackOverrideBlock({
                   : " Check the pack."}
               </span>
             ) : null}
-            <div className="kf-dpn__btns">
+            <div className="kf-ipanel__editor-actions">
+              <button
+                type="button"
+                className="kf-btn kf-btn--ghost kf-btn--sm"
+                disabled={busy}
+                onClick={() => {
+                  if (dirty) resetDrafts();
+                  if (onCancel) onCancel();
+                }}
+              >
+                Cancel
+              </button>
               <button
                 type="button"
                 className={`kf-btn kf-btn--primary kf-btn--sm${busy ? " is-busy" : ""}`}
@@ -791,28 +816,17 @@ export function PackOverrideBlock({
               >
                 {/* S6: label follows the action. Pack pristine + source
                     moved -> price-override write ("Save price"). Any
-                    other save path ("Save pack") keeps today's label.
-                    S7: a toggle flip is a pack save (recompute), so
-                    the label stays "Save pack" even when caseSrc
-                    also moved - matches the save-routing guard. */}
+                    other save path ("Save pack") keeps today's label. */}
                 {busy
                   ? "Saving..."
                   : !catchWeight && packPristine && caseSrcChanged && !catchWeightChanged
                     ? "Save price"
                     : "Save pack"}
               </button>
-              <button
-                type="button"
-                className="kf-btn kf-btn--line kf-btn--sm"
-                disabled={busy || !dirty}
-                onClick={resetDrafts}
-              >
-                Cancel
-              </button>
               <SaveFlash savedAt={savedAt} error={error} />
             </div>
             {lastTwins != null && lastTwins > 0 ? (
-              <div className="kf-dpn__hint">
+              <div className="kf-ipanel__editor-foot">
                 Applied to <strong>{fmtCount(lastTwins + 1)}</strong> matching items (same vendor SKU).
               </div>
             ) : null}
@@ -821,6 +835,9 @@ export function PackOverrideBlock({
         {/* N7 §3d: ItemEachMeasureBlock lifted OUT of the pack editor
             and promoted to its own row in PanelItemZone. */}
       </div>
+      {item.gtin ? (
+        <div className="kf-ipanel__editor-foot">GTIN {item.gtin}</div>
+      ) : null}
     </div>
   );
 }

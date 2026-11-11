@@ -1,7 +1,8 @@
 "use client";
 
-// Item grade (Standard / Premium) segmented control. Lifted verbatim
-// from DetailPanel.tsx in N7 commit 0.
+// N8 §1g: Grade - segmented control (Standard / Premium) in the shared
+// .kf-ipanel__seg chrome. No section header, no hint paragraph; the
+// row that hosts this already labels it.
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
@@ -46,14 +47,14 @@ export function ItemGradeBlock({
   }
 
   return (
-    <div className="kf-grade" aria-label="Grade">
-      <div className="kf-grade__ctl" role="radiogroup" aria-label="Item grade">
+    <div className="kf-ipanel__row-value-flex" aria-label="Grade">
+      <div className="kf-ipanel__seg" role="radiogroup" aria-label="Item grade">
         <button
           type="button"
           role="radio"
           aria-checked={current === "standard"}
           aria-pressed={current === "standard"}
-          className={`kf-grade__btn${current === "standard" ? " kf-grade__btn--on" : ""}`}
+          className="kf-ipanel__seg-btn"
           onClick={() => setGrade("standard")}
           disabled={busy}
         >
@@ -64,15 +65,14 @@ export function ItemGradeBlock({
           role="radio"
           aria-checked={current === "premium"}
           aria-pressed={current === "premium"}
-          className={`kf-grade__btn kf-grade__btn--premium${current === "premium" ? " kf-grade__btn--on" : ""}`}
+          className="kf-ipanel__seg-btn"
           onClick={() => setGrade("premium")}
           disabled={busy}
         >
           Premium
         </button>
-        <SaveFlash savedAt={savedAt} error={error} />
       </div>
+      <SaveFlash savedAt={savedAt} error={error} />
     </div>
   );
 }
-

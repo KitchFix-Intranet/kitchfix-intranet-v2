@@ -85,9 +85,9 @@ type Ingredient = {
   allergens: string[];
   allergens_reviewed_by: string | null;
   allergens_reviewed_at: string | null;
-  // N5: usual weight of one each + where that figure came from.
-  // Null + null when unknown; derivePerLb returns null in that case.
-  // N6: usual measure of one each on the master.
+  // N6: usual measure of one each on the master. Weight or volume
+  // (lb, oz, fl oz, gal, ...) plus a provenance tag; deriveRecipePrice
+  // returns null when both are unset.
   each_measure_qty: number | null;
   each_measure_uom: string | null;
   each_measure_source: string | null;

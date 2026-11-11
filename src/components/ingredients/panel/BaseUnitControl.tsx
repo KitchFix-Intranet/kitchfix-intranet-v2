@@ -34,12 +34,15 @@ const BASE_UNIT_GROUPS: { label: string; options: string[] }[] = [
 export function BaseUnitControl({
   row,
   onSaved,
+  // N8 §1g: Ingredients tab keeps its scale icon + "Costed per" label
+  // and chrome. The panel (where the row already has a label and the
+  // ingredient zone owns the chrome) renders the select alone via
+  // chrome="bare". Default preserves the tab call site exactly.
+  chrome = "tab",
 }: {
   row: BaseUnitControlRow;
-  // N7 B6: callers can observe a successful save to trigger their own
-  // refetch (the ById wrappers need this since router.refresh does not
-  // invalidate their client-fetched state). Defaults to router.refresh.
   onSaved?: () => void;
+  chrome?: "tab" | "bare";
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -62,27 +65,34 @@ export function BaseUnitControl({
     else router.refresh();
   }
 
+  const select = (
+    <select
+      id={`bu-${row.id}`}
+      className={chrome === "bare" ? "kf-ipanel__ctl" : "kf-dt__unitsel"}
+      value={row.baseUnit}
+      disabled={busy}
+      onChange={(e) => save(e.target.value)}
+      aria-label="Costed per"
+    >
+      {BASE_UNIT_GROUPS.map((g) => (
+        <optgroup key={g.label} label={g.label}>
+          {g.options.map((u) => (
+            <option key={u} value={u}>{uomLabel(u)}</option>
+          ))}
+        </optgroup>
+      ))}
+    </select>
+  );
+
+  if (chrome === "bare") return select;
+
   return (
     <span className="kf-dt__unitctl">
       <Scale size={13} strokeWidth={1.5} aria-hidden />
       <label className="kf-dt__unitctl-l" htmlFor={`bu-${row.id}`}>
         Costed per
       </label>
-      <select
-        id={`bu-${row.id}`}
-        className="kf-dt__unitsel"
-        value={row.baseUnit}
-        disabled={busy}
-        onChange={(e) => save(e.target.value)}
-      >
-        {BASE_UNIT_GROUPS.map((g) => (
-          <optgroup key={g.label} label={g.label}>
-            {g.options.map((u) => (
-              <option key={u} value={u}>{uomLabel(u)}</option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
+      {select}
     </span>
   );
 }

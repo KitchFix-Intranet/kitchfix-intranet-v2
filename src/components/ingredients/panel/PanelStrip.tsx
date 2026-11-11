@@ -1,14 +1,14 @@
 "use client";
 
-// N7 §3b: four-cell summary strip. Replaces the ItemFacts dl. Each
-// cell's label + value + sub-line comes from the item. Facts are
-// unchanged from ItemFacts; only the shape moves.
+// N8 §3b: four-cell summary strip. Facts unchanged from N7 per Kevin's
+// ruling (Last bought stays; Case price lives on the Pack and price
+// row). Typography matches docs/renders/ITEM_PANEL_RENDER_REFERENCE.html:
+// Barlow 12px uppercase label, Barlow 28px value (navy for Unit price,
+// ink elsewhere), Mulish 12px sub-line.
 //
-// B2: Unit price sub-line ALWAYS carries the confidence word
-// (from spend / per-unit (high) / est. (low) / override / needs pack).
-// When deriveRecipePrice returns a value it appears AFTER, never
-// instead. perBaseNote does not go here - it goes on the Pack and
-// price row at rest (handled in PanelItemZone).
+// Unit price sub-line always carries the confidence word; derived
+// recipe price appends after when present. perBaseNote belongs on the
+// Pack and price row at rest, not here.
 
 import { fmtCount, fmtDate, fmtUsd, fmtUsdLong } from "@/lib/fmt";
 import { uomLabel } from "@/lib/ingredients/pack";
@@ -55,18 +55,21 @@ export function PanelStrip({
     <div className="kf-ipanel__strip" aria-label="Item summary">
       <div className="kf-ipanel__strip-cell">
         <span className="kf-ipanel__strip-label">Unit price</span>
-        <span className="kf-ipanel__strip-value">
+        <span className="kf-ipanel__strip-value kf-ipanel__strip-value--accent">
           {item.perBase != null && perBaseUomLower ? (
-            <>{fmtUsd(item.perBase)} <span className="kf-muted">/ {perBaseUomLower}</span></>
+            <>
+              {fmtUsd(item.perBase)}{" "}
+              <span className="kf-ipanel__strip-value-unit">/ {perBaseUomLower}</span>
+            </>
           ) : (
-            <span className="kf-muted">- / unit</span>
+            <span className="kf-ipanel__strip-value-unit">- / unit</span>
           )}
         </span>
-        <span className="kf-ipanel__strip-sub">
+        <span className="kf-ipanel__strip-sub kf-ipanel__strip-sub--accent">
           <span>{confidenceWord}</span>
           {derived ? (
             <>
-              <span className="kf-muted">·</span>
+              <span>·</span>
               <strong>{fmtUsd(derived.per)} / {uomLabel(derived.uom)}</strong>
             </>
           ) : null}
@@ -95,7 +98,7 @@ export function PanelStrip({
       <div className="kf-ipanel__strip-cell">
         <span className="kf-ipanel__strip-label">Last bought</span>
         <span className="kf-ipanel__strip-value">
-          {item.lastSeen ? fmtDate(item.lastSeen) : <span className="kf-muted">-</span>}
+          {item.lastSeen ? fmtDate(item.lastSeen) : <span className="kf-ipanel__strip-value-unit">-</span>}
         </span>
         <span className="kf-ipanel__strip-sub">
           {item.accounts.length > 0 ? (
@@ -105,7 +108,7 @@ export function PanelStrip({
               ))}
             </span>
           ) : (
-            <span className="kf-muted">no sites</span>
+            <span>no sites</span>
           )}
         </span>
       </div>

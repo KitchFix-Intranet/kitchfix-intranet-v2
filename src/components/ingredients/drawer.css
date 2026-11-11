@@ -380,51 +380,12 @@
   color: var(--sp-warn);
 }
 
-/* ----- Attention + Evidence sections (A3b) --------------------- */
-
-/* Collapsible section header - full-width button, corp floor, with a
- * rotating caret on the left and a count/summary on the right. */
-.kf-attn__head {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-sp-2);
-  width: 100%;
-  min-height: var(--sp-floor-corp);
-  padding: 0;
-  background: transparent;
-  border: 0;
-  color: var(--sp-ink);
-  cursor: pointer;
-  font: inherit;
-  text-align: left;
-}
-.kf-attn__head:focus-visible {
-  outline: 2px solid var(--sp-navy);
-  outline-offset: 2px;
-}
-.kf-attn__chev {
-  flex: none;
-  color: var(--sp-muted);
-  transition: transform var(--sp-fast) var(--sp-ease);
-}
-.kf-attn__chev.is-open { transform: rotate(180deg); }
-.kf-attn__title {
-  flex: 1 1 auto;
-  font-family: var(--sp-disp);
-  font-weight: 700;
-  font-size: var(--sp-t-h3);
-  color: var(--sp-navy);
-  margin: 0;
-}
-.kf-attn__count {
-  flex: none;
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-micro);
-  color: var(--sp-muted);
-  padding: 2px var(--sp-sp-2);
-  background: var(--sp-sky-tint);
-  border-radius: var(--sp-r-pill);
-}
+/* ----- Attention + Evidence section notes -----------------------
+ * N8: .kf-attn__head / chev / title / count deleted - the collapsible
+ * head they styled is gone (PanelAttention renders inline in §3c;
+ * Evidence is a §3f disclosure row). .kf-attn__note family stays:
+ * EvidenceSection's error branch renders it, and the Attention sheet
+ * reuses its `--bad` / `--info` / `--good` tones. */
 
 /* Issue note. Mirrors .kf-why on the master pane (same four tones)
  * but owns its own class so changing one surface doesn't bleed. */
@@ -440,11 +401,14 @@
   padding: var(--sp-sp-3);
   border-radius: var(--sp-r-sm);
   background: var(--sp-warn-bg);
-  border: 1px solid #EBDAB4;
+  border: 1px solid color-mix(in srgb, var(--sp-warn-strong) 35%, var(--sp-card));
 }
 .kf-attn__note--bad { background: var(--sp-block-bg); border-color: var(--sp-block-line); }
-.kf-attn__note--info { background: var(--sp-info-bg); border-color: #D4E2F3; }
-.kf-attn__note--good { background: var(--sp-good-bg); border-color: #C6E3D5; }
+.kf-attn__note--info { background: var(--sp-info-bg); border-color: var(--sp-sky-line); }
+.kf-attn__note--good {
+  background: var(--sp-good-bg);
+  border-color: color-mix(in srgb, var(--sp-good) 25%, var(--sp-card));
+}
 .kf-attn__note > svg { flex: none; margin-top: 2px; color: var(--sp-warn); }
 .kf-attn__note--bad > svg { color: var(--sp-block); }
 .kf-attn__note--info > svg { color: var(--sp-link); }
@@ -528,111 +492,248 @@
 .kf-evi__row--self td { font-weight: 700; }
 
 /* ======================================================================
- * N7: one-piece item panel.
+ * N8: item panel matches the render.
  *
- * kf-ipanel__* primitives cover the five rules:
- *   1. Read, then problem, then fix.
- *   2. Two zones, never mixed (item = white card, ingredient = sky).
- *   3. One row shape: 150px label, value, one action; stacks at 520.
- *   4. One filled button at rest; simple fields self-save.
- *   5. Rare + heavy stays closed.
- *
- * Classes extend the existing kf-drawer chrome. All numbers in tokens.
+ * All measurements come from docs/renders/ITEM_PANEL_RENDER_REFERENCE.html.
+ * Tokens only - no literal colour, radius, type or hex. The panel is
+ * still a right-side drawer (kf-drawer chrome unchanged); kf-ipanel__*
+ * is its inner layout. Kept families: kf-chain__*, kf-grade__*,
+ * kf-newing__*, kf-dpn__ledger*, kf-evidence/kf-evi__*, kf-events*,
+ * kf-dpn__label (ReviewActions), kf-dpn__hint (editors).
  * ---------------------------------------------------------------------- */
 
-.kf-ipanel__strip {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 0;
-  background: var(--sp-raise);
-  border-top: 1px solid var(--sp-line-soft);
-  border-bottom: 1px solid var(--sp-line-soft);
-}
-.kf-ipanel__strip-cell {
-  padding: var(--sp-sp-3) var(--sp-sp-4);
-  border-right: 1px solid var(--sp-line-soft);
+/* --- Head ---
+ * Sticky head opaque over the strip. Red Barlow eyebrow, navy Barlow
+ * name (uppercase). Status line: text + one pill. Close button is a
+ * 44x44 outlined square beside the name block (not sticky-floated).
+ * The N7 kf-drawer__head rule above owns the sticky + ground; N8 adds
+ * only the chip + eyebrow + close shaping for the render. */
+.kf-ipanel__head {
+  padding: var(--sp-sp-5) var(--sp-sp-5) var(--sp-sp-3) var(--sp-sp-5);
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: flex-start;
+  gap: var(--sp-sp-4);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--sp-card);
+  border-bottom: 1px solid var(--sp-line);
+}
+.kf-ipanel__head-body {
+  flex: 1 1 auto;
   min-width: 0;
-}
-.kf-ipanel__strip-cell:last-child { border-right: none; }
-.kf-ipanel__strip-label {
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-label);
-  font-weight: 700;
-  color: var(--sp-muted);
-  text-transform: uppercase;
-  letter-spacing: .5px;
-}
-.kf-ipanel__strip-value {
-  font-family: var(--sp-num);
-  font-size: var(--sp-t-num);
-  font-weight: 800;
-  color: var(--sp-ink);
-  font-variant-numeric: tabular-nums;
-  line-height: 1.1;
-}
-.kf-ipanel__strip-sub {
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-micro);
-  color: var(--sp-muted);
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-sp-1);
-  align-items: baseline;
-}
-.kf-ipanel__strip-sub strong { color: var(--sp-ink); font-weight: 700; }
-
-.kf-ipanel__zone {
-  padding: var(--sp-sp-5) var(--sp-sp-5);
   display: flex;
   flex-direction: column;
   gap: var(--sp-sp-2);
 }
-.kf-ipanel__zone--item {
-  background: var(--sp-card);
+.kf-ipanel__eyebrow {
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-label);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--sp-red-deep);
 }
+.kf-ipanel__name {
+  margin: 0;
+  font-family: var(--sp-disp);
+  font-weight: 800;
+  font-size: 26px;
+  line-height: 1;
+  letter-spacing: .2px;
+  text-transform: uppercase;
+  color: var(--sp-navy);
+}
+.kf-ipanel__status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-sp-2);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  color: var(--sp-body);
+}
+.kf-ipanel__status-name {
+  font-weight: 800;
+  color: var(--sp-navy);
+}
+.kf-ipanel__close {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  background: var(--sp-card);
+  color: var(--sp-navy);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.kf-ipanel__close:hover { background: var(--sp-sky-tint); }
+
+/* --- Summary strip ---
+ * Four cells, raise ground, Barlow labels 12px uppercase muted,
+ * Barlow values 28px navy or ink, muted micro sub-line. */
+.kf-ipanel__strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  background: var(--sp-raise);
+  border-top: 1px solid var(--sp-line-soft);
+  border-bottom: 1px solid var(--sp-line);
+}
+.kf-ipanel__strip-cell {
+  padding: 14px var(--sp-sp-3) 14px var(--sp-sp-3);
+  border-right: 1px solid var(--sp-line-soft);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+  min-width: 0;
+}
+.kf-ipanel__strip-cell:first-child { padding-left: var(--sp-sp-5); }
+.kf-ipanel__strip-cell:last-child { border-right: none; padding-right: var(--sp-sp-5); }
+.kf-ipanel__strip-label {
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-micro);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--sp-body);
+}
+.kf-ipanel__strip-value {
+  font-family: var(--sp-disp);
+  font-size: var(--sp-t-num);
+  font-weight: 800;
+  line-height: 1;
+  color: var(--sp-ink);
+  font-variant-numeric: tabular-nums;
+}
+.kf-ipanel__strip-value--accent { color: var(--sp-navy); }
+.kf-ipanel__strip-value-unit {
+  font-size: var(--sp-t-body);
+  font-weight: 700;
+  color: var(--sp-body);
+}
+.kf-ipanel__strip-sub {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-body);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-sp-1);
+  align-items: baseline;
+  min-width: 0;
+}
+.kf-ipanel__strip-sub--accent { color: var(--sp-navy); font-weight: 700; }
+
+/* --- Attention sheet (§3c) ---
+ * Warn-tinted rectangle: icon + head + body + action. Not a card grid;
+ * one row per issue. Tone variants swap ground + border. */
+.kf-ipanel__attn {
+  padding: var(--sp-sp-4) var(--sp-sp-5) var(--sp-sp-1);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+}
+.kf-ipanel__attn-item {
+  background: var(--sp-warn-bg);
+  border: 1px solid var(--sp-warn-strong);
+  border-radius: var(--sp-r-ctl);
+  padding: var(--sp-sp-4);
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+.kf-ipanel__attn-item--bad {
+  background: var(--sp-block-bg);
+  border-color: var(--sp-block-line);
+}
+.kf-ipanel__attn-item--info {
+  background: var(--sp-info-bg);
+  border-color: var(--sp-sky-line);
+}
+.kf-ipanel__attn-icon {
+  flex-shrink: 0;
+  color: var(--sp-warn);
+}
+.kf-ipanel__attn-item--bad .kf-ipanel__attn-icon { color: var(--sp-block); }
+.kf-ipanel__attn-item--info .kf-ipanel__attn-icon { color: var(--sp-link); }
+.kf-ipanel__attn-item-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.kf-ipanel__attn-item-head {
+  font-family: var(--sp-ui);
+  font-weight: 800;
+  font-size: var(--sp-t-table);
+  color: var(--sp-warn);
+}
+.kf-ipanel__attn-item--bad .kf-ipanel__attn-item-head { color: var(--sp-block); }
+.kf-ipanel__attn-item--info .kf-ipanel__attn-item-head { color: var(--sp-link); }
+.kf-ipanel__attn-item-body {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  color: var(--sp-ink);
+}
+
+/* --- Zones ---
+ * Two zones. Item zone on card; ingredient zone on sky-soft between
+ * sky-line hairlines. Head is Barlow 20px uppercase navy with a 2px
+ * navy underline and right-aligned micro text. */
+.kf-ipanel__zone {
+  padding: var(--sp-sp-5) var(--sp-sp-5) var(--sp-sp-2);
+  display: flex;
+  flex-direction: column;
+}
+.kf-ipanel__zone--item { background: var(--sp-card); }
 .kf-ipanel__zone--ing {
   background: var(--sp-sky-soft);
+  border-top: 1px solid var(--sp-sky-line);
+  border-bottom: 1px solid var(--sp-sky-line);
 }
 .kf-ipanel__zone-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: var(--sp-sp-3);
-  padding-bottom: var(--sp-sp-2);
+  padding-bottom: var(--sp-sp-3);
   border-bottom: 2px solid var(--sp-navy);
-  margin-bottom: var(--sp-sp-3);
 }
-.kf-ipanel__zone--ing .kf-ipanel__zone-head { border-bottom-color: var(--sp-sky-line); }
-.kf-ipanel__zone-head h4 {
-  margin: 0;
-  font-family: var(--sp-display);
-  font-size: var(--sp-t-h4);
+.kf-ipanel__zone-head-title {
+  font-family: var(--sp-disp);
   font-weight: 800;
-  color: var(--sp-ink);
+  font-size: var(--sp-t-h3);
+  line-height: 1;
+  text-transform: uppercase;
+  color: var(--sp-navy);
 }
-.kf-ipanel__zone-head-right {
+.kf-ipanel__zone-head-sub {
   font-family: var(--sp-ui);
   font-size: var(--sp-t-micro);
-  color: var(--sp-muted);
-  display: flex;
-  gap: var(--sp-sp-2);
-  align-items: center;
+  color: var(--sp-body);
 }
 
+/* --- Row primitive ---
+ * 150px label | value | auto action. 64px min height. Label Mulish
+ * 800 14.5px ink. One micro sub-line allowed via row-label-pill-slot
+ * (the two sanctioned pills, Needs category + allergen status).
+ * Variants with 1fr 1fr value grid (Category, Costed per, One each). */
 .kf-ipanel__row {
   display: grid;
-  grid-template-columns: 150px 1fr auto;
+  grid-template-columns: 150px minmax(0, 1fr) auto;
   gap: var(--sp-sp-4);
   align-items: center;
   min-height: 64px;
-  padding: var(--sp-sp-3) 0;
   border-top: 1px solid var(--sp-line-soft);
 }
 .kf-ipanel__zone--ing .kf-ipanel__row { border-top-color: var(--sp-sky-line); }
 .kf-ipanel__row:first-of-type { border-top: 0; }
+.kf-ipanel__row--split { grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr); }
+.kf-ipanel__row--allergens { align-items: start; padding: 14px 0 12px 0; }
 .kf-ipanel__row-label {
   font-family: var(--sp-ui);
   font-size: var(--sp-t-table);
@@ -643,16 +744,12 @@
   flex-direction: column;
   gap: var(--sp-sp-1);
 }
-.kf-ipanel__row-label-sub {
-  font-weight: 500;
-  font-size: var(--sp-t-micro);
-  color: var(--sp-muted);
-}
+.kf-ipanel__row--allergens .kf-ipanel__row-label { padding-top: var(--sp-sp-1); gap: var(--sp-sp-2); }
 .kf-ipanel__row-value {
   min-width: 0;
   font-family: var(--sp-ui);
   font-size: var(--sp-t-table);
-  color: var(--sp-ink);
+  color: var(--sp-body);
   display: flex;
   flex-direction: column;
   gap: var(--sp-sp-2);
@@ -660,102 +757,322 @@
 .kf-ipanel__row-value-flex {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--sp-sp-2);
+  gap: var(--sp-sp-3);
   align-items: center;
 }
+.kf-ipanel__row-hint {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-body);
+  line-height: 1.6;
+}
+.kf-ipanel__row-hint strong { font-weight: 800; color: var(--sp-ink); }
 .kf-ipanel__row-action {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--sp-sp-2);
+}
+.kf-ipanel__row-sublink {
+  grid-column: 2 / 3;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-navy);
+  text-decoration: underline;
+  background: transparent;
+  border: 0;
+  padding: var(--sp-sp-2) 0;
+  min-height: 44px;
+  align-self: flex-start;
+  text-align: left;
+  cursor: pointer;
+}
+.kf-ipanel__row-sublink:hover { color: var(--sp-navy-deep); }
+.kf-ipanel__row-open {
+  grid-column: 1 / -1;
+  padding: 0 0 var(--sp-sp-3);
+}
+
+/* Pack + price summary line fragments. Rendered inside the value
+ * column of the Pack and price row at rest. */
+.kf-ipanel__pack-summary {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  color: var(--sp-body);
+}
+.kf-ipanel__pack-summary strong { font-weight: 800; color: var(--sp-ink); }
+
+/* --- One control style ---
+ * Every text input, number input, and select inside the panel uses
+ * .kf-ipanel__ctl. 44px tall, 12px x padding, 1px border, --sp-r-sm,
+ * card ground, Mulish 14.5px ink. Ingredient-zone variant swaps the
+ * border for the sky line. Narrow + wide width helpers for the
+ * one-each rows. */
+/* One control style for the panel. The .kf-ipanel__ctl class is the
+ * named handle; the descendant fallback catches anything inside the
+ * two editors (B4 kept their internals and never touched inputs) so
+ * every input and select in the panel renders the same chrome.
+ *
+ * Scope: inside .kf-drawer. The master-pane tabs own their own control
+ * styling via .kf-dt__* etc. Ingredient-zone variant swaps the border
+ * for the sky line. Narrow + wide width helpers for the one-each rows. */
+.kf-ipanel__ctl,
+.kf-drawer .kf-ipanel__editor input[type="text"],
+.kf-drawer .kf-ipanel__editor input[type="number"],
+.kf-drawer .kf-ipanel__editor select {
+  height: 44px;
+  box-sizing: border-box;
+  padding: 0 var(--sp-sp-3);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+  background: var(--sp-card);
+  color: var(--sp-ink);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  width: 100%;
+  min-width: 0;
+}
+.kf-ipanel__zone--ing .kf-ipanel__ctl { border-color: var(--sp-sky-line); }
+.kf-ipanel__ctl:focus-visible,
+.kf-drawer .kf-ipanel__editor input[type="text"]:focus-visible,
+.kf-drawer .kf-ipanel__editor input[type="number"]:focus-visible,
+.kf-drawer .kf-ipanel__editor select:focus-visible {
+  outline: 2px solid var(--sp-navy);
+  outline-offset: 2px;
+}
+.kf-ipanel__ctl:disabled,
+.kf-drawer .kf-ipanel__editor input[type="text"]:disabled,
+.kf-drawer .kf-ipanel__editor input[type="number"]:disabled,
+.kf-drawer .kf-ipanel__editor select:disabled {
+  background: var(--sp-raise);
+  color: var(--sp-muted);
+  cursor: not-allowed;
+}
+.kf-ipanel__ctl[aria-busy="true"] { opacity: .7; }
+.kf-ipanel__ctl--qty { width: 88px; flex: 0 0 auto; }
+.kf-ipanel__ctl--uom { width: 96px; flex: 0 0 auto; padding: 0 var(--sp-sp-2); }
+
+/* Edit / Override toggle button used on Pack-and-price and Price
+ * override rows. Soft sky-tint ground, navy text, 44px, min-width 96. */
+.kf-ipanel__row-toggle {
+  min-width: 96px;
+  height: 44px;
+  padding: 0 var(--sp-sp-3);
+  background: var(--sp-sky-tint);
+  color: var(--sp-navy);
+  border: 0;
+  border-radius: var(--sp-r-sm);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  font-weight: 800;
+  cursor: pointer;
+}
+.kf-ipanel__row-toggle:hover { background: var(--sp-sky); }
+.kf-ipanel__row-toggle:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
+
+/* Segmented control used by Grade and the editor's pricing mode. */
+.kf-ipanel__seg {
+  display: inline-flex;
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+  overflow: hidden;
+}
+.kf-ipanel__seg-btn {
+  height: 44px;
+  padding: 0 18px;
+  background: var(--sp-card);
+  color: var(--sp-body);
+  border: 0;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  font-weight: 700;
+  cursor: pointer;
+}
+.kf-ipanel__seg-btn[aria-pressed="true"] {
+  background: var(--sp-navy);
+  color: var(--sp-on-navy);
+  font-weight: 800;
+}
+.kf-ipanel__seg-btn:not([aria-pressed="true"]):hover:not(:disabled) { background: var(--sp-sky-tint); }
+.kf-ipanel__seg-btn:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: -2px; }
+.kf-ipanel__seg-btn:disabled { opacity: .6; cursor: not-allowed; }
+
+/* Editor box (B4 layout only: markup stays, chrome renders here). */
+.kf-ipanel__editor {
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-ctl);
+  padding: var(--sp-sp-4);
+  margin-bottom: var(--sp-sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-4);
+}
+.kf-ipanel__editor-toprow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-sp-3);
+}
+.kf-ipanel__editor-read {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-body);
+}
+.kf-ipanel__editor-grid {
+  display: grid;
+  gap: var(--sp-sp-3);
+}
+.kf-ipanel__editor-grid--4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.kf-ipanel__editor-grid--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.kf-ipanel__editor-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 800;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--sp-body);
+  min-width: 0;
+}
+.kf-ipanel__editor-band {
+  background: var(--sp-sky-soft);
+  border-radius: var(--sp-r-sm);
+  padding: 14px var(--sp-sp-4);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-sp-3);
+}
+.kf-ipanel__editor-band-l {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.kf-ipanel__editor-band-label {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 800;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--sp-body);
+}
+.kf-ipanel__editor-band-sum {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  color: var(--sp-body);
+}
+.kf-ipanel__editor-band-value {
+  font-family: var(--sp-disp);
+  font-weight: 800;
+  font-size: var(--sp-t-num);
+  line-height: 1;
+  color: var(--sp-navy);
+  flex-shrink: 0;
+}
+.kf-ipanel__editor-band-value-unit {
+  font-size: var(--sp-t-body);
+  font-weight: 700;
+  color: var(--sp-body);
+}
+.kf-ipanel__editor-actions {
   display: flex;
   justify-content: flex-end;
   gap: var(--sp-sp-2);
 }
-/* N7 §3d: row expanded body - spans all three columns under the
- * closed row. Hosts the headerless editor (Pack and price / Price
- * override). */
-.kf-ipanel__row-open {
-  grid-column: 1 / -1;
-  padding-top: var(--sp-sp-3);
+.kf-ipanel__editor-foot {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
 }
 
-/* Disclosure row (56px, bold label + muted line + chevron). */
+/* --- Measure feedback sentence on the ingredient One each row.
+ * Spans the value columns under the fields; the Saved / not set yet
+ * pill sits inline at the start. */
+.kf-ipanel__measure-foot {
+  grid-column: 2 / -1;
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-sp-2);
+  padding-bottom: var(--sp-sp-3);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  line-height: 1.6;
+  color: var(--sp-body);
+  border-bottom: 1px solid var(--sp-sky-line);
+}
+.kf-ipanel__row--measure-wrap {
+  border-top: 0;
+}
+
+/* --- Closed disclosure rows (§3f) ---
+ * 56px minimum, 150px label + 1fr sub + chevron, hairline below.
+ * Last row has no hairline. */
 .kf-ipanel__drow {
   display: grid;
-  grid-template-columns: 150px 1fr auto;
+  grid-template-columns: 150px minmax(0, 1fr) auto;
   gap: var(--sp-sp-4);
   align-items: center;
   min-height: 56px;
-  padding: var(--sp-sp-2) var(--sp-sp-5);
+  padding: var(--sp-sp-2) 0;
   background: var(--sp-card);
   border: 0;
-  border-top: 1px solid var(--sp-line-soft);
+  border-bottom: 1px solid var(--sp-line-soft);
   width: 100%;
   cursor: pointer;
   text-align: left;
   font: inherit;
   color: inherit;
 }
+.kf-ipanel__drow:last-of-type { border-bottom: 0; }
 .kf-ipanel__drow:hover { background: var(--sp-raise); }
 .kf-ipanel__drow:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: -2px; }
 .kf-ipanel__drow-label {
+  font-family: var(--sp-ui);
   font-weight: 800;
   color: var(--sp-ink);
   font-size: var(--sp-t-table);
 }
 .kf-ipanel__drow-sub {
-  color: var(--sp-muted);
-  font-size: var(--sp-t-micro);
+  font-family: var(--sp-ui);
+  color: var(--sp-body);
+  font-size: var(--sp-t-table);
   justify-self: start;
   min-width: 0;
 }
 .kf-ipanel__drow-chev {
-  color: var(--sp-muted);
-  transition: transform .18s;
+  color: var(--sp-body);
+  transition: transform var(--sp-fast) var(--sp-ease);
 }
 .kf-ipanel__drow-chev.is-open { transform: rotate(180deg); }
 .kf-ipanel__drow-body {
-  padding: var(--sp-sp-3) var(--sp-sp-5) var(--sp-sp-4);
+  padding: var(--sp-sp-3) 0 var(--sp-sp-4);
   background: var(--sp-card);
-  border-top: 1px dashed var(--sp-line-soft);
-}
-
-/* Attention block - always open (no chevron). */
-.kf-ipanel__attn {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-sp-2);
-  padding: var(--sp-sp-3) var(--sp-sp-5);
-  background: var(--sp-raise);
-  border-top: 1px solid var(--sp-line-soft);
   border-bottom: 1px solid var(--sp-line-soft);
 }
-.kf-ipanel__attn-item {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: var(--sp-sp-3);
-  align-items: start;
-  padding: var(--sp-sp-2) var(--sp-sp-3);
-  background: var(--sp-card);
-  border-radius: var(--sp-r-md);
-  border: 1px solid var(--sp-line-soft);
+.kf-ipanel__drows {
+  padding: var(--sp-sp-2) var(--sp-sp-5) var(--sp-sp-4);
+  display: flex;
+  flex-direction: column;
 }
-.kf-ipanel__attn-item--bad   { border-color: var(--sp-block); background: var(--sp-block-bg); }
-.kf-ipanel__attn-item--info  { border-color: var(--sp-info); background: var(--sp-info-bg); }
-.kf-ipanel__attn-item > svg { color: var(--sp-ink); margin-top: 2px; }
-.kf-ipanel__attn-item--bad  > svg { color: var(--sp-block); }
-.kf-ipanel__attn-item--info > svg { color: var(--sp-info); }
-.kf-ipanel__attn-item-text  { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.kf-ipanel__attn-item-head  { font-weight: 800; color: var(--sp-ink); font-size: var(--sp-t-table); }
-.kf-ipanel__attn-item-body  { color: var(--sp-muted); font-size: var(--sp-t-micro); }
 
-/* Phone: strip two-by-two; rows stack. */
+/* --- Phone ---
+ * Strip two-by-two; rows and split rows and editor grids collapse.
+ * The sticky head stays opaque. */
 @media (max-width: 520px) {
   .kf-ipanel__strip { grid-template-columns: repeat(2, 1fr); }
   .kf-ipanel__strip-cell:nth-child(2) { border-right: none; }
   .kf-ipanel__strip-cell:nth-child(-n+2) { border-bottom: 1px solid var(--sp-line-soft); }
   .kf-ipanel__row,
+  .kf-ipanel__row--split,
   .kf-ipanel__drow {
     grid-template-columns: 1fr;
     gap: var(--sp-sp-2);
   }
-  .kf-ipanel__row-label { font-size: var(--sp-t-micro); }
+  .kf-ipanel__row-label { font-size: var(--sp-t-micro); text-transform: none; }
   .kf-ipanel__row-action { justify-content: flex-start; }
+  .kf-ipanel__editor-grid--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kf-ipanel__editor-grid--2 { grid-template-columns: 1fr; }
 }
