@@ -681,17 +681,51 @@
   padding: 0 0 var(--sp-sp-3);
 }
 
-/* Pack + price summary line fragments. Rendered inside the value
- * column of the Pack and price row at rest. Segments are nowrap so
- * wraps happen only BETWEEN them; pack + Review chip stay as one
- * block, and the "·" always starts a segment so no dot orphans. */
+/* N8 round 4 fix 1: pending-ingredient paragraph. row-value is a
+ * flex column; without this wrapper each text node and <strong>
+ * becomes its own flex item and the sentence shatters vertically.
+ * The <p> owns the inline text flow. */
+.kf-ipanel__pending-copy {
+  margin: 0;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  line-height: 1.5;
+  color: var(--sp-body);
+}
+.kf-ipanel__pending-copy strong { color: var(--sp-ink); font-weight: 800; }
+
+/* Pack + price summary. N8 round 4 nit: segments wrap as flex items;
+ * dots are `::before` pseudos absolutely positioned to the LEFT of
+ * each non-first segment. When a segment wraps to a new flex line
+ * (becomes left-aligned to the container), the dot extends past the
+ * container's left edge and is clipped by `overflow: clip`. The dot
+ * therefore appears only BETWEEN segments on the same line. No dot
+ * dangles at a line end (round-3), and no dot leads a wrapped line
+ * (round-4). */
 .kf-ipanel__pack-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--sp-sp-3);
+  row-gap: 0;
+  overflow: clip;
   font-family: var(--sp-ui);
   font-size: var(--sp-t-table);
   color: var(--sp-body);
 }
 .kf-ipanel__pack-summary strong { font-weight: 800; color: var(--sp-ink); }
-.kf-ipanel__pack-seg { white-space: nowrap; }
+.kf-ipanel__pack-seg {
+  white-space: nowrap;
+  position: relative;
+}
+.kf-ipanel__pack-seg + .kf-ipanel__pack-seg::before {
+  content: "\00b7";
+  position: absolute;
+  right: calc(100% + var(--sp-sp-1));
+  top: 0;
+  color: var(--sp-body);
+  pointer-events: none;
+}
 
 /* --- One control style ---
  * Every text input, number input, and select inside the panel uses
@@ -889,6 +923,10 @@
  * via the base media rule; the foot follows underneath. */
 .kf-ipanel__row--cat {
   align-items: start;
+  /* N8 round 4 fix 3: foot sits sp-2 (8 px) under the selects, not
+   * the primitive's full sp-4 row-gap. Height = selects + 8 + link
+   * + the primitive's padding, nothing more. */
+  row-gap: var(--sp-sp-2);
 }
 .kf-ipanel__row--cat > .kf-ipanel__row-label {
   padding-top: var(--sp-sp-3);
@@ -899,7 +937,6 @@
   align-items: center;
   flex-wrap: wrap;
   gap: var(--sp-sp-3);
-  padding-top: var(--sp-sp-2);
 }
 .kf-ipanel__cat-link {
   display: inline-flex;

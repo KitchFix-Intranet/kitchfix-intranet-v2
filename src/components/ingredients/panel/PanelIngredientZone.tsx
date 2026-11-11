@@ -526,10 +526,16 @@ export function PanelIngredientZonePending({
       <div className="kf-ipanel__row">
         <div className="kf-ipanel__row-label">Proposed</div>
         <div className="kf-ipanel__row-value">
-          The matcher proposed <strong>{proposedName ?? "a new ingredient"}</strong>
-          {proposedParent ? <> under <strong>{proposedParent}</strong></> : null}.
-          Hit &ldquo;New ingredient&rdquo; on the card below to create it (category required).
-          Rename, category, resale, and merge become available once it exists.
+          {/* N8 round 4 fix 1: one paragraph, one inline flow. The row
+              value is a flex column by default; a block <p> inside
+              owns the inline text so sibling <strong>s do not become
+              their own flex items. */}
+          <p className="kf-ipanel__pending-copy">
+            The matcher proposed <strong>{proposedName ?? "a new ingredient"}</strong>
+            {proposedParent ? <> under <strong>{proposedParent}</strong></> : null}.
+            Hit &ldquo;New ingredient&rdquo; on the card below to create it (category required).
+            Rename, category, resale, and merge become available once it exists.
+          </p>
         </div>
         <div className="kf-ipanel__row-action" />
       </div>

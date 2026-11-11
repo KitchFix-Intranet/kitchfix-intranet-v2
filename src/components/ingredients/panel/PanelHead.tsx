@@ -35,6 +35,31 @@ export const PanelHead = forwardRef<HTMLButtonElement, {
   // §1c: "1 thing needs attention" / "2 things need attention".
   const attentionWord = attentionCount === 1 ? "thing needs" : "things need";
 
+  // N8 round 4 fix 2: the pill tells the truth. "All clear" renders
+  // ONLY when all three hold: zero attention rows, item is linked,
+  // and packState !== "check". Attention rows -> count pill.
+  // No ingredient -> no pill (the status line already says "Not
+  // linked yet"). packState === "check" with zero attention rows
+  // -> "Pack needs review" (warn). deriveAttention and the attention
+  // block are not consulted or changed by this - we key off the two
+  // observable facts the head carries (count + item.packState).
+  const packNeedsReview = kind === "item" && item?.packState === "check";
+  let pill: React.ReactNode = null;
+  if (attentionCount > 0) {
+    pill = (
+      <span className="kf-pill kf-pill--warn">
+        {attentionCount} {attentionWord} attention
+      </span>
+    );
+  } else if (kind === "item" && ingredient && packNeedsReview) {
+    pill = <span className="kf-pill kf-pill--warn">Pack needs review</span>;
+  } else if (kind === "item" && ingredient) {
+    pill = <span className="kf-pill kf-pill--good">All clear</span>;
+  }
+  // kind === "item" && !ingredient -> no pill (status line carries
+  // "Not linked yet"); kind === "ingredient" -> head has no status
+  // line at all, no pill.
+
   return (
     <div className="kf-ipanel__head">
       <div className="kf-ipanel__head-body">
@@ -50,13 +75,7 @@ export const PanelHead = forwardRef<HTMLButtonElement, {
             ) : notLinked ? (
               <span>Not linked yet</span>
             ) : null}
-            {attentionCount > 0 ? (
-              <span className="kf-pill kf-pill--warn">
-                {attentionCount} {attentionWord} attention
-              </span>
-            ) : (
-              <span className="kf-pill kf-pill--good">All clear</span>
-            )}
+            {pill}
           </div>
         ) : null}
       </div>

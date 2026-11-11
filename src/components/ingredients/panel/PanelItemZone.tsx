@@ -126,11 +126,13 @@ export function PanelItemZone({
           <div className="kf-ipanel__pack-summary">
             {packSeg ? (
               <>
-                {/* N8 round 3 fix 6: each segment is nowrap; wraps
-                    only happen BETWEEN them. Pack + Review chip stay
-                    together so the chip never trails the price. "·"
-                    sits at the START of case + per-unit segments so
-                    no dot dangles at a line end. */}
+                {/* N8 round 4 nit: the segments are flex items; dots
+                    are CSS ::before pseudos clipped when a segment
+                    wraps to the start of a line. The JSX carries no
+                    "·" character - the CSS owns separator rendering
+                    so no dot dangles at a line end AND none leads a
+                    wrapped line. Pack + Review chip stay as one
+                    segment. */}
                 <span className="kf-ipanel__pack-seg">
                   {packSeg}
                   {isCheck ? (
@@ -141,16 +143,10 @@ export function PanelItemZone({
                   ) : null}
                 </span>
                 {caseSeg ? (
-                  <>
-                    {" "}
-                    <span className="kf-ipanel__pack-seg">&middot; {caseSeg}</span>
-                  </>
+                  <span className="kf-ipanel__pack-seg">{caseSeg}</span>
                 ) : null}
                 {perUnitSeg ? (
-                  <>
-                    {" "}
-                    <span className="kf-ipanel__pack-seg"><strong>&middot; {perUnitSeg}</strong></span>
-                  </>
+                  <span className="kf-ipanel__pack-seg"><strong>{perUnitSeg}</strong></span>
                 ) : null}
               </>
             ) : (
