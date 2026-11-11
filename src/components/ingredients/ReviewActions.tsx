@@ -79,6 +79,15 @@ function errMsg(data: unknown, fallback: string): string {
   return fallback;
 }
 
+// N4: Create-success toasts that name a master append the inferred
+// unit when it is not the common-case default "each". Keeps the usual
+// case (single-serve items, retail packaged goods) quiet and makes
+// the inferred cases visible.
+function unitSuffix(baseUnit: unknown): string {
+  if (baseUnit !== "lb" && baseUnit !== "gal" && baseUnit !== "dozen") return "";
+  return ` (per ${baseUnit})`;
+}
+
 export function ReviewActions({
   kind,
   currentIngredientId,
@@ -163,6 +172,13 @@ export function ReviewActions({
   async function confirmChecked() {
     if (op || noneChecked) return;
     if (kind === "new") {
+      // N4 P3-close: the create panel is shared with the markResale
+      // fallback, which sets createIntent='retail'. Opening it from
+      // the plain +Create button must reset the intent, otherwise a
+      // user who cancels a retail fallback and then presses +Create
+      // lands on a panel whose primary button still reads "Create and
+      // mark retail". One line here closes the leak at every entry.
+      setCreateIntent("confirm");
       setShowNew(true);
       return;
     }
@@ -285,8 +301,12 @@ export function ReviewActions({
       confirmed?: number;
       marked?: number;
       movedToResale?: number;
+      baseUnit?: string;
     };
     const moved = d.moved ?? checkedCount;
+    // N4: inferred unit suffix - empty string for "each" / missing,
+    // " (per lb)" / " (per gal)" / " (per dozen)" otherwise.
+    const unit = unitSuffix(d.baseUnit);
     if (isRetail) {
       // N3 retail intent: the fallback form path. Partial-atomicity
       // is the same as the confirm path - if markResale throws after
@@ -294,7 +314,7 @@ export function ReviewActions({
       // on it in link_status='proposed', so the user retries from
       // the new card. Already blocked by the !r.ok branch above.
       const n = d.marked ?? d.confirmed ?? moved;
-      toast(`Created "${name}" and marked ${fmtCount(n)} item${n === 1 ? "" : "s"} as retail`);
+      toast(`Created "${name}"${unit} and marked ${fmtCount(n)} item${n === 1 ? "" : "s"} as retail`);
     } else if (createAndConfirm) {
       // Partial-atomicity note: the create -> move -> confirm sequence
       // runs as three successive statements in new-ingredient/route.ts;
@@ -305,10 +325,10 @@ export function ReviewActions({
       // retry confirm. Toast on partial failure is already blocked by
       // the !r.ok branch above.
       const confirmed = d.confirmed ?? moved;
-      toast(`Created "${name}" and confirmed ${fmtCount(confirmed)} item${confirmed === 1 ? "" : "s"}`);
+      toast(`Created "${name}"${unit} and confirmed ${fmtCount(confirmed)} item${confirmed === 1 ? "" : "s"}`);
     } else {
       toast(
-        `Created "${name}" - ${fmtCount(moved)} items moved; confirm them on the new card.`
+        `Created "${name}"${unit} - ${fmtCount(moved)} items moved; confirm them on the new card.`
       );
     }
     setShowNew(false);
@@ -409,11 +429,14 @@ export function ReviewActions({
         setOp(null);
         return;
       }
-      const d = r.data as { confirmed?: number; marked?: number };
+      const d = r.data as { confirmed?: number; marked?: number; baseUnit?: string };
       const n = d.marked ?? d.confirmed ?? checkedCount;
       // Name the master in the toast - the user did not see a form.
+      // N4: append the unit when it is not the common-case default
+      // "each" so the user sees that the server inferred something
+      // other than the usual.
       toast(
-        `Created "${name}" and marked ${fmtCount(n)} item${n === 1 ? "" : "s"} as retail`,
+        `Created "${name}"${unitSuffix(d.baseUnit)} and marked ${fmtCount(n)} item${n === 1 ? "" : "s"} as retail`,
         { tone: "good" }
       );
       setOp(null);
