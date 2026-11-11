@@ -38,12 +38,18 @@ export async function GET(req: NextRequest) {
   const [ingRes, parentsRes] = await Promise.all([
     client
       .from("pr_ingredients")
-      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at")
+      // N5: avg_weight_lb + avg_weight_source added to the two SELECTs
+      // so the panel's Edit-ingredient block can read what is stored
+      // (same shape as ReviewCardIngredient).
+      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,avg_weight_lb,avg_weight_source")
       .eq("id", id)
       .maybeSingle(),
     client
       .from("pr_ingredients")
-      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at")
+      // N5: avg_weight_lb + avg_weight_source added to the two SELECTs
+      // so the panel's Edit-ingredient block can read what is stored
+      // (same shape as ReviewCardIngredient).
+      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,avg_weight_lb,avg_weight_source")
       .eq("status", "active")
       .order("name"),
   ]);

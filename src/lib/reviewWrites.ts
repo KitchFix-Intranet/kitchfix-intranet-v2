@@ -727,7 +727,7 @@ export async function createIngredient(
     // belong on "each".
     baseUnit?: "lb" | "each" | "gal" | "dozen";
   }
-): Promise<{ id: string }> {
+): Promise<{ id: string; baseUnit: "lb" | "each" | "gal" | "dozen" }> {
   const trimmed = args.name.trim();
   if (trimmed.length < 2) throw new Error("Ingredient name is required");
   const nameNorm = trimmed.toLowerCase().replace(/\s+/g, " ");
@@ -737,13 +737,23 @@ export async function createIngredient(
   // baseUnit is deliberately NOT applied to an existing ingredient.
   // 85 masters carry a unit Kevin set by hand; retrofitting them on
   // every re-create would silently clobber that work.
+  // N5 4f: return the matched row's REAL base_unit so the caller's
+  // event + toast reflect what is actually stored, not what was
+  // inferred from the items this time round.
   const { data: existing } = await client
     .from("pr_ingredients")
-    .select("id")
+    .select("id,base_unit")
     .eq("name_norm", nameNorm)
     .eq("status", "active")
     .maybeSingle();
-  if (existing) return { id: (existing as { id: string }).id };
+  if (existing) {
+    const row = existing as { id: string; base_unit: string };
+    const existingUnit = (
+      row.base_unit === "lb" || row.base_unit === "each" ||
+      row.base_unit === "gal" || row.base_unit === "dozen"
+    ) ? row.base_unit : "each";
+    return { id: row.id, baseUnit: existingUnit };
+  }
 
   // base_unit is required by the schema (lb|each|gal|dozen). N4: the
   // caller supplies it; when omitted we fall back to "each" because
@@ -773,6 +783,7 @@ export async function createIngredient(
     .single();
   if (error) throw error;
   const id = (data as { id: string }).id;
+  const insertedBaseUnit = insert.base_unit as "lb" | "each" | "gal" | "dozen";
 
   await client.from("pr_events").insert({
     entity_type: "ingredient",
@@ -781,7 +792,7 @@ export async function createIngredient(
     after: { name: trimmed, parent, category },
     actor: args.actorEmail,
   });
-  return { id };
+  return { id, baseUnit: insertedBaseUnit };
 }
 
 // Split-to-new-ingredient: create a new ingredient AND move the selected
@@ -831,23 +842,30 @@ export async function splitToNewIngredient(
     // create succeeds and the user refines on the admin surface.
   }
 
+  // N5 4f: createIngredient now returns both the id and the row's
+  // ACTUAL base_unit - that's the inferred value when a new row was
+  // inserted, and the stored value when an existing active master was
+  // matched by name_norm. Use it for the event + return so the caller's
+  // toast names what is on disk, not what we proposed.
   let ingredientId: string;
+  let resolvedBaseUnit: "lb" | "each" | "gal" | "dozen" = baseUnit;
   try {
-    const { id } = await createIngredient(client, {
+    const created = await createIngredient(client, {
       name,
       parent,
       category,
       baseUnit,
       actorEmail,
     });
-    ingredientId = id;
+    ingredientId = created.id;
+    resolvedBaseUnit = created.baseUnit;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return { ok: false, error: msg, ingredientId: null, moved: 0, baseUnit };
   }
 
   if (itemIds.length === 0) {
-    return { ok: true, ingredientId, moved: 0, baseUnit };
+    return { ok: true, ingredientId, moved: 0, baseUnit: resolvedBaseUnit };
   }
 
   // Reassign in one UPDATE guarded on current proposed state so a race
@@ -862,7 +880,7 @@ export async function splitToNewIngredient(
     .eq("link_status", "proposed")
     .select("id");
   if (error) {
-    return { ok: false, error: error.message, ingredientId, moved: 0, baseUnit };
+    return { ok: false, error: error.message, ingredientId, moved: 0, baseUnit: resolvedBaseUnit };
   }
   const movedIds = ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
 
@@ -871,14 +889,17 @@ export async function splitToNewIngredient(
     entity_id: ingredientId,
     kind: "ingredient_split_create",
     before: { item_ids: itemIds },
-    // N4: base_unit carried on the create event so the audit trail
-    // matches what landed on pr_ingredients. A later unit change by a
-    // human emits a separate ingredient_base_unit_set event.
-    after: { moved_item_ids: movedIds, name, parent, category, base_unit: baseUnit },
+    // N4 + N5 4f: base_unit carried on the create event so the audit
+    // trail matches what landed on pr_ingredients. On a name-match this
+    // is the EXISTING row's stored unit (not what we inferred this time
+    // round); on an insert it's the inferred value we just wrote. A
+    // later unit change by a human emits a separate
+    // ingredient_base_unit_set event.
+    after: { moved_item_ids: movedIds, name, parent, category, base_unit: resolvedBaseUnit },
     actor: actorEmail,
   });
 
-  return { ok: true, ingredientId, moved: movedIds.length, baseUnit };
+  return { ok: true, ingredientId, moved: movedIds.length, baseUnit: resolvedBaseUnit };
 }
 
 // ---------------------------------------------------------------------------
@@ -1307,6 +1328,141 @@ export async function setIngredientBaseUnit(
     kind: "ingredient_base_unit_set",
     before: { base_unit: row.base_unit },
     after: { base_unit: baseUnit },
+    actor: actorEmail,
+  });
+
+  return { ok: true };
+}
+
+// N5: the usual weight of one each. Gated on base_unit === 'each' - a
+// weight on an lb / gal / dozen master cannot be read by derivePerLb
+// (which converts EA-priced items only) and would be a control that
+// does nothing. The DB check constraint is > 0 and <= 200; this helper
+// mirrors it so a bad value never reaches the insert. null clears
+// both the weight AND the source - they are co-nullable by constraint.
+const AVG_WEIGHT_SOURCES = new Set(["house_test", "book", "vendor_spec", "estimate"]);
+
+export async function setIngredientAvgWeight(
+  client: SupabaseClient,
+  args: {
+    ingredientId: string;
+    weightLb: number | null;
+    source: string | null;
+    actorEmail: string;
+  }
+): Promise<{ ok: boolean; error?: string }> {
+  const { ingredientId, weightLb, source, actorEmail } = args;
+
+  // Shape-check the input before touching the row. Clearing: both must
+  // be null together; setting: weight must be > 0 and <= 200 with at
+  // most two stored decimals, source must be one of the four strings.
+  let roundedWeight: number | null = null;
+  let normalizedSource: string | null = null;
+  if (weightLb == null && source == null) {
+    // clear - no further validation
+  } else if (weightLb == null || source == null) {
+    return { ok: false, error: "weight and source must be set together or cleared together" };
+  } else {
+    if (!Number.isFinite(weightLb)) return { ok: false, error: "weight must be a finite number" };
+    if (weightLb <= 0 || weightLb > 200) return { ok: false, error: "weight must be greater than 0 and at most 200" };
+    if (!AVG_WEIGHT_SOURCES.has(source)) return { ok: false, error: "source must be one of house_test, book, vendor_spec, estimate" };
+    roundedWeight = Math.round(weightLb * 100) / 100;
+    normalizedSource = source;
+  }
+
+  const { data: cur, error: curErr } = await client
+    .from("pr_ingredients")
+    .select("id,base_unit,status,avg_weight_lb,avg_weight_source")
+    .eq("id", ingredientId)
+    .maybeSingle();
+  if (curErr) return { ok: false, error: curErr.message };
+  if (!cur) return { ok: false, error: "Ingredient not found" };
+  const row = cur as {
+    id: string;
+    base_unit: string;
+    status: string;
+    avg_weight_lb: number | null;
+    avg_weight_source: string | null;
+  };
+  if (row.status === "merged") return { ok: false, error: "Ingredient is merged" };
+  // Gate: a weight only means something on an each master. Refused
+  // regardless of whether the caller is setting or clearing, so a stale
+  // value cannot be edited post-hoc either. The DB columns are kept as
+  // nullable numeric because migration 0017 is a schema patch; the
+  // app-level gate here is the one that stops invalid writes.
+  if (row.base_unit !== "each") {
+    return { ok: false, error: "weight applies only to ingredients costed per each" };
+  }
+
+  const curWeight = row.avg_weight_lb == null ? null : Number(row.avg_weight_lb);
+  const curSource = row.avg_weight_source ?? null;
+  if (curWeight === roundedWeight && curSource === normalizedSource) {
+    // No-op success - same shape as setIngredientBaseUnit.
+    return { ok: true };
+  }
+
+  const { error: upErr } = await client
+    .from("pr_ingredients")
+    .update({
+      avg_weight_lb: roundedWeight,
+      avg_weight_source: normalizedSource,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", ingredientId);
+  if (upErr) return { ok: false, error: upErr.message };
+
+  await client.from("pr_events").insert({
+    entity_type: "ingredient",
+    entity_id: ingredientId,
+    kind: "ingredient_avg_weight_set",
+    before: { avg_weight_lb: curWeight, avg_weight_source: curSource },
+    after: { avg_weight_lb: roundedWeight, avg_weight_source: normalizedSource },
+    actor: actorEmail,
+  });
+
+  return { ok: true };
+}
+
+// N5: a vendor item's own each weight when its each is a different
+// size than the master's average (e.g. a 6 count cauliflower case
+// holds bigger heads than a 12). null clears the column. Mirrors the
+// DB check constraint > 0 and <= 200.
+export async function setVendorItemEachWeight(
+  client: SupabaseClient,
+  args: { itemId: string; weightLb: number | null; actorEmail: string }
+): Promise<{ ok: boolean; error?: string }> {
+  const { itemId, weightLb, actorEmail } = args;
+
+  let roundedWeight: number | null = null;
+  if (weightLb != null) {
+    if (!Number.isFinite(weightLb)) return { ok: false, error: "weight must be a finite number" };
+    if (weightLb <= 0 || weightLb > 200) return { ok: false, error: "weight must be greater than 0 and at most 200" };
+    roundedWeight = Math.round(weightLb * 100) / 100;
+  }
+
+  const { data: cur, error: curErr } = await client
+    .from("pr_vendor_items")
+    .select("id,each_weight_lb")
+    .eq("id", itemId)
+    .maybeSingle();
+  if (curErr) return { ok: false, error: curErr.message };
+  if (!cur) return { ok: false, error: "Item not found" };
+  const row = cur as { id: string; each_weight_lb: number | null };
+  const curWeight = row.each_weight_lb == null ? null : Number(row.each_weight_lb);
+  if (curWeight === roundedWeight) return { ok: true };
+
+  const { error: upErr } = await client
+    .from("pr_vendor_items")
+    .update({ each_weight_lb: roundedWeight })
+    .eq("id", itemId);
+  if (upErr) return { ok: false, error: upErr.message };
+
+  await client.from("pr_events").insert({
+    entity_type: "vendor_item",
+    entity_id: itemId,
+    kind: "vendor_item_each_weight_set",
+    before: { each_weight_lb: curWeight },
+    after: { each_weight_lb: roundedWeight },
     actor: actorEmail,
   });
 

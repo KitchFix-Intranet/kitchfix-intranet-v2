@@ -19,6 +19,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check, Pencil, Scale } from "lucide-react";
 import { fmtCount, fmtDate, fmtUsd, fmtUsdLong } from "@/lib/fmt";
+import { derivePerLb } from "@/lib/ingredients/eachWeight";
 import { ReviewActions } from "./ReviewActions";
 import { DetailPanel, type DetailPanelOpen } from "./DetailPanel";
 import { RowFlagToggle } from "./RowFlagToggle";
@@ -351,7 +352,7 @@ export function ReviewCard({
                 ) : null}
               </td>
               <td className="kf-table__num">
-                <UnitPriceCell item={it} />
+                <UnitPriceCell item={it} ingredient={group.ingredient ?? null} />
               </td>
               <td className="kf-table__num"><strong>${fmtUsdLong(it.usd12m).replace(/^\$/, "")}</strong></td>
               <td className="kf-table__num">{fmtCount(it.lines12m)}</td>
@@ -420,7 +421,25 @@ function ConfidenceChip({ c }: { c: string | null }) {
 // catalog / billed case price moves to a secondary sub-line as
 // context, so a bad pack reads as an absurd $/unit at a glance (the
 // Knorr-soup-base lesson). Never fabricates a per-unit.
-function UnitPriceCell({ item }: { item: ReviewGroupItem }) {
+function UnitPriceCell({
+  item,
+  ingredient,
+}: {
+  item: ReviewGroupItem;
+  // N5: the group's ingredient feeds avg_weight_lb into derivePerLb.
+  // Null for ai-new groups - the item's own each_weight_lb is the
+  // only possible source there.
+  ingredient: ReviewCardIngredient | null;
+}) {
+  // N5: derived per-lb for each-priced rows only. Returns null when
+  // perBaseUom !== "EA", when perBase is missing or zero, or when no
+  // weight is available from either side. Never invents a weight.
+  const perLb = derivePerLb({
+    perBase: item.perBase,
+    perBaseUom: item.perBaseUom,
+    itemEachWeightLb: item.eachWeightLb,
+    ingredientAvgWeightLb: ingredient?.avg_weight_lb ?? null,
+  });
   const perUnitAvailable =
     item.perBase != null && item.perBaseUom != null && item.perBaseConfidence != null;
   const uomLower = item.perBaseUom
@@ -456,7 +475,10 @@ function UnitPriceCell({ item }: { item: ReviewGroupItem }) {
           : item.perBaseConfidence === "high"
             ? "Per-unit estimate from pack size + case price"
             : "Low-confidence estimate (range / catch-weight / soft parse)") +
-      (item.perBaseNote ? ` - ${item.perBaseNote}` : "")
+      (item.perBaseNote ? ` - ${item.perBaseNote}` : "") +
+      // N5: show the math behind the derived per-lb line so the
+      // reviewer sees which weight sourced it.
+      (perLb ? ` · ${fmtUsd(item.perBase as number)} each ÷ ${perLb.weightLb} lb` : "")
     : "Per-unit needs pack normalization - edit the pack in the detail panel";
 
   return (
@@ -492,6 +514,21 @@ function UnitPriceCell({ item }: { item: ReviewGroupItem }) {
           <span className="kf-conf-chip kf-conf-chip--low">needs pack</span>
         </>
       )}
+      {perLb ? (
+        <>
+          <br />
+          <span className="kf-cell-sub kf-rvc__secondary">
+            {fmtUsd(perLb.perLb)}
+            <span className="kf-muted"> / lb</span>
+            {perLb.from === "item" ? (
+              <>
+                <span className="kf-rvc__chip-gap" aria-hidden> </span>
+                <span className="kf-conf-chip">own weight</span>
+              </>
+            ) : null}
+          </span>
+        </>
+      ) : null}
       {secondary ? (
         <>
           <br />

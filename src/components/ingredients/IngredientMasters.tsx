@@ -45,6 +45,10 @@ type Ingredient = {
   allergens: string[];
   allergens_reviewed_by: string | null;
   allergens_reviewed_at: string | null;
+  // N5: usual weight of one each + where that figure came from.
+  // Only meaningful on each-costed masters; null everywhere else.
+  avg_weight_lb: number | null;
+  avg_weight_source: string | null;
 };
 
 type LinkedItemRow = {
@@ -67,6 +71,8 @@ type LinkedItemRow = {
   // sanctioned non-null value today. The master rolls up three
   // prices filtered by this field.
   grade: string | null;
+  // N5: per-item each weight override. Null for most rows.
+  each_weight_lb: number | null;
 };
 
 // S3: median-based outlier exclusion for the master blend. Rule:
@@ -244,7 +250,9 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
   // combined total (every master has `resale` set, defaults to false).
   const { data: ingData, error: ingErr } = await client
     .from("pr_ingredients")
-    .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at")
+    // N5: avg_weight_lb + avg_weight_source added for the Ingredients
+    // tab row's derived per-lb (frame B).
+    .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,avg_weight_lb,avg_weight_source")
     .eq("status", "active")
     .eq("resale", mode === "resale")
     .order("name");
@@ -258,7 +266,10 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
   for (;;) {
     const { data, error } = await client
       .from("pr_vendor_items")
-      .select("id,vendor_id,ingredient_id,name,usd_12m,price_estimate,pack_override,grade")
+      // N5: each_weight_lb added so the linked-item lines show the
+      // item's own derived per-lb when an override is set. The row
+      // header figure itself still uses the ingredient's avg only.
+      .select("id,vendor_id,ingredient_id,name,usd_12m,price_estimate,pack_override,grade,each_weight_lb")
       .eq("link_status", "confirmed")
       .in("status", LIVE_STATUSES) // B4: archived/not_food/duplicate/one_off never reach the rollup
       .not("ingredient_id", "is", null)
@@ -560,6 +571,10 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
           // Null is standard; see src/lib/ingredients/grade.ts.
           grade: it.grade ?? null,
           usd12m: Number(it.usd_12m ?? 0),
+          // N5: per-item each weight override. Linked-item lines use
+          // this directly via derivePerLb; the row header figure keeps
+          // using only the ingredient's avg_weight_lb.
+          eachWeightLb: it.each_weight_lb == null ? null : Number(it.each_weight_lb),
         };
       })
       .sort((a, b) => b.usd12m - a.usd12m);
@@ -661,6 +676,11 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
       flagged,
       flagReason,
       linkedItems,
+      // N5: the master's own avg weight + where it came from. Snake
+      // field names on the fetch row get projected to camel here so
+      // the client type stays camel-only. Null + null when unknown.
+      avgWeightLb: m.avg_weight_lb == null ? null : Number(m.avg_weight_lb),
+      avgWeightSource: m.avg_weight_source ?? null,
     };
   });
 
