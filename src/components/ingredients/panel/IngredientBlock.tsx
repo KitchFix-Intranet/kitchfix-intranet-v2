@@ -112,16 +112,14 @@ export function IngredientBlock({
     [parents, ingredient.id]
   );
 
-  // N7 commit 2: self-save on blur / Enter. Silently no-op on the same
-  // name or a too-short draft (blur fires every time the input loses
-  // focus, so a toast on no-op would spam). Save-is-best-effort: on
-  // server failure the draft reverts to the stored name and the inline
-  // error shows under the input - the toast is extra, not the signal.
+  // N7 commit 2: Rename keeps an explicit Save button (primary while
+  // the draft differs) because a rename writes an alias. The other
+  // fields self-save; Rename is the deliberate exception.
   async function doRename() {
     const next = renameDraft.trim();
     if (renameBusy) return;
-    if (next.length < 2) return;
-    if (next === ingredient.name) return;
+    if (next.length < 2) { toast("Name is too short", { tone: "block" }); return; }
+    if (next === ingredient.name) { toast("Same name, nothing to save"); return; }
     setRenameBusy(true);
     setRenameError(null);
     const r = await postJson("/api/review/rename-ingredient", {
@@ -132,7 +130,6 @@ export function IngredientBlock({
       const msg = errMsg(r.data, `Rename failed (${r.status})`);
       setRenameError(msg);
       toast(msg, { tone: "block" });
-      setRenameDraft(ingredient.name);
       setRenameBusy(false);
       return;
     }
@@ -333,17 +330,25 @@ export function IngredientBlock({
             type="text"
             value={renameDraft}
             onChange={(e) => setRenameDraft(e.target.value)}
-            onBlur={() => { void doRename(); }}
             onKeyDown={(e) => {
               if (e.key === "Enter") { e.preventDefault(); void doRename(); }
             }}
             placeholder="Ingredient name"
             disabled={renameBusy}
-            aria-busy={renameBusy}
           />
         </label>
         <div className="kf-dpn__hint">
           The old name is kept as an alias, so linked items stay linked.
+        </div>
+        <div className="kf-dpn__btns">
+          <button
+            type="button"
+            className={`kf-btn kf-btn--primary kf-btn--sm${renameBusy ? " is-busy" : ""}`}
+            disabled={renameBusy || renameDraft.trim().length < 2 || renameDraft.trim() === ingredient.name}
+            onClick={doRename}
+          >
+            {renameBusy ? "Saving..." : "Save name"}
+          </button>
           <SaveFlash savedAt={renameSavedAt} error={renameError} />
         </div>
       </div>
