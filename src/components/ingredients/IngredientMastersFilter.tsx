@@ -30,6 +30,7 @@ import { ItemPanelById } from "./ItemPanelById";
 import { IngredientPanelById } from "./IngredientPanelById";
 import { IngredientAllergens } from "./IngredientAllergens";
 import { SUPER_CATEGORIES } from "@/lib/ingredients/categories";
+import { derivePerLb } from "@/lib/ingredients/eachWeight";
 import { RowSendBackButton } from "./RowSendBackButton";
 import { RowGradeToggle } from "./RowGradeToggle";
 import { MasterSendAllBackButton } from "./MasterSendAllBackButton";
@@ -86,6 +87,10 @@ export type MasterLinkedItem = {
   // only sanctioned non-null value today.
   grade: string | null;
   usd12m: number;
+  // N5: per-item each weight override. Linked-item lines read this
+  // through derivePerLb so an override shows the item's own per-lb
+  // next to its per-each.
+  eachWeightLb: number | null;
 };
 
 export type MasterRow = {
@@ -137,6 +142,13 @@ export type MasterRow = {
   // deviated from. Null when no priced items in-dim.
   medianBeforeExclusion: number | null;
   linkedItems: MasterLinkedItem[];
+  // N5: the master's own avg each weight + source. Only meaningful on
+  // each-costed masters; null everywhere else. The row's derived per-lb
+  // is avgPerBase through derivePerLb with itemEachWeightLb = null -
+  // the ingredient's weight only; item overrides live on the linked
+  // item lines, not the row header.
+  avgWeightLb: number | null;
+  avgWeightSource: string | null;
 };
 
 type SortMode = "spend" | "name" | "links" | "spread";
@@ -713,6 +725,27 @@ function MasterRowButton({
           <span>
             <strong>{fmtUsd(row.avgPerBase)}</strong>
             <span className="kf-muted"> / {uom}</span>
+            {(() => {
+              // N5: derived per lb on each-costed rows. Reads the
+              // ingredient's own avg weight only - per-item overrides
+              // appear on the linked-item lines, not the row header.
+              // baseUom === "EA" means the master is per-each; perLb
+              // is null when the row has no weight.
+              const perLb = derivePerLb({
+                perBase: row.avgPerBase,
+                perBaseUom: row.baseUom,
+                itemEachWeightLb: null,
+                ingredientAvgWeightLb: row.avgWeightLb,
+              });
+              if (!perLb) return null;
+              return (
+                <>
+                  <span className="kf-muted"> · </span>
+                  <strong>{fmtUsd(perLb.perLb)}</strong>
+                  <span className="kf-muted"> / lb</span>
+                </>
+              );
+            })()}
           </span>
         ) : (
           <span className="kf-muted">- / {row.baseUnit?.toLowerCase() ?? "unit"}</span>
@@ -818,6 +851,113 @@ function BaseUnitControl({ row }: { row: MasterRow }) {
           </option>
         ))}
       </select>
+    </span>
+  );
+}
+
+// N5: usual weight of one each. Writes pr_ingredients.avg_weight_lb +
+// avg_weight_source via POST /api/review/set-avg-weight. The write
+// mirrors BaseUnitControl - one toast, one router.refresh, reversible
+// by picking the old value back. Empty draft + Save is refused with a
+// toast; clearing goes through the dedicated null-weightLb path.
+function AvgWeightControl({ row }: { row: MasterRow }) {
+  const router = useRouter();
+  const [draft, setDraft] = useState<string>(
+    row.avgWeightLb == null ? "" : String(row.avgWeightLb)
+  );
+  const [busy, setBusy] = useState(false);
+
+  async function saveNumber(n: number) {
+    if (busy) return;
+    setBusy(true);
+    const r = await postJson("/api/review/set-avg-weight", {
+      ingredientId: row.id,
+      weightLb: n,
+      // Row-level control defaults the source to house_test when the
+      // row has no source yet. If a source already exists, keep it -
+      // the detail panel is the place to change the source.
+      source: row.avgWeightSource ?? "house_test",
+    });
+    if (!r.ok) {
+      toast(errText(r.data, `Save failed (${r.status})`), { tone: "block" });
+      setBusy(false);
+      return;
+    }
+    toast(`${row.name}: one each weighs ${Math.round(n * 100) / 100} lb`);
+    setBusy(false);
+    router.refresh();
+  }
+
+  function onCommit() {
+    const trimmed = draft.trim();
+    if (trimmed === "") return; // empty = no-op on blur; Clear handles delete
+    const n = Number(trimmed);
+    if (!Number.isFinite(n) || n <= 0 || n > 200) {
+      toast("Weight must be greater than 0 and at most 200 lb.", { tone: "block" });
+      return;
+    }
+    const rounded = Math.round(n * 100) / 100;
+    if (rounded === row.avgWeightLb) return; // no-op
+    void saveNumber(rounded);
+  }
+
+  // Empty-state chip: when no weight is set yet, keep the warn style the
+  // row already uses for "Check allergens". A small matching chip in
+  // place of the input, so the user sees the gap without a disabled
+  // control floating next to a populated one.
+  if (row.avgWeightLb == null && draft === "") {
+    return (
+      <span className="kf-dt__unitctl">
+        <Scale size={13} strokeWidth={1.5} aria-hidden />
+        <label className="kf-dt__unitctl-l" htmlFor={`avgw-${row.id}`}>
+          One each
+        </label>
+        <input
+          id={`avgw-${row.id}`}
+          type="number"
+          inputMode="decimal"
+          step="0.01"
+          min="0"
+          max="200"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={onCommit}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onCommit(); } }}
+          placeholder="lb"
+          aria-label="One each weighs, in pounds"
+          disabled={busy}
+          className="kf-dt__unitsel"
+          style={{ width: "6ch" }}
+        />
+        <span className="kf-master__bdg kf-master__bdg--unreviewed">no weight yet</span>
+      </span>
+    );
+  }
+
+  return (
+    <span className="kf-dt__unitctl">
+      <Scale size={13} strokeWidth={1.5} aria-hidden />
+      <label className="kf-dt__unitctl-l" htmlFor={`avgw-${row.id}`}>
+        One each
+      </label>
+      <input
+        id={`avgw-${row.id}`}
+        type="number"
+        inputMode="decimal"
+        step="0.01"
+        min="0"
+        max="200"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={onCommit}
+        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onCommit(); } }}
+        placeholder="lb"
+        aria-label="One each weighs, in pounds"
+        disabled={busy}
+        className="kf-dt__unitsel"
+        style={{ width: "7ch" }}
+      />
+      <span className="kf-muted">lb</span>
     </span>
   );
 }
@@ -1055,6 +1195,11 @@ function MasterDetail({
           ))}
           {row.resale ? <span className="kf-pill kf-pill--muted">Retail</span> : null}
           <BaseUnitControl row={row} />
+          {/* N5 frame B: usual weight of one each, right next to the
+              base-unit control. Rendered only on each-costed masters;
+              dropping to lb / gal / dozen does not clear the stored
+              weight, the control just stops showing. */}
+          {row.baseUnit === "each" ? <AvgWeightControl row={row} /> : null}
           {/* G3 §1: lens is now a <select> matching BaseUnitControl's
               chrome and register. Native element - keyboard + SR
               behaviour comes free. Hidden entirely when only one

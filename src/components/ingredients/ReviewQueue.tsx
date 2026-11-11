@@ -65,6 +65,9 @@ type ProposedItem = {
     note?: string | null;
   } | null;
   grade: string | null;
+  // N5: the item's own each weight, when its each is a different size
+  // than the ingredient's average. Null for most rows.
+  each_weight_lb: number | null;
 };
 
 type Ingredient = {
@@ -80,6 +83,10 @@ type Ingredient = {
   allergens: string[];
   allergens_reviewed_by: string | null;
   allergens_reviewed_at: string | null;
+  // N5: usual weight of one each + where that figure came from.
+  // Null + null when unknown; derivePerLb returns null in that case.
+  avg_weight_lb: number | null;
+  avg_weight_source: string | null;
 };
 type Vendor = { id: string; name: string };
 
@@ -129,7 +136,9 @@ async function loadReview() {
     const { data, error } = await client
       .from("pr_vendor_items")
       .select(
-        "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_qty,pack_size,pack_uom,pack_state,pack_override,pack_note,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen,flagged,flag_note,flagged_by,flagged_at,price_estimate,grade"
+        // N5: each_weight_lb added. Additive; no new query - this is
+        // the already-paginated main read of the review queue.
+        "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_qty,pack_size,pack_uom,pack_state,pack_override,pack_note,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen,flagged,flag_note,flagged_by,flagged_at,price_estimate,grade,each_weight_lb"
       )
       .eq("link_status", "proposed")
       .in("status", ["active", "resale"])
@@ -149,7 +158,9 @@ async function loadReview() {
     client.from("pr_vendors").select("id,name"),
     client
       .from("pr_ingredients")
-      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at")
+      // N5: avg_weight_lb + avg_weight_source added. Additive; 439
+      // rows, read once, no new query.
+      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,avg_weight_lb,avg_weight_source")
       .eq("status", "active")
       .order("name"),
     client
@@ -375,6 +386,10 @@ async function loadReview() {
           // Q2 §4: pack-note (evidence-strength phrase from the P1/P2
           // backfill). Pass through verbatim; null for most items.
           packNote: it.pack_note ?? null,
+          // N5: per-item each weight override. Null for most rows;
+          // when set it wins over the ingredient's avg_weight_lb in
+          // derivePerLb.
+          eachWeightLb: it.each_weight_lb == null ? null : Number(it.each_weight_lb),
         });
       }
       groups.set(key, g);
@@ -497,6 +512,10 @@ async function loadReview() {
           // Q2 §4: pack-note (evidence-strength phrase from the P1/P2
           // backfill). Pass through verbatim; null for most items.
           packNote: it.pack_note ?? null,
+          // N5: per-item each weight override. Null for most rows;
+          // when set it wins over the ingredient's avg_weight_lb in
+          // derivePerLb.
+          eachWeightLb: it.each_weight_lb == null ? null : Number(it.each_weight_lb),
         });
       }
       groups.set(key, g);

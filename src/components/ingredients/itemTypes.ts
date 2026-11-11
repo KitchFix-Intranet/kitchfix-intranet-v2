@@ -104,6 +104,11 @@ export type ReviewGroupItem = {
   // pack-source label so the reviewer can tell weak corroboration
   // from strong at a glance.
   packNote: string | null;
+  // N5: per-item each weight. Null for most rows; set when this
+  // vendor's each is a different size than the ingredient's average
+  // (a 6-count case holds bigger heads than a 12). derivePerLb reads
+  // this first and falls back to the ingredient's avg_weight_lb.
+  eachWeightLb: number | null;
 };
 
 // Does this pack_override payload actually represent a human-set
@@ -159,4 +164,11 @@ export type ReviewCardIngredient = {
   allergens: string[];
   allergens_reviewed_by: string | null;
   allergens_reviewed_at: string | null;
+  // N5: usual weight of one each + where that figure came from (one
+  // of house_test | book | vendor_spec | estimate). Null + null when
+  // unknown; derivePerLb returns null in that case. Snake case to
+  // match the rest of this type's fields (direct passthrough from
+  // pr_ingredients row shape).
+  avg_weight_lb: number | null;
+  avg_weight_source: string | null;
 };

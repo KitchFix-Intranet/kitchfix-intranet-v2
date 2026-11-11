@@ -672,6 +672,19 @@ function IngredientBlock({
   const [resaleSavedAt, setResaleSavedAt] = useState<number | null>(null);
   const [resaleError, setResaleError] = useState<string | null>(null);
 
+  // N5: usual-weight-per-each. Only rendered for each-costed masters
+  // (frame C left). Keeps its own draft + busy + saved/error, same
+  // pattern as rename / category / resale.
+  const [weightDraft, setWeightDraft] = useState<string>(
+    ingredient.avg_weight_lb == null ? "" : String(ingredient.avg_weight_lb)
+  );
+  const [weightSourceDraft, setWeightSourceDraft] = useState<string>(
+    ingredient.avg_weight_source ?? "house_test"
+  );
+  const [weightBusy, setWeightBusy] = useState(false);
+  const [weightSavedAt, setWeightSavedAt] = useState<number | null>(null);
+  const [weightError, setWeightError] = useState<string | null>(null);
+
   // B1: allergen state + handlers moved to the shared
   // IngredientAllergens component (used here AND in the workbench's
   // MasterDetail pane). The component owns selection, Confirm
@@ -764,6 +777,68 @@ function IngredientBlock({
     toast(nextSuper ? `Saved: category ${nextSuper}` : "Saved: Needs category");
     setCatSavedAt(Date.now());
     setCatBusy(false);
+    onDone();
+  }
+
+  // N5: save the usual weight + its source. Empty draft is a validation
+  // error, not a clear - use the dedicated doWeightClear() for that.
+  async function doWeightSave() {
+    if (weightBusy) return;
+    const trimmed = weightDraft.trim();
+    if (trimmed === "") {
+      const msg = "Enter a weight, or press Clear.";
+      setWeightError(msg);
+      toast(msg, { tone: "block" });
+      return;
+    }
+    const n = Number(trimmed);
+    if (!Number.isFinite(n) || n <= 0 || n > 200) {
+      const msg = "Weight must be greater than 0 and at most 200 lb.";
+      setWeightError(msg);
+      toast(msg, { tone: "block" });
+      return;
+    }
+    setWeightBusy(true);
+    setWeightError(null);
+    const r = await postJson("/api/review/set-avg-weight", {
+      ingredientId: ingredient.id,
+      weightLb: n,
+      source: weightSourceDraft,
+    });
+    if (!r.ok) {
+      const msg = errMsg(r.data, `Save failed (${r.status})`);
+      setWeightError(msg);
+      toast(msg, { tone: "block" });
+      setWeightBusy(false);
+      return;
+    }
+    toast(`Saved: one each weighs ${Math.round(n * 100) / 100} lb`);
+    setWeightSavedAt(Date.now());
+    setWeightBusy(false);
+    onDone();
+  }
+
+  // N5: clear both columns together (they are co-nullable by the DB
+  // check; the writer enforces the same).
+  async function doWeightClear() {
+    if (weightBusy) return;
+    setWeightBusy(true);
+    setWeightError(null);
+    const r = await postJson("/api/review/set-avg-weight", {
+      ingredientId: ingredient.id,
+      weightLb: null,
+    });
+    if (!r.ok) {
+      const msg = errMsg(r.data, `Clear failed (${r.status})`);
+      setWeightError(msg);
+      toast(msg, { tone: "block" });
+      setWeightBusy(false);
+      return;
+    }
+    toast("Weight cleared");
+    setWeightDraft("");
+    setWeightSavedAt(Date.now());
+    setWeightBusy(false);
     onDone();
   }
 
@@ -919,6 +994,71 @@ function IngredientBlock({
           <SaveFlash savedAt={catSavedAt} error={catError} />
         </div>
       </div>
+
+      {/* N5 frame C left: usual weight of one each. Rendered only for
+          each-costed masters. Changing the master's unit away from
+          each (via the workbench's BaseUnitControl) does NOT clear the
+          stored weight; the block simply stops showing. derivePerLb
+          still refuses to convert non-EA items, so the weight is
+          harmless to leave on disk. */}
+      {ingredient.base_unit === "each" ? (
+        <div className="kf-dpn__row">
+          <div className="kf-dpn__row kf-newing__row">
+            <label className="kf-dpn__label">
+              <span>One each weighs</span>
+              <input
+                type="number"
+                inputMode="decimal"
+                step="0.01"
+                min="0"
+                max="200"
+                value={weightDraft}
+                onChange={(e) => setWeightDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void doWeightSave(); } }}
+                placeholder="e.g. 3.5"
+                aria-label="One each weighs, in pounds"
+                disabled={weightBusy}
+              />
+            </label>
+            <label className="kf-dpn__label">
+              <span>Source</span>
+              <select
+                value={weightSourceDraft}
+                onChange={(e) => setWeightSourceDraft(e.target.value)}
+                disabled={weightBusy}
+                aria-label="Weight source"
+              >
+                <option value="house_test">Weighed in house</option>
+                <option value="book">Book value</option>
+                <option value="vendor_spec">Vendor spec</option>
+                <option value="estimate">Estimate</option>
+              </select>
+            </label>
+          </div>
+          <div className="kf-dpn__btns">
+            <button
+              type="button"
+              className={`kf-btn kf-btn--primary kf-btn--sm${weightBusy ? " is-busy" : ""}`}
+              disabled={weightBusy}
+              onClick={doWeightSave}
+            >
+              {weightBusy ? "Saving..." : "Save weight"}
+            </button>
+            <button
+              type="button"
+              className="kf-btn kf-btn--line kf-btn--sm"
+              disabled={weightBusy || (weightDraft.trim() === "" && ingredient.avg_weight_lb == null)}
+              onClick={doWeightClear}
+            >
+              Clear
+            </button>
+            <SaveFlash savedAt={weightSavedAt} error={weightError} />
+          </div>
+          <div className="kf-dpn__hint">
+            Recipes that read per lb will use this weight. The stored price stays per each.
+          </div>
+        </div>
+      ) : null}
 
       <div className="kf-dpn__row">
         <div className="kf-dpn__toggle">
@@ -1876,8 +2016,161 @@ function PackOverrideBlock({
             ) : null}
           </div>
         </div>
+        {/* N5 frame C right: a per-item each weight override. Shown
+            only when the item is priced per EA, because derivePerLb
+            refuses to convert anything else - a weight on an LB- or
+            GAL-priced item would be a control that does nothing. */}
+        {item.perBaseUom === "EA" ? (
+          <ItemEachWeightBlock item={item} ingredient={ingredient} onDone={onDone} />
+        ) : null}
       </div>
     </section>
+  );
+}
+
+// N5: this item's own each_weight_lb when it differs from the master's
+// average. A checkbox reveals the input; unticking + Save clears the
+// column. The sentence under it shows this item's math and, when the
+// ingredient also has a weight, what the ingredient's weight would
+// have given.
+function ItemEachWeightBlock({
+  item,
+  ingredient,
+  onDone,
+}: {
+  item: ReviewGroupItem;
+  ingredient: ReviewCardIngredient | null;
+  onDone: () => void;
+}) {
+  const [hasOwn, setHasOwn] = useState<boolean>(item.eachWeightLb != null);
+  const [draft, setDraft] = useState<string>(
+    item.eachWeightLb == null ? "" : String(item.eachWeightLb)
+  );
+  const [busy, setBusy] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    if (!hasOwn) {
+      // Unticked + Save = clear.
+      const r = await postJson("/api/review/set-item-each-weight", {
+        itemId: item.id,
+        weightLb: null,
+      });
+      if (!r.ok) {
+        const msg = errMsg(r.data, `Clear failed (${r.status})`);
+        setError(msg);
+        toast(msg, { tone: "block" });
+        setBusy(false);
+        return;
+      }
+      toast("Item weight cleared");
+      setDraft("");
+      setSavedAt(Date.now());
+      setBusy(false);
+      onDone();
+      return;
+    }
+    const trimmed = draft.trim();
+    if (trimmed === "") {
+      const msg = "Enter a weight or untick the box.";
+      setError(msg);
+      toast(msg, { tone: "block" });
+      setBusy(false);
+      return;
+    }
+    const n = Number(trimmed);
+    if (!Number.isFinite(n) || n <= 0 || n > 200) {
+      const msg = "Weight must be greater than 0 and at most 200 lb.";
+      setError(msg);
+      toast(msg, { tone: "block" });
+      setBusy(false);
+      return;
+    }
+    const r = await postJson("/api/review/set-item-each-weight", {
+      itemId: item.id,
+      weightLb: n,
+    });
+    if (!r.ok) {
+      const msg = errMsg(r.data, `Save failed (${r.status})`);
+      setError(msg);
+      toast(msg, { tone: "block" });
+      setBusy(false);
+      return;
+    }
+    toast(`Saved: this each weighs ${Math.round(n * 100) / 100} lb`);
+    setSavedAt(Date.now());
+    setBusy(false);
+    onDone();
+  }
+
+  const perBaseNumber = item.perBase != null && Number.isFinite(item.perBase) && item.perBase > 0 ? item.perBase : null;
+  const itemWeight = item.eachWeightLb != null && Number.isFinite(item.eachWeightLb) && item.eachWeightLb > 0 ? item.eachWeightLb : null;
+  const ingWeight = ingredient?.avg_weight_lb != null && Number.isFinite(ingredient.avg_weight_lb) && ingredient.avg_weight_lb > 0 ? ingredient.avg_weight_lb : null;
+
+  return (
+    <div className="kf-chain__row">
+      <div className="kf-chain__label">Each weight</div>
+      <div className="kf-chain__value">
+        <label className="kf-dpn__toggle-label">
+          <input
+            type="checkbox"
+            checked={hasOwn}
+            onChange={(e) => setHasOwn(e.currentTarget.checked)}
+            disabled={busy}
+          />
+          <span>This item&rsquo;s each has its own weight</span>
+        </label>
+        {hasOwn ? (
+          <div className="kf-dpn__row">
+            <label className="kf-dpn__label">
+              <span>lb</span>
+              <input
+                type="number"
+                inputMode="decimal"
+                step="0.01"
+                min="0"
+                max="200"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void save(); } }}
+                placeholder="e.g. 5"
+                aria-label="One each weighs, in pounds"
+                disabled={busy}
+              />
+            </label>
+          </div>
+        ) : null}
+        <div className="kf-dpn__btns">
+          <button
+            type="button"
+            className={`kf-btn kf-btn--primary kf-btn--sm${busy ? " is-busy" : ""}`}
+            disabled={busy}
+            onClick={save}
+          >
+            {busy ? "Saving..." : hasOwn ? "Save weight" : "Clear"}
+          </button>
+          <SaveFlash savedAt={savedAt} error={error} />
+        </div>
+        {perBaseNumber != null && itemWeight != null ? (
+          <span className="kf-chain__sub">
+            {fmtUsd(perBaseNumber)} each ÷ {itemWeight} lb = {fmtUsd(perBaseNumber / itemWeight)} / lb
+            {ingWeight != null ? (
+              <>
+                {" "}· the ingredient&rsquo;s {ingWeight} lb would give {fmtUsd(perBaseNumber / ingWeight)} / lb.
+              </>
+            ) : null}
+          </span>
+        ) : perBaseNumber != null && ingWeight != null && !hasOwn ? (
+          <span className="kf-chain__sub">
+            Without an item-level override, {fmtUsd(perBaseNumber)} each ÷ {ingWeight} lb = {fmtUsd(perBaseNumber / ingWeight)} / lb.
+          </span>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
