@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Item panel render reference</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Mulish:wght@400;600;700;800&display=swap">
+<style>body{margin:0;background:#F3F6F9;font-family:Mulish,Verdana,sans-serif;color:#1B2637;font-variant-numeric:tabular-nums}
+.wrap{display:flex;gap:64px;align-items:flex-start;padding:32px 40px 48px;width:max-content}
+.cap{font-size:13px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:#48556A;margin:0 0 12px}
+.note{max-width:660px;font-size:13px;color:#48556A;margin:0 0 20px 40px;padding-top:24px}</style></head><body>
+<p class="note">Static reference for CC. Every inline style is a measurement. Item and prices are a sample; the weights in frame B are sample values to show the filled states.</p>
+<div class="wrap"><div><p class="cap">A · At rest</p><div style="width: 660px; background: #FFFFFF; border: 1px solid #DCE4EB; border-radius: 14px; box-shadow: 0 8px 28px rgba(14,42,78,.12); overflow: hidden; display: flex; flex-direction: column">
+
+    <!-- head -->
+    <div style="padding: 24px 24px 18px 24px; display: flex; gap: 16px; align-items: flex-start">
+      <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 8px; min-width: 0">
+        <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 700; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: #C92B27">Vendor item · Cheney Brothers · #432300</div>
+        <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 800; font-size: 26px; line-height: 1; letter-spacing: .2px; text-transform: uppercase; color: #153968">Cauliflower 9 to 12 ct</div>
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 14.5px; color: #48556A">
+          <span>Linked to</span>
+          <span style="font-weight: 800; color: #153968">Cauliflower</span>
+          
+            <span style="font-size: 12px; font-weight: 700; color: #8A5A0E; background: #F8EDD6; border-radius: 999px; padding: 4px 10px">1 thing needs attention</span>
+          
+          
+        </div>
+      </div>
+      <button type="button" aria-label="Close" style="width: 44px; height: 44px; flex-shrink: 0; border: 1px solid #DCE4EB; background: #FFFFFF; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: #153968">
+        <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+      </button>
+    </div>
+
+    <!-- summary strip -->
+    <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid #EAEFF3; border-bottom: 1px solid #DCE4EB; background: #F8FAFC">
+      <div style="padding: 14px 12px 14px 24px; display: flex; flex-direction: column; gap: 4px; border-right: 1px solid #EAEFF3">
+        <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 700; font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; color: #48556A">Unit price</div>
+        <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 800; font-size: 28px; line-height: 1; color: #153968">$3.18 <span style="font-size: 16px; font-weight: 700; color: #48556A">/ each</span></div>
+        <div style="font-size: 12px; font-weight: 700; color: #153968">no recipe price yet</div>
+      </div>
+      <div style="padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; border-right: 1px solid #EAEFF3">
+        <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 700; font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; color: #48556A">Pack</div>
+        <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 800; font-size: 28px; line-height: 1; color: #1B2637">12/1 CT</div>
+        <div style="font-size: 12px; color: #48556A">billed by the case</div>
+      </div>
+      <div style="padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; border-right: 1px solid #EAEFF3">
+        <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 700; font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; color: #48556A">Annual spend</div>
+        <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 800; font-size: 28px; line-height: 1; color: #1B2637">$268</div>
+        <div style="font-size: 12px; color: #48556A">from invoices</div>
+      </div>
+      <div style="padding: 14px 24px 14px 16px; display: flex; flex-direction: column; gap: 4px">
+        <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 700; font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; color: #48556A">Case price</div>
+        <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 800; font-size: 28px; line-height: 1; color: #1B2637">$38.06</div>
+        <div style="font-size: 12px; color: #48556A">catalog</div>
+      </div>
+    </div>
+
+    <!-- needs attention -->
+    
+      <div style="padding: 20px 24px 4px 24px">
+        <div style="background: #F8EDD6; border: 1px solid #E5CD97; border-radius: 12px; padding: 16px; display: flex; gap: 14px; align-items: center">
+          <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#8A5A0E" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0"><path d="M12 3l10 18H2L12 3z"></path><path d="M12 10v5M12 18v.5"></path></svg>
+          <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px">
+            <div style="font-size: 14.5px; font-weight: 800; color: #6B4508">Pack was matched by name</div>
+            <div style="font-size: 14.5px; color: #1B2637">Check that 12 to the case is right before this price is trusted.</div>
+          </div>
+          <button type="button" style="height: 44px; padding: 0 16px; flex-shrink: 0; border: 1px solid #153968; background: #FFFFFF; color: #153968; border-radius: 10px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 800">Check the pack</button>
+        </div>
+      </div>
+    
+
+    <!-- THIS ITEM -->
+    <div style="padding: 20px 24px 8px 24px; display: flex; flex-direction: column">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; padding-bottom: 10px; border-bottom: 2px solid #153968">
+        <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 800; font-size: 20px; line-height: 1; text-transform: uppercase; color: #153968">This item</div>
+        <div style="font-size: 12px; color: #48556A">Changes here touch this vendor item only</div>
+      </div>
+
+      <!-- pack -->
+      <div style="display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 64px">
+        <div style="font-size: 14.5px; font-weight: 800">Pack and price</div>
+        <div style="font-size: 14.5px; color: #48556A">12 x 1 CT · $38.06 case · <span style="font-weight: 800; color: #1B2637">$3.18 / each</span></div>
+        <button type="button" aria-expanded="false" style="height: 44px; min-width: 96px; padding: 0 14px; border: 0; background: #E7F1F4; color: #153968; border-radius: 10px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 800">Edit</button>
+      </div>
+      
+
+      <!-- item own weight -->
+      <div style="display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 16px; align-items: center; min-height: 64px; border-top: 1px solid #EAEFF3">
+        <div style="font-size: 14.5px; font-weight: 800">One each is</div>
+        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 0">
+          <label style="display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 14.5px; color: #1B2637">
+            <input type="checkbox" style="width: 20px; height: 20px; accent-color: #153968">
+            Different from the ingredient
+          </label>
+          
+          
+            <span style="font-size: 12px; color: #48556A">Tick if this case holds a different size</span>
+          
+        </div>
+      </div>
+
+      <!-- grade -->
+      <div style="display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 16px; align-items: center; min-height: 64px; border-top: 1px solid #EAEFF3">
+        <div style="font-size: 14.5px; font-weight: 800">Grade</div>
+        <div style="display: flex; align-items: center; gap: 12px">
+          <div style="display: flex; border: 1px solid #DCE4EB; border-radius: 10px; overflow: hidden">
+            <button type="button" aria-pressed="true" style="height: 44px; padding: 0 18px; border: 0; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; background: #153968; color: #FFFFFF; font-weight: 800">Standard</button>
+            <button type="button" aria-pressed="false" style="height: 44px; padding: 0 18px; border: 0; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; background: #FFFFFF; color: #48556A; font-weight: 700">Premium</button>
+          </div>
+          
+        </div>
+      </div>
+
+      <!-- override -->
+      <div style="display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 64px; border-top: 1px solid #EAEFF3">
+        <div style="font-size: 14.5px; font-weight: 800">Price override</div>
+        <div style="font-size: 14.5px; color: #48556A">None. Use only when the pack is right and the number is not.</div>
+        <button type="button" aria-expanded="false" style="height: 44px; min-width: 96px; padding: 0 14px; border: 0; background: #E7F1F4; color: #153968; border-radius: 10px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 800">Override</button>
+      </div>
+      
+    </div>
+
+    <!-- INGREDIENT -->
+    <div style="background: #F1F7F9; border-top: 1px solid #C9DBE6; border-bottom: 1px solid #C9DBE6; padding: 20px 24px 8px 24px; display: flex; flex-direction: column">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; padding-bottom: 10px; border-bottom: 2px solid #153968">
+        <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 800; font-size: 20px; line-height: 1; text-transform: uppercase; color: #153968">Ingredient · Cauliflower</div>
+        <div style="font-size: 12px; color: #48556A">Changes here apply to every item linked to it</div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 64px; border-bottom: 1px solid #DCE4EB">
+        <label for="i-name" style="font-size: 14.5px; font-weight: 800">Name</label>
+        <input id="i-name" type="text" value="Cauliflower" style="height: 44px; box-sizing: border-box; padding: 0 12px; border: 1px solid #C9DBE6; border-radius: 10px; background: #FFFFFF; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637; width: 100%">
+        <button type="button" style="height: 44px; min-width: 96px; padding: 0 14px; border-radius: 10px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 800; border: 1px solid #153968; background: #FFFFFF; color: #153968">Rename</button>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: center; min-height: 64px; border-bottom: 1px solid #DCE4EB">
+        <div style="font-size: 14.5px; font-weight: 800">Category</div>
+        <select aria-label="Category" style="height: 44px; padding: 0 12px; border: 1px solid #C9DBE6; border-radius: 10px; background: #FFFFFF; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637"><option>Produce</option><option>Protein</option><option>Dairy</option><option>Pantry / Dry goods</option></select>
+        <select aria-label="Sub-category" style="height: 44px; padding: 0 12px; border: 1px solid #C9DBE6; border-radius: 10px; background: #FFFFFF; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637"><option>Vegetables and herbs</option><option>Fruit</option></select>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: center; min-height: 64px">
+        <div style="font-size: 14.5px; font-weight: 800">Costed per</div>
+        <select aria-label="Costed per" style="height: 44px; padding: 0 12px; border: 1px solid #C9DBE6; border-radius: 10px; background: #FFFFFF; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637"><option>Each</option><option>Pound (lb)</option><option>Gallon</option><option>Dozen</option></select>
+        <div style="font-size: 12px; color: #48556A">How recipes count this ingredient.</div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: center; min-height: 64px">
+        <label for="i-wt" style="font-size: 14.5px; font-weight: 800">One each is</label>
+        <div style="display: flex; align-items: center; gap: 8px">
+          <input id="i-wt" type="text" inputmode="decimal" value="" style="height: 44px; box-sizing: border-box; padding: 0 12px; border: 1px solid #C9DBE6; border-radius: 10px; background: #FFFFFF; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637; width: 88px">
+          <select aria-label="Weight unit" value="lb" style="height: 44px; padding: 0 10px; border: 1px solid #C9DBE6; border-radius: 10px; background: #FFFFFF; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637">
+            <optgroup label="Weight"><option value="lb">lb</option><option value="oz">oz</option><option value="g">g</option><option value="kg">kg</option></optgroup><optgroup label="Volume"><option value="floz">fl oz</option><option value="gal">gal</option></optgroup>
+          </select>
+        </div>
+        <select aria-label="Where the measure came from" style="height: 44px; padding: 0 12px; border: 1px solid #C9DBE6; border-radius: 10px; background: #FFFFFF; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637"><option>Measured in house</option><option>Book value</option><option>Vendor spec</option><option>Estimate</option></select>
+      </div>
+      <div style="display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 16px; padding-bottom: 14px; border-bottom: 1px solid #DCE4EB">
+        <div></div>
+        <div style="font-size: 12px; line-height: 1.6; color: #48556A"><span style="font-weight: 700; color: #8A5A0E; background: #F8EDD6; border-radius: 999px; padding: 3px 10px; margin-right: 8px; white-space: nowrap">not set yet</span>Enter what one each is, by weight or by volume, and recipes can cost it that way. The stored price stays per each.</div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 16px; align-items: start; padding: 14px 0 12px 0">
+        <div style="display: flex; flex-direction: column; gap: 6px; padding-top: 6px">
+          <div style="font-size: 14.5px; font-weight: 800">Allergens</div>
+          
+            <span style="align-self: flex-start; font-size: 12px; font-weight: 700; color: #8A5A0E; background: #F8EDD6; border-radius: 999px; padding: 4px 10px">not reviewed</span>
+          
+          
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 12px">
+          <div style="display: flex; flex-wrap: wrap; gap: 8px">
+            
+              <button type="button" style="height: 44px; padding: 0 14px; border-radius: 999px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 700; border: 1px solid #C9DBE6; background: #FFFFFF; color: #1B2637">Milk</button>
+            
+              <button type="button" style="height: 44px; padding: 0 14px; border-radius: 999px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 700; border: 1px solid #C9DBE6; background: #FFFFFF; color: #1B2637">Eggs</button>
+            
+              <button type="button" style="height: 44px; padding: 0 14px; border-radius: 999px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 700; border: 1px solid #C9DBE6; background: #FFFFFF; color: #1B2637">Fish</button>
+            
+              <button type="button" style="height: 44px; padding: 0 14px; border-radius: 999px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 700; border: 1px solid #C9DBE6; background: #FFFFFF; color: #1B2637">Shellfish</button>
+            
+              <button type="button" style="height: 44px; padding: 0 14px; border-radius: 999px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 700; border: 1px solid #C9DBE6; background: #FFFFFF; color: #1B2637">Tree nuts</button>
+            
+              <button type="button" style="height: 44px; padding: 0 14px; border-radius: 999px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 700; border: 1px solid #C9DBE6; background: #FFFFFF; color: #1B2637">Peanuts</button>
+            
+              <button type="button" style="height: 44px; padding: 0 14px; border-radius: 999px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 700; border: 1px solid #C9DBE6; background: #FFFFFF; color: #1B2637">Wheat</button>
+            
+              <button type="button" style="height: 44px; padding: 0 14px; border-radius: 999px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 700; border: 1px solid #C9DBE6; background: #FFFFFF; color: #1B2637">Soy</button>
+            
+              <button type="button" style="height: 44px; padding: 0 14px; border-radius: 999px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 700; border: 1px solid #C9DBE6; background: #FFFFFF; color: #1B2637">Sesame</button>
+            
+          </div>
+          <div>
+            <button type="button" style="height: 44px; padding: 0 16px; border: 0; background: #153968; color: #FFFFFF; border-radius: 10px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 800">Confirm none</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MORE + RECORD -->
+    <div style="padding: 8px 24px 16px 24px; display: flex; flex-direction: column">
+      <button type="button" aria-expanded="false" style="display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 56px; border: 0; border-bottom: 1px solid #EAEFF3; background: #FFFFFF; padding: 0; text-align: left; font-family: Mulish, Verdana, sans-serif; color: #1B2637">
+        <span style="font-size: 14.5px; font-weight: 800">Mark as retail</span>
+        <span style="font-size: 14.5px; color: #48556A">Takes Cauliflower out of recipe coverage</span>
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#48556A" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg>
+      </button>
+      
+
+      <button type="button" aria-expanded="false" style="display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 56px; border: 0; border-bottom: 1px solid #EAEFF3; background: #FFFFFF; padding: 0; text-align: left; font-family: Mulish, Verdana, sans-serif; color: #1B2637">
+        <span style="font-size: 14.5px; font-weight: 800">Merge</span>
+        <span style="font-size: 14.5px; color: #48556A">Fold Cauliflower into another ingredient</span>
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#48556A" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg>
+      </button>
+      
+
+      <button type="button" aria-expanded="false" style="display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 56px; border: 0; border-bottom: 1px solid #EAEFF3; background: #FFFFFF; padding: 0; text-align: left; font-family: Mulish, Verdana, sans-serif; color: #1B2637">
+        <span style="font-size: 14.5px; font-weight: 800">Evidence</span>
+        <span style="font-size: 14.5px; color: #48556A">The invoice lines behind this price</span>
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#48556A" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg>
+      </button>
+      
+
+      <button type="button" aria-expanded="false" style="display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 56px; border: 0; background: #FFFFFF; padding: 0; text-align: left; font-family: Mulish, Verdana, sans-serif; color: #1B2637">
+        <span style="font-size: 14.5px; font-weight: 800">Change history</span>
+        <span style="font-size: 14.5px; color: #48556A">Every change, newest first</span>
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#48556A" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg>
+      </button>
+      
+    </div>
+  </div>
+
+</div><div><p class="cap">B · Pack and Price override open, measures filled (sample values)</p><div style="width: 660px; background: #FFFFFF; border: 1px solid #DCE4EB; border-radius: 14px; box-shadow: 0 8px 28px rgba(14,42,78,.12); overflow: hidden; display: flex; flex-direction: column">
+
+    <!-- head -->
+    <div style="padding: 24px 24px 18px 24px; display: flex; gap: 16px; align-items: flex-start">
+      <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 8px; min-width: 0">
+        <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 700; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: #C92B27">Vendor item · Cheney Brothers · #432300</div>
+        <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 800; font-size: 26px; line-height: 1; letter-spacing: .2px; text-transform: uppercase; color: #153968">Cauliflower 9 to 12 ct</div>
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 14.5px; color: #48556A">
+          <span>Linked to</span>
+          <span style="font-weight: 800; color: #153968">Cauliflower</span>
+          
+            <span style="font-size: 12px; font-weight: 700; color: #8A5A0E; background: #F8EDD6; border-radius: 999px; padding: 4px 10px">1 thing needs attention</span>
+          
+          
+        </div>
+      </div>
+      <button type="button" aria-label="Close" style="width: 44px; height: 44px; flex-shrink: 0; border: 1px solid #DCE4EB; background: #FFFFFF; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: #153968">
+        <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+      </button>
+    </div>
+
+    <!-- summary strip -->
+    <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid #EAEFF3; border-bottom: 1px solid #DCE4EB; background: #F8FAFC">
+      <div style="padding: 14px 12px 14px 24px; display: flex; flex-direction: column; gap: 4px; border-right: 1px solid #EAEFF3">
+        <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 700; font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; color: #48556A">Unit price</div>
+        <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 800; font-size: 28px; line-height: 1; color: #153968">$3.18 <span style="font-size: 16px; font-weight: 700; color: #48556A">/ each</span></div>
+        <div style="font-size: 12px; font-weight: 700; color: #153968">$0.64 / lb · own measure</div>
+      </div>
+      <div style="padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; border-right: 1px solid #EAEFF3">
+        <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 700; font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; color: #48556A">Pack</div>
+        <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 800; font-size: 28px; line-height: 1; color: #1B2637">12/1 CT</div>
+        <div style="font-size: 12px; color: #48556A">billed by the case</div>
+      </div>
+      <div style="padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; border-right: 1px solid #EAEFF3">
+        <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 700; font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; color: #48556A">Annual spend</div>
+        <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 800; font-size: 28px; line-height: 1; color: #1B2637">$268</div>
+        <div style="font-size: 12px; color: #48556A">from invoices</div>
+      </div>
+      <div style="padding: 14px 24px 14px 16px; display: flex; flex-direction: column; gap: 4px">
+        <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 700; font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; color: #48556A">Case price</div>
+        <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 800; font-size: 28px; line-height: 1; color: #1B2637">$38.06</div>
+        <div style="font-size: 12px; color: #48556A">catalog</div>
+      </div>
+    </div>
+
+    <!-- needs attention -->
+    
+      <div style="padding: 20px 24px 4px 24px">
+        <div style="background: #F8EDD6; border: 1px solid #E5CD97; border-radius: 12px; padding: 16px; display: flex; gap: 14px; align-items: center">
+          <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#8A5A0E" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0"><path d="M12 3l10 18H2L12 3z"></path><path d="M12 10v5M12 18v.5"></path></svg>
+          <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px">
+            <div style="font-size: 14.5px; font-weight: 800; color: #6B4508">Pack was matched by name</div>
+            <div style="font-size: 14.5px; color: #1B2637">Check that 12 to the case is right before this price is trusted.</div>
+          </div>
+          <button type="button" style="height: 44px; padding: 0 16px; flex-shrink: 0; border: 1px solid #153968; background: #FFFFFF; color: #153968; border-radius: 10px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 800">Check the pack</button>
+        </div>
+      </div>
+    
+
+    <!-- THIS ITEM -->
+    <div style="padding: 20px 24px 8px 24px; display: flex; flex-direction: column">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; padding-bottom: 10px; border-bottom: 2px solid #153968">
+        <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 800; font-size: 20px; line-height: 1; text-transform: uppercase; color: #153968">This item</div>
+        <div style="font-size: 12px; color: #48556A">Changes here touch this vendor item only</div>
+      </div>
+
+      <!-- pack -->
+      <div style="display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 64px">
+        <div style="font-size: 14.5px; font-weight: 800">Pack and price</div>
+        <div style="font-size: 14.5px; color: #48556A">12 x 1 CT · $38.06 case · <span style="font-weight: 800; color: #1B2637">$3.18 / each</span></div>
+        <button type="button" aria-expanded="true" style="height: 44px; min-width: 96px; padding: 0 14px; border: 0; background: #E7F1F4; color: #153968; border-radius: 10px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 800">Close</button>
+      </div>
+      
+        <div style="border: 1px solid #DCE4EB; border-radius: 12px; padding: 16px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 16px">
+          <div style="display: flex; align-items: center; justify-content: space-between">
+            <div style="display: flex; border: 1px solid #DCE4EB; border-radius: 10px; overflow: hidden">
+              <button type="button" aria-pressed="true" style="height: 44px; padding: 0 18px; border: 0; background: #153968; color: #FFFFFF; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 800">Priced by the case</button>
+              <button type="button" aria-pressed="false" style="height: 44px; padding: 0 18px; border: 0; background: #FFFFFF; color: #48556A; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 700">Catch weight</button>
+            </div>
+            <div style="font-size: 12px; color: #48556A">Invoice reads "12/1 CT"</div>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px">
+            <label style="display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: #48556A">Qty
+              <input type="text" inputmode="decimal" value="12" style="height: 44px; box-sizing: border-box; padding: 0 12px; border: 1px solid #C9DBE6; border-radius: 10px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637; width: 100%">
+            </label>
+            <label style="display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: #48556A">Size
+              <input type="text" inputmode="decimal" value="1" style="height: 44px; box-sizing: border-box; padding: 0 12px; border: 1px solid #C9DBE6; border-radius: 10px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637; width: 100%">
+            </label>
+            <label style="display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: #48556A">Unit
+              <select style="height: 44px; padding: 0 12px; border: 1px solid #C9DBE6; border-radius: 10px; background: #FFFFFF; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637"><option>CT</option><option>LB</option><option>OZ</option><option>GAL</option></select>
+            </label>
+            <label style="display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: #48556A">Billed by
+              <select style="height: 44px; padding: 0 12px; border: 1px solid #C9DBE6; border-radius: 10px; background: #FFFFFF; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637"><option>case</option><option>each</option><option>lb</option></select>
+            </label>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px"><label style="display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: #48556A">Case price<select style="height: 44px; box-sizing: border-box; padding: 0 12px; border: 1px solid #C9DBE6; border-radius: 10px; background: #FFFFFF; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637; width: 100%"><option>$38.06 - catalog</option></select></label><label style="display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: #48556A">Note (optional)<input type="text" placeholder="confirmed with vendor rep" style="height: 44px; box-sizing: border-box; padding: 0 12px; border: 1px solid #C9DBE6; border-radius: 10px; background: #FFFFFF; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637; width: 100%"></label></div>
+          <div style="background: #F1F7F9; border-radius: 10px; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between">
+            <div style="display: flex; flex-direction: column; gap: 2px">
+              <div style="font-size: 12px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: #48556A">Result</div>
+              <div style="font-size: 14.5px; color: #48556A">12 x 1 CT in a $38.06 case</div>
+            </div>
+            <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 800; font-size: 28px; line-height: 1; color: #153968">$3.18 <span style="font-size: 16px; font-weight: 700; color: #48556A">/ each</span></div>
+          </div>
+          <div style="display: flex; justify-content: flex-end; gap: 8px">
+            <button type="button" style="height: 44px; padding: 0 16px; border: 0; background: #FFFFFF; color: #153968; border-radius: 10px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 800">Cancel</button>
+            <button type="button" style="height: 44px; padding: 0 18px; border: 0; background: #153968; color: #FFFFFF; border-radius: 10px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 800">Save pack</button>
+          </div>
+        </div>
+      
+
+      <!-- item own weight -->
+      <div style="display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 16px; align-items: center; min-height: 64px; border-top: 1px solid #EAEFF3">
+        <div style="font-size: 14.5px; font-weight: 800">One each is</div>
+        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 0">
+          <label style="display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 14.5px; color: #1B2637">
+            <input type="checkbox" checked style="width: 20px; height: 20px; accent-color: #153968">
+            Different from the ingredient
+          </label>
+          
+            <div style="display: flex; align-items: center; gap: 8px">
+              <input type="text" inputmode="decimal" aria-label="This item's each weighs" value="5" style="height: 44px; box-sizing: border-box; padding: 0 12px; border: 1px solid #C9DBE6; border-radius: 10px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637; width: 88px">
+              <select aria-label="Weight unit for this item" value="lb" style="height: 44px; padding: 0 10px; border: 1px solid #C9DBE6; border-radius: 10px; background: #FFFFFF; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637">
+                <optgroup label="Weight"><option value="lb">lb</option><option value="oz">oz</option><option value="g">g</option><option value="kg">kg</option></optgroup><optgroup label="Volume"><option value="floz">fl oz</option><option value="gal">gal</option></optgroup>
+              </select>
+              
+                <span style="display: flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 700; color: #1B7A55">
+                  <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"></path></svg>
+                  Saved
+                </span>
+              
+            </div>
+          
+          
+        </div>
+      </div>
+
+      <!-- grade -->
+      <div style="display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 16px; align-items: center; min-height: 64px; border-top: 1px solid #EAEFF3">
+        <div style="font-size: 14.5px; font-weight: 800">Grade</div>
+        <div style="display: flex; align-items: center; gap: 12px">
+          <div style="display: flex; border: 1px solid #DCE4EB; border-radius: 10px; overflow: hidden">
+            <button type="button" aria-pressed="true" style="height: 44px; padding: 0 18px; border: 0; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; background: #153968; color: #FFFFFF; font-weight: 800">Standard</button>
+            <button type="button" aria-pressed="false" style="height: 44px; padding: 0 18px; border: 0; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; background: #FFFFFF; color: #48556A; font-weight: 700">Premium</button>
+          </div>
+          
+        </div>
+      </div>
+
+      <!-- override -->
+      <div style="display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 64px; border-top: 1px solid #EAEFF3">
+        <div style="font-size: 14.5px; font-weight: 800">Price override</div>
+        <div style="font-size: 14.5px; color: #48556A">None. Use only when the pack is right and the number is not.</div>
+        <button type="button" aria-expanded="true" style="height: 44px; min-width: 96px; padding: 0 14px; border: 0; background: #E7F1F4; color: #153968; border-radius: 10px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 800">Close</button>
+      </div>
+      
+        <div style="border: 1px solid #DCE4EB; border-radius: 12px; padding: 16px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 16px">
+          <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px">
+            <label style="display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: #48556A">$ per unit
+              <input type="text" inputmode="decimal" value="" style="height: 44px; box-sizing: border-box; padding: 0 12px; border: 1px solid #C9DBE6; border-radius: 10px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637; width: 100%">
+            </label>
+            <label style="display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: #48556A">Unit
+              <select style="height: 44px; padding: 0 12px; border: 1px solid #C9DBE6; border-radius: 10px; background: #FFFFFF; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637"><option>each</option><option>lb</option><option>fl oz</option><option>gal</option></select>
+            </label>
+          </div>
+          <label style="display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: #48556A">Reason (required)
+            <input type="text" value="" placeholder="vendor confirmed, invoice pricing error" style="height: 44px; box-sizing: border-box; padding: 0 12px; border: 1px solid #C9DBE6; border-radius: 10px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637; width: 100%">
+          </label>
+          <div style="display: flex; justify-content: flex-end; gap: 8px">
+            <button type="button" style="height: 44px; padding: 0 16px; border: 0; background: #FFFFFF; color: #153968; border-radius: 10px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 800">Cancel</button>
+            <button type="button" style="height: 44px; min-width: 96px; padding: 0 14px; border-radius: 10px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 800; border: 1px solid #DCE4EB; background: #F8FAFC; color: #48556A">Save price</button>
+          </div>
+        </div>
+      
+    </div>
+
+    <!-- INGREDIENT -->
+    <div style="background: #F1F7F9; border-top: 1px solid #C9DBE6; border-bottom: 1px solid #C9DBE6; padding: 20px 24px 8px 24px; display: flex; flex-direction: column">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; padding-bottom: 10px; border-bottom: 2px solid #153968">
+        <div style="font-family: 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif; font-weight: 800; font-size: 20px; line-height: 1; text-transform: uppercase; color: #153968">Ingredient · Cauliflower</div>
+        <div style="font-size: 12px; color: #48556A">Changes here apply to every item linked to it</div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 64px; border-bottom: 1px solid #DCE4EB">
+        <label for="i-name" style="font-size: 14.5px; font-weight: 800">Name</label>
+        <input id="i-name" type="text" value="Cauliflower" style="height: 44px; box-sizing: border-box; padding: 0 12px; border: 1px solid #C9DBE6; border-radius: 10px; background: #FFFFFF; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637; width: 100%">
+        <button type="button" style="height: 44px; min-width: 96px; padding: 0 14px; border-radius: 10px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 800; border: 1px solid #153968; background: #FFFFFF; color: #153968">Rename</button>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: center; min-height: 64px; border-bottom: 1px solid #DCE4EB">
+        <div style="font-size: 14.5px; font-weight: 800">Category</div>
+        <select aria-label="Category" style="height: 44px; padding: 0 12px; border: 1px solid #C9DBE6; border-radius: 10px; background: #FFFFFF; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637"><option>Produce</option><option>Protein</option><option>Dairy</option><option>Pantry / Dry goods</option></select>
+        <select aria-label="Sub-category" style="height: 44px; padding: 0 12px; border: 1px solid #C9DBE6; border-radius: 10px; background: #FFFFFF; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637"><option>Vegetables and herbs</option><option>Fruit</option></select>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: center; min-height: 64px">
+        <div style="font-size: 14.5px; font-weight: 800">Costed per</div>
+        <select aria-label="Costed per" style="height: 44px; padding: 0 12px; border: 1px solid #C9DBE6; border-radius: 10px; background: #FFFFFF; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637"><option>Each</option><option>Pound (lb)</option><option>Gallon</option><option>Dozen</option></select>
+        <div style="font-size: 12px; color: #48556A">How recipes count this ingredient.</div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: center; min-height: 64px">
+        <label for="i-wt" style="font-size: 14.5px; font-weight: 800">One each is</label>
+        <div style="display: flex; align-items: center; gap: 8px">
+          <input id="i-wt" type="text" inputmode="decimal" value="3.5" style="height: 44px; box-sizing: border-box; padding: 0 12px; border: 1px solid #C9DBE6; border-radius: 10px; background: #FFFFFF; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637; width: 88px">
+          <select aria-label="Weight unit" value="lb" style="height: 44px; padding: 0 10px; border: 1px solid #C9DBE6; border-radius: 10px; background: #FFFFFF; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637">
+            <optgroup label="Weight"><option value="lb">lb</option><option value="oz">oz</option><option value="g">g</option><option value="kg">kg</option></optgroup><optgroup label="Volume"><option value="floz">fl oz</option><option value="gal">gal</option></optgroup>
+          </select>
+        </div>
+        <select aria-label="Where the measure came from" style="height: 44px; padding: 0 12px; border: 1px solid #C9DBE6; border-radius: 10px; background: #FFFFFF; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; color: #1B2637"><option>Measured in house</option><option>Book value</option><option>Vendor spec</option><option>Estimate</option></select>
+      </div>
+      <div style="display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 16px; padding-bottom: 14px; border-bottom: 1px solid #DCE4EB">
+        <div></div>
+        <div style="font-size: 12px; line-height: 1.6; color: #48556A"><span style="font-weight: 700; color: #1B7A55; background: #E3F1EA; border-radius: 999px; padding: 3px 10px; margin-right: 8px; white-space: nowrap">Saved</span>Recipes will use $0.91 / lb for this item ($3.18 each ÷ 3.5 lb). The stored price stays per each.</div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 16px; align-items: start; padding: 14px 0 12px 0">
+        <div style="display: flex; flex-direction: column; gap: 6px; padding-top: 6px">
+          <div style="font-size: 14.5px; font-weight: 800">Allergens</div>
+          
+            <span style="align-self: flex-start; font-size: 12px; font-weight: 700; color: #8A5A0E; background: #F8EDD6; border-radius: 999px; padding: 4px 10px">not reviewed</span>
+          
+          
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 12px">
+          <div style="display: flex; flex-wrap: wrap; gap: 8px">
+            
+              <button type="button" style="height: 44px; padding: 0 14px; border-radius: 999px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 700; border: 1px solid #C9DBE6; background: #FFFFFF; color: #1B2637">Milk</button>
+            
+              <button type="button" style="height: 44px; padding: 0 14px; border-radius: 999px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 700; border: 1px solid #C9DBE6; background: #FFFFFF; color: #1B2637">Eggs</button>
+            
+              <button type="button" style="height: 44px; padding: 0 14px; border-radius: 999px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 700; border: 1px solid #C9DBE6; background: #FFFFFF; color: #1B2637">Fish</button>
+            
+              <button type="button" style="height: 44px; padding: 0 14px; border-radius: 999px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 700; border: 1px solid #C9DBE6; background: #FFFFFF; color: #1B2637">Shellfish</button>
+            
+              <button type="button" style="height: 44px; padding: 0 14px; border-radius: 999px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 700; border: 1px solid #C9DBE6; background: #FFFFFF; color: #1B2637">Tree nuts</button>
+            
+              <button type="button" style="height: 44px; padding: 0 14px; border-radius: 999px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 700; border: 1px solid #C9DBE6; background: #FFFFFF; color: #1B2637">Peanuts</button>
+            
+              <button type="button" style="height: 44px; padding: 0 14px; border-radius: 999px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 700; border: 1px solid #C9DBE6; background: #FFFFFF; color: #1B2637">Wheat</button>
+            
+              <button type="button" style="height: 44px; padding: 0 14px; border-radius: 999px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 700; border: 1px solid #C9DBE6; background: #FFFFFF; color: #1B2637">Soy</button>
+            
+              <button type="button" style="height: 44px; padding: 0 14px; border-radius: 999px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 700; border: 1px solid #C9DBE6; background: #FFFFFF; color: #1B2637">Sesame</button>
+            
+          </div>
+          <div>
+            <button type="button" style="height: 44px; padding: 0 16px; border: 0; background: #153968; color: #FFFFFF; border-radius: 10px; font-family: Mulish, Verdana, sans-serif; font-size: 14.5px; font-weight: 800">Confirm none</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MORE + RECORD -->
+    <div style="padding: 8px 24px 16px 24px; display: flex; flex-direction: column">
+      <button type="button" aria-expanded="false" style="display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 56px; border: 0; border-bottom: 1px solid #EAEFF3; background: #FFFFFF; padding: 0; text-align: left; font-family: Mulish, Verdana, sans-serif; color: #1B2637">
+        <span style="font-size: 14.5px; font-weight: 800">Mark as retail</span>
+        <span style="font-size: 14.5px; color: #48556A">Takes Cauliflower out of recipe coverage</span>
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#48556A" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg>
+      </button>
+      
+
+      <button type="button" aria-expanded="false" style="display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 56px; border: 0; border-bottom: 1px solid #EAEFF3; background: #FFFFFF; padding: 0; text-align: left; font-family: Mulish, Verdana, sans-serif; color: #1B2637">
+        <span style="font-size: 14.5px; font-weight: 800">Merge</span>
+        <span style="font-size: 14.5px; color: #48556A">Fold Cauliflower into another ingredient</span>
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#48556A" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg>
+      </button>
+      
+
+      <button type="button" aria-expanded="false" style="display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 56px; border: 0; border-bottom: 1px solid #EAEFF3; background: #FFFFFF; padding: 0; text-align: left; font-family: Mulish, Verdana, sans-serif; color: #1B2637">
+        <span style="font-size: 14.5px; font-weight: 800">Evidence</span>
+        <span style="font-size: 14.5px; color: #48556A">The invoice lines behind this price</span>
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#48556A" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg>
+      </button>
+      
+
+      <button type="button" aria-expanded="false" style="display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 16px; align-items: center; min-height: 56px; border: 0; background: #FFFFFF; padding: 0; text-align: left; font-family: Mulish, Verdana, sans-serif; color: #1B2637">
+        <span style="font-size: 14.5px; font-weight: 800">Change history</span>
+        <span style="font-size: 14.5px; color: #48556A">Every change, newest first</span>
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#48556A" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg>
+      </button>
+      
+    </div>
+  </div>
+
+</div></div></body></html>
