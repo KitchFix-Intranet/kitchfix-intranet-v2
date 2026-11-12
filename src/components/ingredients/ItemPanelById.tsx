@@ -19,9 +19,14 @@ type Fetched = {
 export function ItemPanelById({
   itemId,
   onClose,
+  showStatusActions = false,
 }: {
   itemId: string | null;
   onClose: () => void;
+  // N13 R5: Archive + Mark one-off footer renders ONLY when the panel
+  // is opened from the Vendor items tab. Default off; the review
+  // queue and the Ingredients tab never show it.
+  showStatusActions?: boolean;
 }) {
   const [state, setState] = useState<
     | { phase: "idle" }
@@ -94,6 +99,7 @@ export function ItemPanelById({
         proposedName={null}
         proposedParent={null}
         onInvalidate={() => setNonce((n) => n + 1)}
+        showStatusActions={showStatusActions}
       />
     );
   }

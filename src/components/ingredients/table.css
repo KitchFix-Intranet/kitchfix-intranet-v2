@@ -193,37 +193,8 @@
   display: inline-block;
 }
 
-/* Legend row */
-.kf-table-legend {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-sp-2);
-  padding: 8px var(--sp-sp-4) 10px;
-  border-bottom: 1px solid var(--sp-line-soft);
-  background: var(--sp-sky-soft);
-  flex-wrap: wrap;
-  min-height: 36px;
-}
-.kf-table-legend__label {
-  color: var(--sp-muted);
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-micro);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-}
-.kf-table-legend__sep {
-  display: inline-block;
-  width: 1px;
-  height: 16px;
-  background: var(--sp-line);
-  margin: 0 var(--sp-sp-1);
-}
-.kf-table-legend__hint {
-  color: var(--sp-muted);
-  font-size: var(--sp-t-micro);
-}
-.kf-table-legend .kf-pill { margin-left: 0; }
+/* N13: .kf-table-legend family removed - only VendorItemsPage used
+ * it and the N13 rebuild drops the legend row entirely. */
 
 /* Sort select */
 .kf-sort select {

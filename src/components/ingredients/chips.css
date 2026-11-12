@@ -1,0 +1,73 @@
+/* N13 R9: one chip primitive shared by the Ingredients tab filter rows
+ * and the Vendor items tab filter rows. Lifted out of
+ * ingredients-tab.css where it was prefixed with the workspace scope
+ * (.kf-ingp__chip). Both tabs import this file so there is one
+ * source; see docs/GOVERNANCE.md on primitive-level additions.
+ *
+ * 36 px visible chrome (frame-A look across both tabs) with a 4 px
+ * invisible ::before halo so the hit target meets the 44 px floor
+ * (same pattern .kf-allergen uses). */
+
+.kf-chip-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+@media (max-width: 860px) {
+  /* Phone: each chip group is a single horizontally-scrolling strip
+   * rather than six wrapped lines of chips. Hide the native
+   * scrollbar; the chrome stays flat. */
+  .kf-chip-row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .kf-chip-row::-webkit-scrollbar { display: none; }
+}
+
+.kf-chip {
+  position: relative;
+  min-height: 36px;
+  padding: 0 var(--sp-sp-3);
+  border-radius: var(--sp-r-pill);
+  border: 1px solid var(--sp-line);
+  background: var(--sp-card);
+  font-family: var(--sp-ui);
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--sp-ink);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.kf-chip::before {
+  content: "";
+  position: absolute;
+  inset: -4px 0;
+}
+.kf-chip span { color: var(--sp-muted); font-weight: 400; }
+
+.kf-chip--on {
+  background: var(--sp-navy);
+  border-color: var(--sp-navy);
+  color: var(--sp-card);
+}
+.kf-chip--on span { color: var(--sp-sky-line); }
+
+.kf-chip--warn {
+  border-color: var(--sp-warn-strong);
+  color: var(--sp-warn);
+}
+.kf-chip--warn span { color: var(--sp-warn); }
+.kf-chip--warn.kf-chip--on {
+  background: var(--sp-warn-strong);
+  border-color: var(--sp-warn-strong);
+  color: var(--sp-card);
+}
+.kf-chip--warn.kf-chip--on span { color: var(--sp-card); }

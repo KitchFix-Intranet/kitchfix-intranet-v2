@@ -74,11 +74,8 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.kf-drawer__chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-sp-1);
-}
+/* N13: .kf-drawer__chips removed - only VendorItemDrawer's head
+ * rendered the chip row; the drawer is deleted. */
 /* Sticky inside the scrolling <aside>, not absolute to it: the aside IS
  * the scroll container, so an absolute X scrolls off with the content
  * (measured y = -688 at the pack-override section). The negative bottom
@@ -135,122 +132,13 @@
   margin: 0;
 }
 
-/* 2 x 3 facts grid */
-.kf-facts {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--sp-sp-3) var(--sp-sp-4);
-  margin: 0;
-}
-.kf-facts > div { display: flex; flex-direction: column; gap: 2px; }
-.kf-facts dt {
-  font-family: var(--sp-disp);
-  font-size: var(--sp-t-label);
-  font-weight: 700;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  color: var(--sp-muted);
-}
-.kf-facts dd {
-  margin: 0;
-  font-family: var(--sp-ui);
-  font-weight: 800;
-  font-size: var(--sp-t-body);
-  color: var(--sp-ink);
-  font-variant-numeric: tabular-nums;
-}
-.kf-facts__note {
-  display: block;
-  color: var(--sp-muted);
-  font-size: var(--sp-t-micro);
-  font-weight: 700;
-  margin-top: 2px;
-}
-.kf-facts__note--warn { color: var(--sp-warn-strong); }
-
-/* Compact table inside the drawer */
-.kf-table--compact { font-size: var(--sp-t-micro); }
-.kf-table--compact thead th {
-  position: static;
-  background: transparent;
-  padding: 6px var(--sp-sp-2);
-  border-bottom: 1px solid var(--sp-line-soft);
-  letter-spacing: 1px;
-}
-.kf-table--compact tbody td {
-  height: 36px;
-  padding: 0 var(--sp-sp-2);
-}
-
-/* Description variants */
-.kf-aliases {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-sp-1);
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-table);
-}
-.kf-aliases li {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: var(--sp-sp-2);
-  padding-bottom: var(--sp-sp-1);
-  border-bottom: 1px solid var(--sp-line-soft);
-  align-items: baseline;
-}
-.kf-aliases li:last-child { border-bottom: none; }
-.kf-aliases__desc {
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.kf-aliases__count { color: var(--sp-navy); font-weight: 800; font-variant-numeric: tabular-nums; }
-.kf-aliases__date { color: var(--sp-muted); font-size: var(--sp-t-micro); }
-
-/* Ledger */
-.kf-events {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-sp-2);
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-table);
-}
-.kf-events li {
-  padding: var(--sp-sp-2) var(--sp-sp-3);
-  background: var(--sp-sky-soft);
-  border-radius: var(--sp-r-sm);
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--sp-sp-2);
-  align-items: baseline;
-}
-.kf-events__kind { font-weight: 700; color: var(--sp-navy); }
-.kf-events__who {
-  color: var(--sp-muted);
-  font-size: var(--sp-t-micro);
-  grid-column: 1;
-}
-.kf-events time { color: var(--sp-muted); font-size: var(--sp-t-micro); grid-column: 2; grid-row: 1; justify-self: end; }
-.kf-events li p { grid-column: 1 / -1; margin-top: var(--sp-sp-1); color: var(--sp-body); }
-
-/* Sticky footer */
-.kf-drawer__footer {
-  position: sticky;
-  bottom: 0;
-  background: var(--sp-card);
-  border-top: 1px solid var(--sp-line);
-  padding: var(--sp-sp-3) var(--sp-sp-5);
-  display: flex;
-  gap: var(--sp-sp-2);
-  justify-content: flex-start;
-}
+/* N13: .kf-facts / .kf-aliases / .kf-events families removed - all
+ * three were VendorItemDrawer-local. The item panel's two new
+ * closed rows (Spend by site + Invoice wording) use the
+ * .kf-ipanel__history-table in vendor-items-tab.css; the ledger
+ * surface already lives inside PanelClosedRows via LedgerBlock.
+ * .kf-drawer__footer is also gone - the item panel's footer uses
+ * .kf-ipanel__footer-strip. */
 
 /* Inline empty variant for ledger */
 .kf-empty--inline { padding: var(--sp-sp-3); gap: var(--sp-sp-2); }
