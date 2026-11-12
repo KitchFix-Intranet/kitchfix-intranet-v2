@@ -7,24 +7,30 @@
  *   1. the two-pane workspace scaffold (list + detail);
  *   2. the list row primitive + pane head + colhead;
  *   3. the detail-pane head above the zones (eyebrow + h2 + meta);
- *   4. per-item sub-lines inside the linked-items table.
+ *   4. per-item sub-lines inside the linked-items table;
+ *   5. scope-based overrides so the shared .kf-ipanel__* primitives
+ *      sit on this tab's own ground (no tinted zone, one 24 inset,
+ *      no outline on the attention box, no zone header).
  *
- * Fill mechanism (R5): at >=861w and >=640h the workspace is sized
- * with calc(100dvh - --sp-topbar - --sp-sp-5). That arithmetic puts
- * workspace.top at topbar.bottom at full scroll WITHOUT a sticky
- * container (the canvas's 24 px bottom padding is accounted for in
- * the height). Below either threshold the workspace flows naturally
- * and the window scrolls.
+ * Fill mechanism (round 1 R5 + round 2 fix 19): at >=861w and >=720h
+ * the workspace height is calc(100dvh - --sp-topbar - --sp-sp-5). The
+ * canvas's 24 px bottom padding is accounted for in the height so no
+ * sticky is needed; at full scroll workspace.top sits at topbar.bottom
+ * and the canvas's bottom padding sits below the workspace. Below
+ * 720 px of window height the page flows naturally.
  */
 
 /* --- Workspace fill ------------------------------------------- */
 .kf-ingp__workspace {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-sp-3);
+  gap: var(--sp-sp-4);
+  /* round 2 fix 11: 16 px gap between the shell's top bar and the
+   * toolbar (search box top edge). */
+  padding-top: var(--sp-sp-4);
 }
 
-@media (min-width: 861px) and (min-height: 640px) {
+@media (min-width: 861px) and (min-height: 720px) {
   .kf-ingp__workspace {
     height: calc(100dvh - var(--sp-topbar) - var(--sp-sp-5));
     overflow: hidden;
@@ -39,17 +45,19 @@
   flex: 1;
 }
 
-@media (min-width: 861px) and (min-height: 640px) {
+@media (min-width: 861px) and (min-height: 720px) {
   .kf-ingp__panes { overflow: hidden; }
 }
 
-/* Phone (<=860): one column; `.kf-ingp__panes--detail-open` swaps
- * the list for the detail. */
+/* Phone (<=860): one column; toolbar + list by default, detail swaps
+ * them when open. Round 2 fix 18: on phone with detail open, hide the
+ * whole toolbar block too so only the back link + detail are visible. */
 @media (max-width: 860px) {
   .kf-ingp__panes { grid-template-columns: minmax(0, 1fr); }
   .kf-ingp__panes > .kf-ingp__pane--detail { display: none; }
   .kf-ingp__panes--detail-open > .kf-ingp__pane--list { display: none; }
   .kf-ingp__panes--detail-open > .kf-ingp__pane--detail { display: flex; }
+  .kf-ingp__workspace--detail-open .kf-ingp__tools { display: none; }
 }
 
 .kf-ingp__pane {
@@ -131,14 +139,19 @@
 /* --- List rows ----------------------------------------------- */
 .kf-ingp__list { list-style: none; margin: 0; padding: 0; }
 .kf-ingp__row {
+  /* Round 2 fix 1: globals.css does not reset <button> borders, so
+   * default user-agent borders print on top and right when only the
+   * bottom + left are declared. Reset the whole border, then set the
+   * two we want. */
+  border: 0;
+  border-bottom: 1px solid var(--sp-line-soft);
+  border-left: 3px solid transparent;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 116px 56px;
   gap: var(--sp-sp-3);
   align-items: center;
   min-height: 64px;
   padding: var(--sp-sp-2) var(--sp-sp-4);
-  border-bottom: 1px solid var(--sp-line-soft);
-  border-left: 3px solid transparent;
   width: 100%;
   background: transparent;
   color: inherit;
@@ -265,13 +278,14 @@
   flex-direction: column;
   gap: var(--sp-sp-1);
 }
+/* Round 2 fix 10: eyebrow is the panel's red, same as .kf-ipanel__eyebrow. */
 .kf-ingp__dhead-eyebrow {
   font-family: var(--sp-disp);
   font-weight: 700;
-  font-size: var(--sp-t-micro);
+  font-size: var(--sp-t-label);
   letter-spacing: 2px;
   text-transform: uppercase;
-  color: var(--sp-navy);
+  color: var(--sp-red-deep);
 }
 .kf-ingp__dhead-eyebrow--warn { color: var(--sp-warn-strong); }
 .kf-ingp__dhead h2 {
@@ -313,12 +327,13 @@
   .kf-ingp__dback { display: inline-flex; }
 }
 
-/* --- Detail zone container ----------------------------------- */
+/* --- Detail zones: one 24 px inset ------------------------------
+ * Round 2 fix 4 + 5 + 6 + 7: everything inside the detail pane aligns
+ * to one 24 px inset. The shared .kf-ipanel__* primitives render
+ * their own padding, so we scope-override them to drop left/right
+ * padding when they live inside the ingredients-tab detail pane. */
 .kf-ingp__dzone { padding: 0 var(--sp-sp-5); }
-.kf-ingp__dzone--section {
-  padding: 0 var(--sp-sp-5) var(--sp-sp-3);
-  margin-top: var(--sp-sp-5);
-}
+.kf-ingp__dzone--section { padding: 0 var(--sp-sp-5) var(--sp-sp-3); margin-top: var(--sp-sp-5); }
 .kf-ingp__dzone--section-head {
   display: flex;
   justify-content: space-between;
@@ -341,16 +356,117 @@
   font-size: var(--sp-t-micro);
   color: var(--sp-muted);
 }
-
 .kf-ingp__dzone--attn-wrap { padding: var(--sp-sp-3) var(--sp-sp-5) 0; }
+.kf-ingp__dzone--closed { padding: var(--sp-sp-3) var(--sp-sp-5) var(--sp-sp-5); margin-top: var(--sp-sp-3); border-top: 1px solid var(--sp-line); }
 
-.kf-ingp__dzone--closed {
-  padding: var(--sp-sp-3) var(--sp-sp-5) var(--sp-sp-5);
-  margin-top: var(--sp-sp-3);
-  border-top: 1px solid var(--sp-line);
+/* Fix 4: strip stretches the full pane width - its first/last cells
+ * carry 24 of padding internally, so no outer wrapper is needed. */
+
+/* Fix 5 + 6: ingredient zone inside the detail pane renders on the
+ * card ground (no sky-tint, no sky-line borders, no inner padding,
+ * no zone header). The item panel keeps its tint via its own mount.
+ */
+.kf-ingp__dzone .kf-ipanel__zone {
+  background: transparent;
+  border-top: 0;
+  border-bottom: 0;
+  padding: 0;
+}
+.kf-ingp__dzone .kf-ipanel__zone-head { display: none; }
+
+/* The zone's rows were tuned for a 150 px label column on a tinted
+ * zone. On this tab they also use 150 label, but the sky-tint-only
+ * row border colour needs to swap to the pane's own line colour. */
+.kf-ingp__dzone .kf-ipanel__zone--ing .kf-ipanel__row { border-top-color: var(--sp-line-soft); }
+
+/* Fix 7: attention box inside this pane drops its outline and sits
+ * on the card ground. The item panel keeps its outlined look via its
+ * own mount (this scope override is tab-only). Primitive change for
+ * the --good variant (new in this round) still adds the left 3 px
+ * bar for all tones. */
+.kf-ingp__dzone--attn-wrap .kf-ipanel__attn { padding: 0; }
+.kf-ingp__dzone--attn-wrap .kf-ipanel__attn-item {
+  border: 0;
+  border-left: 3px solid var(--sp-warn-strong);
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  font-size: var(--sp-t-table);
+}
+.kf-ingp__dzone--attn-wrap .kf-ipanel__attn-item--bad { border-left-color: var(--sp-block); }
+.kf-ingp__dzone--attn-wrap .kf-ipanel__attn-item--info { border-left-color: var(--sp-link); }
+.kf-ingp__dzone--attn-wrap .kf-ipanel__attn-item--good { border-left-color: var(--sp-good); }
+
+/* Fix 7: the issue list inside one attention item. Summary head +
+ * nested <ul> of per-issue lines (frame B / C). */
+.kf-ingp__attn-list {
+  margin: var(--sp-sp-1) 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+  font-size: var(--sp-t-table);
+  color: var(--sp-ink);
+}
+.kf-ingp__attn-list li b { font-weight: 800; }
+.kf-ingp__attn-fix {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--sp-link);
+  text-decoration: underline;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: inherit;
+  white-space: nowrap;
+}
+.kf-ingp__attn-fix:hover:not(:disabled) { color: var(--sp-navy); }
+.kf-ingp__attn-fix:disabled { opacity: .6; cursor: default; }
+
+/* --- Strip tweaks (fix 9) -----------------------------------
+ * The value + unit sit on one line; the lens select below the Price
+ * cell is compact but carries a 44 px hit area. */
+.kf-ingp__dzone--section + .kf-ipanel__strip,
+.kf-ipanel__strip {
+  overflow: hidden; /* so a cell cannot push the strip wider than
+                       its parent */
+}
+.kf-ingp__dzone-strip .kf-ipanel__strip-cell { min-width: 0; }
+.kf-ingp__dzone-strip .kf-ipanel__strip-value {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+}
+.kf-ingp__lens {
+  /* Compact line underneath the price. 28 px visible chrome with 8 px
+   * invisible padding top/bottom to keep the hit area at 44 px. */
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 var(--sp-sp-2);
+  margin: var(--sp-sp-1) 0;
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+  background: var(--sp-card);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-ink);
+  /* 8 px invisible margin keeps the click target at 44 */
+  box-shadow: 0 0 0 8px transparent;
+}
+.kf-ingp__lens select {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  outline: none;
+  cursor: pointer;
 }
 
-/* --- Linked-items table ------------------------------------- */
+/* --- Linked-items table (fix 3) -----------------------------
+ * `table-layout: fixed` with explicit col widths; 16 px gap between
+ * columns via td/th padding; tag sits UNDER the price. */
 .kf-ingp__items {
   width: 100%;
   border-collapse: collapse;
@@ -358,7 +474,7 @@
 }
 .kf-ingp__items th {
   text-align: left;
-  padding: var(--sp-sp-2) 0;
+  padding: var(--sp-sp-2) 0 var(--sp-sp-2) 0;
   border-bottom: 1px solid var(--sp-line);
   font-family: var(--sp-disp);
   font-weight: 700;
@@ -368,6 +484,8 @@
   color: var(--sp-muted);
   height: 40px;
 }
+.kf-ingp__items th + th,
+.kf-ingp__items td + td { padding-left: var(--sp-sp-4); }
 .kf-ingp__items th.kf-ingp__items-num { text-align: right; }
 .kf-ingp__items td {
   padding: var(--sp-sp-3) 0;
@@ -377,7 +495,6 @@
 }
 .kf-ingp__items tbody tr:last-child td { border-bottom: 0; }
 .kf-ingp__items td.kf-ingp__items-num { text-align: right; white-space: nowrap; }
-.kf-ingp__items td:first-child { padding-right: var(--sp-sp-4); }
 .kf-ingp__items b { font-weight: 800; }
 
 .kf-ingp__item-name {
@@ -405,6 +522,41 @@
 .kf-ingp__item-sub-warn {
   font-weight: 800;
   color: var(--sp-warn);
+}
+
+/* Fix 3: tag UNDER the price, right-aligned, in its own line. */
+.kf-ingp__items-price {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+/* Fix 2: RowGradeToggle chrome. Restored from the deleted review.css
+ * block (lines 2107-2128 at 682a08f). One-click pill in the linked-
+ * items table. Standard reads muted; Premium reads amber. */
+.kf-grade-row {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: var(--sp-r-pill);
+  border: 1px solid var(--sp-line);
+  background: transparent;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 700;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
+  min-height: var(--sp-floor-corp);
+}
+.kf-grade-row:hover:not(:disabled) { border-color: var(--sp-ink); color: var(--sp-ink); }
+.kf-grade-row:disabled { cursor: default; opacity: .6; }
+.kf-grade-row.is-busy { opacity: .7; }
+.kf-grade-row--standard { color: var(--sp-muted); border-color: var(--sp-line); background: transparent; }
+.kf-grade-row--premium {
+  color: var(--sp-warn-strong);
+  background: var(--sp-warn-bg);
+  border-color: var(--sp-warn-bg);
 }
 
 /* --- Toolbar ------------------------------------------------- */
@@ -469,7 +621,25 @@
   flex-wrap: wrap;
   align-items: center;
 }
+/* Round 2 fix 17: on phone each group is a single row that scrolls
+ * horizontally rather than wrapping into six lines. */
+@media (max-width: 860px) {
+  .kf-ingp__filters { grid-template-columns: minmax(0, 1fr); }
+  .kf-ingp__filters-label { display: none; }
+  .kf-ingp__chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .kf-ingp__chips::-webkit-scrollbar { display: none; }
+}
 .kf-ingp__chip {
+  /* Round 2 fix 16: visible chrome stays 36 px (frame A look); a 4 px
+   * invisible ::before above + below gives the 44 px hit target the
+   * floor rule asks for. Same precedent as .kf-allergen's hit halo. */
+  position: relative;
   min-height: 36px;
   padding: 0 var(--sp-sp-3);
   border-radius: var(--sp-r-pill);
@@ -484,6 +654,11 @@
   gap: 6px;
   white-space: nowrap;
   cursor: pointer;
+}
+.kf-ingp__chip::before {
+  content: "";
+  position: absolute;
+  inset: -4px 0;
 }
 .kf-ingp__chip span { color: var(--sp-muted); font-weight: 400; }
 .kf-ingp__chip--on {

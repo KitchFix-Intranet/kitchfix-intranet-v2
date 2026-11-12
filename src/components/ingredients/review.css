@@ -1901,20 +1901,27 @@
   color: var(--sp-good);
   background: var(--sp-good-bg, var(--sp-sky-tint));
 }
-/* Pill grid. Flex-wrap so long names never force overflow; min-width
- * on each pill protects against a cramped column stealing the Confirm
- * button's row. */
+/* N12 round 2 fix 8: 5 x 2 equal-column grid shared by the item
+ * panel and the ingredients-tab detail pane. The Confirm button
+ * lives in the mounting row's action column, not inside this grid.
+ * Phone falls back to 2 columns. */
 .kf-allergens__grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-sp-1) var(--sp-sp-2);
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--sp-sp-1);
   min-width: 0;
+  width: 100%;
+}
+@media (max-width: 860px) {
+  .kf-allergens__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 .kf-allergen {
   position: relative;
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  min-height: 32px;
+  justify-content: center;
+  width: 100%;
+  min-height: 40px;
   padding: var(--sp-sp-1) var(--sp-sp-3);
   background: var(--sp-card);
   color: var(--sp-body);

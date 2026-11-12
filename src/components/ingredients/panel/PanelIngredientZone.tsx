@@ -16,13 +16,18 @@
 //
 // Pending (ai-new) renders as the same zone shape.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtUsd } from "@/lib/fmt";
 import { SUPER_CATEGORIES, type SuperCategory } from "@/lib/ingredients/categories";
 import { DIM_BY_UOM, WEIGHT_UOMS, VOLUME_UOMS, uomLabel } from "@/lib/ingredients/pack";
 import { deriveRecipePrice } from "@/lib/ingredients/eachMeasure";
-import { IngredientAllergens, allergenStatus } from "../IngredientAllergens";
+import {
+  IngredientAllergens,
+  allergenStatus,
+  type AllergensHandle,
+  type AllergensState,
+} from "../IngredientAllergens";
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 import { SaveFlash } from "./SaveFlash";
 import { postJson, errMsg } from "./common";
@@ -272,7 +277,20 @@ export function PanelIngredientZone({
     renameDraft.trim().length >= 2 &&
     renameDraft.trim() !== ingredient.name;
 
-  const allergenState = allergenStatus(ingredient.allergens ?? [], ingredient.allergens_reviewed_at ?? null);
+  const allergenPill = allergenStatus(ingredient.allergens ?? [], ingredient.allergens_reviewed_at ?? null);
+
+  // N12 round 2 fix 8: Confirm lives in the row's action column.
+  // IngredientAllergens exposes its confirm() via a ref and reports
+  // its state via onStateChange so the parent-rendered button mirrors
+  // enablement + busy without owning the chip state.
+  const allergenRef = useRef<AllergensHandle>(null);
+  const [allergenCtl, setAllergenCtl] = useState<AllergensState>({
+    canConfirm: ingredient.allergens_reviewed_at == null,
+    busy: false,
+    savedAt: null,
+    error: null,
+  });
+  const onAllergenState = useCallback((s: AllergensState) => setAllergenCtl(s), []);
 
   // N8 round 3 fix 1: the ingredient's One each row describes the
   // INGREDIENT's own measure, so call deriveRecipePrice with
@@ -610,16 +628,28 @@ export function PanelIngredientZone({
       <div className="kf-ipanel__row kf-ipanel__row--allergens">
         <div className="kf-ipanel__row-label">
           <span>Allergens</span>
-          <span className={`kf-pill kf-pill--${allergenState.tone}`}>{allergenState.label}</span>
+          <span className={`kf-pill kf-pill--${allergenPill.tone}`}>{allergenPill.label}</span>
         </div>
         <div className="kf-ipanel__row-value">
           <IngredientAllergens
+            ref={allergenRef}
             ingredientId={ingredient.id}
             allergens={ingredient.allergens}
             reviewedBy={ingredient.allergens_reviewed_by}
             reviewedAt={ingredient.allergens_reviewed_at}
             onSaved={onDone}
+            onStateChange={onAllergenState}
           />
+        </div>
+        <div className="kf-ipanel__row-action">
+          <button
+            type="button"
+            className={`kf-btn ${allergenCtl.canConfirm ? "kf-btn--primary" : "kf-btn--line"} kf-btn--sm${allergenCtl.busy ? " is-busy" : ""}`}
+            disabled={!allergenCtl.canConfirm || allergenCtl.busy}
+            onClick={() => allergenRef.current?.confirm()}
+          >
+            {allergenCtl.busy ? "Saving..." : "Confirm"}
+          </button>
         </div>
       </div>
     </section>

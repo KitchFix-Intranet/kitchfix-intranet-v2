@@ -25,10 +25,7 @@ import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   Check,
-  Flame,
-  Info,
   Search,
-  Wand2,
   X,
 } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
@@ -135,6 +132,12 @@ const BASE_UNIT_WORD: Record<string, string> = {
 
 function uomOrUnit(uom: string | null): string {
   return uom ? uomLabel(uom) : "unit";
+}
+
+// N12 round 2 fix 14: $0.00 reads as noise next to the pane head's
+// "- a year"; prefer "$0". fmtUsd stays untouched for other callers.
+function fmtMoney(n: number): string {
+  return n === 0 ? "$0" : fmtUsd(n);
 }
 
 function matches(row: MasterRow, needle: string): boolean {
@@ -437,11 +440,11 @@ export function IngredientMastersFilter({
                   <>
                     <b>{fmtCount(filtered.length)}</b> of <b>{fmtCount(rows.length)}</b> shown
                     {" · "}
-                    <b>{fmtUsd(matchedUsd)}</b> a year
+                    <b>{fmtMoney(matchedUsd)}</b> a year
                   </>
                 ) : (
                   <>
-                    <b>{fmtCount(rows.length)}</b> shown · <b>{fmtUsd(totalUsd)}</b> a year
+                    <b>{fmtCount(rows.length)}</b> shown · <b>{fmtMoney(totalUsd)}</b> a year
                   </>
                 )}
               </span>
@@ -573,7 +576,9 @@ function IngredientRow({
         <span className="kf-ingp__row-sub">
           <span>
             {row.parent ?? (row.category ? row.category : "No category")}
-            {row.linkedCount > 0 ? ` · ${fmtCount(row.linkedCount)} items` : ""}
+            {row.linkedCount > 0
+              ? ` · ${fmtCount(row.linkedCount)} item${row.linkedCount === 1 ? "" : "s"}`
+              : ""}
           </span>
           {row.resale ? <span className="kf-ingp__row-retail">Retail</span> : null}
           {badges.map((b) => (
@@ -664,8 +669,10 @@ function DetailView({
         </div>
       </div>
 
-      {/* Strip */}
-      <div className="kf-ipanel__strip">
+      {/* Strip - round 2 fix 9: value + unit on one line, no wrap;
+          lens select below Price is the compact chrome, never
+          clipped, with a 44 px click target. */}
+      <div className="kf-ipanel__strip kf-ingp__dzone-strip">
         <div className="kf-ipanel__strip-cell">
           <span className="kf-ipanel__strip-label">
             {effectiveLens === "blended" ? "Price" : effectiveLens === "standard" ? "Standard price" : "Premium price"}
@@ -681,17 +688,20 @@ function DetailView({
             {derivedForStrip ? ` · ${derivedForStrip}` : ""}
           </span>
           {showLens ? (
-            <select
-              className="kf-ingp__sort"
-              style={{ width: "100%", marginTop: "4px" }}
-              value={effectiveLens}
-              onChange={(e) => setLens(e.target.value as "blended" | "standard" | "premium")}
-              aria-label="Price lens"
-            >
-              <option value="blended">Blended</option>
-              <option value="standard">Standard</option>
-              <option value="premium">Premium</option>
-            </select>
+            <label className="kf-ingp__lens">
+              <select
+                value={effectiveLens}
+                onChange={(e) => {
+                  const v = e.target.value as "blended" | "standard" | "premium";
+                  setLens(v);
+                }}
+                aria-label="Price lens"
+              >
+                <option value="blended">Blended</option>
+                <option value="standard">Standard</option>
+                <option value="premium">Premium</option>
+              </select>
+            </label>
           ) : null}
         </div>
         <div className="kf-ipanel__strip-cell">
@@ -726,7 +736,7 @@ function DetailView({
         <div className="kf-ipanel__strip-cell">
           <span className="kf-ipanel__strip-label">12-mo spend</span>
           <span className="kf-ipanel__strip-value kf-ipanel__strip-value--accent">
-            {row.linkedCount > 0 ? fmtUsd(active.usd12m) : "-"}
+            {row.linkedCount > 0 ? fmtMoney(active.usd12m) : "-"}
           </span>
           <span className="kf-ipanel__strip-sub">
             {row.linkedCount > 0
@@ -796,17 +806,36 @@ function DetailView({
 
 function IngredientAttention({ row, onDone }: { row: MasterRow; onDone: () => void }) {
   const uom = uomOrUnit(row.baseUom);
-  type Note = { tone: "bad" | "info" | "warn"; icon: ReactNode; head: string; body: ReactNode };
-  const notes: Note[] = [];
+  type Issue = { lead: string; body: ReactNode };
+  const issues: Issue[] = [];
+
+  // N12 round 2 fix 13: zero-linked ingredients cannot be "flagged"
+  // or "clean" against nothing. Say the no-items sentence, warn tone.
+  if (row.linkedCount === 0) {
+    return (
+      <div className="kf-ipanel__attn" aria-label="What needs attention">
+        <div className="kf-ipanel__attn-item">
+          <span className="kf-ipanel__attn-icon">
+            <AlertTriangle size={22} strokeWidth={1.75} aria-hidden />
+          </span>
+          <div className="kf-ipanel__attn-item-text">
+            <span className="kf-ipanel__attn-item-head">No live vendor items</span>
+            <span className="kf-ipanel__attn-item-body">
+              No live items are linked to this ingredient. If it is a fresh split, the matcher
+              will attach items next run; otherwise it is likely ready to retire.
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (row.issues.includes("spread")) {
-    notes.push({
-      tone: "bad",
-      icon: <Flame size={22} strokeWidth={1.75} aria-hidden />,
-      head: `Spread is ${row.spreadRatio?.toFixed(1)}x`,
+    issues.push({
+      lead: `Spread is ${row.spreadRatio?.toFixed(1)}x.`,
       body: (
         <>
-          Cheapest linked item is {fmtUsd(row.minPerBase ?? 0)}/{uom}, dearest is{" "}
+          {" "}Cheapest linked item is {fmtUsd(row.minPerBase ?? 0)}/{uom}, dearest is{" "}
           {fmtUsd(row.maxPerBase ?? 0)}/{uom}. Over 3x usually means one item has a bad pack size,
           not a real price difference.
         </>
@@ -814,15 +843,14 @@ function IngredientAttention({ row, onDone }: { row: MasterRow; onDone: () => vo
     });
   }
   if (row.issues.includes("coverage")) {
-    notes.push({
-      tone: "warn",
-      icon: <AlertTriangle size={22} strokeWidth={1.75} aria-hidden />,
-      head: `${fmtCount(row.linkedCount - row.pricedCount)} of ${fmtCount(row.linkedCount)} linked items are not in this price`,
+    issues.push({
+      lead: `${fmtCount(row.linkedCount - row.pricedCount)} of ${fmtCount(row.linkedCount)} linked items are not in this price.`,
       body: (
         <>
+          {" "}
           <strong>{fmtUsd(row.unpricedUsd)}</strong> of this ingredient&rsquo;s{" "}
-          {fmtUsd(row.usd12m)} sits outside the blend - either no per-unit price at all, or a price
-          in a different unit. The figure above describes {fmtCount(row.pricedCount)} item
+          {fmtUsd(row.usd12m)} sits outside the blend - either no per-unit price at all, or a
+          price in a different unit. The figure above describes {fmtCount(row.pricedCount)} item
           {row.pricedCount === 1 ? "" : "s"}, not {fmtCount(row.linkedCount)}.
         </>
       ),
@@ -830,21 +858,23 @@ function IngredientAttention({ row, onDone }: { row: MasterRow; onDone: () => vo
   }
   if (row.issues.includes("mismatch")) {
     const n = row.linkedItems.filter((li) => li.unitMismatch).length;
-    notes.push({
-      tone: "info",
-      icon: <Info size={22} strokeWidth={1.75} aria-hidden />,
-      head: `${fmtCount(n)} item${n === 1 ? "" : "s"} priced in a different unit`,
+    // N12 round 2 fix 15: suggested base-unit printed through uomLabel
+    // so "floz" reads "fl oz", not the raw column form.
+    const suggested = row.suggestedBaseUnit
+      ? uomLabel(row.suggestedBaseUnit) || BASE_UNIT_WORD[row.suggestedBaseUnit] || row.suggestedBaseUnit
+      : null;
+    issues.push({
+      lead: `${fmtCount(n)} item${n === 1 ? "" : "s"} priced in a different unit.`,
       body: (
         <>
-          This ingredient is costed per <strong>{uom}</strong>, but{" "}
+          {" "}This ingredient is costed per <strong>{uom}</strong>, but{" "}
           {n === 1 ? "an item is" : "those items are"} priced per a different dimension. Those
           numbers are not comparable and never reach the blend until the unit is fixed.
-          {row.suggestedBaseUnit ? (
+          {suggested ? (
             <>
-              {" "}Most of its priced items are in{" "}
-              <strong>{BASE_UNIT_WORD[row.suggestedBaseUnit] ?? row.suggestedBaseUnit}</strong>, so
-              the ingredient is probably the one set wrong - it was created on the default.{" "}
-              <SuggestBaseUnitLink row={row} onDone={onDone} />
+              {" "}Most of its priced items are in <strong>{suggested}</strong>, so the ingredient
+              is probably the one set wrong - it was created on the default.{" "}
+              <SuggestBaseUnitLink row={row} suggestedLabel={suggested} onDone={onDone} />
             </>
           ) : null}
         </>
@@ -854,12 +884,11 @@ function IngredientAttention({ row, onDone }: { row: MasterRow; onDone: () => vo
   if (row.issues.includes("outlier")) {
     const o = row.linkedItems.filter((li) => li.outlier);
     const median = row.medianBeforeExclusion;
-    notes.push({
-      tone: "bad",
-      icon: <AlertTriangle size={22} strokeWidth={1.75} aria-hidden />,
-      head: `${fmtCount(o.length)} item${o.length === 1 ? "" : "s"} excluded as outlier${o.length === 1 ? "" : "s"}`,
+    issues.push({
+      lead: `${fmtCount(o.length)} item${o.length === 1 ? "" : "s"} excluded as outlier${o.length === 1 ? "" : "s"}.`,
       body: (
         <>
+          {" "}
           {o
             .map(
               (li) =>
@@ -874,15 +903,13 @@ function IngredientAttention({ row, onDone }: { row: MasterRow; onDone: () => vo
     });
   }
   if (row.issues.includes("band")) {
-    notes.push({
-      tone: "warn",
-      icon: <AlertTriangle size={22} strokeWidth={1.75} aria-hidden />,
-      head: "Average is outside the typical band for this unit",
-      body: <>A soft signal, not an assertion - worth a look at the pack sizes.</>,
+    issues.push({
+      lead: "Average is outside the typical band for this unit.",
+      body: <> A soft signal, not an assertion - worth a look at the pack sizes.</>,
     });
   }
 
-  if (notes.length === 0) {
+  if (issues.length === 0) {
     return (
       <div className="kf-ipanel__attn" aria-label="What needs attention">
         <div className="kf-ipanel__attn-item kf-ipanel__attn-item--good">
@@ -901,25 +928,47 @@ function IngredientAttention({ row, onDone }: { row: MasterRow; onDone: () => vo
     );
   }
 
+  // N12 round 2 fix 7: one box with a summary head + <ul> of
+  // per-issue lines (frames B / C). Tone = the strongest tone across
+  // the issues.
+  const toneRank = (k: MasterIssue): number =>
+    k === "spread" || k === "outlier" ? 3 : k === "mismatch" ? 2 : 1;
+  const strongestKind = [...row.issues].sort((a, b) => toneRank(b) - toneRank(a))[0];
+  const tone =
+    strongestKind === "spread" || strongestKind === "outlier" ? "bad" : strongestKind === "mismatch" ? "info" : "warn";
+
   return (
     <div className="kf-ipanel__attn" aria-label="What needs attention">
-      {notes.map((n) => (
-        <div
-          key={n.head}
-          className={`kf-ipanel__attn-item${n.tone === "bad" ? " kf-ipanel__attn-item--bad" : n.tone === "info" ? " kf-ipanel__attn-item--info" : ""}`}
-        >
-          <span className="kf-ipanel__attn-icon">{n.icon}</span>
-          <div className="kf-ipanel__attn-item-text">
-            <span className="kf-ipanel__attn-item-head">{n.head}</span>
-            <span className="kf-ipanel__attn-item-body">{n.body}</span>
-          </div>
+      <div className={`kf-ipanel__attn-item${tone === "bad" ? " kf-ipanel__attn-item--bad" : tone === "info" ? " kf-ipanel__attn-item--info" : ""}`}>
+        <span className="kf-ipanel__attn-icon">
+          <AlertTriangle size={22} strokeWidth={1.75} aria-hidden />
+        </span>
+        <div className="kf-ipanel__attn-item-text">
+          <span className="kf-ipanel__attn-item-head">
+            {issues.length} thing{issues.length === 1 ? "" : "s"} need{issues.length === 1 ? "s" : ""} attention
+          </span>
+          <ul className="kf-ingp__attn-list">
+            {issues.map((n) => (
+              <li key={n.lead}>
+                <b>{n.lead}</b>{n.body}
+              </li>
+            ))}
+          </ul>
         </div>
-      ))}
+      </div>
     </div>
   );
 }
 
-function SuggestBaseUnitLink({ row, onDone }: { row: MasterRow; onDone: () => void }) {
+function SuggestBaseUnitLink({
+  row,
+  suggestedLabel,
+  onDone,
+}: {
+  row: MasterRow;
+  suggestedLabel: string;
+  onDone: () => void;
+}) {
   const [busy, setBusy] = useState(false);
   const next = row.suggestedBaseUnit;
   if (!next) return null;
@@ -938,7 +987,7 @@ function SuggestBaseUnitLink({ row, onDone }: { row: MasterRow; onDone: () => vo
       setBusy(false);
       return;
     }
-    toast(`Switched to ${BASE_UNIT_WORD[next] ?? next}`);
+    toast(`Switched to ${suggestedLabel}`);
     setBusy(false);
     onDone();
   }
@@ -946,21 +995,11 @@ function SuggestBaseUnitLink({ row, onDone }: { row: MasterRow; onDone: () => vo
   return (
     <button
       type="button"
-      className="kf-ingp__inline-link"
+      className="kf-ingp__attn-fix"
       onClick={apply}
       disabled={busy}
-      style={{
-        background: "transparent",
-        border: 0,
-        padding: 0,
-        color: "var(--sp-link)",
-        textDecoration: "underline",
-        fontWeight: 700,
-        cursor: "pointer",
-      }}
     >
-      <Wand2 size={13} strokeWidth={1.5} aria-hidden />
-      {busy ? " Switching..." : ` Cost this per ${BASE_UNIT_WORD[next] ?? next} instead`}
+      {busy ? "Switching..." : `Cost this per ${suggestedLabel} instead`}
     </button>
   );
 }
@@ -1054,14 +1093,18 @@ function LinkedItems({
                 <RowGradeToggle itemId={li.id} grade={li.grade} />
               </td>
               <td className="kf-ingp__items-num">
-                {li.perBase != null ? (
-                  <>
-                    <b>{fmtUsd(li.perBase)}</b> / {liUom}
-                  </>
-                ) : (
-                  <b>- / {base}</b>
-                )}
-                {tag ? <span className="kf-ipanel__tag" style={{ marginLeft: 8 }}>{tag}</span> : null}
+                <div className="kf-ingp__items-price">
+                  <span>
+                    {li.perBase != null ? (
+                      <>
+                        <b>{fmtUsd(li.perBase)}</b> / {liUom}
+                      </>
+                    ) : (
+                      <b>- / {base}</b>
+                    )}
+                  </span>
+                  {tag ? <span className="kf-ipanel__tag">{tag}</span> : null}
+                </div>
               </td>
               <td className="kf-ingp__items-num">
                 <b>{fmtUsdLong(li.usd12m)}</b>
