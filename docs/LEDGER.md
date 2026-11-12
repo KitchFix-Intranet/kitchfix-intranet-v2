@@ -20,6 +20,7 @@ entry in its PR (the ledger-in-PR convention, see GOVERNANCE.md).
 - Stockpot / Ingredients - craft bar + Ingredients, then the Oct 30 - Nov 5 run: allergens (b1), grade model (g1-g3), pack recovery (p1-p2), vendor-reliability gate, queue throughput (q2), rescan loader (l1-l4), observation-countability (n0 series), through m-series to m3. Live.
 - Shared foundation - tokens, components, shell, sign-in. Live.
   - T0a (2026-11-11): People lane fence set in docs/OWNERSHIP.md; People rail wired in Shell.tsx; People titles + crumbs added to (shell)/layout.tsx; `--sp-muted` recolour and new `--sp-line-field` per R-PP63.
+  - R-PP80 (2026-11-12): phone shell drops the top-bar burger; the bottom-bar Menu tab is the only drawer opener. The opener moves from first in the phone tab order to last (the bottom bar is DOM-last). Accepted trade, R-PP80. Files: `src/components/shell/Shell.tsx` (button at ~440-446), `src/components/shell/shell.css` (burger rule at ~376 and phone override at ~472).
 
 ## In flight
 - F4 - shared promotion: head wash + earned-column system move from academy.css into the shell (tokens.css/components.css). Was gated on the Stockpot lane vacating shared CSS; that lane is inactive, so re-confirm nothing is uncommitted there, then it can proceed.
