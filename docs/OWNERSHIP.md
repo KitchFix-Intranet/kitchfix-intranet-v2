@@ -8,6 +8,11 @@ and hand Kevin a patch, they never edit it in their own PR.
 - src/app/tokens.css
 - src/app/components.css  (shared components; lives in src/app/, not src/components/**/components.css as the template guessed)
 - src/components/shell/Shell.tsx       (the shell chrome)
+- src/components/shell/routeTitles.tsx (the topbar title + crumb map)
+  - Shell lane owns the function, the types, the fallback, the Home entry, the order rules, and every other file in src/components/shell/.
+  - Each section lane may ADD AND EDIT ONLY its own rows: People -> `/people...` rows; Academy + Library -> `/academy...` and `/library...` rows; Stockpot -> `/stockpot...` rows.
+  - Row pattern, copied from the file:
+    `{ test: (p) => p === "/stockpot/ingredients/vendor-items", v: { title: "Vendor items", crumb: "Stockpot / Ingredients" } },`
 - src/lib/fmt.ts
 - src/app/globals.css
 - docs/DESIGN.md, docs/GOTCHAS.md
