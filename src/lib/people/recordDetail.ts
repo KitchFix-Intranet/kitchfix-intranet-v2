@@ -9,6 +9,8 @@
 
 import { fmtFull } from "./dates";
 import { fmtMoney } from "./money";
+import { resolveSite, type SiteIndex } from "./site";
+import { separationType } from "./separation";
 
 type Pair = [string, string];
 type Payload = Record<string, unknown>;
@@ -74,9 +76,13 @@ function forLine(p: Payload, resolvedPersonName: string | null): string {
   return s || NOT_GIVEN;
 }
 
-function siteLine(p: Payload): string {
-  const s = str(p.locationName);
-  return s || NOT_GIVEN;
+// T3.1 fix 4 (2026-11-13). Site resolution walks the three signals
+// (payload.locationName -> payload.locationKey -> submissions.location),
+// so older rows that only carry `submissions.location` ("STL - FL -
+// St Louis Cardinals") still print "St Louis Cardinals" instead of
+// "Not given".
+function siteLine(p: Payload, submissionsLocation: string | null, index: SiteIndex): string {
+  return resolveSite(p.locationName, p.locationKey, submissionsLocation, index) ?? NOT_GIVEN;
 }
 
 // Public entry. `action_type` picks the field list; `module === "newhire"`
@@ -86,6 +92,8 @@ export function detailPairs(
   action_type: string | null,
   payload: Payload,
   resolvedPersonName: string | null,
+  submissionsLocation: string | null,
+  siteIndex: SiteIndex,
 ): Pair[] {
   const m = (module ?? "").toLowerCase();
   const a = (action_type ?? "").toLowerCase();
@@ -94,30 +102,43 @@ export function detailPairs(
     const first = str(payload.firstName);
     const last = str(payload.lastName);
     const both = [first, last].filter(Boolean).join(" ") || NOT_GIVEN;
+    // T3.1 fix 8 (2026-11-13). Tools and access uses the render's
+    // four names, not the terse form checkbox labels.
     const tools: string[] = [];
-    if (payload.needsLaptop) tools.push("Laptop");
-    if (payload.needsEmail) tools.push("Email");
-    if (payload.needsCell) tools.push("Cell phone");
-    if (payload.needsCard) tools.push("Expense card");
+    if (payload.needsCard) tools.push("Company card");
+    if (payload.needsEmail) tools.push("KitchFix email");
+    if (payload.needsLaptop) tools.push("Company laptop");
+    if (payload.needsCell) tools.push("Cell phone reimbursement");
+    // Site is the club name only (not "STL - FL - St Louis Cardinals").
+    // `operation` carries the combo string on hire forms; resolveSite
+    // peels the team-key prefix off via the SiteIndex.
+    const siteName = resolveSite(payload.operation, payload.operation, submissionsLocation, siteIndex) ?? NOT_GIVEN;
+    // Worked here before -> "New to KitchFix" or "Returning".
+    const isRehireVal = payload.isRehire;
+    const workedHere = (isRehireVal === true || isRehireVal === "true" || isRehireVal === "Yes" || isRehireVal === "yes")
+      ? "Returning"
+      : (isRehireVal === false || isRehireVal === "false" || isRehireVal === "No" || isRehireVal === "no")
+        ? "New to KitchFix"
+        : NOT_GIVEN;
     return [
       ["For", both],
       ["Personal email", textOr(payload.personalEmail)],
-      ["Worked here before", yesNo(payload.isRehire)],
-      ["Site", textOr(payload.operation)],
+      ["Worked here before", workedHere],
+      ["Site", siteName],
       ["Reports to", textOr(payload.manager)],
       ["Job title", textOr(payload.jobTitle)],
       ["Pay type", textOr(payload.payType)],
       ["Rate", moneyOr(payload.payRate)],
       ["Full-time", yesNo(payload.isFullTime)],
       ["Start date", dateOr(payload.startDate)],
-      ["Tools and access", tools.length ? tools.join(" · ") : NOT_GIVEN],
+      ["Tools and access", tools.length ? tools.join(" · ") : "None"],
     ];
   }
 
   if (a === "travel_reimbursement") {
     return [
       ["For", forLine(payload, resolvedPersonName)],
-      ["Site visited", siteLine(payload)],
+      ["Site visited", siteLine(payload, submissionsLocation, siteIndex)],
       ["Days away", textOr(payload.travelTotalDays)],
       ["Effective date", dateOr(payload.effectiveDate ?? payload.travelStartDate)],
       ["Meals each day", perDiemLine(payload)],
@@ -128,12 +149,17 @@ export function detailPairs(
   }
 
   if (a === "separation") {
+    // T3.1 fix 7 (2026-11-13). Type is derived from the separation
+    // REASON (Voluntary / Involuntary), never from
+    // `statusChangeDirection` - that is the part-time / full-time
+    // toggle for a status change, not a separation signal.
+    const reason = str(payload.separationReason ?? payload.replacementReason);
     return [
       ["For", forLine(payload, resolvedPersonName)],
-      ["Site", siteLine(payload)],
+      ["Site", siteLine(payload, submissionsLocation, siteIndex)],
       ["Effective date", dateOr(payload.effectiveDate)],
-      ["Type", textOr(payload.statusChangeDirection)],
-      ["Reason", textOr(payload.separationReason ?? payload.replacementReason)],
+      ["Type", separationType(reason)],
+      ["Reason", reason || NOT_GIVEN],
       ["Last day worked", dateOr(payload.lastDayWorked)],
       ["Eligible to rehire", yesNo(payload.rehireEligible)],
     ];
@@ -142,7 +168,7 @@ export function detailPairs(
   if (a === "add_bonus" || a === "add_deduction" || a === "other_reimbursement") {
     return [
       ["For", forLine(payload, resolvedPersonName)],
-      ["Site", siteLine(payload)],
+      ["Site", siteLine(payload, submissionsLocation, siteIndex)],
       ["Effective date", dateOr(payload.effectiveDate)],
       ["Amount", moneyOr(payload.amount)],
       ["Reason", textOr(payload.explanation)],
@@ -153,7 +179,7 @@ export function detailPairs(
   if (a === "add_cell_phone") {
     return [
       ["For", forLine(payload, resolvedPersonName)],
-      ["Site", siteLine(payload)],
+      ["Site", siteLine(payload, submissionsLocation, siteIndex)],
       ["Effective date", dateOr(payload.effectiveDate)],
       ["Amount", moneyOr(payload.amount)],
       ["Frequency", textOr(payload.cellFrequency)],
@@ -167,7 +193,7 @@ export function detailPairs(
   if (a === "title_change") {
     return [
       ["For", forLine(payload, resolvedPersonName)],
-      ["Site", siteLine(payload)],
+      ["Site", siteLine(payload, submissionsLocation, siteIndex)],
       ["Effective date", dateOr(payload.effectiveDate)],
       ["Old title", textOr(payload.oldTitle)],
       ["New title", textOr(payload.newTitle)],
@@ -178,7 +204,7 @@ export function detailPairs(
   if (a === "rate_change") {
     return [
       ["For", forLine(payload, resolvedPersonName)],
-      ["Site", siteLine(payload)],
+      ["Site", siteLine(payload, submissionsLocation, siteIndex)],
       ["Effective date", dateOr(payload.effectiveDate)],
       ["Old rate", moneyOr(payload.oldRate)],
       ["New rate", moneyOr(payload.newRate)],
@@ -189,7 +215,7 @@ export function detailPairs(
   if (a === "status_change") {
     return [
       ["For", forLine(payload, resolvedPersonName)],
-      ["Site", siteLine(payload)],
+      ["Site", siteLine(payload, submissionsLocation, siteIndex)],
       ["Effective date", dateOr(payload.effectiveDate)],
       ["Change", textOr(payload.statusChangeDirection ?? payload.reclassChangeRate)],
       ["Old", textOr(payload.reclassFrom ?? payload.oldTitle)],
@@ -206,7 +232,7 @@ export function detailPairs(
       (payload.eligManagerApproved ? 1 : 0);
     return [
       ["For", forLine(payload, resolvedPersonName)],
-      ["Site", siteLine(payload)],
+      ["Site", siteLine(payload, submissionsLocation, siteIndex)],
       ["Effective date", dateOr(payload.effectiveDate)],
       ["Old rate", moneyOr(payload.oldRate)],
       ["New rate", moneyOr(payload.newRate)],
@@ -223,7 +249,7 @@ export function detailPairs(
   // fields so the viewer sees who and when, not blank.
   return [
     ["For", forLine(payload, resolvedPersonName)],
-    ["Site", siteLine(payload)],
+    ["Site", siteLine(payload, submissionsLocation, siteIndex)],
     ["Effective date", dateOr(payload.effectiveDate)],
     ["Reason", textOr(payload.explanation)],
   ];

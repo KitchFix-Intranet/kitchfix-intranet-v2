@@ -37,6 +37,23 @@ export function fmtFull(iso: string | null | undefined): string {
   return `${MONTHS_SHORT[p.m - 1]} ${p.d}, ${p.y}`;
 }
 
+// T3.1 fix 5 (2026-11-13). Date range formatter for the inbox:
+//   same day              -> "Sep 15"
+//   same month different d -> "Oct 20 to 22"
+//   different months       -> "Sep 29 to Oct 1"
+//   missing end or start   -> falls back to fmtShort(start || end)
+// Never "Sep 15 - Sep 15" and never a hyphen when a range is given.
+export function fmtRangeShort(startIso: string | null | undefined, endIso: string | null | undefined): string {
+  const start = startIso ? parsePartsFromISO(startIso) : null;
+  const end = endIso ? parsePartsFromISO(endIso) : null;
+  if (start && end) {
+    if (start.m === end.m && start.d === end.d && start.y === end.y) return `${MONTHS_SHORT[start.m - 1]} ${start.d}`;
+    if (start.m === end.m && start.y === end.y) return `${MONTHS_SHORT[start.m - 1]} ${start.d} to ${end.d}`;
+    return `${MONTHS_SHORT[start.m - 1]} ${start.d} to ${MONTHS_SHORT[end.m - 1]} ${end.d}`;
+  }
+  return fmtShort(startIso ?? endIso);
+}
+
 // "N days" - ONLY for how long a request has waited. Takes an ISO
 // timestamp (submitted_at) and returns the integer-day delta from
 // today, formatted as "<N> days" or "today"/"1 day".

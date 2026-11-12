@@ -55,7 +55,17 @@
   border-color: var(--sp-navy);
 }
 
-/* ---------- Inbox table ---------- */
+/* ---------- Inbox table ----------
+ * T3.1 fix 1 (2026-11-13). `table-layout: fixed` + `width: 100%`
+ * so the colgroup widths below are authoritative; without this the
+ * browser falls back to auto layout, computes column widths from
+ * content, and the table spills past its card at 861-1180 (measured
+ * at 1024: card 740px, table 881px, chopped Date and chevron).
+ * Fixed columns: Amount 128 + Status 156 + Date 112 + Chevron 56 =
+ * 452px, so the Request column takes `cardWidth - 452` and its
+ * contents truncate with ellipsis. Math at 1024: 740 - 452 = 288
+ * for Request. */
+.kf-pe-table--inbox { width: 100%; table-layout: fixed; }
 .kf-pe-table--inbox col.c-num    { width: 128px; }
 .kf-pe-table--inbox col.c-status { width: 156px; }
 .kf-pe-table--inbox col.c-when   { width: 112px; }
@@ -67,7 +77,14 @@
   background: var(--sp-sky-soft);
   border-bottom: 1px solid var(--sp-line);
 }
-.kf-pe-table--inbox th.kf-pe-num,
+/* T3.1 fix 3 (2026-11-13). The Amount header was pulled up to
+ * body size by the shared th+td rule below. Split them so the th
+ * tracks every other header (label size, muted, right-aligned over
+ * the numeric column); only the td stays at body size. */
+.kf-pe-table--inbox th.kf-pe-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
 .kf-pe-table--inbox td.kf-pe-num {
   text-align: right;
   font-variant-numeric: tabular-nums;

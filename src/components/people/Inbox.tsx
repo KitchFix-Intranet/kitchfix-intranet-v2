@@ -56,9 +56,13 @@ function StatusPill({ row }: { row: InboxRow }) {
 function Row({
   row, needs, onOpen,
 }: { row: InboxRow; needs: boolean; onOpen: (id: string) => void }) {
+  // T3.1 fix 9 (2026-11-13). The unread dot means "decided and not
+  // opened yet". Pending rows never carry it - including the ones
+  // that land in Needs you because they have waited >= LATE_DAYS.
+  const showDot = row.unread && row.status_code !== "Pending";
   const cls = [
     "kf-pe-row",
-    row.unread ? "is-unread" : "",
+    showDot ? "is-unread" : "",
     row.status_code === "Withdrawn" || row.status_code === "Cancelled" ? "is-gone" : "",
   ].filter(Boolean).join(" ");
   return (
@@ -74,7 +78,7 @@ function Row({
         <KindIcon kind={row.kind} />
         <span className="kf-pe-what__text">
           <b>
-            {row.unread ? <i className="kf-pe-unread" aria-label="New" /> : null}
+            {showDot ? <i className="kf-pe-unread" aria-label="New" /> : null}
             {row.title}
           </b>
           <small>

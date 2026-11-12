@@ -21,9 +21,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Viewer } from "./types";
 import type { InboxKind } from "./inboxTypes";
 import { labelForAction, routeFor } from "./labels";
-import { fmtShort, fmtFull } from "./dates";
+import { fmtShort, fmtFull, fmtRangeShort } from "./dates";
 import { viewerIsInChain } from "./chain";
 import { detailPairs } from "./recordDetail";
+import { buildSiteIndex, resolveSite } from "./site";
 
 export interface RecordView {
   id: string;
@@ -55,6 +56,9 @@ interface SubmissionRow {
   person_worker_id: string | null;
   notes: string | null;
   payload: string | null;
+  // T3.1 fix 4 (2026-11-13). Older travel rows left locationName
+  // blank; the site lives here.
+  location: string | null;
 }
 
 function parsePayload(raw: string | null): Record<string, unknown> {
@@ -116,7 +120,7 @@ export async function loadRecord(
 ): Promise<{ view: RecordView; row: SubmissionRow } | null> {
   const q = await sb
     .from("submissions")
-    .select("id, module, action_type, status, submitted_at, admin_action_at, submitter_worker_id, person_worker_id, notes, payload")
+    .select("id, module, action_type, status, submitted_at, admin_action_at, submitter_worker_id, person_worker_id, notes, payload, location")
     .eq("id", recordId)
     .maybeSingle();
   if (q.error || !q.data) return null;
@@ -153,18 +157,29 @@ export async function loadRecord(
     kind === "hire" ? "New Hire" :
     `PAF · ${action_label}`;
 
+  // Build the site index once per record load; used by the title
+  // (self-travel) and threaded into detailPairs for every row's
+  // Site / Site visited line.
+  const accQ = await sb.from("accounts").select("team_key, name");
+  const siteIndex = buildSiteIndex(
+    (accQ.data ?? []) as Array<{ team_key: string; name: string | null }>,
+  );
+
   // Title mirrors the inbox row: travel-self shows "<club> · <dates>",
   // new hire shows "<first> <last>", otherwise the person's name.
+  // T3.1 fix 4/5 (2026-11-13): site walks the three signals; dates
+  // use fmtRangeShort so "Sep 15 - Sep 15" no longer renders.
   function titleOf(): string {
     const isSelfTravel = row.submitter_worker_id === viewer.worker_id
       && row.action_type === "travel_reimbursement"
       && (row.person_worker_id === null || row.person_worker_id === viewer.worker_id);
     if (isSelfTravel) {
-      const loc = String(payload.locationName ?? "").trim();
-      const start = String(payload.travelStartDate ?? "").trim();
-      const end = String(payload.travelEndDate ?? "").trim();
-      const dates = start && end ? `${fmtShort(start)} - ${fmtShort(end)}` : start ? fmtShort(start) : end ? fmtShort(end) : "";
-      const parts = [loc, dates].filter(Boolean);
+      const site = resolveSite(payload.locationName, payload.locationKey, row.location, siteIndex);
+      const dates = fmtRangeShort(
+        String(payload.travelStartDate ?? "").trim() || null,
+        String(payload.travelEndDate ?? "").trim() || null,
+      );
+      const parts = [site ?? "", dates === "-" ? "" : dates].filter(Boolean);
       if (parts.length) return parts.join(" · ");
     }
     if (kind === "hire") {
@@ -179,7 +194,7 @@ export async function loadRecord(
     return eyebrow;
   }
 
-  const detail = detailPairs(row.module, row.action_type, payload, personName || null);
+  const detail = detailPairs(row.module, row.action_type, payload, personName || null, row.location, siteIndex);
 
   // Sender's note lives in payload.explanation when the form has one.
   // The render masked it, but per T3 ruling we show it for real
@@ -251,7 +266,12 @@ export async function loadRecord(
         when: fmtFull(row.admin_action_at),
       });
     }
-    // Keep chronological order (sent first, decision second).
+    // T3.1 fix 10 (2026-11-13). Render order is reverse-chronological:
+    // the decision line sits ON TOP of the sent line, so the newest
+    // state the viewer acted on is the first thing they read. The
+    // render's openInboxRow() pushes the decision first and the "Sent
+    // to ..." line second, and the <ol> renders in push order. We
+    // built [sent, decision] above for readability; reverse to match.
     ledger.reverse();
   }
 

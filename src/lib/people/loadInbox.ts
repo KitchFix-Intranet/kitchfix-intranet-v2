@@ -17,8 +17,9 @@ import type {
 } from "./inboxTypes";
 import { labelForAction, routeFor } from "./labels";
 import { LATE_DAYS, decidedAfterCutover } from "./thresholds";
-import { fmtShort, fmtFull } from "./dates";
+import { fmtShort, fmtFull, fmtRangeShort } from "./dates";
 import { fmtMoney } from "./money";
+import { buildSiteIndex, resolveSite, type SiteIndex } from "./site";
 
 // A submissions row shape, after a narrow server-side SELECT. The
 // payload is a TEXT column holding one JSON object; parse once per
@@ -34,6 +35,10 @@ interface SubmissionRow {
   person_worker_id: string | null;
   notes: string | null;
   payload: string | null;
+  // T3.1 fix 4 (2026-11-13). Older travel rows left `locationName`
+  // empty; the site lives in this column (and in payload.locationKey)
+  // instead. site.ts turns any of the three signals into a name.
+  location: string | null;
 }
 
 function parsePayload(raw: string | null): Record<string, unknown> {
@@ -151,23 +156,26 @@ function whyTextOf(status: SubmissionRow["status"], action_type: string | null, 
 // show "<club> · <dates>" (the trip, not the person - the person is
 // the viewer). Otherwise show the person's name (`employeeName`, or
 // first + last for a new hire). Falls back to the module word.
+// T3.1 fix 4 (2026-11-13): site resolves through site.ts so older
+// travel rows that only carry `submissions.location` no longer show
+// as just "Sep 9 - Sep 11". T3.1 fix 5: dates use fmtRangeShort.
 function titleOf(
   row: SubmissionRow,
   payload: Record<string, unknown>,
   viewer: Viewer,
   kind: InboxKind,
+  siteIndex: SiteIndex,
 ): string {
   const isSelfTravel = row.submitter_worker_id === viewer.worker_id
     && row.action_type === "travel_reimbursement"
     && (row.person_worker_id === null || row.person_worker_id === viewer.worker_id);
   if (isSelfTravel) {
-    const loc = String(payload.locationName ?? "").trim();
-    const start = String(payload.travelStartDate ?? "").trim();
-    const end = String(payload.travelEndDate ?? "").trim();
-    const dates = start && end
-      ? `${fmtShort(start)} - ${fmtShort(end)}`
-      : start ? fmtShort(start) : end ? fmtShort(end) : "";
-    const parts = [loc, dates].filter(Boolean);
+    const site = resolveSite(payload.locationName, payload.locationKey, row.location, siteIndex);
+    const dates = fmtRangeShort(
+      String(payload.travelStartDate ?? "").trim() || null,
+      String(payload.travelEndDate ?? "").trim() || null,
+    );
+    const parts = [site ?? "", dates === "-" ? "" : dates].filter(Boolean);
     if (parts.length) return parts.join(" · ");
   }
   if (kind === "hire") {
@@ -183,7 +191,17 @@ function titleOf(
 
 // Subline tail: trip length for travel; site for others; "job · site"
 // for new hire.
-function sublineTail(row: SubmissionRow, payload: Record<string, unknown>, kind: InboxKind): string {
+// T3.1 fix 6 (2026-11-13): travel subline reads "N days" (no " away")
+// and does NOT repeat the site when the title already includes it
+// (a self-travel title carries the site). Non-self travel rows still
+// append the site because the title is the person's name.
+function sublineTail(
+  row: SubmissionRow,
+  payload: Record<string, unknown>,
+  viewer: Viewer,
+  kind: InboxKind,
+  siteIndex: SiteIndex,
+): string {
   const bits: string[] = [];
   if (kind === "hire") {
     const job = String(payload.jobTitle ?? "").trim();
@@ -194,13 +212,17 @@ function sublineTail(row: SubmissionRow, payload: Record<string, unknown>, kind:
   }
   if (row.action_type === "travel_reimbursement") {
     const days = Number(payload.travelTotalDays);
-    if (Number.isFinite(days) && days > 0) bits.push(`${days} day${days === 1 ? "" : "s"} away`);
-    const loc = String(payload.locationName ?? "").trim();
-    if (loc) bits.push(loc);
+    if (Number.isFinite(days) && days > 0) bits.push(`${days} day${days === 1 ? "" : "s"}`);
+    const isSelfTravel = row.submitter_worker_id === viewer.worker_id
+      && (row.person_worker_id === null || row.person_worker_id === viewer.worker_id);
+    if (!isSelfTravel) {
+      const site = resolveSite(payload.locationName, payload.locationKey, row.location, siteIndex);
+      if (site) bits.push(site);
+    }
     return bits.join(" · ");
   }
-  const loc = String(payload.locationName ?? "").trim();
-  if (loc) bits.push(loc);
+  const site = resolveSite(payload.locationName, payload.locationKey, row.location, siteIndex);
+  if (site) bits.push(site);
   return bits.join(" · ");
 }
 
@@ -221,12 +243,13 @@ function toInboxRow(
   unread: boolean,
   now: Date,
   senderName: string,
+  siteIndex: SiteIndex,
 ): InboxRow {
   const payload = parsePayload(row.payload);
   const kind = kindFromModule(row.module);
   const action_label = labelForAction(row.module, row.action_type);
-  const title_base = titleOf(row, payload, viewer, kind);
-  const tail = sublineTail(row, payload, kind);
+  const title_base = titleOf(row, payload, viewer, kind, siteIndex);
+  const tail = sublineTail(row, payload, viewer, kind, siteIndex);
   const isAboutMyTeam = row.submitter_worker_id !== viewer.worker_id;
   const subline = [
     kindWord(kind),
@@ -279,9 +302,11 @@ export async function loadInbox(sb: SupabaseClient, viewer: Viewer): Promise<Inb
   const now = new Date();
 
   // 1. All submissions. Narrow the projection to the fields we need.
+  //    `location` added (T3.1 fix 4) so older travel rows that left
+  //    payload.locationName empty still resolve to a site.
   const subQ = await sb
     .from("submissions")
-    .select("id, module, action_type, status, submitted_at, admin_action_at, submitter_worker_id, person_worker_id, notes, payload")
+    .select("id, module, action_type, status, submitted_at, admin_action_at, submitter_worker_id, person_worker_id, notes, payload, location")
     .order("submitted_at", { ascending: false });
   if (subQ.error) throw new Error(`[people/loadInbox] submissions: ${subQ.error.message}`);
   const rows = (subQ.data ?? []) as SubmissionRow[];
@@ -318,13 +343,17 @@ export async function loadInbox(sb: SupabaseClient, viewer: Viewer): Promise<Inb
     }
   }
 
-  // 4. Accounts for site scope (RD) + the payload fallback by
-  //    locationKey when person_worker_id is null.
-  const acctQ = await sb.from("accounts").select("team_key, region");
+  // 4. Accounts: region (for RD scope) + name (for the T3.1 site
+  //    index - turns a team_key or a "team_key - name" combo into a
+  //    canonical site name).
+  const acctQ = await sb.from("accounts").select("team_key, region, name");
   const accountRegionByKey = new Map<string, string | null>();
   for (const a of (acctQ.data ?? []) as AccountRow[]) {
     accountRegionByKey.set(a.team_key, (a.region as string | null) ?? null);
   }
+  const siteIndex = buildSiteIndex(
+    (acctQ.data ?? []) as Array<{ team_key: string; name: string | null }>,
+  );
 
   // 5. Build the viewer's site scope for About my team.
   //    - SL: one account.
@@ -365,7 +394,7 @@ export async function loadInbox(sb: SupabaseClient, viewer: Viewer): Promise<Inb
       ? (senderNameByWorker.get(row.submitter_worker_id) ?? "")
       : "";
     if (row.submitter_worker_id === viewer.worker_id) {
-      mine.push(toInboxRow(row, viewer, unread, now, senderName));
+      mine.push(toInboxRow(row, viewer, unread, now, senderName, siteIndex));
       continue;
     }
     if (!hasTeamSwitch) continue;
@@ -383,7 +412,7 @@ export async function loadInbox(sb: SupabaseClient, viewer: Viewer): Promise<Inb
     const personSite = personAccountByWorker.get(row.person_worker_id) ?? null;
     if (!personSite || !teamSiteKeys.has(personSite)) continue;
     if (!hasFullAccess && !descendants.has(row.person_worker_id)) continue;
-    team.push(toInboxRow(row, viewer, unread, now, senderName));
+    team.push(toInboxRow(row, viewer, unread, now, senderName, siteIndex));
   }
 
   // 7. Band is derived from `mine` only.
