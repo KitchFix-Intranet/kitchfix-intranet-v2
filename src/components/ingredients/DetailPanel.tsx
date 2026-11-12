@@ -53,10 +53,10 @@ export function DetailPanel({
   parents: ReviewCardIngredient[];
   proposedName?: string | null;
   proposedParent?: string | null;
-  // N7 B6: callers that fetch panel data themselves (ItemPanelById /
-  // IngredientPanelById) pass a refetch fn; it fires after any panel
-  // write that would change the data the wrapper fetched. ReviewCard
-  // leaves it undefined and router.refresh() handles the server path.
+  // N7 B6: callers that fetch panel data themselves (ItemPanelById)
+  // pass a refetch fn; it fires after any panel write that would
+  // change the data the wrapper fetched. ReviewCard leaves it
+  // undefined and router.refresh() handles the server path.
   onInvalidate?: () => void;
 }) {
   const router = useRouter();

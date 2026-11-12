@@ -521,7 +521,7 @@ function UnitPriceCell({
   return (
     <div className="kf-rvc__price" title={title}>
       <div className="kf-rvc__price-main">
-        {rowTag ? <span className="kf-rvc__row-tag">{rowTag}</span> : null}
+        {rowTag ? <span className="kf-ipanel__tag">{rowTag}</span> : null}
         {perUnitAvailable ? (
           <>
             <strong>{fmtUsd(item.perBase as number)}</strong>

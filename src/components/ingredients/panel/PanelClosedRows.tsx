@@ -1,10 +1,15 @@
 "use client";
 
-// N7 §3f: four disclosure rows in order:
+// N7 §3f + N12 §2c.6: disclosure rows under the zones, in order:
 //   1. Mark as retail - lazy preview GET on first open (B7)
-//   2. Merge          - typeahead + merge confirm
-//   3. Evidence       - lazy fetch on first open
-//   4. Change history - lazy fetch on first open (LedgerBlock)
+//   2. Merge          - typeahead + merge confirm; parents may be
+//                       passed in, or fetched on first open via
+//                       `onLoadParents` (N12 §R2)
+//   3. Evidence       - lazy fetch on first open (hidden when no
+//                       item in scope)
+//   4. Send all back  - N12 §2c.6; renders when `sendAllBack` is
+//                       passed, wrapping MasterSendAllBackButton
+//   5. Change history - lazy fetch on first open (LedgerBlock)
 //
 // Each row owns its own open state. Rows render on the white ground
 // under the zones. The disclosure body lazy-mounts its content so no
@@ -18,6 +23,7 @@ import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 import { IngredientTypeahead } from "../IngredientTypeahead";
 import { EvidenceSection } from "./EvidenceSection";
 import { LedgerBlock } from "./LedgerBlock";
+import { MasterSendAllBackButton } from "../MasterSendAllBackButton";
 import { postJson, errMsg } from "./common";
 import { SaveFlash } from "./SaveFlash";
 
@@ -154,15 +160,46 @@ function RetailRow({
 
 function MergeRow({
   ingredient,
-  parents,
+  parents: parentsProp,
+  onLoadParents,
   onDone,
 }: {
   ingredient: ReviewCardIngredient;
   parents: ReviewCardIngredient[];
+  // N12 §R2: when parents wasn't fetched up front (ingredients tab:
+  // avoiding a fetch on selection), MergeRow runs this on first open
+  // and shows loading / error states inline. Reuses the strings the
+  // retired IngredientPanelById used.
+  onLoadParents?: () => Promise<ReviewCardIngredient[]>;
   onDone: () => void;
 }) {
   const [target, setTarget] = useState<string>("");
   const [busy, setBusy] = useState(false);
+  const [parents, setParents] = useState<ReviewCardIngredient[]>(parentsProp);
+  const [loadState, setLoadState] = useState<"idle" | "loading" | "ready" | "error">(
+    parentsProp.length > 0 ? "ready" : onLoadParents ? "idle" : "ready"
+  );
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (loadState !== "idle" || !onLoadParents) return;
+    let cancelled = false;
+    setLoadState("loading");
+    (async () => {
+      try {
+        const ps = await onLoadParents();
+        if (cancelled) return;
+        setParents(ps);
+        setLoadState("ready");
+      } catch (e) {
+        if (cancelled) return;
+        setLoadError(e instanceof Error ? e.message : String(e));
+        setLoadState("error");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [loadState, onLoadParents]);
+
   const choices = useMemo(
     () => parents.filter((p) => p.id !== ingredient.id),
     [parents, ingredient.id]
@@ -205,6 +242,17 @@ function MergeRow({
     onDone();
   }
 
+  if (loadState === "loading") {
+    return <div className="kf-dpn__hint">Loading ingredient...</div>;
+  }
+  if (loadState === "error") {
+    return (
+      <div className="kf-dpn__hint">
+        Could not load ingredient: {loadError ?? "unknown error"}
+      </div>
+    );
+  }
+
   return (
     <>
       <IngredientTypeahead
@@ -241,11 +289,19 @@ export function PanelClosedRows({
   item,
   ingredient,
   parents,
+  onLoadParents,
+  sendAllBack,
   onDone,
 }: {
   item: ReviewGroupItem | null;
   ingredient: ReviewCardIngredient | null;
   parents: ReviewCardIngredient[];
+  // N12 §R2: optional lazy fetcher for Merge candidates; fires once
+  // on first expand of the Merge row.
+  onLoadParents?: () => Promise<ReviewCardIngredient[]>;
+  // N12 §2c.6: when present, "Send all back" renders between Merge
+  // (or Evidence) and Change history.
+  sendAllBack?: { masterName: string; itemIds: string[] };
   onDone: () => void;
 }) {
   // N8 §1i: closed-row sub copy comes from the render.
@@ -260,13 +316,36 @@ export function PanelClosedRows({
 
       {ingredient ? (
         <DisclosureRow label="Merge" sub={`Fold ${ingredientName} into another ingredient`}>
-          {() => <MergeRow ingredient={ingredient} parents={parents} onDone={onDone} />}
+          {() => (
+            <MergeRow
+              ingredient={ingredient}
+              parents={parents}
+              onLoadParents={onLoadParents}
+              onDone={onDone}
+            />
+          )}
         </DisclosureRow>
       ) : null}
 
       {item ? (
         <DisclosureRow label="Evidence" sub="The invoice lines behind this price">
           {(open) => <EvidenceSection item={item} open={open} />}
+        </DisclosureRow>
+      ) : null}
+
+      {sendAllBack && sendAllBack.itemIds.length > 0 ? (
+        <DisclosureRow
+          label="Send all back"
+          sub={`Return all ${sendAllBack.itemIds.length} items to the review queue`}
+        >
+          {() => (
+            <div className="kf-dpn__btns">
+              <MasterSendAllBackButton
+                masterName={sendAllBack.masterName}
+                itemIds={sendAllBack.itemIds}
+              />
+            </div>
+          )}
         </DisclosureRow>
       ) : null}
 

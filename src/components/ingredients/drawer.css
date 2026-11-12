@@ -533,12 +533,21 @@
   background: var(--sp-info-bg);
   border-color: var(--sp-sky-line);
 }
+/* N12: good variant for the "Nothing flagged" state on the
+ * ingredients-tab detail pane. The item panel only renders the
+ * attention primitive when there IS something, so the good state
+ * is new to the primitive set. */
+.kf-ipanel__attn-item--good {
+  background: var(--sp-good-bg);
+  border-color: var(--sp-good);
+}
 .kf-ipanel__attn-icon {
   flex-shrink: 0;
   color: var(--sp-warn);
 }
 .kf-ipanel__attn-item--bad .kf-ipanel__attn-icon { color: var(--sp-block); }
 .kf-ipanel__attn-item--info .kf-ipanel__attn-icon { color: var(--sp-link); }
+.kf-ipanel__attn-item--good .kf-ipanel__attn-icon { color: var(--sp-good); }
 .kf-ipanel__attn-item-text {
   flex: 1 1 auto;
   min-width: 0;
@@ -554,6 +563,7 @@
 }
 .kf-ipanel__attn-item--bad .kf-ipanel__attn-item-head { color: var(--sp-block); }
 .kf-ipanel__attn-item--info .kf-ipanel__attn-item-head { color: var(--sp-link); }
+.kf-ipanel__attn-item--good .kf-ipanel__attn-item-head { color: var(--sp-good); }
 .kf-ipanel__attn-item-body {
   font-family: var(--sp-ui);
   font-size: var(--sp-t-table);
@@ -561,6 +571,24 @@
 }
 /* N8 fix 6: the Fix-the-pack button must not wrap at 1100. */
 .kf-ipanel__attn-item .kf-btn { white-space: nowrap; }
+
+/* N12 §R7: lowest / highest row tag. Promoted from .kf-rvc__row-tag
+ * so review cards and the ingredient-detail linked-items table share
+ * one primitive. Neutral line pill, distinct from warn / good pills. */
+.kf-ipanel__tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: var(--sp-r-pill);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 800;
+  letter-spacing: .5px;
+  text-transform: uppercase;
+  color: var(--sp-body);
+  background: var(--sp-line-soft);
+  white-space: nowrap;
+}
 
 /* --- Zones ---
  * Two zones. Item zone on card; ingredient zone on sky-soft between

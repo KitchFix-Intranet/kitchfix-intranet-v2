@@ -456,7 +456,6 @@ export function PanelIngredientZone({
         <BaseUnitControl
           row={{ id: ingredient.id, name: ingredient.name, baseUnit: ingredient.base_unit }}
           onSaved={onDone}
-          chrome="bare"
         />
         <div className="kf-ipanel__row-hint">How recipes count this ingredient.</div>
       </div>
@@ -620,7 +619,6 @@ export function PanelIngredientZone({
             reviewedBy={ingredient.allergens_reviewed_by}
             reviewedAt={ingredient.allergens_reviewed_at}
             onSaved={onDone}
-            chrome="bare"
           />
         </div>
       </div>

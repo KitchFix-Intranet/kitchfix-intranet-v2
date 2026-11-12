@@ -1,24 +1,18 @@
 "use client";
 
-// B1 (allergens) UI. Nine pills + None + Confirm. One component with
-// two call sites:
+// B1 (allergens) UI. Nine pills + None + Confirm.
 //
-//   - MasterDetail (in-pane in the Ingredients + Resale workbench's
-//     right pane, `.kf-dt`): the panel Kevin lands on by clicking a
-//     master row.
-//   - IngredientBlock (slide-in DetailPanel drawer): the surface the
-//     Review queue + the A4 master-name button open.
-//
-// The initial B1 build placed the block only in the drawer; the
-// workbench pane rendered nothing. This component is the single
-// source of truth so both surfaces carry the same control, driven by
-// the same state machine. See src/lib/ingredients/allergens.ts for
-// the canonical nine and the three-state model.
+// N12: there is now one call site. The component renders inside
+// PanelIngredientZone's Allergens row (where the row supplies the
+// label and status pill). Both the Review-queue drawer and the
+// Ingredients-tab detail pane mount the zone, not this component
+// directly. The chrome="tab" variant (head pill + trailing hint) has
+// been removed. See src/lib/ingredients/allergens.ts for the
+// canonical nine and the three-state model.
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/ui/Toaster";
-import { fmtDate } from "@/lib/fmt";
 import { ALLERGENS, type Allergen } from "@/lib/ingredients/allergens";
 
 type Props = {
@@ -55,14 +49,10 @@ function errMsg(data: unknown, fallback: string): string {
 export function IngredientAllergens({
   ingredientId,
   allergens,
-  reviewedBy,
+  reviewedBy: _reviewedBy,
   reviewedAt,
   onSaved,
-  // N8 §1g: panel renders the chips + Confirm button only; the status
-  // pill lives beside the row label and the trailing hint is dropped.
-  // Ingredients tab (default) keeps the full head + hint block.
-  chrome = "tab",
-}: Props & { chrome?: "tab" | "bare" }) {
+}: Props) {
   const router = useRouter();
 
   // Seed selection + None from the saved values. The canonical-nine
@@ -151,24 +141,6 @@ export function IngredientAllergens({
 
   return (
     <div className="kf-allergens">
-      {chrome === "tab" ? (
-        <div className="kf-allergens__head">
-          <span className="kf-allergens__label">Allergens</span>
-          {unreviewed ? (
-            <span className="kf-allergens__state kf-allergens__state--warn">
-              Check allergens
-            </span>
-          ) : (allergens ?? []).length === 0 ? (
-            <span className="kf-allergens__state kf-allergens__state--ok">
-              No Top 9 allergens
-            </span>
-          ) : (
-            <span className="kf-allergens__state kf-allergens__state--ok">
-              Confirmed
-            </span>
-          )}
-        </div>
-      ) : null}
       <div className="kf-allergens__grid" role="group" aria-label="Top 9 allergens">
         {ALLERGENS.map((a) => {
           const on = selected.has(a);
@@ -208,17 +180,6 @@ export function IngredientAllergens({
         {savedAt ? <span className="kf-allergens__flash">Saved</span> : null}
         {error ? <span className="kf-allergens__flash kf-allergens__flash--err">{error}</span> : null}
       </div>
-      {chrome === "tab" ? (
-        reviewedAt ? (
-          <div className="kf-allergens__hint">
-            Last confirmed by {reviewedBy ?? "someone"} on {fmtDate(reviewedAt, "short")}.
-          </div>
-        ) : (
-          <div className="kf-allergens__hint">
-            Unreviewed. Pick a tag or confirm &ldquo;None&rdquo; to clear this from the queue.
-          </div>
-        )
-      ) : null}
     </div>
   );
 }
