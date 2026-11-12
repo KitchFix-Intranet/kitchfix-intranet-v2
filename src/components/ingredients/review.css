@@ -2030,6 +2030,37 @@
 }
 .kf-dt__unitsel:disabled { opacity: 0.6; cursor: progress; }
 
+/* N11 §2: Ingredients tab measure control wraps the inline unitctl
+ * and a note line below. The note carries the dirty state
+ * ("Not saved yet - Discard") or the hint ("Enter a number" /
+ * "Pick a unit"). Column layout so the note sits under the control
+ * instead of flowing beside it. */
+.kf-dt__measure {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-sp-1);
+}
+.kf-dt__measure-note {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-1);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-body);
+}
+.kf-dt__measure-discard {
+  background: transparent;
+  border: 0;
+  padding: var(--sp-sp-1) 0;
+  font: inherit;
+  color: var(--sp-navy);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.kf-dt__measure-discard:hover:not(:disabled) { color: var(--sp-navy-deep); }
+.kf-dt__measure-discard:disabled { opacity: 0.5; cursor: default; }
+
 /* The one-click fix inside a note. .kf-why span is display:block, so
    this is a button, not a span, and it gets its own top margin rather
    than inheriting the note's line rhythm. */

@@ -1,31 +1,47 @@
 "use client";
 
-// N8 §1g: item-side each measure. Inline per render:
-//   [ ] Different from the ingredient    (hint when unticked)
-//   [x] Different from the ingredient    88px number  96px unit  Saved
+// N11 §2: item-side each measure. Explicit Save button; auto-save on
+// blur/change/untick is gone. Owns its row (label + value + action) so
+// Save sits in the standard row-action column per R4. PanelItemZone
+// mounts this component as row 2 directly.
 //
-// B5 rules unchanged from N7 commit 2:
-//   (a) unit change saves when the number is valid;
-//   (b) untick-saved clears immediately + Saved;
-//   (c) untick-unsaved only hides fields;
-//   (d) tick-no-number writes nothing until a valid number lands.
+// State matrix (identical strings across all three each-measure
+// editors per R1):
+//   Clean               Save line-variant, disabled; no note line.
+//   Dirty + invalid     Save line-variant, disabled; hint (Enter a
+//                       number / Pick a unit).
+//   Dirty + valid       Save primary, enabled; note "Not saved yet ·
+//                       Discard".
+// Untick on a stored measure is dirty+valid (removes it).
 //
-// deriveRecipePrice stays the single source for the derived figure;
-// the panel never divides on its own. The render shows a short "Saved"
-// marker rather than the full comparison paragraph - we keep the
-// SaveFlash chip and drop the comparison paragraph per §1g.
+// R2 baseline rule: a prop change always updates the baseline; the
+// draft is re-seeded only when the item id changes OR the draft was
+// already in sync with the prior stored values. A refresh never
+// wipes a dirty draft on the same item.
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "@/components/ui/Toaster";
 import { DIM_BY_UOM, WEIGHT_UOMS, VOLUME_UOMS, uomLabel } from "@/lib/ingredients/pack";
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
-import { SaveFlash } from "./SaveFlash";
 import { postJson, errMsg } from "./common";
+
+type Draft = { hasOwn: boolean; qty: string; uom: string };
+
+function makeDraft(item: ReviewGroupItem): Draft {
+  if (item.eachMeasure == null) return { hasOwn: false, qty: "", uom: "" };
+  return {
+    hasOwn: true,
+    qty: String(item.eachMeasure.qty),
+    uom: item.eachMeasure.uom.toUpperCase(),
+  };
+}
+
+function equal(a: Draft, b: Draft) {
+  return a.hasOwn === b.hasOwn && a.qty === b.qty && a.uom === b.uom;
+}
 
 export function ItemEachMeasureBlock({
   item,
-  // ingredient reserved for future hints; not rendered inline per
-  // render §1g (the derivation sentence moved to the ingredient zone).
   ingredient: _ingredient,
   onDone,
 }: {
@@ -33,138 +49,174 @@ export function ItemEachMeasureBlock({
   ingredient: ReviewCardIngredient | null;
   onDone: () => void;
 }) {
-  const [hasOwn, setHasOwn] = useState<boolean>(item.eachMeasure != null);
-  const [qtyDraft, setQtyDraft] = useState<string>(
-    item.eachMeasure == null ? "" : String(item.eachMeasure.qty)
-  );
-  const [uomDraft, setUomDraft] = useState<string>(
-    (item.eachMeasure?.uom ?? "LB").toUpperCase()
-  );
+  const [baseline, setBaseline] = useState<Draft>(() => makeDraft(item));
+  const [draft, setDraft] = useState<Draft>(baseline);
   const [busy, setBusy] = useState(false);
-  const [savedAt, setSavedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const prevId = useRef(item.id);
+  const priorStoredRef = useRef<Draft>(baseline);
 
-  async function saveValue(n: number, u: string) {
-    if (busy) return;
+  useEffect(() => {
+    const next = makeDraft(item);
+    const idChanged = prevId.current !== item.id;
+    const priorStored = priorStoredRef.current;
+    prevId.current = item.id;
+    priorStoredRef.current = next;
+    setBaseline(next);
+    setDraft((cur) => (idChanged || equal(cur, priorStored) ? next : cur));
+  }, [item.id, item.eachMeasure?.qty, item.eachMeasure?.uom]);
+
+  const dirty = !equal(draft, baseline);
+  const qtyTrimmed = draft.qty.trim();
+  const qtyNum = Number(qtyTrimmed);
+  const qtyValid = qtyTrimmed !== "" && Number.isFinite(qtyNum) && qtyNum > 0 && qtyNum <= 100000;
+  const uomDim = DIM_BY_UOM[draft.uom];
+  const uomValid = uomDim === "weight" || uomDim === "volume";
+
+  const removing = dirty && !draft.hasOwn && baseline.hasOwn;
+  const writing = dirty && draft.hasOwn && qtyValid && uomValid;
+  const saveEnabled = !busy && (removing || writing);
+
+  const hint =
+    draft.hasOwn && qtyTrimmed === "" ? "Enter a number"
+    : draft.hasOwn && qtyValid && !uomValid ? "Pick a unit"
+    : null;
+
+  async function doSave() {
+    if (!saveEnabled) return;
     setBusy(true);
     setError(null);
-    const r = await postJson("/api/review/set-item-each-measure", {
-      itemId: item.id,
-      qty: n,
-      uom: u,
-    });
+    const body: Record<string, unknown> =
+      draft.hasOwn
+        ? { itemId: item.id, qty: qtyNum, uom: draft.uom }
+        : { itemId: item.id, qty: null };
+    const r = await postJson("/api/review/set-item-each-measure", body);
     if (!r.ok) {
-      const msg = errMsg(r.data, `Save failed (${r.status})`);
+      const msg = errMsg(r.data, draft.hasOwn ? `Save failed (${r.status})` : `Clear failed (${r.status})`);
       setError(msg);
       toast(msg, { tone: "block" });
-      setQtyDraft(item.eachMeasure == null ? "" : String(item.eachMeasure.qty));
-      setUomDraft((item.eachMeasure?.uom ?? "LB").toUpperCase());
       setBusy(false);
       return;
     }
-    toast(`Saved: this each is ${Math.round(n * 10000) / 10000} ${uomLabel(u)}`);
-    setSavedAt(Date.now());
+    if (draft.hasOwn) {
+      toast(`Saved: this each is ${Math.round(qtyNum * 10000) / 10000} ${uomLabel(draft.uom)}`);
+    } else {
+      toast("Item measure cleared");
+    }
+    const saved: Draft = draft.hasOwn
+      ? { hasOwn: true, qty: String(qtyNum), uom: draft.uom }
+      : { hasOwn: false, qty: "", uom: "" };
+    priorStoredRef.current = saved;
+    setBaseline(saved);
+    setDraft(saved);
     setBusy(false);
     onDone();
   }
 
-  async function clearStored() {
+  function onDiscard() {
     if (busy) return;
-    setBusy(true);
+    setDraft(baseline);
     setError(null);
-    const r = await postJson("/api/review/set-item-each-measure", {
-      itemId: item.id,
-      qty: null,
-    });
-    if (!r.ok) {
-      const msg = errMsg(r.data, `Clear failed (${r.status})`);
-      setError(msg);
-      toast(msg, { tone: "block" });
-      setHasOwn(true);
-      setBusy(false);
-      return;
+  }
+
+  function onKey(e: React.KeyboardEvent<HTMLElement>) {
+    if (e.key === "Enter" && saveEnabled) {
+      e.preventDefault();
+      void doSave();
+    } else if (e.key === "Escape" && dirty) {
+      e.preventDefault();
+      onDiscard();
     }
-    toast("Item measure cleared");
-    setQtyDraft("");
-    setSavedAt(Date.now());
-    setBusy(false);
-    onDone();
-  }
-
-  function trySave() {
-    if (!hasOwn) return;
-    const trimmed = qtyDraft.trim();
-    if (trimmed === "") return;
-    const n = Number(trimmed);
-    if (!Number.isFinite(n) || n <= 0 || n > 100000) return;
-    const u = uomDraft.toUpperCase();
-    const dim = DIM_BY_UOM[u];
-    if (dim !== "weight" && dim !== "volume") return;
-    const stored = item.eachMeasure;
-    if (stored != null && Number(stored.qty) === n && stored.uom.toUpperCase() === u) return;
-    void saveValue(n, u);
-  }
-
-  function onTickChange(next: boolean) {
-    setHasOwn(next);
-    if (!next && item.eachMeasure != null) void clearStored();
   }
 
   return (
-    <div className="kf-ipanel__itemmeasure">
-      <label className="kf-ipanel__itemmeasure-check">
-        <input
-          type="checkbox"
-          checked={hasOwn}
-          onChange={(e) => onTickChange(e.currentTarget.checked)}
-          disabled={busy}
-        />
-        <span>Different from the ingredient</span>
-      </label>
-      {hasOwn ? (
-        <>
-          <div className="kf-ipanel__itemmeasure-fields">
+    <div className="kf-ipanel__row">
+      <div className="kf-ipanel__row-label">One each is</div>
+      <div className="kf-ipanel__row-value">
+        <div className="kf-ipanel__itemmeasure">
+          <label className="kf-ipanel__itemmeasure-check">
             <input
-              type="number"
-              inputMode="decimal"
-              step="0.0001"
-              min="0"
-              className="kf-ipanel__ctl kf-ipanel__ctl--uom"
-              value={qtyDraft}
-              onChange={(e) => setQtyDraft(e.target.value)}
-              onBlur={trySave}
-              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); trySave(); } }}
-              placeholder=""
-              aria-label="This item's each weighs"
+              type="checkbox"
+              checked={draft.hasOwn}
+              onChange={(e) =>
+                setDraft((d) => ({ ...d, hasOwn: e.currentTarget.checked }))
+              }
               disabled={busy}
             />
-            <select
-              className="kf-ipanel__ctl kf-ipanel__ctl--uom"
-              value={uomDraft}
-              onChange={(e) => {
-                setUomDraft(e.target.value);
-                queueMicrotask(trySave);
-              }}
-              disabled={busy}
-              aria-label="Weight unit for this item"
-            >
-              <optgroup label="Weight">
-                {WEIGHT_UOMS.map((u) => (
-                  <option key={u} value={u}>{uomLabel(u)}</option>
-                ))}
-              </optgroup>
-              <optgroup label="Volume">
-                {VOLUME_UOMS.map((u) => (
-                  <option key={u} value={u}>{uomLabel(u)}</option>
-                ))}
-              </optgroup>
-            </select>
+            <span>Different from the ingredient</span>
+          </label>
+          {draft.hasOwn ? (
+            <div className="kf-ipanel__itemmeasure-fields">
+              <input
+                type="number"
+                inputMode="decimal"
+                step="0.0001"
+                min="0"
+                className="kf-ipanel__ctl kf-ipanel__ctl--qty"
+                value={draft.qty}
+                onChange={(e) => setDraft((d) => ({ ...d, qty: e.target.value }))}
+                onKeyDown={onKey}
+                aria-label="This item's each weighs"
+                disabled={busy}
+              />
+              <select
+                className="kf-ipanel__ctl kf-ipanel__ctl--uom"
+                value={draft.uom}
+                onChange={(e) => setDraft((d) => ({ ...d, uom: e.target.value.toUpperCase() }))}
+                onKeyDown={onKey}
+                disabled={busy}
+                aria-label="Weight unit for this item"
+              >
+                <option value="" disabled>Unit</option>
+                <optgroup label="Weight">
+                  {WEIGHT_UOMS.map((u) => (
+                    <option key={u} value={u}>{uomLabel(u)}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="Volume">
+                  {VOLUME_UOMS.map((u) => (
+                    <option key={u} value={u}>{uomLabel(u)}</option>
+                  ))}
+                </optgroup>
+              </select>
+            </div>
+          ) : (
+            <span className="kf-ipanel__itemmeasure-hint">Tick if this case holds a different size</span>
+          )}
+        </div>
+        {dirty ? (
+          <div className="kf-ipanel__measure-note kf-ipanel__measure-note--dirty" aria-live="polite">
+            {hint ? (
+              <span>{hint}</span>
+            ) : (
+              <>
+                <span>Not saved yet</span>
+                <span aria-hidden>&middot;</span>
+                <button
+                  type="button"
+                  className="kf-ipanel__measure-discard"
+                  onClick={onDiscard}
+                  disabled={busy}
+                >
+                  Discard
+                </button>
+              </>
+            )}
+            {error ? <span className="kf-ipanel__measure-error">{error}</span> : null}
           </div>
-          <SaveFlash savedAt={savedAt} error={error} />
-        </>
-      ) : (
-        <span className="kf-ipanel__itemmeasure-hint">Tick if this case holds a different size</span>
-      )}
+        ) : null}
+      </div>
+      <div className="kf-ipanel__row-action">
+        <button
+          type="button"
+          className={`kf-btn ${saveEnabled ? "kf-btn--primary" : "kf-btn--line"} kf-btn--sm${busy ? " is-busy" : ""}`}
+          disabled={!saveEnabled}
+          onClick={doSave}
+          onKeyDown={onKey}
+        >
+          {busy ? "Saving..." : "Save"}
+        </button>
+      </div>
     </div>
   );
 }

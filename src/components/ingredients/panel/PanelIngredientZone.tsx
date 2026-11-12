@@ -16,7 +16,7 @@
 //
 // Pending (ai-new) renders as the same zone shape.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtUsd } from "@/lib/fmt";
 import { SUPER_CATEGORIES, type SuperCategory } from "@/lib/ingredients/categories";
@@ -56,35 +56,58 @@ export function PanelIngredientZone({
   const [catSavedAt, setCatSavedAt] = useState<number | null>(null);
   const [catError, setCatError] = useState<string | null>(null);
 
-  // --- One each --------------------------------------------------
-  const [measureQtyDraft, setMeasureQtyDraft] = useState<string>(
-    ingredient.each_measure_qty == null ? "" : String(ingredient.each_measure_qty)
-  );
-  const [measureUomDraft, setMeasureUomDraft] = useState<string>(
-    (ingredient.each_measure_uom ?? "LB").toUpperCase()
-  );
-  const [measureSourceDraft, setMeasureSourceDraft] = useState<string>(
-    ingredient.each_measure_source ?? "house_test"
-  );
+  // --- One each ---------------------------------------------------
+  // N11 §2 R2: measure keeps its own baseline state and own sync
+  // effect, split out of the shared rename/category sync below. A
+  // refresh updates the baseline but never wipes a dirty draft on
+  // the same ingredient.
+  type MeasureShape = { qty: string; uom: string; source: string };
+  const makeMeasure = (): MeasureShape => ({
+    qty: ingredient.each_measure_qty == null ? "" : String(ingredient.each_measure_qty),
+    uom: (ingredient.each_measure_uom ?? "").toUpperCase(),
+    source: ingredient.each_measure_source ?? "house_test",
+  });
+  const equalMeasure = (a: MeasureShape, b: MeasureShape) =>
+    a.qty === b.qty && a.uom === b.uom && a.source === b.source;
+
+  const [measureBaseline, setMeasureBaseline] = useState<MeasureShape>(() => makeMeasure());
+  const [measureDraft, setMeasureDraft] = useState<MeasureShape>(measureBaseline);
   const [measureBusy, setMeasureBusy] = useState(false);
   const [measureSavedAt, setMeasureSavedAt] = useState<number | null>(null);
   const [measureError, setMeasureError] = useState<string | null>(null);
+  const measurePrevIdRef = useRef(ingredient.id);
+  const measurePriorStoredRef = useRef<MeasureShape>(measureBaseline);
 
-  // Keep local drafts in sync when the ingredient reloads underneath.
+  // Keep rename/category drafts in sync when the ingredient reloads
+  // underneath. Measure fields are deliberately absent from this
+  // effect per R2 (own effect below).
   useEffect(() => {
     setRenameDraft(ingredient.name);
     setSuperDraft(ingredient.category ?? "");
     setSubPick(ingredient.parent ?? "");
-    setMeasureQtyDraft(
-      ingredient.each_measure_qty == null ? "" : String(ingredient.each_measure_qty)
-    );
-    setMeasureUomDraft((ingredient.each_measure_uom ?? "LB").toUpperCase());
-    setMeasureSourceDraft(ingredient.each_measure_source ?? "house_test");
   }, [
     ingredient.id,
     ingredient.name,
     ingredient.category,
     ingredient.parent,
+  ]);
+
+  useEffect(() => {
+    const next: MeasureShape = {
+      qty: ingredient.each_measure_qty == null ? "" : String(ingredient.each_measure_qty),
+      uom: (ingredient.each_measure_uom ?? "").toUpperCase(),
+      source: ingredient.each_measure_source ?? "house_test",
+    };
+    const idChanged = measurePrevIdRef.current !== ingredient.id;
+    const priorStored = measurePriorStoredRef.current;
+    measurePrevIdRef.current = ingredient.id;
+    measurePriorStoredRef.current = next;
+    setMeasureBaseline(next);
+    setMeasureDraft((cur) =>
+      idChanged || equalMeasure(cur, priorStored) ? next : cur
+    );
+  }, [
+    ingredient.id,
     ingredient.each_measure_qty,
     ingredient.each_measure_uom,
     ingredient.each_measure_source,
@@ -150,30 +173,37 @@ export function PanelIngredientZone({
     onDone();
   }
 
+  // N11 §2: measure save goes through an explicit press now. The
+  // qty-blur / unit-change auto-save and the blank-blur-clears
+  // behaviour are both gone. Emptying the number is invalid (R3);
+  // the Clear link below the row is the only way to remove.
+  const measureDirty = !equalMeasure(measureDraft, measureBaseline);
+  const measureQtyTrimmed = measureDraft.qty.trim();
+  const measureQtyNum = Number(measureQtyTrimmed);
+  const measureQtyValid =
+    measureQtyTrimmed !== "" &&
+    Number.isFinite(measureQtyNum) &&
+    measureQtyNum > 0 &&
+    measureQtyNum <= 100000;
+  const measureUomDim = DIM_BY_UOM[measureDraft.uom];
+  const measureUomValid = measureUomDim === "weight" || measureUomDim === "volume";
+  const measureSaveEnabled =
+    !measureBusy && measureDirty && measureQtyValid && measureUomValid;
+  const measureHint =
+    measureQtyTrimmed === "" ? "Enter a number"
+    : measureQtyValid && !measureUomValid ? "Pick a unit"
+    : null;
+
   async function doMeasureSave() {
-    if (measureBusy) return;
-    const trimmed = measureQtyDraft.trim();
-    if (trimmed === "") return;
-    const n = Number(trimmed);
-    if (!Number.isFinite(n) || n <= 0 || n > 100000) return;
-    const u = measureUomDraft.toUpperCase();
-    const dim = DIM_BY_UOM[u];
-    if (dim !== "weight" && dim !== "volume") return;
-    if (
-      ingredient.each_measure_qty != null &&
-      Number(ingredient.each_measure_qty) === n &&
-      (ingredient.each_measure_uom ?? "").toUpperCase() === u &&
-      (ingredient.each_measure_source ?? "house_test") === measureSourceDraft
-    ) {
-      return;
-    }
+    if (!measureSaveEnabled) return;
     setMeasureBusy(true);
     setMeasureError(null);
+    const u = measureDraft.uom;
     const r = await postJson("/api/review/set-each-measure", {
       ingredientId: ingredient.id,
-      qty: n,
+      qty: measureQtyNum,
       uom: u,
-      source: measureSourceDraft,
+      source: measureDraft.source,
     });
     if (!r.ok) {
       const msg = errMsg(r.data, `Save failed (${r.status})`);
@@ -182,7 +212,15 @@ export function PanelIngredientZone({
       setMeasureBusy(false);
       return;
     }
-    toast(`Saved: one each is ${Math.round(n * 10000) / 10000} ${uomLabel(u)}`);
+    toast(`Saved: one each is ${Math.round(measureQtyNum * 10000) / 10000} ${uomLabel(u)}`);
+    const saved: MeasureShape = {
+      qty: String(measureQtyNum),
+      uom: u,
+      source: measureDraft.source,
+    };
+    measurePriorStoredRef.current = saved;
+    setMeasureBaseline(saved);
+    setMeasureDraft(saved);
     setMeasureSavedAt(Date.now());
     setMeasureBusy(false);
     onDone();
@@ -205,21 +243,29 @@ export function PanelIngredientZone({
       return;
     }
     toast("Measure cleared");
-    setMeasureQtyDraft("");
+    const cleared: MeasureShape = { qty: "", uom: "", source: measureDraft.source };
+    measurePriorStoredRef.current = cleared;
+    setMeasureBaseline(cleared);
+    setMeasureDraft(cleared);
     setMeasureSavedAt(Date.now());
     setMeasureBusy(false);
     onDone();
   }
 
-  // N8 §1g: "clearing the number and leaving the field clears the
-  // measure." Blank blur == clear if there was a stored value.
-  function onMeasureQtyBlur() {
-    const trimmed = measureQtyDraft.trim();
-    if (trimmed === "" && ingredient.each_measure_qty != null) {
-      void doMeasureClear();
-      return;
+  function onMeasureDiscard() {
+    if (measureBusy) return;
+    setMeasureDraft(measureBaseline);
+    setMeasureError(null);
+  }
+
+  function onMeasureKey(e: React.KeyboardEvent<HTMLElement>) {
+    if (e.key === "Enter" && measureSaveEnabled) {
+      e.preventDefault();
+      void doMeasureSave();
+    } else if (e.key === "Escape" && measureDirty) {
+      e.preventDefault();
+      onMeasureDiscard();
     }
-    void doMeasureSave();
   }
 
   const renameDirty =
@@ -235,7 +281,7 @@ export function PanelIngredientZone({
   // measure." clause so it is clear which number the engine will use.
   const measureFoot = (() => {
     const stored = ingredient.each_measure_qty;
-    const draftN = Number(measureQtyDraft);
+    const draftN = Number(measureDraft.qty);
     const n = Number.isFinite(draftN) && draftN > 0 ? draftN : (stored != null ? Number(stored) : null);
     if (n == null) {
       return {
@@ -244,7 +290,7 @@ export function PanelIngredientZone({
         body: "Enter what one each is, by weight or by volume, and recipes can cost it that way. The stored price stays per each.",
       };
     }
-    const u = measureUomDraft.toUpperCase();
+    const u = measureDraft.uom || (ingredient.each_measure_uom ?? "LB").toUpperCase();
     if (item && item.perBaseUom === "EA" && item.perBase != null) {
       const derivedFromIngredient = deriveRecipePrice({
         perBase: item.perBase,
@@ -415,76 +461,123 @@ export function PanelIngredientZone({
         <div className="kf-ipanel__row-hint">How recipes count this ingredient.</div>
       </div>
 
-      {/* Row 4: One each is - controls on line 1, measure note on
-          line 2 inside the same grid (spans cols 2 to -1). */}
+      {/* Row 4: One each is - N11 §2 R4: standard row shape (label /
+          value / action). Value cell holds qty + unit + source; Save
+          lives in the action column; the note row below carries
+          saved-state, dirty "Not saved yet · Discard", and the
+          immediate Clear link when a measure is stored. */}
       {ingredient.base_unit === "each" ? (
-        <div className="kf-ipanel__row kf-ipanel__row--split">
+        <div className="kf-ipanel__row">
           <label className="kf-ipanel__row-label" htmlFor={`ing-m-qty-${ingredient.id}`}>
             One each is
           </label>
-          <div className="kf-ipanel__row-value-flex">
-            <input
-              id={`ing-m-qty-${ingredient.id}`}
-              type="number"
-              inputMode="decimal"
-              step="0.0001"
-              min="0"
-              className="kf-ipanel__ctl kf-ipanel__ctl--qty"
-              value={measureQtyDraft}
-              onChange={(e) => setMeasureQtyDraft(e.target.value)}
-              onBlur={onMeasureQtyBlur}
-              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onMeasureQtyBlur(); } }}
-              placeholder=""
-              aria-label="One each, quantity"
-              disabled={measureBusy}
-            />
-            <select
-              className="kf-ipanel__ctl kf-ipanel__ctl--uom"
-              value={measureUomDraft}
-              onChange={(e) => {
-                const u = e.target.value;
-                setMeasureUomDraft(u);
-                const trimmed = measureQtyDraft.trim();
-                if (trimmed === "") return;
-                const n = Number(trimmed);
-                if (!Number.isFinite(n) || n <= 0 || n > 100000) return;
-                void doMeasureSave();
-              }}
-              disabled={measureBusy}
-              aria-label="One each, unit"
-            >
-              <optgroup label="Weight">
-                {WEIGHT_UOMS.map((u) => (
-                  <option key={u} value={u}>{uomLabel(u)}</option>
-                ))}
-              </optgroup>
-              <optgroup label="Volume">
-                {VOLUME_UOMS.map((u) => (
-                  <option key={u} value={u}>{uomLabel(u)}</option>
-                ))}
-              </optgroup>
-            </select>
+          <div className="kf-ipanel__row-value">
+            <div className="kf-ipanel__row-value-flex">
+              <input
+                id={`ing-m-qty-${ingredient.id}`}
+                type="number"
+                inputMode="decimal"
+                step="0.0001"
+                min="0"
+                className="kf-ipanel__ctl kf-ipanel__ctl--qty"
+                value={measureDraft.qty}
+                onChange={(e) =>
+                  setMeasureDraft((m) => ({ ...m, qty: e.target.value }))
+                }
+                onKeyDown={onMeasureKey}
+                placeholder=""
+                aria-label="One each, quantity"
+                disabled={measureBusy}
+              />
+              <select
+                className="kf-ipanel__ctl kf-ipanel__ctl--uom"
+                value={measureDraft.uom}
+                onChange={(e) =>
+                  setMeasureDraft((m) => ({ ...m, uom: e.target.value.toUpperCase() }))
+                }
+                onKeyDown={onMeasureKey}
+                disabled={measureBusy}
+                aria-label="One each, unit"
+              >
+                <option value="" disabled>Unit</option>
+                <optgroup label="Weight">
+                  {WEIGHT_UOMS.map((u) => (
+                    <option key={u} value={u}>{uomLabel(u)}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="Volume">
+                  {VOLUME_UOMS.map((u) => (
+                    <option key={u} value={u}>{uomLabel(u)}</option>
+                  ))}
+                </optgroup>
+              </select>
+              <select
+                className="kf-ipanel__ctl kf-ipanel__ctl--source"
+                value={measureDraft.source}
+                onChange={(e) =>
+                  setMeasureDraft((m) => ({ ...m, source: e.target.value }))
+                }
+                onKeyDown={onMeasureKey}
+                disabled={measureBusy}
+                aria-label="Where the measure came from"
+              >
+                <option value="house_test">Measured in house</option>
+                <option value="book">Book value</option>
+                <option value="vendor_spec">Vendor spec</option>
+                <option value="estimate">Estimate</option>
+              </select>
+            </div>
+            <div className="kf-ipanel__measure-note" aria-live="polite">
+              {measureDirty ? (
+                measureHint ? (
+                  <span>{measureHint}</span>
+                ) : (
+                  <>
+                    <span>Not saved yet</span>
+                    <span aria-hidden>&middot;</span>
+                    <button
+                      type="button"
+                      className="kf-ipanel__measure-discard"
+                      onClick={onMeasureDiscard}
+                      disabled={measureBusy}
+                    >
+                      Discard
+                    </button>
+                  </>
+                )
+              ) : (
+                <>
+                  {measureFoot.tone === "good" ? (
+                    <span className="kf-pill kf-pill--good">Saved</span>
+                  ) : (
+                    <span className="kf-pill kf-pill--warn">not set yet</span>
+                  )}
+                  <span>{measureFoot.body}</span>
+                </>
+              )}
+              {ingredient.each_measure_qty != null ? (
+                <button
+                  type="button"
+                  className="kf-ipanel__measure-clear"
+                  onClick={doMeasureClear}
+                  disabled={measureBusy}
+                >
+                  Clear
+                </button>
+              ) : null}
+              <SaveFlash savedAt={measureSavedAt} error={measureError} />
+            </div>
           </div>
-          <select
-            className="kf-ipanel__ctl"
-            value={measureSourceDraft}
-            onChange={(e) => setMeasureSourceDraft(e.target.value)}
-            disabled={measureBusy}
-            aria-label="Where the measure came from"
-          >
-            <option value="house_test">Measured in house</option>
-            <option value="book">Book value</option>
-            <option value="vendor_spec">Vendor spec</option>
-            <option value="estimate">Estimate</option>
-          </select>
-          <div className="kf-ipanel__measure-note" aria-live="polite">
-            {measureFoot.tone === "good" ? (
-              <span className="kf-pill kf-pill--good">Saved</span>
-            ) : (
-              <span className="kf-pill kf-pill--warn">not set yet</span>
-            )}
-            <span>{measureFoot.body}</span>
-            <SaveFlash savedAt={measureSavedAt} error={measureError} />
+          <div className="kf-ipanel__row-action">
+            <button
+              type="button"
+              className={`kf-btn ${measureSaveEnabled ? "kf-btn--primary" : "kf-btn--line"} kf-btn--sm${measureBusy ? " is-busy" : ""}`}
+              disabled={!measureSaveEnabled}
+              onClick={doMeasureSave}
+              onKeyDown={onMeasureKey}
+            >
+              {measureBusy ? "Saving..." : "Save"}
+            </button>
           </div>
         </div>
       ) : null}

@@ -776,6 +776,11 @@
 .kf-ipanel__ctl[aria-busy="true"] { opacity: .7; }
 .kf-ipanel__ctl--qty { width: 88px; flex: 0 0 auto; }
 .kf-ipanel__ctl--uom { width: 96px; flex: 0 0 auto; padding: 0 var(--sp-sp-2); }
+/* N11 §2 R4: source select shares the value-flex row with qty + unit;
+ * grows to fill remaining space, caps at a comfortable width, and
+ * wraps to a new flex line below the standard row-action breakpoint
+ * so "Measured in house" never clips. */
+.kf-ipanel__ctl--source { flex: 1 1 160px; min-width: 140px; max-width: 220px; padding: 0 var(--sp-sp-2); }
 
 /* Edit / Override toggle button used on Pack-and-price and Price
  * override rows. Soft sky-tint ground, navy text, 44px, min-width 96. */
@@ -1006,6 +1011,29 @@
   color: var(--sp-body);
 }
 .kf-ipanel__row--measure-wrap { border-top: 0; }
+
+/* N11 §2: Save-button-only each measure. Discard + Clear are inline
+ * muted-navy text links that live in the measure-note slot. Both
+ * meet the 44 px floor via vertical padding so a mis-tap on either
+ * is forgiving. Error text is block-red at --sp-t-micro and wraps
+ * on its own flex line. */
+.kf-ipanel__measure-discard,
+.kf-ipanel__measure-clear {
+  background: transparent;
+  border: 0;
+  padding: var(--sp-sp-1) 0;
+  font: inherit;
+  color: var(--sp-navy);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.kf-ipanel__measure-discard:hover:not(:disabled),
+.kf-ipanel__measure-clear:hover:not(:disabled) { color: var(--sp-navy-deep); }
+.kf-ipanel__measure-discard:disabled,
+.kf-ipanel__measure-clear:disabled { opacity: 0.5; cursor: default; }
+.kf-ipanel__measure-clear { margin-left: auto; color: var(--sp-muted); }
+.kf-ipanel__measure-clear:hover:not(:disabled) { color: var(--sp-ink); }
+.kf-ipanel__measure-error { color: var(--sp-block); flex-basis: 100%; }
 
 /* N8 fix 8: allergen chip meets the 44 px floor inside chrome="bare".
  * The Ingredients tab (chrome="tab") keeps its own .kf-allergen rule

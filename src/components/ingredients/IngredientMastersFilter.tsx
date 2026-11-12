@@ -835,26 +835,84 @@ function errText(data: unknown, fallback: string): string {
 // item panel's ingredient zone can mount the same writer. Markup and
 // behaviour unchanged.
 
-// N6: usual measure of one each. Writes the pr_ingredients.each_measure_*
-// trio via POST /api/review/set-each-measure. Row control carries qty +
-// uom; source defaults to house_test when the row has no source yet,
-// else stays as-is (the detail panel is the place to change source).
+// N11 §2: usual measure of one each. Explicit Save button; the prior
+// blur-commit and unit-change auto-save are gone. On a stored
+// measure, emptying the number is the Remove-measure draft (R3) and
+// Save reads "Remove measure"; on an empty row, the editor starts
+// with no unit (disabled "Unit" placeholder per R1) and Save is
+// disabled until a number and unit are picked. Source lives on the
+// detail panel and is not part of this draft (R5).
 function EachMeasureControl({ row }: { row: MasterRow }) {
   const router = useRouter();
-  const [qtyDraft, setQtyDraft] = useState<string>(
-    row.eachMeasureQty == null ? "" : String(row.eachMeasureQty)
-  );
-  const [uomDraft, setUomDraft] = useState<string>(
-    (row.eachMeasureUom ?? "LB").toUpperCase()
-  );
-  const [busy, setBusy] = useState(false);
+  type Shape = { qty: string; uom: string };
+  const makeBaseline = (): Shape => ({
+    qty: row.eachMeasureQty == null ? "" : String(row.eachMeasureQty),
+    uom: (row.eachMeasureUom ?? "").toUpperCase(),
+  });
+  const equalShape = (a: Shape, b: Shape) => a.qty === b.qty && a.uom === b.uom;
 
-  async function saveNumber(n: number, u: string) {
-    if (busy) return;
+  const [baseline, setBaseline] = useState<Shape>(() => makeBaseline());
+  const [draft, setDraft] = useState<Shape>(baseline);
+  const [busy, setBusy] = useState(false);
+  const prevId = useRef(row.id);
+  const priorStoredRef = useRef<Shape>(baseline);
+
+  useEffect(() => {
+    const next: Shape = {
+      qty: row.eachMeasureQty == null ? "" : String(row.eachMeasureQty),
+      uom: (row.eachMeasureUom ?? "").toUpperCase(),
+    };
+    const idChanged = prevId.current !== row.id;
+    const priorStored = priorStoredRef.current;
+    prevId.current = row.id;
+    priorStoredRef.current = next;
+    setBaseline(next);
+    setDraft((cur) => (idChanged || equalShape(cur, priorStored) ? next : cur));
+  }, [row.id, row.eachMeasureQty, row.eachMeasureUom]);
+
+  const dirty = !equalShape(draft, baseline);
+  const qtyTrimmed = draft.qty.trim();
+  const qtyNum = Number(qtyTrimmed);
+  const qtyValid = qtyTrimmed !== "" && Number.isFinite(qtyNum) && qtyNum > 0 && qtyNum <= 100000;
+  const uomDim = DIM_BY_UOM[draft.uom];
+  const uomValid = uomDim === "weight" || uomDim === "volume";
+
+  const removing = dirty && qtyTrimmed === "" && row.eachMeasureQty != null;
+  const writing = dirty && qtyValid && uomValid;
+  const saveEnabled = !busy && (removing || writing);
+
+  const hint =
+    qtyTrimmed === "" && row.eachMeasureQty == null ? "Enter a number"
+    : qtyValid && !uomValid ? "Pick a unit"
+    : null;
+
+  async function doSave() {
+    if (!saveEnabled) return;
     setBusy(true);
+    if (removing) {
+      const r = await postJson("/api/review/set-each-measure", {
+        ingredientId: row.id,
+        qty: null,
+      });
+      if (!r.ok) {
+        toast(errText(r.data, `Clear failed (${r.status})`), { tone: "block" });
+        setBusy(false);
+        return;
+      }
+      toast(`${row.name}: measure cleared`);
+      const cleared: Shape = { qty: "", uom: "" };
+      priorStoredRef.current = cleared;
+      setBaseline(cleared);
+      setDraft(cleared);
+      setBusy(false);
+      router.refresh();
+      return;
+    }
+    const rounded = Math.round(qtyNum * 10000) / 10000;
+    const u = draft.uom;
     const r = await postJson("/api/review/set-each-measure", {
       ingredientId: row.id,
-      qty: n,
+      qty: rounded,
       uom: u,
       source: row.eachMeasureSource ?? "house_test",
     });
@@ -863,36 +921,35 @@ function EachMeasureControl({ row }: { row: MasterRow }) {
       setBusy(false);
       return;
     }
-    toast(`${row.name}: one each is ${Math.round(n * 10000) / 10000} ${uomLabel(u)}`);
+    toast(`${row.name}: one each is ${rounded} ${uomLabel(u)}`);
+    const saved: Shape = { qty: String(rounded), uom: u };
+    priorStoredRef.current = saved;
+    setBaseline(saved);
+    setDraft(saved);
     setBusy(false);
     router.refresh();
   }
 
-  function onCommit(nextQtyStr: string, nextUom: string) {
-    const trimmed = nextQtyStr.trim();
-    if (trimmed === "") return; // empty = no-op on blur; clear from the panel
-    const n = Number(trimmed);
-    if (!Number.isFinite(n) || n <= 0 || n > 100000) {
-      toast("Quantity must be greater than 0 and at most 100000.", { tone: "block" });
-      return;
-    }
-    const u = nextUom.toUpperCase();
-    const dim = DIM_BY_UOM[u];
-    if (dim !== "weight" && dim !== "volume") {
-      toast("Pick a weight or volume unit.", { tone: "block" });
-      return;
-    }
-    const rounded = Math.round(n * 10000) / 10000;
-    if (rounded === row.eachMeasureQty && u === (row.eachMeasureUom ?? "").toUpperCase()) return; // no-op
-    void saveNumber(rounded, u);
+  function onDiscard() {
+    if (busy) return;
+    setDraft(baseline);
   }
 
-  // Empty-state chip: when no measure is set yet, keep the warn style
-  // the row already uses for "Check allergens". Small matching chip in
-  // place of the control so the user sees the gap without a disabled
-  // input floating next to a populated one.
-  if (row.eachMeasureQty == null && qtyDraft === "") {
-    return (
+  function onKey(e: React.KeyboardEvent<HTMLElement>) {
+    if (e.key === "Enter" && saveEnabled) {
+      e.preventDefault();
+      void doSave();
+    } else if (e.key === "Escape" && dirty) {
+      e.preventDefault();
+      onDiscard();
+    }
+  }
+
+  const emptyBaseline = row.eachMeasureQty == null && baseline.qty === "";
+  const saveLabel = busy ? "Saving..." : removing ? "Remove measure" : "Save";
+
+  return (
+    <span className="kf-dt__measure">
       <span className="kf-dt__unitctl">
         <Scale size={13} strokeWidth={1.5} aria-hidden />
         <label className="kf-dt__unitctl-l" htmlFor={`avgw-${row.id}`}>
@@ -904,10 +961,9 @@ function EachMeasureControl({ row }: { row: MasterRow }) {
           inputMode="decimal"
           step="0.0001"
           min="0"
-          value={qtyDraft}
-          onChange={(e) => setQtyDraft(e.target.value)}
-          onBlur={() => onCommit(qtyDraft, uomDraft)}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onCommit(qtyDraft, uomDraft); } }}
+          value={draft.qty}
+          onChange={(e) => setDraft((d) => ({ ...d, qty: e.target.value }))}
+          onKeyDown={onKey}
           placeholder=""
           aria-label="One each, quantity"
           disabled={busy}
@@ -915,12 +971,14 @@ function EachMeasureControl({ row }: { row: MasterRow }) {
           style={{ width: "6ch" }}
         />
         <select
-          value={uomDraft}
-          onChange={(e) => setUomDraft(e.target.value)}
+          value={draft.uom}
+          onChange={(e) => setDraft((d) => ({ ...d, uom: e.target.value.toUpperCase() }))}
+          onKeyDown={onKey}
           disabled={busy}
           aria-label="One each, unit"
           className="kf-dt__unitsel"
         >
+          <option value="" disabled>Unit</option>
           <optgroup label="Weight">
             {WEIGHT_UOMS.map((u) => (
               <option key={u} value={u}>{uomLabel(u)}</option>
@@ -932,51 +990,38 @@ function EachMeasureControl({ row }: { row: MasterRow }) {
             ))}
           </optgroup>
         </select>
-        <span className="kf-master__bdg kf-master__bdg--unreviewed">no measure yet</span>
+        <button
+          type="button"
+          className={`kf-btn ${saveEnabled ? "kf-btn--primary" : "kf-btn--line"} kf-btn--sm${busy ? " is-busy" : ""}`}
+          disabled={!saveEnabled}
+          onClick={doSave}
+        >
+          {saveLabel}
+        </button>
+        {emptyBaseline && !dirty ? (
+          <span className="kf-master__bdg kf-master__bdg--unreviewed">no measure yet</span>
+        ) : null}
       </span>
-    );
-  }
-
-  return (
-    <span className="kf-dt__unitctl">
-      <Scale size={13} strokeWidth={1.5} aria-hidden />
-      <label className="kf-dt__unitctl-l" htmlFor={`avgw-${row.id}`}>
-        One each
-      </label>
-      <input
-        id={`avgw-${row.id}`}
-        type="number"
-        inputMode="decimal"
-        step="0.0001"
-        min="0"
-        value={qtyDraft}
-        onChange={(e) => setQtyDraft(e.target.value)}
-        onBlur={() => onCommit(qtyDraft, uomDraft)}
-        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onCommit(qtyDraft, uomDraft); } }}
-        placeholder="qty"
-        aria-label="One each, quantity"
-        disabled={busy}
-        className="kf-dt__unitsel"
-        style={{ width: "6ch" }}
-      />
-      <select
-        value={uomDraft}
-        onChange={(e) => { setUomDraft(e.target.value); onCommit(qtyDraft, e.target.value); }}
-        disabled={busy}
-        aria-label="One each, unit"
-        className="kf-dt__unitsel"
-      >
-        <optgroup label="Weight">
-          {WEIGHT_UOMS.map((u) => (
-            <option key={u} value={u}>{uomLabel(u)}</option>
-          ))}
-        </optgroup>
-        <optgroup label="Volume">
-          {VOLUME_UOMS.map((u) => (
-            <option key={u} value={u}>{uomLabel(u)}</option>
-          ))}
-        </optgroup>
-      </select>
+      {dirty ? (
+        <span className="kf-dt__measure-note" aria-live="polite">
+          {hint ? (
+            <span>{hint}</span>
+          ) : (
+            <>
+              <span>Not saved yet</span>
+              <span aria-hidden>&middot;</span>
+              <button
+                type="button"
+                className="kf-dt__measure-discard"
+                onClick={onDiscard}
+                disabled={busy}
+              >
+                Discard
+              </button>
+            </>
+          )}
+        </span>
+      ) : null}
     </span>
   );
 }
