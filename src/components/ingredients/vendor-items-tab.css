@@ -358,37 +358,92 @@
   color: var(--sp-muted);
 }
 
-/* Round 3 fix 1: MIDDLE tier. Card 720-1039 px. Still a table,
- * five columns - Vendor and Last-bought fold into the Item and 12 mo
- * cells respectively. The Item column takes the slack the two folded
- * columns leave.
- *   Item flex | Linked to 208 | Pack 148 | Price 100 | 12 mo 120
- * Cols 1 and 7 collapse (0 width) and their cells are display:none;
- * the fold-sub lines become visible inside cols 2 and 6. */
-@container vi-card (min-width: 720px) and (max-width: 1039px) {
-  .kf-vi__table col:nth-child(1),
-  .kf-vi__table col:nth-child(7) { visibility: collapse; width: 0; }
-  .kf-vi__table col:nth-child(6) { width: 120px; }
+/* Round 4 fix 1: ONE mechanism below 1140. The real table layout
+ * stops; each <tr> becomes a CSS grid; the cells are block boxes
+ * placed via grid-area + nth-child. The prior
+ * `visibility: collapse` on <col> fighting `display: none` on cells
+ * was collapsing col 2 in Chromium because the DOM-cell / colgroup
+ * shift moved the remaining cells one column left.
+ *
+ * Column widths come from the grid-template-columns per tier; the
+ * card's inset lives inside the cell paddings (NOT the tr padding
+ * or column-gap), so the fixed cols account for every pixel the
+ * Item column sees. tr has zero horizontal padding and zero
+ * column-gap at every grid tier - the cells own the space. */
+@container vi-card (max-width: 1139px) {
+  .kf-vi__table,
+  .kf-vi__table tbody,
+  .kf-vi__table thead { display: block; width: 100%; }
+  .kf-vi__table colgroup { display: none; }
+  .kf-vi__table tr {
+    display: grid;
+    column-gap: 0;
+    row-gap: var(--sp-sp-1);
+    padding: 0;
+    border-bottom: 1px solid var(--sp-line-soft);
+  }
+  .kf-vi__table tr:last-child { border-bottom: 0; }
+  .kf-vi__table th,
+  .kf-vi__table td {
+    display: block;
+    padding: var(--sp-sp-3) var(--sp-sp-2);
+    border: 0;
+  }
+  .kf-vi__table thead tr { background: var(--sp-raise); }
+  .kf-vi__table thead th {
+    padding: var(--sp-sp-2) var(--sp-sp-2);
+  }
+  .kf-vi__table th.kf-vi__num,
+  .kf-vi__table td.kf-vi__num { text-align: right; }
+  /* Vendor cell always hides when the tr is a grid (both tiers).
+   * Vendor fact folds into the Item cell's sub. */
   .kf-vi__table th:nth-child(1),
-  .kf-vi__table td:nth-child(1),
+  .kf-vi__table td:nth-child(1) { display: none; }
+}
+
+/* Round 4 fix 1 + 2: MIDDLE tier. Card 860-1139 px. Five cells
+ * horizontal: Item flex | Linked to 208 | Pack 148 | Price 100 |
+ * 12 mo 120. No column-gap, zero tr padding - the fixed widths
+ * are honoured exactly.
+ *
+ * Item widths at the thresholds:
+ *   card 1140 (wide tier starts): Item = 1140 - 2 (card border) -
+ *     852 (6 fixed cols 180+208+148+100+104+112) = 286 px.
+ *   card 1139 (middle, upper bound): Item = 1139 - 2 - 576 (4 fixed
+ *     cols 208+148+100+120) = 561 px.
+ *   card 860 (middle, lower bound): Item = 860 - 2 - 576 = 282 px.
+ *   card 859 (narrow starts): Item cell spans the full tr content
+ *     (minmax(0, 1fr) at the stack's top row). */
+@container vi-card (min-width: 860px) and (max-width: 1139px) {
+  .kf-vi__table tr {
+    grid-template-columns: minmax(240px, 1fr) 208px 148px 100px 120px;
+    grid-template-areas: "item linkto pack price usd";
+    align-items: start;
+  }
   .kf-vi__table th:nth-child(7),
   .kf-vi__table td:nth-child(7) { display: none; }
+  .kf-vi__table th:nth-child(2),
+  .kf-vi__table td:nth-child(2) { grid-area: item; padding-left: var(--sp-sp-4); }
+  .kf-vi__table th:nth-child(3),
+  .kf-vi__table td:nth-child(3) { grid-area: linkto; }
+  .kf-vi__table th:nth-child(4),
+  .kf-vi__table td:nth-child(4) { grid-area: pack; }
+  .kf-vi__table th:nth-child(5),
+  .kf-vi__table td:nth-child(5) { grid-area: price; }
+  .kf-vi__table th:nth-child(6),
+  .kf-vi__table td:nth-child(6) { grid-area: usd; padding-right: var(--sp-sp-4); }
   .kf-vi__cell-sub--fold-vendor { display: block; }
   .kf-vi__cell-sub--fold-lastbot { display: block; }
 }
 
-/* Round 3 fix 2: NARROW tier. Card < 720 px. Stacked block per
- * frame D - description + warn, vendor micro, dashed rule, Linked
- * to | Price, dashed rule, Pack | 12 mo, "last bought {date}" micro.
- * One source; serves both phone (card is the viewport) and any
- * desktop context that renders the panel this narrow. */
-@container vi-card (max-width: 719px) {
-  .kf-vi__table,
-  .kf-vi__table tbody { display: block; width: 100%; }
-  .kf-vi__table colgroup,
+/* Round 4: NARROW tier. Card < 860 px. Stacked block per frame D -
+ * description + warn, vendor micro, dashed rule, Linked to |
+ * Price, dashed rule, Pack | 12 mo, "last bought {date}" micro.
+ * The th row is hidden entirely (the stack has no need for a
+ * header strip). */
+@container vi-card (max-width: 859px) {
   .kf-vi__table thead { display: none; }
   .kf-vi__table tr {
-    display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
       "item     item"
@@ -396,40 +451,25 @@
       "pack     usd"
       "lastbot  lastbot";
     column-gap: var(--sp-sp-3);
-    row-gap: var(--sp-sp-1);
     padding: var(--sp-sp-3) var(--sp-sp-4);
-    border-bottom: 1px solid var(--sp-line-soft);
   }
-  .kf-vi__table tr:last-child { border-bottom: 0; }
-  .kf-vi__table td { display: block; padding: 0; border: 0; }
-  .kf-vi__table td.kf-vi__num { text-align: right; }
-  /* Vendor column collapses - vendor fact is folded into the Item
-   * cell's sub below the description + warn. */
-  .kf-vi__table td:nth-child(1) { display: none; }
+  .kf-vi__table th,
+  .kf-vi__table td { padding: 0; }
   .kf-vi__table td:nth-child(2) { grid-area: item; }
   .kf-vi__table td:nth-child(3) { grid-area: linkto; }
   .kf-vi__table td:nth-child(4) { grid-area: pack; }
   .kf-vi__table td:nth-child(5) { grid-area: price; }
   .kf-vi__table td:nth-child(6) { grid-area: usd; }
   .kf-vi__table td:nth-child(7) { grid-area: lastbot; }
-  /* Fold-vendor is the micro under the description. */
   .kf-vi__cell-sub--fold-vendor { display: block; }
-  /* Fold-lastbot stays hidden - last-bought gets its own standalone
-   * row at the bottom (td7 / .kf-vi__lb-compact). */
   .kf-vi__lb-full { display: none; }
   .kf-vi__lb-compact { display: block; }
-  /* Dashed dividers above the two pair rows. */
   .kf-vi__table td:nth-child(3),
   .kf-vi__table td:nth-child(5) {
     padding-top: var(--sp-sp-2);
     border-top: 1px dashed var(--sp-line);
   }
-  /* Last-bought row sits above the lower border of the tr with its
-   * own top spacing so the pair rule stays visually tied to the
-   * pairs above it. */
-  .kf-vi__table td:nth-child(7) {
-    padding-top: var(--sp-sp-2);
-  }
+  .kf-vi__table td:nth-child(7) { padding-top: var(--sp-sp-2); }
 }
 
 /* Round 2 fix 4: phone card head stacks (title + count, then sort
