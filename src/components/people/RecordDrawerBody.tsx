@@ -81,15 +81,13 @@ export function RecordDrawerBody({ record }: { record: RecordView }) {
         )}
       </div>
 
+      {/* T3.1 fix 2 (2026-11-13). A record is not a person. The
+       * footer carries only the read-only caption plus Close on
+       * phone. "Start a PAF" / "Report an incident" belong to the
+       * person card, not here. */}
       <footer className="kf-pe-drawer__foot">
         <span className="kf-pe-foot__cap">
           Read-only in this release. Withdraw, Nudge and Fix-and-resend arrive with the forms.
-        </span>
-        <span className="kf-btn kf-btn--primary kf-pe-disabled" aria-disabled="true">
-          <span>Start a PAF</span>
-        </span>
-        <span className="kf-btn kf-btn--ghost kf-pe-disabled" aria-disabled="true">
-          <span>Report an incident</span>
         </span>
         <PersonCardFooterClose />
       </footer>
