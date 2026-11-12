@@ -793,66 +793,10 @@
   text-transform: uppercase;
   color: var(--sp-muted);
 }
-.kf-ingp__chips {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  align-items: center;
-}
-/* Round 2 fix 17: on phone each group is a single row that scrolls
- * horizontally rather than wrapping into six lines. */
+/* N13 R9: chip primitive lifted to chips.css so the Vendor items tab
+ * uses the same source. The filters-label hides on phone (unchanged
+ * from this file; the chip layout + visuals live in chips.css). */
 @media (max-width: 860px) {
   .kf-ingp__filters { grid-template-columns: minmax(0, 1fr); }
   .kf-ingp__filters-label { display: none; }
-  .kf-ingp__chips {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    scrollbar-width: none;
-    -webkit-overflow-scrolling: touch;
-  }
-  .kf-ingp__chips::-webkit-scrollbar { display: none; }
 }
-.kf-ingp__chip {
-  /* Round 2 fix 16: visible chrome stays 36 px (frame A look); a 4 px
-   * invisible ::before above + below gives the 44 px hit target the
-   * floor rule asks for. Same precedent as .kf-allergen's hit halo. */
-  position: relative;
-  min-height: 36px;
-  padding: 0 var(--sp-sp-3);
-  border-radius: var(--sp-r-pill);
-  border: 1px solid var(--sp-line);
-  background: var(--sp-card);
-  font-family: var(--sp-ui);
-  font-weight: 700;
-  font-size: 13px;
-  color: var(--sp-ink);
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.kf-ingp__chip::before {
-  content: "";
-  position: absolute;
-  inset: -4px 0;
-}
-.kf-ingp__chip span { color: var(--sp-muted); font-weight: 400; }
-.kf-ingp__chip--on {
-  background: var(--sp-navy);
-  border-color: var(--sp-navy);
-  color: var(--sp-card);
-}
-.kf-ingp__chip--on span { color: var(--sp-sky-line); }
-.kf-ingp__chip--warn {
-  border-color: var(--sp-warn-strong);
-  color: var(--sp-warn);
-}
-.kf-ingp__chip--warn span { color: var(--sp-warn); }
-.kf-ingp__chip--warn.kf-ingp__chip--on {
-  background: var(--sp-warn-strong);
-  border-color: var(--sp-warn-strong);
-  color: var(--sp-card);
-}
-.kf-ingp__chip--warn.kf-ingp__chip--on span { color: var(--sp-card); }

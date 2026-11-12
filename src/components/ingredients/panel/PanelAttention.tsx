@@ -62,7 +62,17 @@ export function PanelAttention({
       i.kind === "pack_unreadable" ||
       i.kind === "unit_mismatch"
   );
-  if (rendered.length === 0) return null;
+  // N13 R4: "{n} of {lines} invoice lines were flagged when read"
+  // is a warn attention line whenever needsReviewLines > 0. One line,
+  // no body - round 3 fix 3: the prior body sentence was invented;
+  // nothing in the prompt or the old drawer sources it.
+  const flaggedLines =
+    item?.needsReviewLines && item.needsReviewLines > 0
+      ? {
+          head: `${item.needsReviewLines} of ${item.lines12m} invoice lines were flagged when read`,
+        }
+      : null;
+  if (rendered.length === 0 && !flaggedLines) return null;
 
   const toneRank: Record<string, number> = { bad: 3, info: 2, warn: 1 };
   const fixable = rendered
@@ -72,6 +82,16 @@ export function PanelAttention({
 
   return (
     <div className="kf-ipanel__attn" aria-label="What needs attention">
+      {flaggedLines ? (
+        <div className="kf-ipanel__attn-item">
+          <span className="kf-ipanel__attn-icon">
+            <AttentionIcon tone="warn" />
+          </span>
+          <div className="kf-ipanel__attn-item-text">
+            <span className="kf-ipanel__attn-item-head">{flaggedLines.head}</span>
+          </div>
+        </div>
+      ) : null}
       {rendered.map((issue) => {
         const tone: "bad" | "info" | "warn" =
           issue.tone === "bad" ? "bad" : issue.tone === "info" ? "info" : "warn";

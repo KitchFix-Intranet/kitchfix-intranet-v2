@@ -100,6 +100,14 @@ export function PanelStrip({
         <span className="kf-ipanel__strip-value">
           {item.lastSeen ? fmtDate(item.lastSeen) : <span className="kf-ipanel__strip-value-unit">-</span>}
         </span>
+        {/* N13 R4: first-bought micro sits below the sites pills,
+            quiet unless the item has ever been bought. Null on
+            legacy rows (API field is optional). */}
+        {item.firstSeen ? (
+          <span className="kf-ipanel__strip-sub">
+            <span>first bought {fmtDate(item.firstSeen)}</span>
+          </span>
+        ) : null}
         <span className="kf-ipanel__strip-sub">
           {item.accounts.length > 0 ? (
             <span className="kf-site-pills">

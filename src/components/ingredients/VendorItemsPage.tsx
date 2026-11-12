@@ -1,20 +1,33 @@
-// Vendor items table. Render V4 shape: no page head, sticky thead inside a
-// fixed-colgroup card, 48-px nowrap-ellipsis rows, whole-row clickable via
-// <RowLink>, segment chips with live counts, server-side sort, compact
-// pager, phone cards. Export CSV + Run intake sit in the @topbar slot.
+// N13: Server component for the Vendor items tab. Loads + shapes
+// rows, then hands plain props to VendorItemsView (client). Chat-
+// Claude can mount the view in isolation with sample rows without
+// touching Next.
+//
+// What changed from the old render:
+//   - adds `ingredient_id` + `price_estimate` to the page SELECT
+//     (§3.1), + a batched name lookup on the page's ingredient ids
+//     (§3.2), + a shared perBase helper (§3.3 - see
+//     src/lib/ingredients/priceEstimate.ts) used by both this page
+//     and /api/review/item.
+//   - replaces the 7 chip segments with 10 (five Link, five Show
+//     only) per §3.4. The URL enum keeps `status=unlinked`; the
+//     chip label becomes "Not linked" and the filter narrows to
+//     link_status='none' only (R7). New URL values: proposed,
+//     linked, retail.
+//   - deletes the VendorItemDrawer mount: a row opens ItemPanelById
+//     instead. The ?drawer= URL param is unchanged in shape, but
+//     it feeds a client fetch rather than a server-mounted drawer.
 
-import { ChevronLeft, ChevronRight, Scale, Copy, ArrowDown } from "lucide-react";
 import { serviceClient } from "@/lib/supabase/service";
-import { fmtCount, fmtDate, fmtUsdLong } from "@/lib/fmt";
 import { Tabs } from "./Tabs";
 import { IdentBand } from "@/components/ui/IdentBand";
-import { Filters, type StatusSeg } from "./Filters";
-import { RowLink } from "./RowLink";
-import { SortSelect } from "./SortSelect";
-import { type SortKey, parseSort } from "./sortKeys";
-import { VendorItemDrawer } from "./VendorItemDrawer";
+import { fmtCount } from "@/lib/fmt";
+import { readPerBase, type PriceEstimate } from "@/lib/ingredients/priceEstimate";
+import { VendorItemsView, type VendorSeg, type SortKey, type VendorSegCounts, type VendorItemViewRow, type LinkCell } from "./VendorItemsView";
 import "./ingredients.css";
 import "./table.css";
+import "./chips.css";
+import "./vendor-items-tab.css";
 
 const DEFAULT_PAGE_SIZE = 80;
 
@@ -32,6 +45,8 @@ type Row = {
   status: string;
   link_status: string;
   duplicate_of_id: string | null;
+  ingredient_id: string | null;
+  price_estimate: PriceEstimate;
   usd_12m: number | null;
   lines_12m: number | null;
   accounts: string[] | null;
@@ -54,18 +69,18 @@ function toParam(x: string | string[] | undefined): string | undefined {
   return Array.isArray(x) ? x[0] : x;
 }
 
-function parseSeg(v: string | undefined): StatusSeg {
+function parseSeg(v: string | undefined): VendorSeg {
   const s = (v ?? "all").toLowerCase();
-  if (
-    s === "unlinked" ||
-    s === "catch_weight" ||
-    s === "no_number" ||
-    s === "not_food" ||
-    s === "duplicates" ||
-    s === "archived"
-  )
-    return s;
-  return "all";
+  const allowed: ReadonlyArray<VendorSeg> = [
+    "all", "unlinked", "proposed", "linked", "retail",
+    "catch_weight", "no_number", "duplicates", "not_food", "archived",
+  ];
+  return (allowed as readonly string[]).includes(s) ? (s as VendorSeg) : "all";
+}
+
+function parseSort(v: string | undefined): SortKey {
+  if (v === "lines" || v === "last_seen") return v;
+  return "spend";
 }
 
 function parsePer(v: string | undefined): number {
@@ -74,25 +89,20 @@ function parsePer(v: string | undefined): number {
   return Math.max(20, Math.min(100, n));
 }
 
-// Build the base vendor-items query with vendor + segment filters applied
-// but no sort / range / search / count mode.
-function baseQuery(
-  client: ReturnType<typeof serviceClient>,
-  vendor: string | undefined,
-  seg: StatusSeg
-) {
-  let q = client.from("pr_vendor_items");
-  // The .select below is replaced by the caller with its own options.
-  // Here we only compose the filters.
-  return applyFilters(q, vendor, seg);
-}
-
-// Supabase query builder is chainable; `any` kept narrow to the local scope.
+// Compose vendor + segment filters per §3.4.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function applyFilters(q: any, vendor: string | undefined, seg: StatusSeg): any {
+function applyFilters(q: any, vendor: string | undefined, seg: VendorSeg): any {
   if (vendor && vendor !== "all") q = q.eq("vendor_id", vendor);
   if (seg === "unlinked") {
-    q = q.eq("is_food", true).in("link_status", ["none", "proposed"]).in("status", ["active", "resale"]);
+    // R7: narrowed to link_status='none' (today's unlinked also
+    // counted 'proposed'). The URL value stays `unlinked`.
+    q = q.eq("is_food", true).eq("link_status", "none").in("status", ["active", "resale"]);
+  } else if (seg === "proposed") {
+    q = q.eq("is_food", true).eq("link_status", "proposed").in("status", ["active", "resale"]);
+  } else if (seg === "linked") {
+    q = q.eq("link_status", "confirmed").eq("status", "active");
+  } else if (seg === "retail") {
+    q = q.eq("status", "resale");
   } else if (seg === "catch_weight") {
     q = q.eq("catch_weight", true).eq("is_food", true).in("status", ["active", "resale"]);
   } else if (seg === "no_number") {
@@ -102,9 +112,6 @@ function applyFilters(q: any, vendor: string | undefined, seg: StatusSeg): any {
   } else if (seg === "duplicates") {
     q = q.eq("status", "duplicate");
   } else if (seg === "archived") {
-    // R2: isolate archived items (status='archived'). The "all" branch
-    // below mixes archived with every other disposition, so without
-    // this branch there was no way to scan archived on its own.
     q = q.eq("status", "archived");
   } else {
     q = q.in("status", ["active", "resale", "duplicate", "one_off", "not_food", "archived"]);
@@ -112,37 +119,113 @@ function applyFilters(q: any, vendor: string | undefined, seg: StatusSeg): any {
   return q;
 }
 
-type SegCounts = { all: number; unlinked: number; catch_weight: number; no_number: number; not_food: number; duplicates: number; archived: number };
-
 async function readSegCounts(
   client: ReturnType<typeof serviceClient>,
-  vendor: string | undefined
-): Promise<SegCounts> {
-  const build = (seg: StatusSeg) => {
-    const q = applyFilters(
+  vendor: string | undefined,
+): Promise<VendorSegCounts> {
+  const build = (seg: VendorSeg) =>
+    applyFilters(
       client.from("pr_vendor_items").select("id", { count: "exact", head: true }),
       vendor,
-      seg
+      seg,
     );
-    return q;
-  };
-  const [a, u, c, n, nf, d, ar] = await Promise.all([
+  const [a, u, p, l, r, cw, nn, d, nf, ar] = await Promise.all([
     build("all"),
     build("unlinked"),
+    build("proposed"),
+    build("linked"),
+    build("retail"),
     build("catch_weight"),
     build("no_number"),
-    build("not_food"),
     build("duplicates"),
+    build("not_food"),
     build("archived"),
   ]);
   return {
     all: a.count ?? 0,
     unlinked: u.count ?? 0,
-    catch_weight: c.count ?? 0,
-    no_number: n.count ?? 0,
-    not_food: nf.count ?? 0,
+    proposed: p.count ?? 0,
+    linked: l.count ?? 0,
+    retail: r.count ?? 0,
+    catch_weight: cw.count ?? 0,
+    no_number: nn.count ?? 0,
     duplicates: d.count ?? 0,
+    not_food: nf.count ?? 0,
     archived: ar.count ?? 0,
+  };
+}
+
+function linkCell(
+  r: Row,
+  ingredientName: string | null,
+  twinNumber: string | null,
+): LinkCell {
+  if (r.status === "duplicate") {
+    return { kind: "duplicate", main: "Duplicate", sub: twinNumber ? `counted on #${twinNumber}` : "counted on the twin" };
+  }
+  if (r.status === "archived") {
+    return { kind: "archived", main: "Archived", sub: "out of the catalog" };
+  }
+  if (r.status === "one_off") {
+    return { kind: "one_off", main: "One-off", sub: "bought once" };
+  }
+  if (r.is_food === false) {
+    return { kind: "not_food", main: "Not food", sub: "fees and supplies" };
+  }
+  if (r.status === "resale") {
+    // Round 2 fix 10: retail-with-ingredient reads as the ingredient's
+    // name over "retail"; retail-with-no-ingredient reads "Retail" over
+    // "sold as-is" so the sub never repeats the main.
+    return ingredientName
+      ? { kind: "retail", main: ingredientName, sub: "retail" }
+      : { kind: "retail", main: "Retail", sub: "sold as-is" };
+  }
+  if (r.link_status === "proposed") {
+    return { kind: "proposed", main: ingredientName ?? "Proposed", sub: "proposed, needs review" };
+  }
+  if (r.link_status === "confirmed") {
+    return { kind: "linked", main: ingredientName ?? "Linked", sub: "linked" };
+  }
+  if (r.link_status === "rejected") {
+    return { kind: "rejected", main: "Rejected", sub: "link was turned down" };
+  }
+  return { kind: "not_linked", main: "Not linked", sub: "in the review queue" };
+}
+
+function shapeRow(
+  r: Row,
+  vendorName: string,
+  ingredientName: string | null,
+  twinNumber: string | null,
+): VendorItemViewRow {
+  const { perBase, perBaseUom } = readPerBase(r.price_estimate);
+  const link = linkCell(r, ingredientName, twinNumber);
+  // Attention bar: unlinked / proposed / food in active with no pack.
+  const packMissing = !r.pack_text || r.pack_text.trim().length === 0;
+  const activeOrResale = r.status === "active" || r.status === "resale";
+  const attention =
+    link.kind === "not_linked" ||
+    link.kind === "proposed" ||
+    (r.is_food === true && activeOrResale && packMissing);
+  return {
+    id: r.id,
+    vendorName,
+    itemNumber: r.item_number,
+    name: r.name,
+    catchWeight: r.catch_weight === true,
+    twinOfNumber: twinNumber,
+    link,
+    packText: r.pack_text,
+    billedUnit: r.billed_unit,
+    packMissing,
+    perBase,
+    perBaseUom,
+    usd12m: Number(r.usd_12m ?? 0),
+    lines12m: Number(r.lines_12m ?? 0),
+    lastSeenISO: r.last_seen,
+    attention,
+    isFood: r.is_food === true,
+    status: r.status,
   };
 }
 
@@ -174,18 +257,18 @@ export async function VendorItemsPage({
   ]);
   const vendors = (vendorsRes.data ?? []) as Vendor[];
 
-  // Page query.
   let pageQuery = client
     .from("pr_vendor_items")
     .select(
-      "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,billed_unit,catch_weight,is_food,status,link_status,duplicate_of_id,usd_12m,lines_12m,accounts,last_seen",
-      { count: "exact" }
+      // §3.1: ingredient_id + price_estimate added. Nothing else.
+      "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,billed_unit,catch_weight,is_food,status,link_status,duplicate_of_id,ingredient_id,price_estimate,usd_12m,lines_12m,accounts,last_seen",
+      { count: "exact" },
     );
   pageQuery = applyFilters(pageQuery, p.vendor, seg);
   if (q.length > 0) {
     const safe = q.replace(/[,]/g, " ").replace(/\s+/g, " ");
     pageQuery = pageQuery.or(
-      `name.ilike.%${safe}%,item_number.ilike.%${safe}%,description_key.ilike.%${safe}%`
+      `name.ilike.%${safe}%,item_number.ilike.%${safe}%,description_key.ilike.%${safe}%`,
     );
   }
   if (sort === "lines") {
@@ -214,317 +297,79 @@ export async function VendorItemsPage({
   const total = count ?? 0;
   const vendorNameById = new Map(vendors.map((v) => [v.id, v.name]));
 
-  // Twin parent lookups for "Twin of #X" title.
-  const twinParentIds = Array.from(
-    new Set(items.filter((r) => r.duplicate_of_id).map((r) => r.duplicate_of_id as string))
+  // §3.2: batched ingredient-name lookup for the ingredient ids on
+  // this page. Same shape as the twin-parent lookup below; one call
+  // regardless of row count.
+  const ingredientIds = Array.from(
+    new Set(items.filter((r) => r.ingredient_id).map((r) => r.ingredient_id as string)),
   );
-  const twinParentById = new Map<string, { item_number: string | null; name: string }>();
-  if (twinParentIds.length > 0) {
-    const { data: parents } = await client
-      .from("pr_vendor_items")
-      .select("id,item_number,name")
-      .in("id", twinParentIds);
-    for (const row of (parents ?? []) as { id: string; item_number: string | null; name: string }[]) {
-      twinParentById.set(row.id, { item_number: row.item_number, name: row.name });
+  const ingredientNameById = new Map<string, string>();
+  if (ingredientIds.length > 0) {
+    const { data: ings } = await client
+      .from("pr_ingredients")
+      .select("id,name")
+      .in("id", ingredientIds);
+    for (const row of (ings ?? []) as { id: string; name: string }[]) {
+      ingredientNameById.set(row.id, row.name);
     }
   }
 
-  const last = Math.max(0, Math.ceil(total / pageSize) - 1);
+  // Twin-parent lookup (unchanged): the number is what the row's
+  // "counted on #X" sub-line names.
+  const twinParentIds = Array.from(
+    new Set(items.filter((r) => r.duplicate_of_id).map((r) => r.duplicate_of_id as string)),
+  );
+  const twinNumberById = new Map<string, string | null>();
+  if (twinParentIds.length > 0) {
+    const { data: parents } = await client
+      .from("pr_vendor_items")
+      .select("id,item_number")
+      .in("id", twinParentIds);
+    for (const row of (parents ?? []) as { id: string; item_number: string | null }[]) {
+      twinNumberById.set(row.id, row.item_number);
+    }
+  }
+
+  const shaped: VendorItemViewRow[] = items.map((r) =>
+    shapeRow(
+      r,
+      vendorNameById.get(r.vendor_id) ?? r.vendor_id,
+      r.ingredient_id ? ingredientNameById.get(r.ingredient_id) ?? null : null,
+      r.duplicate_of_id ? twinNumberById.get(r.duplicate_of_id) ?? null : null,
+    ),
+  );
+
   const from = total === 0 ? 0 : page * pageSize + 1;
   const to = Math.min(total, (page + 1) * pageSize);
 
   return (
     <div className="kf-ing">
-      {/* Polish 6: Overview-style hero. Items + Unlinked cells read
-          the counts the Filters' segs already carry - no new fetch.
-          Export CSV + Run intake stay in the @topbar slot. */}
       <IdentBand
         eyebrow="Culinary office"
         title="Vendor items"
         facts={[
           { label: "Items", value: fmtCount(segCounts.all), note: "every line we've read" },
-          { label: "Unlinked", value: fmtCount(segCounts.unlinked), note: "waiting to be named" },
+          { label: "Unlinked", value: fmtCount(segCounts.unlinked + segCounts.proposed), note: "waiting to be named" },
         ]}
       />
 
       <Tabs active="vendor-items" />
 
-      <Filters
+      <VendorItemsView
+        rows={shaped}
         vendors={vendors}
-        selectedVendor={p.vendor ?? "all"}
-        activeSeg={seg}
-        q={q}
+        seg={seg}
         segCounts={segCounts}
+        q={q}
+        sort={sort}
+        page={page}
         pageSize={pageSize}
+        total={total}
+        from={from}
+        to={to}
+        openId={p.drawer ?? null}
+        vendorFilterId={p.vendor ?? "all"}
       />
-
-      <section aria-label="Vendor items" className="kf-table-wrap">
-        <div className="kf-table-meta">
-          <div className="kf-table-meta__left">
-            <strong>{fmtCount(total)}</strong>
-            <span>items</span>
-            <span className="kf-table-meta__dot" />
-            <span>Showing {fmtCount(from)}-{fmtCount(to)}</span>
-          </div>
-          <div className="kf-table-meta__right">
-            <SortSelect value={sort} />
-            <Pager page={page} last={last} params={p} seg={seg} q={q} sort={sort} pageSize={pageSize} />
-          </div>
-        </div>
-        <StatusLegend />
-
-        {items.length === 0 ? (
-          <EmptyRow />
-        ) : (
-          <>
-            <div className="kf-table-scroll kf-only-desktop">
-              <table className="kf-table">
-                <colgroup>
-                  <col style={{ width: 146 }} />
-                  <col style={{ width: 100 }} />
-                  <col />
-                  <col style={{ width: 136 }} />
-                  <col style={{ width: 100 }} />
-                  <col style={{ width: 64 }} />
-                  <col style={{ width: 92 }} />
-                  <col style={{ width: 104 }} />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th>Vendor</th>
-                    <th>Item #</th>
-                    <th>Description</th>
-                    <th>Pack / unit</th>
-                    <th className={`kf-table__num${sort === "spend" ? " is-sorted" : ""}`}>
-                      <span>Annual $</span>
-                      {sort === "spend" ? <ArrowDown size={14} strokeWidth={1.5} /> : null}
-                    </th>
-                    <th className={`kf-table__num${sort === "lines" ? " is-sorted" : ""}`}>
-                      <span>Lines</span>
-                      {sort === "lines" ? <ArrowDown size={14} strokeWidth={1.5} /> : null}
-                    </th>
-                    <th className={sort === "last_seen" ? "is-sorted" : ""}>
-                      <span>Last purchase</span>
-                      {sort === "last_seen" ? <ArrowDown size={14} strokeWidth={1.5} /> : null}
-                    </th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((r) => {
-                    const vendorName = vendorNameById.get(r.vendor_id) ?? r.vendor_id;
-                    const twinParent = r.duplicate_of_id ? twinParentById.get(r.duplicate_of_id) : null;
-                    return (
-                      <RowLink key={r.id} href={rowHref(r.id, p, seg, q, sort, pageSize)} rowId={r.id}>
-                        <td title={vendorName}><div className="kf-cell-ellipsis kf-cell-strong">{vendorName}</div></td>
-                        <td>
-                          {r.item_number ? (
-                            <span className="kf-cell-ellipsis">{r.item_number}</span>
-                          ) : (
-                            <span className="kf-cell-ellipsis kf-muted">none</span>
-                          )}
-                        </td>
-                        <td title={r.name}>
-                          <div className="kf-desc">
-                            <span className="kf-desc__text">{r.name}</span>
-                            {r.catch_weight ? (
-                              <span className="kf-flag kf-flag--warn" title="Priced by actual weight">
-                                <Scale size={14} strokeWidth={1.5} />
-                              </span>
-                            ) : null}
-                            {twinParent ? (
-                              <span
-                                className="kf-flag kf-flag--twin"
-                                title={`Twin of #${twinParent.item_number ?? "?"}`}
-                              >
-                                <Copy size={14} strokeWidth={1.5} />
-                              </span>
-                            ) : null}
-                          </div>
-                        </td>
-                        <td>
-                          <div className="kf-cell-ellipsis">
-                            {r.pack_text ?? "-"}
-                            <span className="kf-muted"> / {r.billed_unit ?? "-"}</span>
-                          </div>
-                        </td>
-                        <td className="kf-table__num"><strong>${fmtUsdLong(Number(r.usd_12m ?? 0)).replace(/^\$/, "")}</strong></td>
-                        <td className="kf-table__num">{fmtCount(Number(r.lines_12m ?? 0))}</td>
-                        <td>{r.last_seen ? fmtDate(r.last_seen) : "-"}</td>
-                        <td><StatusChip row={r} /></td>
-                      </RowLink>
-                    );
-                  })}
-                </tbody>
-                <tfoot>
-                  <tr>
-                    <td colSpan={8}>
-                      <div className="kf-pager-foot">
-                        <span>Showing {fmtCount(from)}-{fmtCount(to)} of {fmtCount(total)}</span>
-                        <Pager page={page} last={last} params={p} seg={seg} q={q} sort={sort} pageSize={pageSize} />
-                      </div>
-                    </td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-
-            <ul className="kf-cards kf-only-phone">
-              {items.map((r) => {
-                const vendorName = vendorNameById.get(r.vendor_id) ?? r.vendor_id;
-                const twinParent = r.duplicate_of_id ? twinParentById.get(r.duplicate_of_id) : null;
-                const href = rowHref(r.id, p, seg, q, sort, pageSize);
-                return (
-                  <li key={r.id}>
-                    <a href={href} className="kf-cards__item">
-                      <div className="kf-cards__head">
-                        <span className="kf-cards__vendor">{vendorName}</span>
-                        <span className="kf-cards__num">{r.item_number ?? "none"}</span>
-                      </div>
-                      <div className="kf-cards__name">{r.name}</div>
-                      <div className="kf-cards__meta">
-                        <span>${fmtUsdLong(Number(r.usd_12m ?? 0)).replace(/^\$/, "")} / 12m</span>
-                        <span>{fmtCount(Number(r.lines_12m ?? 0))} lines</span>
-                        <span>{r.last_seen ? fmtDate(r.last_seen) : "-"}</span>
-                      </div>
-                      <div className="kf-cards__chips">
-                        <StatusChip row={r} />
-                        {r.catch_weight ? (
-                          <span className="kf-flag kf-flag--warn" title="Priced by actual weight">
-                            <Scale size={14} strokeWidth={1.5} />
-                          </span>
-                        ) : null}
-                        {twinParent ? (
-                          <span
-                            className="kf-flag kf-flag--twin"
-                            title={`Twin of #${twinParent.item_number ?? "?"}`}
-                          >
-                            <Copy size={14} strokeWidth={1.5} />
-                          </span>
-                        ) : null}
-                      </div>
-                    </a>
-                  </li>
-                );
-              })}
-            </ul>
-          </>
-        )}
-      </section>
-
-      {p.drawer ? (
-        <VendorItemDrawer
-          id={p.drawer}
-          closeHref={buildHref({ ...p, drawer: undefined }, seg, q, sort, pageSize)}
-          vendorNameById={Object.fromEntries(vendorNameById)}
-        />
-      ) : null}
     </div>
   );
-}
-
-function StatusChip({ row }: { row: Row }) {
-  if (row.status === "duplicate") return <span className="kf-pill kf-pill--twin">Duplicate</span>;
-  if (row.status === "archived") return <span className="kf-pill kf-pill--muted">Archived</span>;
-  if (row.status === "one_off") return <span className="kf-pill kf-pill--muted">One off</span>;
-  if (row.status === "not_food" || row.is_food === false) return <span className="kf-pill kf-pill--muted">Not food</span>;
-  if (row.status === "resale") return <span className="kf-pill kf-pill--muted">Retail</span>;
-  if (row.link_status === "proposed") return <span className="kf-pill kf-pill--info">Proposed</span>;
-  if (row.link_status === "confirmed") return <span className="kf-pill kf-pill--good">Linked</span>;
-  if (row.link_status === "rejected") return <span className="kf-pill kf-pill--muted">Rejected</span>;
-  return <span className="kf-pill kf-pill--info">Unlinked</span>;
-}
-
-function StatusLegend() {
-  return (
-    <div className="kf-table-legend" aria-label="Status legend">
-      <span className="kf-table-legend__label">Link status</span>
-      <span className="kf-pill kf-pill--info">Unlinked</span>
-      <span className="kf-pill kf-pill--info">Proposed</span>
-      <span className="kf-pill kf-pill--good">Linked</span>
-      <span className="kf-pill kf-pill--muted">Rejected</span>
-      <span className="kf-table-legend__sep" />
-      <span className="kf-flag kf-flag--warn" aria-hidden><Scale size={12} strokeWidth={1.5} /></span>
-      <span className="kf-table-legend__hint">Priced by actual weight</span>
-      <span className="kf-flag kf-flag--twin" aria-hidden><Copy size={12} strokeWidth={1.5} /></span>
-      <span className="kf-table-legend__hint">Twin of another number</span>
-    </div>
-  );
-}
-
-function Pager({
-  page,
-  last,
-  params,
-  seg,
-  q,
-  sort,
-  pageSize,
-}: {
-  page: number;
-  last: number;
-  params: Params;
-  seg: StatusSeg;
-  q: string;
-  sort: SortKey;
-  pageSize: number;
-}) {
-  const prev = buildHref({ ...params, page: String(Math.max(0, page - 1)) }, seg, q, sort, pageSize);
-  const next = buildHref({ ...params, page: String(Math.min(last, page + 1)) }, seg, q, sort, pageSize);
-  const prevDisabled = page === 0;
-  const nextDisabled = page >= last;
-  return (
-    <div className="kf-pager" aria-label="Page navigation">
-      <a
-        href={prev}
-        className={`kf-pager__btn${prevDisabled ? " is-disabled" : ""}`}
-        aria-disabled={prevDisabled}
-        aria-label="Previous page"
-      >
-        <ChevronLeft size={16} strokeWidth={1.5} />
-      </a>
-      <span className="kf-pager__loc">
-        {fmtCount(page + 1)} <span className="kf-muted">of {fmtCount(Math.max(1, last + 1))}</span>
-      </span>
-      <a
-        href={next}
-        className={`kf-pager__btn${nextDisabled ? " is-disabled" : ""}`}
-        aria-disabled={nextDisabled}
-        aria-label="Next page"
-      >
-        <ChevronRight size={16} strokeWidth={1.5} />
-      </a>
-    </div>
-  );
-}
-
-function EmptyRow() {
-  return (
-    <div className="kf-empty kf-table-empty">
-      <div>
-        <div className="kf-empty__title">No items match</div>
-        <div className="kf-empty__body">Clear the search or widen the segment.</div>
-      </div>
-      <a href="/stockpot/ingredients/vendor-items" className="kf-btn kf-btn--soft kf-btn--sm">
-        Clear filters
-      </a>
-    </div>
-  );
-}
-
-function rowHref(id: string, p: Params, seg: StatusSeg, q: string, sort: SortKey, pageSize: number): string {
-  return buildHref({ ...p, drawer: id }, seg, q, sort, pageSize);
-}
-
-function buildHref(p: Params, seg: StatusSeg, q: string, sort: SortKey, pageSize: number): string {
-  const u = new URLSearchParams();
-  if (p.vendor && p.vendor !== "all") u.set("vendor", p.vendor);
-  if (seg !== "all") u.set("status", seg);
-  if (q.length > 0) u.set("q", q);
-  if (p.page && p.page !== "0") u.set("page", p.page);
-  if (sort !== "spend") u.set("sort", sort);
-  if (pageSize !== DEFAULT_PAGE_SIZE) u.set("per", String(pageSize));
-  if (p.drawer) u.set("drawer", p.drawer);
-  const qs = u.toString();
-  return qs ? `?${qs}` : "?";
 }

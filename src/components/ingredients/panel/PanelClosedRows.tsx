@@ -22,6 +22,7 @@ import { fmtCount } from "@/lib/fmt";
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 import { IngredientTypeahead } from "../IngredientTypeahead";
 import { EvidenceSection } from "./EvidenceSection";
+import { ItemHistoryRows } from "./ItemHistoryRows";
 import { LedgerBlock } from "./LedgerBlock";
 import { MasterSendAllBackButton } from "../MasterSendAllBackButton";
 import { postJson, errMsg } from "./common";
@@ -325,6 +326,19 @@ export function PanelClosedRows({
             />
           )}
         </DisclosureRow>
+      ) : null}
+
+      {/* N13 §2c + round 2 fix 12: Spend by site + Invoice wording sit
+          between Merge and Evidence. Same disclosure primitive, same
+          24 inset as the rows beside them. ItemHistoryRows shares one
+          lazy fetch between the two expands. priceUom gives the
+          "Last paid" cell its unit so it reads "$21.44 / each"
+          rather than bare dollars (round 2 fix 13). */}
+      {item ? (
+        <ItemHistoryRows
+          itemId={item.id}
+          priceUom={item.perBaseUom ?? item.billedUnit ?? null}
+        />
       ) : null}
 
       {item ? (

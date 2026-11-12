@@ -115,6 +115,19 @@ export type ReviewGroupItem = {
   // Supersedes N5's eachWeightLb; qty + uom replace the pounds-only
   // field, which the DB column each_weight_lb has been emptied of.
   eachMeasure: { qty: number; uom: string } | null;
+  // N13 R3: five fields so the item-panel surfaces (strip, attention,
+  // head pills) carry what VendorItemDrawer displayed. Present on
+  // every /api/review/item response; optional at the type level so
+  // the review-queue builder in ReviewQueue.tsx (which this lane is
+  // not allowed to touch) compiles unchanged. Consumers default to
+  // "no attention line / no pill" when undefined.
+  needsReviewLines?: number;
+  firstSeen?: string | null;
+  status?: string;
+  // Tri-state: null = legacy / unknown; the "Not food" pill in the
+  // item panel renders only on strict `false`.
+  isFood?: boolean | null;
+  foodReason?: string | null;
 };
 
 // Does this pack_override payload actually represent a human-set

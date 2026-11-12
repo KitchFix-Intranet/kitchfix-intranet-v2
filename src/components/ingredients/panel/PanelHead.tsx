@@ -60,6 +60,26 @@ export const PanelHead = forwardRef<HTMLButtonElement, {
   // "Not linked yet"); kind === "ingredient" -> head has no status
   // line at all, no pill.
 
+  // N13 R4: status pill when the item sits outside the normal
+  // active flow. One pill, muted tone; nothing for plain active.
+  const statusPill =
+    kind === "item" && item
+      ? item.status === "archived"
+        ? "Archived"
+        : item.status === "one_off"
+          ? "One-off"
+          : item.status === "duplicate"
+            ? "Duplicate"
+            : item.status === "resale"
+              ? "Retail"
+              : null
+      : null;
+  // N13 R4 + round 2 fix 2: "Not food" pill only when is_food is
+  // STRICTLY false. Tri-state: null means we never asked / it is a
+  // legacy row - no pill. foodReason prints as muted text beside
+  // when present.
+  const showNotFoodPill = kind === "item" && item?.isFood === false;
+
   return (
     <div className="kf-ipanel__head">
       <div className="kf-ipanel__head-body">
@@ -76,6 +96,17 @@ export const PanelHead = forwardRef<HTMLButtonElement, {
               <span>Not linked yet</span>
             ) : null}
             {pill}
+            {statusPill ? (
+              <span className="kf-pill kf-pill--muted">{statusPill}</span>
+            ) : null}
+            {showNotFoodPill ? (
+              <>
+                <span className="kf-pill kf-pill--muted">Not food</span>
+                {item?.foodReason ? (
+                  <span className="kf-ipanel__status-note">{item.foodReason}</span>
+                ) : null}
+              </>
+            ) : null}
           </div>
         ) : null}
       </div>

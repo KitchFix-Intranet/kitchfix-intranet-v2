@@ -358,12 +358,12 @@ export function IngredientMastersFilter({
 
         <div className="kf-ingp__filters">
           <span className="kf-ingp__filters-label">Category</span>
-          <div className="kf-ingp__chips" role="radiogroup" aria-label="Category filter">
+          <div className="kf-chip-row" role="radiogroup" aria-label="Category filter">
             <button
               type="button"
               role="radio"
               aria-checked={superCat === "all"}
-              className={`kf-ingp__chip${superCat === "all" ? " kf-ingp__chip--on" : ""}`}
+              className={`kf-chip${superCat === "all" ? " kf-chip--on" : ""}`}
               onClick={() => setSuperCat("all")}
             >
               All <span>{fmtCount(rows.length)}</span>
@@ -377,7 +377,7 @@ export function IngredientMastersFilter({
                   type="button"
                   role="radio"
                   aria-checked={superCat === cat}
-                  className={`kf-ingp__chip${superCat === cat ? " kf-ingp__chip--on" : ""}`}
+                  className={`kf-chip${superCat === cat ? " kf-chip--on" : ""}`}
                   onClick={() => setSuperCat(cat)}
                 >
                   {cat} <span>{fmtCount(n)}</span>
@@ -387,11 +387,11 @@ export function IngredientMastersFilter({
           </div>
 
           <span className="kf-ingp__filters-label">Show only</span>
-          <div className="kf-ingp__chips" role="radiogroup" aria-label="Attention filter">
+          <div className="kf-chip-row" role="radiogroup" aria-label="Attention filter">
             <button
               type="button"
               aria-pressed={onlyFlagged}
-              className={`kf-ingp__chip kf-ingp__chip--warn${onlyFlagged ? " kf-ingp__chip--on" : ""}`}
+              className={`kf-chip kf-chip--warn${onlyFlagged ? " kf-chip--on" : ""}`}
               onClick={() => setOnlyFlagged((v) => !v)}
               title="Ingredients with a spread, coverage, unit or outlier issue"
             >
@@ -400,7 +400,7 @@ export function IngredientMastersFilter({
             <button
               type="button"
               aria-pressed={onlyUnreviewed}
-              className={`kf-ingp__chip${onlyUnreviewed ? " kf-ingp__chip--on" : ""}`}
+              className={`kf-chip${onlyUnreviewed ? " kf-chip--on" : ""}`}
               onClick={() => setOnlyUnreviewed((v) => !v)}
               title="Ingredients whose Top 9 allergens have not been reviewed"
             >
@@ -409,7 +409,7 @@ export function IngredientMastersFilter({
             <button
               type="button"
               aria-pressed={onlyEmpty}
-              className={`kf-ingp__chip${onlyEmpty ? " kf-ingp__chip--on" : ""}`}
+              className={`kf-chip${onlyEmpty ? " kf-chip--on" : ""}`}
               onClick={() => setOnlyEmpty((v) => !v)}
               title="Ingredients with no live vendor items (candidates to retire)"
             >
@@ -418,7 +418,7 @@ export function IngredientMastersFilter({
             {anyFilterActive ? (
               <button
                 type="button"
-                className="kf-ingp__chip"
+                className="kf-chip"
                 onClick={clearAll}
               >
                 Clear

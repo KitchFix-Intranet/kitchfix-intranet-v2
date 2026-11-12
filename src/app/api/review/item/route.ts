@@ -25,6 +25,7 @@ import {
   type ReviewCardIngredient,
   type ReviewGroupItem,
 } from "@/components/ingredients/itemTypes";
+import { readPerBase } from "@/lib/ingredients/priceEstimate";
 
 export const dynamic = "force-dynamic";
 
@@ -64,8 +65,10 @@ export async function GET(req: NextRequest) {
   const { data: itRow, error: itErr } = await client
     .from("pr_vendor_items")
     .select(
-      // N5: each_weight_lb added.
-      "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_qty,pack_size,pack_uom,pack_state,pack_override,pack_note,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen,flagged,flag_note,flagged_by,flagged_at,price_estimate,grade,each_measure_qty,each_measure_uom"
+      // N13 R3: five columns added (needs_review_lines, first_seen,
+      // status, is_food, food_reason) so the item panel can carry the
+      // facts the old VendorItemDrawer displayed. Additive only.
+      "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_qty,pack_size,pack_uom,pack_state,pack_override,pack_note,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen,flagged,flag_note,flagged_by,flagged_at,price_estimate,grade,each_measure_qty,each_measure_uom,needs_review_lines,first_seen,status,is_food,food_reason"
     )
     .eq("id", id)
     .maybeSingle();
@@ -115,6 +118,13 @@ export async function GET(req: NextRequest) {
     // N6: per-item each measure override. Both null for most rows.
     each_measure_qty: number | null;
     each_measure_uom: string | null;
+    // N13 R3: additive columns for the item-panel surfaces that used
+    // to live inside VendorItemDrawer.
+    needs_review_lines: number | null;
+    first_seen: string | null;
+    status: string;
+    is_food: boolean | null;
+    food_reason: string | null;
   };
 
   // Enrichment reads: vendor name, catalog match (if the item has a
@@ -207,12 +217,11 @@ export async function GET(req: NextRequest) {
         ? `${it.pack_size} ${it.pack_uom}`
         : `${it.pack_qty}/${it.pack_size} ${it.pack_uom}`
       : null;
-  const perBase =
-    pe && pe.per_base != null && Number.isFinite(Number(pe.per_base)) ? Number(pe.per_base) : null;
-  const perBaseConfidence =
-    pe && (pe.confidence === "high" || pe.confidence === "low" || pe.confidence === "override" || pe.confidence === "derived")
-      ? (pe.confidence as "high" | "low" | "override" | "derived")
-      : null;
+  // N13 §3.3: perBase + perBaseUom + confidence + note come from one
+  // helper so VendorItemsPage's row-shaping reads the same values with
+  // no risk of drift. The output below is byte-identical to the prior
+  // inline derivation.
+  const { perBase, perBaseUom: perBaseUomFromPe, perBaseConfidence, perBaseNote } = readPerBase(pe);
   const parsed = parseReason(it.link_reason);
   const u12 = Number(it.usd_12m ?? 0);
 
@@ -245,9 +254,9 @@ export async function GET(req: NextRequest) {
     catalogPrice,
     gtin,
     perBase,
-    perBaseUom: pe?.base_uom ?? null,
+    perBaseUom: perBaseUomFromPe,
     perBaseConfidence,
-    perBaseNote: pe?.note ?? null,
+    perBaseNote,
     storedCasePrice:
       pe?.case_price != null && Number.isFinite(Number(pe.case_price))
         ? Number(pe.case_price)
@@ -292,6 +301,16 @@ export async function GET(req: NextRequest) {
       pe?.match_score != null && Number.isFinite(Number(pe.match_score))
         ? Number(pe.match_score)
         : null,
+    // N13 R3: five additive fields so the item panel carries what
+    // VendorItemDrawer displayed. isFood is TRI-STATE on the wire
+    // (round 2 fix 2): null means legacy / unknown, not food. The
+    // "Not food" pill only renders when is_food is strictly false,
+    // so the response must preserve null.
+    needsReviewLines: Number(it.needs_review_lines ?? 0),
+    firstSeen: it.first_seen,
+    status: it.status,
+    isFood: it.is_food,
+    foodReason: it.food_reason,
   };
 
   const ingredient = (ingredientRes.data as ReviewCardIngredient | null) ?? null;

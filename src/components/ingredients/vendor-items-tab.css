@@ -1,0 +1,495 @@
+/* N13: Vendor items tab. Card-shaped table above a repeating pager;
+ * one cell primitive (main + micro sub); nothing truncated; phone
+ * stack. Chips come from chips.css (shared with the Ingredients tab).
+ * Item-panel chrome comes from drawer.css + ingredients-tab.css;
+ * this file only carries the surfaces specific to the tab. */
+
+.kf-vi__page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+}
+
+/* --- Toolbar ----------------------------------------------- */
+.kf-vi__tools {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+}
+.kf-vi__tools-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-sp-3);
+  align-items: center;
+}
+.kf-vi__search { position: relative; display: block; }
+.kf-vi__search input {
+  width: 100%;
+  min-height: var(--sp-floor-corp);
+  padding: 0 var(--sp-sp-3) 0 calc(var(--sp-sp-3) * 2 + 16px);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-ctl);
+  background: var(--sp-card);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  color: var(--sp-ink);
+}
+.kf-vi__search svg {
+  position: absolute;
+  left: var(--sp-sp-3);
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--sp-muted);
+}
+.kf-vi__vendor-select {
+  min-height: var(--sp-floor-corp);
+  min-width: 160px;
+  padding: 0 var(--sp-sp-3);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-ctl);
+  background: var(--sp-card);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  color: var(--sp-ink);
+}
+.kf-vi__filters {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: var(--sp-sp-2) var(--sp-sp-3);
+  align-items: center;
+}
+.kf-vi__filters-label {
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-micro);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--sp-muted);
+}
+@media (max-width: 860px) {
+  .kf-vi__filters { grid-template-columns: minmax(0, 1fr); }
+  .kf-vi__filters-label { display: none; }
+  .kf-vi__tools-row { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* --- Card + pane heads ------------------------------------- */
+.kf-vi__card {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  box-shadow: 0 1px 2px rgba(14, 42, 78, .06), 0 4px 14px rgba(14, 42, 78, .06);
+  overflow: hidden;
+  /* Round 2 fix 3: the card is a named size container so the table
+   * switches to the stacked block when the CARD gets narrower than
+   * ~1040 (the fixed 180 + 208 + 148 + 100 + 104 + 112 = 852 plus
+   * breathing room for the Item column). Below 1040 the Item col
+   * would be under 240 and names start wrapping; stack instead. */
+  container-type: inline-size;
+  container-name: vi-card;
+}
+.kf-vi__card-head,
+.kf-vi__card-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--sp-sp-3);
+  padding: var(--sp-sp-4);
+  border-bottom: 1px solid var(--sp-line);
+}
+.kf-vi__card-foot { border-bottom: 0; border-top: 1px solid var(--sp-line); }
+.kf-vi__card-head-title h3 {
+  margin: 0 0 var(--sp-sp-1);
+  font-family: var(--sp-disp);
+  font-weight: 800;
+  font-size: var(--sp-t-h3);
+  line-height: 1;
+  color: var(--sp-navy);
+  text-transform: uppercase;
+}
+.kf-vi__card-head-sub,
+.kf-vi__card-foot-sub {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+}
+.kf-vi__card-head-sub b { font-weight: 800; color: var(--sp-ink); }
+.kf-vi__card-head-right,
+.kf-vi__card-foot-right {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-3);
+}
+.kf-vi__sort {
+  min-height: var(--sp-floor-corp);
+  min-width: 180px;
+  padding: 0 var(--sp-sp-3);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-ctl);
+  background: var(--sp-card);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  color: var(--sp-ink);
+}
+
+/* --- Pager ------------------------------------------------- */
+.kf-vi__pager {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+}
+.kf-vi__pager-btn {
+  min-height: var(--sp-floor-corp);
+  min-width: var(--sp-floor-corp);
+  padding: 0 var(--sp-sp-2);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+  background: var(--sp-card);
+  color: var(--sp-ink);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.kf-vi__pager-btn:disabled { opacity: .5; cursor: default; }
+.kf-vi__pager-loc {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-body);
+  min-width: 80px;
+  text-align: center;
+}
+
+/* --- Table ------------------------------------------------- */
+.kf-vi__table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+/* Wide tier (default): the N13 §2b colgroup. 180 / flex / 208 /
+ * 148 / 100 / 104 / 112. The flex cell (Item) takes the remainder. */
+.kf-vi__table col:nth-child(1) { width: 180px; }
+.kf-vi__table col:nth-child(3) { width: 208px; }
+.kf-vi__table col:nth-child(4) { width: 148px; }
+.kf-vi__table col:nth-child(5) { width: 100px; }
+.kf-vi__table col:nth-child(6) { width: 104px; }
+.kf-vi__table col:nth-child(7) { width: 112px; }
+
+/* Fold subs hidden at the wide tier - the Vendor column and the
+ * Last-bought column carry those facts. */
+.kf-vi__cell-sub--fold-vendor,
+.kf-vi__cell-sub--fold-lastbot,
+.kf-vi__lb-compact { display: none; }
+.kf-vi__table th {
+  text-align: left;
+  padding: var(--sp-sp-2) var(--sp-sp-4);
+  border-bottom: 1px solid var(--sp-line);
+  background: var(--sp-raise);
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-micro);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--sp-muted);
+  height: 40px;
+}
+.kf-vi__table th.kf-vi__num { text-align: right; }
+.kf-vi__table td {
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  border-bottom: 1px solid var(--sp-line-soft);
+  vertical-align: top;
+}
+.kf-vi__table td.kf-vi__num { text-align: right; white-space: nowrap; }
+.kf-vi__table tbody tr:last-child td { border-bottom: 0; }
+.kf-vi__row { min-height: 64px; cursor: pointer; }
+.kf-vi__row:hover { background: var(--sp-raise); }
+.kf-vi__row:focus-visible {
+  outline: 2px solid var(--sp-navy);
+  outline-offset: -2px;
+}
+.kf-vi__row--att {
+  box-shadow: inset 3px 0 0 0 var(--sp-warn-strong);
+}
+.kf-vi__cell-main {
+  font-family: var(--sp-ui);
+  font-weight: 700;
+  font-size: var(--sp-t-table);
+  color: var(--sp-ink);
+  line-height: 1.3;
+  word-break: break-word;
+}
+.kf-vi__cell-main--strong { font-weight: 800; }
+.kf-vi__cell-main--navy { color: var(--sp-navy); font-weight: 800; }
+.kf-vi__cell-main--muted { color: var(--sp-muted); font-weight: 700; }
+/* Round 2 fix 9: Not linked reads main-warn 800 over plain sub. */
+.kf-vi__cell-main--warn { color: var(--sp-warn); font-weight: 800; }
+.kf-vi__cell-sub {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  margin-top: 2px;
+}
+.kf-vi__cell-sub--warn { color: var(--sp-warn); font-weight: 800; }
+.kf-vi__cell-sub--good { color: var(--sp-good); font-weight: 800; }
+
+/* --- Empty state ------------------------------------------- */
+.kf-vi__empty {
+  padding: var(--sp-sp-5);
+  text-align: center;
+}
+.kf-vi__empty-title {
+  font-family: var(--sp-ui);
+  font-weight: 800;
+  font-size: var(--sp-t-body);
+  color: var(--sp-ink);
+  margin-bottom: var(--sp-sp-1);
+}
+.kf-vi__empty-body {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  margin-bottom: var(--sp-sp-3);
+}
+
+/* --- Phone list -------------------------------------------- */
+.kf-vi__phone-list { list-style: none; margin: 0; padding: 0; }
+.kf-vi__phone-item {
+  display: block;
+  width: 100%;
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  border-bottom: 1px solid var(--sp-line-soft);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--sp-line-soft);
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+.kf-vi__phone-item:last-child { border-bottom: 0; }
+.kf-vi__phone-item:hover { background: var(--sp-raise); }
+.kf-vi__phone-item--att {
+  box-shadow: inset 3px 0 0 0 var(--sp-warn-strong);
+}
+.kf-vi__phone-name {
+  font-family: var(--sp-ui);
+  font-weight: 800;
+  font-size: var(--sp-t-table);
+  color: var(--sp-ink);
+  margin-bottom: 2px;
+  word-break: break-word;
+}
+.kf-vi__phone-vendor {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  margin-bottom: var(--sp-sp-2);
+}
+.kf-vi__phone-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-sp-1) var(--sp-sp-3);
+}
+.kf-vi__phone-grid-right { text-align: right; }
+
+/* --- Item panel footer (R5) + 2 new closed rows ------------- */
+.kf-ipanel__footer-strip {
+  padding: var(--sp-sp-4) var(--sp-sp-5);
+  border-top: 1px solid var(--sp-line);
+  background: var(--sp-raise);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+}
+.kf-ipanel__footer-label {
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-micro);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--sp-muted);
+}
+.kf-ipanel__footer-actions {
+  display: flex;
+  gap: var(--sp-sp-2);
+  flex-wrap: wrap;
+}
+.kf-btn--soft {
+  background: var(--sp-sky-tint);
+  color: var(--sp-navy);
+  border: 1px solid var(--sp-sky-line);
+}
+.kf-btn--soft:hover:not(:disabled) {
+  background: var(--sp-sky);
+  border-color: var(--sp-sky);
+}
+.kf-btn--soft:disabled { opacity: .5; cursor: default; }
+
+/* 2 new history rows: Spend by site + Invoice wording. Simple
+ * tables inside the disclosure body (reuse the row primitive from
+ * PanelClosedRows' DisclosureRow). */
+.kf-ipanel__history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-body);
+}
+.kf-ipanel__history-table th,
+.kf-ipanel__history-table td {
+  padding: var(--sp-sp-2) var(--sp-sp-3);
+  border-bottom: 1px solid var(--sp-line-soft);
+  text-align: left;
+  vertical-align: middle;
+}
+.kf-ipanel__history-table th {
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-micro);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--sp-muted);
+}
+.kf-ipanel__history-table .kf-vi__num,
+.kf-ipanel__history-table th.kf-vi__num { text-align: right; }
+.kf-ipanel__history-table tbody tr:last-child td { border-bottom: 0; }
+.kf-ipanel__history-note {
+  padding: var(--sp-sp-2) var(--sp-sp-3);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+}
+
+/* Round 4 fix 1: ONE mechanism below 1140. The real table layout
+ * stops; each <tr> becomes a CSS grid; the cells are block boxes
+ * placed via grid-area + nth-child. The prior
+ * `visibility: collapse` on <col> fighting `display: none` on cells
+ * was collapsing col 2 in Chromium because the DOM-cell / colgroup
+ * shift moved the remaining cells one column left.
+ *
+ * Column widths come from the grid-template-columns per tier; the
+ * card's inset lives inside the cell paddings (NOT the tr padding
+ * or column-gap), so the fixed cols account for every pixel the
+ * Item column sees. tr has zero horizontal padding and zero
+ * column-gap at every grid tier - the cells own the space. */
+@container vi-card (max-width: 1139px) {
+  .kf-vi__table,
+  .kf-vi__table tbody,
+  .kf-vi__table thead { display: block; width: 100%; }
+  .kf-vi__table colgroup { display: none; }
+  .kf-vi__table tr {
+    display: grid;
+    column-gap: 0;
+    row-gap: var(--sp-sp-1);
+    padding: 0;
+    border-bottom: 1px solid var(--sp-line-soft);
+  }
+  .kf-vi__table tr:last-child { border-bottom: 0; }
+  .kf-vi__table th,
+  .kf-vi__table td {
+    display: block;
+    padding: var(--sp-sp-3) var(--sp-sp-2);
+    border: 0;
+  }
+  .kf-vi__table thead tr { background: var(--sp-raise); }
+  .kf-vi__table thead th {
+    padding: var(--sp-sp-2) var(--sp-sp-2);
+  }
+  .kf-vi__table th.kf-vi__num,
+  .kf-vi__table td.kf-vi__num { text-align: right; }
+  /* Vendor cell always hides when the tr is a grid (both tiers).
+   * Vendor fact folds into the Item cell's sub. */
+  .kf-vi__table th:nth-child(1),
+  .kf-vi__table td:nth-child(1) { display: none; }
+}
+
+/* Round 4 fix 1 + 2: MIDDLE tier. Card 860-1139 px. Five cells
+ * horizontal: Item flex | Linked to 208 | Pack 148 | Price 100 |
+ * 12 mo 120. No column-gap, zero tr padding - the fixed widths
+ * are honoured exactly.
+ *
+ * Item widths at the thresholds:
+ *   card 1140 (wide tier starts): Item = 1140 - 2 (card border) -
+ *     852 (6 fixed cols 180+208+148+100+104+112) = 286 px.
+ *   card 1139 (middle, upper bound): Item = 1139 - 2 - 576 (4 fixed
+ *     cols 208+148+100+120) = 561 px.
+ *   card 860 (middle, lower bound): Item = 860 - 2 - 576 = 282 px.
+ *   card 859 (narrow starts): Item cell spans the full tr content
+ *     (minmax(0, 1fr) at the stack's top row). */
+@container vi-card (min-width: 860px) and (max-width: 1139px) {
+  .kf-vi__table tr {
+    grid-template-columns: minmax(240px, 1fr) 208px 148px 100px 120px;
+    grid-template-areas: "item linkto pack price usd";
+    align-items: start;
+  }
+  .kf-vi__table th:nth-child(7),
+  .kf-vi__table td:nth-child(7) { display: none; }
+  .kf-vi__table th:nth-child(2),
+  .kf-vi__table td:nth-child(2) { grid-area: item; padding-left: var(--sp-sp-4); }
+  .kf-vi__table th:nth-child(3),
+  .kf-vi__table td:nth-child(3) { grid-area: linkto; }
+  .kf-vi__table th:nth-child(4),
+  .kf-vi__table td:nth-child(4) { grid-area: pack; }
+  .kf-vi__table th:nth-child(5),
+  .kf-vi__table td:nth-child(5) { grid-area: price; }
+  .kf-vi__table th:nth-child(6),
+  .kf-vi__table td:nth-child(6) { grid-area: usd; padding-right: var(--sp-sp-4); }
+  .kf-vi__cell-sub--fold-vendor { display: block; }
+  .kf-vi__cell-sub--fold-lastbot { display: block; }
+}
+
+/* Round 4: NARROW tier. Card < 860 px. Stacked block per frame D -
+ * description + warn, vendor micro, dashed rule, Linked to |
+ * Price, dashed rule, Pack | 12 mo, "last bought {date}" micro.
+ * The th row is hidden entirely (the stack has no need for a
+ * header strip). */
+@container vi-card (max-width: 859px) {
+  .kf-vi__table thead { display: none; }
+  .kf-vi__table tr {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "item     item"
+      "linkto   price"
+      "pack     usd"
+      "lastbot  lastbot";
+    column-gap: var(--sp-sp-3);
+    padding: var(--sp-sp-3) var(--sp-sp-4);
+  }
+  .kf-vi__table th,
+  .kf-vi__table td { padding: 0; }
+  .kf-vi__table td:nth-child(2) { grid-area: item; }
+  .kf-vi__table td:nth-child(3) { grid-area: linkto; }
+  .kf-vi__table td:nth-child(4) { grid-area: pack; }
+  .kf-vi__table td:nth-child(5) { grid-area: price; }
+  .kf-vi__table td:nth-child(6) { grid-area: usd; }
+  .kf-vi__table td:nth-child(7) { grid-area: lastbot; }
+  .kf-vi__cell-sub--fold-vendor { display: block; }
+  .kf-vi__lb-full { display: none; }
+  .kf-vi__lb-compact { display: block; }
+  .kf-vi__table td:nth-child(3),
+  .kf-vi__table td:nth-child(5) {
+    padding-top: var(--sp-sp-2);
+    border-top: 1px dashed var(--sp-line);
+  }
+  .kf-vi__table td:nth-child(7) { padding-top: var(--sp-sp-2); }
+}
+
+/* Round 2 fix 4: phone card head stacks (title + count, then sort
+ * full-width, then pager). Replaces the generic flex row. Rendered
+ * at <=860 by media query so the layout does not trip on container
+ * queries' subtler behaviour. */
+@media (max-width: 860px) {
+  .kf-vi__card-head,
+  .kf-vi__card-foot {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .kf-vi__card-head-right,
+  .kf-vi__card-foot-right {
+    flex-direction: column;
+    gap: var(--sp-sp-2);
+    align-items: stretch;
+  }
+  .kf-vi__card-head-right .kf-vi__sort,
+  .kf-vi__card-foot-right .kf-vi__sort { width: 100%; }
+  .kf-vi__card-head-right .kf-vi__pager,
+  .kf-vi__card-foot-right .kf-vi__pager { justify-content: center; }
+}

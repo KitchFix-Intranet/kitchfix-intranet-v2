@@ -18,6 +18,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "@/components/ui/Toaster";
 import type { ReviewCardIngredient, ReviewGroupItem } from "./itemTypes";
 import { PanelHead } from "./panel/PanelHead";
 import { PanelStrip } from "./panel/PanelStrip";
@@ -27,6 +28,12 @@ import { PanelIngredientZone, PanelIngredientZonePending } from "./panel/PanelIn
 import { PanelClosedRows } from "./panel/PanelClosedRows";
 import type { PackHint } from "./panel/packHelpers";
 import "./drawer.css";
+// N13: item-panel extensions (history closed rows + status footer)
+// ride in the same stylesheet as the Vendor items tab since both
+// surface the same primitives. DetailPanel opens on review queue /
+// Ingredients tab / Vendor items tab; importing here keeps the CSS
+// loaded wherever the panel mounts.
+import "./vendor-items-tab.css";
 
 export type DetailPanelOpen =
   | null
@@ -44,6 +51,7 @@ export function DetailPanel({
   proposedName,
   proposedParent,
   onInvalidate,
+  showStatusActions = false,
 }: {
   open: Exclude<DetailPanelOpen, null>;
   onClose: () => void;
@@ -58,6 +66,9 @@ export function DetailPanel({
   // change the data the wrapper fetched. ReviewCard leaves it
   // undefined and router.refresh() handles the server path.
   onInvalidate?: () => void;
+  // N13 R5: Archive + Mark one-off footer renders ONLY when the
+  // panel is opened from the Vendor items tab. Default off.
+  showStatusActions?: boolean;
 }) {
   const router = useRouter();
   const labelId = useId();
@@ -193,7 +204,85 @@ export function DetailPanel({
           parents={parents}
           onDone={onDone}
         />
+
+        {showStatusActions && item ? (
+          <ItemStatusFooter item={item} onDone={() => {
+            // N13 R5: after a change close the panel and refresh the
+            // underlying list. router.refresh() picks up the status
+            // flip from the server-rendered VendorItemsPage.
+            close();
+            router.refresh();
+            if (onInvalidate) onInvalidate();
+          }} />
+        ) : null}
       </aside>
     </>
+  );
+}
+
+// N13 R5: inline footer with Archive + Mark one-off. Same behaviour
+// as the retired ItemStatusActions (POST /api/vendor-items/[id]/status,
+// toast with Undo to the prior status) - renders only when the panel
+// is opened from the Vendor items tab (showStatusActions prop).
+function ItemStatusFooter({ item, onDone }: { item: ReviewGroupItem; onDone: () => void }) {
+  const [busy, setBusy] = useState<null | "archived" | "one_off">(null);
+  async function post(next: string): Promise<string | null> {
+    const res = await fetch(`/api/vendor-items/${item.id}/status`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: next }),
+    });
+    if (res.ok) return null;
+    try {
+      const body = await res.text();
+      return body || `Status ${res.status}`;
+    } catch {
+      return `Status ${res.status}`;
+    }
+  }
+  async function set(next: "archived" | "one_off", successCopy: string) {
+    if (busy) return;
+    setBusy(next);
+    const prior = item.status ?? "active";
+    const err = await post(next);
+    if (err) {
+      toast(err, { tone: "block" });
+      setBusy(null);
+      return;
+    }
+    toast(successCopy, {
+      undo: async () => {
+        const errUndo = await post(prior);
+        if (errUndo) {
+          toast(errUndo, { tone: "block" });
+          return;
+        }
+        onDone();
+      },
+    });
+    onDone();
+  }
+  return (
+    <div className="kf-ipanel__footer-strip">
+      <span className="kf-ipanel__footer-label">Not for recipes</span>
+      <div className="kf-ipanel__footer-actions">
+        <button
+          type="button"
+          className={`kf-btn kf-btn--soft kf-btn--sm${busy === "archived" ? " is-busy" : ""}`}
+          disabled={busy !== null || item.status === "archived"}
+          onClick={() => set("archived", "Archived")}
+        >
+          Archive
+        </button>
+        <button
+          type="button"
+          className={`kf-btn kf-btn--soft kf-btn--sm${busy === "one_off" ? " is-busy" : ""}`}
+          disabled={busy !== null || item.status === "one_off"}
+          onClick={() => set("one_off", "Marked one-off")}
+        >
+          Mark one-off
+        </button>
+      </div>
+    </div>
   );
 }
