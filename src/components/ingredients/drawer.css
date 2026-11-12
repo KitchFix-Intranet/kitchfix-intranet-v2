@@ -1031,9 +1031,19 @@
 .kf-ipanel__measure-clear:hover:not(:disabled) { color: var(--sp-navy-deep); }
 .kf-ipanel__measure-discard:disabled,
 .kf-ipanel__measure-clear:disabled { opacity: 0.5; cursor: default; }
-.kf-ipanel__measure-clear { margin-left: auto; color: var(--sp-muted); }
+.kf-ipanel__measure-clear { color: var(--sp-muted); }
 .kf-ipanel__measure-clear:hover:not(:disabled) { color: var(--sp-ink); }
 .kf-ipanel__measure-error { color: var(--sp-block); flex-basis: 100%; }
+/* N11 round 2 §4: the measure body wraps to a line below the Saved
+ * pill + Clear link so the first line of the note reads as one head.
+ * Flex-basis: 100% forces the break inside flex-wrap. */
+.kf-ipanel__measure-body { flex-basis: 100%; }
+
+/* N11 round 2 §4: measure row top-aligns the action column with the
+ * input line. Default row is align-items: center, which centres Save
+ * against a five-line note. Pinning the whole row to start keeps
+ * label, input, and Save on the same y. */
+.kf-ipanel__row--measure { align-items: start; }
 
 /* N8 fix 8: allergen chip meets the 44 px floor inside chrome="bare".
  * The Ingredients tab (chrome="tab") keeps its own .kf-allergen rule

@@ -962,7 +962,10 @@ function EachMeasureControl({ row }: { row: MasterRow }) {
           step="0.0001"
           min="0"
           value={draft.qty}
-          onChange={(e) => setDraft((d) => ({ ...d, qty: e.target.value }))}
+          onChange={(e) => {
+            const v = e.target.value;
+            setDraft((d) => ({ ...d, qty: v }));
+          }}
           onKeyDown={onKey}
           placeholder=""
           aria-label="One each, quantity"
@@ -972,7 +975,10 @@ function EachMeasureControl({ row }: { row: MasterRow }) {
         />
         <select
           value={draft.uom}
-          onChange={(e) => setDraft((d) => ({ ...d, uom: e.target.value.toUpperCase() }))}
+          onChange={(e) => {
+            const v = e.target.value.toUpperCase();
+            setDraft((d) => ({ ...d, uom: v }));
+          }}
           onKeyDown={onKey}
           disabled={busy}
           aria-label="One each, unit"

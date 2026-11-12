@@ -467,7 +467,7 @@ export function PanelIngredientZone({
           saved-state, dirty "Not saved yet · Discard", and the
           immediate Clear link when a measure is stored. */}
       {ingredient.base_unit === "each" ? (
-        <div className="kf-ipanel__row">
+        <div className="kf-ipanel__row kf-ipanel__row--measure">
           <label className="kf-ipanel__row-label" htmlFor={`ing-m-qty-${ingredient.id}`}>
             One each is
           </label>
@@ -481,9 +481,10 @@ export function PanelIngredientZone({
                 min="0"
                 className="kf-ipanel__ctl kf-ipanel__ctl--qty"
                 value={measureDraft.qty}
-                onChange={(e) =>
-                  setMeasureDraft((m) => ({ ...m, qty: e.target.value }))
-                }
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setMeasureDraft((m) => ({ ...m, qty: v }));
+                }}
                 onKeyDown={onMeasureKey}
                 placeholder=""
                 aria-label="One each, quantity"
@@ -492,9 +493,10 @@ export function PanelIngredientZone({
               <select
                 className="kf-ipanel__ctl kf-ipanel__ctl--uom"
                 value={measureDraft.uom}
-                onChange={(e) =>
-                  setMeasureDraft((m) => ({ ...m, uom: e.target.value.toUpperCase() }))
-                }
+                onChange={(e) => {
+                  const v = e.target.value.toUpperCase();
+                  setMeasureDraft((m) => ({ ...m, uom: v }));
+                }}
                 onKeyDown={onMeasureKey}
                 disabled={measureBusy}
                 aria-label="One each, unit"
@@ -514,9 +516,10 @@ export function PanelIngredientZone({
               <select
                 className="kf-ipanel__ctl kf-ipanel__ctl--source"
                 value={measureDraft.source}
-                onChange={(e) =>
-                  setMeasureDraft((m) => ({ ...m, source: e.target.value }))
-                }
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setMeasureDraft((m) => ({ ...m, source: v }));
+                }}
                 onKeyDown={onMeasureKey}
                 disabled={measureBusy}
                 aria-label="Where the measure came from"
@@ -530,7 +533,19 @@ export function PanelIngredientZone({
             <div className="kf-ipanel__measure-note" aria-live="polite">
               {measureDirty ? (
                 measureHint ? (
-                  <span>{measureHint}</span>
+                  <>
+                    <span>{measureHint}</span>
+                    {ingredient.each_measure_qty != null ? (
+                      <button
+                        type="button"
+                        className="kf-ipanel__measure-clear"
+                        onClick={doMeasureClear}
+                        disabled={measureBusy}
+                      >
+                        Clear
+                      </button>
+                    ) : null}
+                  </>
                 ) : (
                   <>
                     <span>Not saved yet</span>
@@ -543,6 +558,16 @@ export function PanelIngredientZone({
                     >
                       Discard
                     </button>
+                    {ingredient.each_measure_qty != null ? (
+                      <button
+                        type="button"
+                        className="kf-ipanel__measure-clear"
+                        onClick={doMeasureClear}
+                        disabled={measureBusy}
+                      >
+                        Clear
+                      </button>
+                    ) : null}
                   </>
                 )
               ) : (
@@ -552,19 +577,19 @@ export function PanelIngredientZone({
                   ) : (
                     <span className="kf-pill kf-pill--warn">not set yet</span>
                   )}
-                  <span>{measureFoot.body}</span>
+                  {ingredient.each_measure_qty != null ? (
+                    <button
+                      type="button"
+                      className="kf-ipanel__measure-clear"
+                      onClick={doMeasureClear}
+                      disabled={measureBusy}
+                    >
+                      Clear
+                    </button>
+                  ) : null}
+                  <span className="kf-ipanel__measure-body">{measureFoot.body}</span>
                 </>
               )}
-              {ingredient.each_measure_qty != null ? (
-                <button
-                  type="button"
-                  className="kf-ipanel__measure-clear"
-                  onClick={doMeasureClear}
-                  disabled={measureBusy}
-                >
-                  Clear
-                </button>
-              ) : null}
               <SaveFlash savedAt={measureSavedAt} error={measureError} />
             </div>
           </div>

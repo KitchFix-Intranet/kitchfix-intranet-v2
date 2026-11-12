@@ -138,9 +138,10 @@ export function ItemEachMeasureBlock({
             <input
               type="checkbox"
               checked={draft.hasOwn}
-              onChange={(e) =>
-                setDraft((d) => ({ ...d, hasOwn: e.currentTarget.checked }))
-              }
+              onChange={(e) => {
+                const next = e.currentTarget.checked;
+                setDraft((d) => ({ ...d, hasOwn: next }));
+              }}
               disabled={busy}
             />
             <span>Different from the ingredient</span>
@@ -154,7 +155,10 @@ export function ItemEachMeasureBlock({
                 min="0"
                 className="kf-ipanel__ctl kf-ipanel__ctl--qty"
                 value={draft.qty}
-                onChange={(e) => setDraft((d) => ({ ...d, qty: e.target.value }))}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setDraft((d) => ({ ...d, qty: v }));
+                }}
                 onKeyDown={onKey}
                 aria-label="This item's each weighs"
                 disabled={busy}
@@ -162,7 +166,10 @@ export function ItemEachMeasureBlock({
               <select
                 className="kf-ipanel__ctl kf-ipanel__ctl--uom"
                 value={draft.uom}
-                onChange={(e) => setDraft((d) => ({ ...d, uom: e.target.value.toUpperCase() }))}
+                onChange={(e) => {
+                  const v = e.target.value.toUpperCase();
+                  setDraft((d) => ({ ...d, uom: v }));
+                }}
                 onKeyDown={onKey}
                 disabled={busy}
                 aria-label="Weight unit for this item"
@@ -180,14 +187,29 @@ export function ItemEachMeasureBlock({
                 </optgroup>
               </select>
             </div>
-          ) : (
+          ) : !dirty ? (
             <span className="kf-ipanel__itemmeasure-hint">Tick if this case holds a different size</span>
-          )}
+          ) : null}
         </div>
         {dirty ? (
           <div className="kf-ipanel__measure-note kf-ipanel__measure-note--dirty" aria-live="polite">
             {hint ? (
               <span>{hint}</span>
+            ) : removing ? (
+              <>
+                <span>Will use the ingredient&rsquo;s measure</span>
+                <span aria-hidden>&middot;</span>
+                <span>not saved yet</span>
+                <span aria-hidden>&middot;</span>
+                <button
+                  type="button"
+                  className="kf-ipanel__measure-discard"
+                  onClick={onDiscard}
+                  disabled={busy}
+                >
+                  Discard
+                </button>
+              </>
             ) : (
               <>
                 <span>Not saved yet</span>
@@ -207,15 +229,17 @@ export function ItemEachMeasureBlock({
         ) : null}
       </div>
       <div className="kf-ipanel__row-action">
-        <button
-          type="button"
-          className={`kf-btn ${saveEnabled ? "kf-btn--primary" : "kf-btn--line"} kf-btn--sm${busy ? " is-busy" : ""}`}
-          disabled={!saveEnabled}
-          onClick={doSave}
-          onKeyDown={onKey}
-        >
-          {busy ? "Saving..." : "Save"}
-        </button>
+        {(draft.hasOwn || baseline.hasOwn) ? (
+          <button
+            type="button"
+            className={`kf-btn ${saveEnabled ? "kf-btn--primary" : "kf-btn--line"} kf-btn--sm${busy ? " is-busy" : ""}`}
+            disabled={!saveEnabled}
+            onClick={doSave}
+            onKeyDown={onKey}
+          >
+            {busy ? "Saving..." : "Save"}
+          </button>
+        ) : null}
       </div>
     </div>
   );
