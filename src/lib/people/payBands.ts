@@ -116,16 +116,22 @@ export interface ClientBands {
   hourly: Record<string, Band>;
   leadership: Record<string, Band>;
 }
-export function bandsForClient(accountKey: string | null, accountState: string | null): ClientBands {
+// T4b-2.1 Fix 5: leadership salary bands only reach the client when
+// the person on the screen is salaried. Hourly bands always ship (the
+// hourly slice carries only the person's state, which is the policy
+// anyone on site would already know). Leadership salary figures are
+// company-confidential and should not land in every PAF page view.
+export function bandsForClient(
+  accountKey: string | null,
+  accountState: string | null,
+  isSalaried: boolean,
+): ClientBands {
   // Prefer the accounts.state column; fall back to parsing it from
   // the key (older account rows may not have state set).
   const state = (accountState ?? "").trim() || parseStateFromLocation(accountKey);
   const hourly = state && PAY_BANDS.hourly[state] ? PAY_BANDS.hourly[state] : {};
-  return {
-    state,
-    hourly,
-    leadership: PAY_BANDS.leadership as Record<string, Band>,
-  };
+  const leadership = isSalaried ? (PAY_BANDS.leadership as Record<string, Band>) : {};
+  return { state, hourly, leadership };
 }
 
 // Server-authoritative dollar + percent difference between two

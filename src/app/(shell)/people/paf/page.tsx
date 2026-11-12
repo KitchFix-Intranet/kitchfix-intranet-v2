@@ -242,12 +242,23 @@ export default async function Page({
 
   // Pay bands for the client. bandsForClient is the ONLY function
   // that reads PAY_BANDS; the whole table never reaches the browser.
-  // We resolve the state from the chosen person's account; if there
-  // is no person yet, we hand the client a blank slice and the band
-  // bar on the Pay increase sheet simply does not render.
+  // T4b-2.1 Fix 5: the leadership slice is empty unless the on-screen
+  // person is salaried. We read is_salaried from people for whoever
+  // is on initial.person; drafts hydrate the person via enrichPerson
+  // (which only touches title) so we fetch the flag explicitly here.
   const personAccountKey = initial.person?.account_key ?? null;
   const personAcc = personAccountKey ? accounts.find((a) => a.team_key === personAccountKey) : null;
-  const bands = bandsForClient(personAccountKey, (personAcc?.state as string | null) ?? null);
+  let personIsSalaried = false;
+  if (initial.person?.worker_id) {
+    const sQ = await sb
+      .from("people")
+      .select("is_salaried")
+      .eq("worker_id", initial.person.worker_id)
+      .eq("status", "ACTIVE")
+      .maybeSingle();
+    personIsSalaried = !!(sQ.data && (sQ.data as { is_salaried?: boolean }).is_salaried);
+  }
+  const bands = bandsForClient(personAccountKey, (personAcc?.state as string | null) ?? null, personIsSalaried);
 
   return (
     <div className="kf-pe-surface">

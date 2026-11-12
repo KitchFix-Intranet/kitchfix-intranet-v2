@@ -272,32 +272,34 @@ export async function sanitizeBody(
       }
     }
 
-    // T4b-2: Pay increase computed fields (dollarIncrease, pctIncrease).
-    if (action_type === "pay_increase") {
-      const { dollarIncrease, pctIncrease } = computeRateIncrease(
-        String(payload.oldRate ?? ""),
-        String(payload.newRate ?? ""),
-      );
-      payload.dollarIncrease = dollarIncrease;
-      payload.pctIncrease = pctIncrease;
-    }
-
-    // T4b-2: Travel totals recomputed from the dates + per-day
-    // choices + supplement switch. The body's totals are ignored.
-    if (action_type === "travel_reimbursement") {
-      const totals = computeTravelTotals({
-        startISO: String(payload.travelStartDate ?? ""),
-        endISO: String(payload.travelEndDate ?? ""),
-        perDiemDays: Array.isArray(payload.perDiemDays) ? payload.perDiemDays as PerDiemDay[] : [],
-        supplementEnabled: String(payload.travelSupplementEnabled ?? "") === "Yes",
-      });
-      for (const [k, v] of Object.entries(totals)) payload[k] = v;
-    }
   } else {
     payload.employeeName = "";
     payload.locationKey = "";
     payload.locationName = "";
     delete payload.oldTitle;
+  }
+
+  // T4b-2.1 Fix 4: server-side compute for pay_increase + travel runs
+  // UNCONDITIONALLY, not only when a person is picked. A travel draft
+  // that saves before the viewer picks a person must still have
+  // server-computed totals; otherwise the body's whatever-the-browser-
+  // sent values would be stored and later read back as truth.
+  if (action_type === "pay_increase") {
+    const { dollarIncrease, pctIncrease } = computeRateIncrease(
+      String(payload.oldRate ?? ""),
+      String(payload.newRate ?? ""),
+    );
+    payload.dollarIncrease = dollarIncrease;
+    payload.pctIncrease = pctIncrease;
+  }
+  if (action_type === "travel_reimbursement") {
+    const totals = computeTravelTotals({
+      startISO: String(payload.travelStartDate ?? ""),
+      endISO: String(payload.travelEndDate ?? ""),
+      perDiemDays: Array.isArray(payload.perDiemDays) ? payload.perDiemDays as PerDiemDay[] : [],
+      supplementEnabled: String(payload.travelSupplementEnabled ?? "") === "Yes",
+    });
+    for (const [k, v] of Object.entries(totals)) payload[k] = v;
   }
 
   return { ok: true, body: { action_type, payload, person_name } };

@@ -1,4 +1,5 @@
-// T4b-2 (2026-11-14). Receipt attachments API. Three methods:
+// T4b-2 + T4b-2.1 (2026-11-12). Receipt attachments API. Three
+// methods:
 //
 //   POST   /api/people/attachments?draft=<id>
 //     multipart/form-data with one `file` field. Validates:
@@ -6,7 +7,10 @@
 //       - magic-byte check against PDF / JPEG / PNG / WebP / HEIC
 //       - draft exists + belongs to the viewer
 //       - draft's action is travel_reimbursement or other_reimbursement
-//     Writes one storage object + one people_attachments row.
+//       - draft has fewer than MAX_RECEIPTS_PER_DRAFT (5) rows already
+//     Generates the attachment id server-side, uploads to
+//     `drafts/<draft>/<id>.<ext>`, THEN inserts the row with the
+//     final storage_path. If the insert fails the object is removed.
 //     Returns the row.
 //
 //   DELETE /api/people/attachments?id=<attachment>
@@ -21,7 +25,9 @@
 // is non-null). GET is allowed under preview so the owner can see
 // what already exists without mutating it.
 //
-// Table / bucket: people_attachments + people-receipts.
+// Table / bucket: people_attachments + people-receipts. (The T4b-2.1
+// prompt named `people_v2_05_receipts`; the live table is
+// `people_attachments` with that exact column shape.)
 
 import { NextResponse } from "next/server";
 import { requireOwnerApi } from "@/lib/gate";
@@ -29,15 +35,17 @@ import { serviceClient } from "@/lib/supabase/service";
 import { resolveViewer } from "@/lib/people/viewer";
 import { loadDraft } from "@/lib/people/drafts";
 import {
-  BUCKET, MAX_BYTES, SIGNED_URL_SECS,
+  BUCKET, KIND_RECEIPT, MAX_BYTES, MAX_RECEIPTS_PER_DRAFT, SIGNED_URL_SECS,
   detectKind, safeFileName, storagePath,
-  listReceiptsForDraft, getReceipt, deleteReceipt,
+  listReceiptsForDraft, countReceiptsForDraft, getReceipt, deleteReceipt,
   type AttachmentRow,
 } from "@/lib/people/attachments";
 import type { Viewer } from "@/lib/people/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+const TABLE = "people_attachments";
 
 // Actions that MAY carry receipts. Draft must have one of these
 // action_types for POST to succeed.
@@ -58,12 +66,11 @@ function ownerEmailFor(viewer: Viewer): string {
   return (viewer.work_email ?? "").trim().toLowerCase();
 }
 
-// Lightweight projection of a row for the client.
 function toClientRow(r: AttachmentRow) {
   return {
     id: r.id,
     file_name: r.file_name,
-    file_size: r.file_size,
+    file_size: r.size_bytes,
     mime_type: r.mime_type,
   };
 }
@@ -116,6 +123,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "action_not_receipts" }, { status: 400 });
   }
 
+  // T4b-2.1 Fix 3: per-draft cap. Count is cheap (head:true). The
+  // race window between count + insert is bounded by the insert's
+  // storage_path uniqueness constraint - the sixth concurrent write
+  // would still land in the table but the client refuses visibly.
+  const haveN = await countReceiptsForDraft(sb, owner, draftId);
+  if (haveN >= MAX_RECEIPTS_PER_DRAFT) {
+    return NextResponse.json({ error: "too_many_files" }, { status: 409 });
+  }
+
   const form = await req.formData().catch(() => null);
   if (!form) return NextResponse.json({ error: "bad_form" }, { status: 400 });
   const raw = form.get("file");
@@ -127,50 +143,42 @@ export async function POST(req: Request) {
   if (!kind) return NextResponse.json({ error: "unsupported_type" }, { status: 415 });
 
   const fileName = safeFileName(raw.name, kind.ext);
-  // Insert the DB row FIRST with a placeholder storage_path so we
-  // have the generated id for the object key. Then upload; if the
-  // upload fails we delete the row.
-  const insertQ = await sb
-    .from("people_attachments")
-    .insert({
-      draft_id: draftId,
-      owner_email: owner,
-      file_name: fileName,
-      file_size: raw.size,
-      mime_type: kind.mime,
-      storage_path: "pending",
-    })
-    .select("*")
-    .maybeSingle();
-  if (insertQ.error || !insertQ.data) {
-    return NextResponse.json({ error: "db_insert_failed" }, { status: 500 });
-  }
-  const row = insertQ.data as AttachmentRow;
-  const path = storagePath(owner, draftId, row.id, kind.ext);
+
+  // T4b-2.1 Fix 2: generate id server-side, upload FIRST, then
+  // insert with the final storage_path. storage_path is UNIQUE, so
+  // a "pending" placeholder would wedge every subsequent upload for
+  // every owner. We also do not update after insert.
+  const attachmentId = crypto.randomUUID();
+  const path = storagePath(draftId, attachmentId, kind.ext);
 
   const upload = await sb.storage.from(BUCKET).upload(path, bytes, {
     contentType: kind.mime,
     upsert: false,
   });
   if (upload.error) {
-    await sb.from("people_attachments").delete().eq("id", row.id).eq("owner_email", owner);
     return NextResponse.json({ error: "upload_failed" }, { status: 500 });
   }
 
-  const patchQ = await sb
-    .from("people_attachments")
-    .update({ storage_path: path })
-    .eq("id", row.id)
-    .eq("owner_email", owner)
+  const insertQ = await sb
+    .from(TABLE)
+    .insert({
+      id: attachmentId,
+      draft_id: draftId,
+      owner_email: owner,
+      kind: KIND_RECEIPT,
+      file_name: fileName,
+      size_bytes: raw.size,
+      mime_type: kind.mime,
+      storage_path: path,
+    })
     .select("*")
     .maybeSingle();
-  if (patchQ.error || !patchQ.data) {
-    // Object is in bucket but row is broken. Clean up both.
+  if (insertQ.error || !insertQ.data) {
+    // Row never landed; clean up the orphaned object.
     await sb.storage.from(BUCKET).remove([path]);
-    await sb.from("people_attachments").delete().eq("id", row.id).eq("owner_email", owner);
-    return NextResponse.json({ error: "db_update_failed" }, { status: 500 });
+    return NextResponse.json({ error: "db_insert_failed" }, { status: 500 });
   }
-  return NextResponse.json({ row: toClientRow(patchQ.data as AttachmentRow) }, { status: 201 });
+  return NextResponse.json({ row: toClientRow(insertQ.data as AttachmentRow) }, { status: 201 });
 }
 
 export async function DELETE(req: Request) {
