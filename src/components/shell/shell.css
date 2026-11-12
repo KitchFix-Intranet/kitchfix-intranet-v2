@@ -459,7 +459,23 @@
     z-index: calc(var(--sp-z-rail-phone) - 1);
   }
   .kf-topbar { padding: 0 var(--sp-sp-4); min-height: 56px; }
-  .kf-topbar__title h1 { font-size: 20px; }
+  /* The h1 does not shrink in the flex row. Basis is its intrinsic
+   * width (flex-shrink: 0) so the crumb absorbs all shrinkage and
+   * the title stays whole wherever there is space to hold it. The
+   * last-resort cap is the h1's own max-width: 100 % of the title
+   * wrapper - when the h1 alone cannot fit beside the actions, it
+   * ellipses against its own box rather than overlapping anything. */
+  .kf-topbar__title h1 {
+    font-size: 20px;
+    flex: 0 0 auto;
+    max-width: 100%;
+    min-width: 0;
+  }
+  /* The crumb is the shrinker: basis 0, grow 1, shrink 1. It grows
+   * into the space the h1 does not need, and ellipses down to 0 as
+   * the row tightens. The base rule already carries overflow
+   * hidden + text-overflow ellipsis + white-space nowrap. */
+  .kf-topbar__crumb { flex: 1 1 0%; }
   .kf-rail__close { display: inline-flex; }
   .kf-canvas { padding: var(--sp-sp-4); padding-bottom: calc(var(--sp-tabbar) + var(--sp-sp-5)); }
 }
