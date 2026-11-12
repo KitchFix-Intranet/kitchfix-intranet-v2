@@ -226,6 +226,7 @@ export async function GET(req: NextRequest) {
     itemNumber: it.item_number,
     pack: packDisplay,
     packNormalized: normalizedPack,
+    packUom: it.pack_uom ?? null,
     packState: it.pack_state,
     packSource,
     packManualOverride: hasManualOverride,

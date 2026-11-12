@@ -378,7 +378,7 @@
  * Tokens only - no literal colour, radius, type or hex. The panel is
  * still a right-side drawer (kf-drawer chrome unchanged); kf-ipanel__*
  * is its inner layout. Kept families: kf-chain__*, kf-grade__*,
- * kf-newing__*, kf-dpn__ledger*, kf-evidence/kf-evi__*, kf-events*,
+ * kf-dpn__ledger*, kf-evidence/kf-evi__*, kf-events*,
  * kf-dpn__label (ReviewActions), kf-dpn__hint (editors).
  * ---------------------------------------------------------------------- */
 
