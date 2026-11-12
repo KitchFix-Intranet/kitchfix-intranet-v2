@@ -13,7 +13,7 @@ import { resolveAcademyIdentity } from "@/lib/academy/identity";
 type Hit = { title: string; crumb?: string };
 function titleFor(pathname: string, dateLong: string, periodTag: string | null): { title: string; crumb?: React.ReactNode } {
   const map: Array<{ test: (p: string) => boolean; v: Hit }> = [
-    { test: (p) => p === "/people",   v: { title: "People Portal",     crumb: "On the current intranet" } },
+    { test: (p) => p === "/people",   v: { title: "My team",           crumb: "People Portal" } },
     // People Portal T0a. Specificity order: incidents/new (and under) wins
     // over /people/incidents/:id, which wins over the /incidents index.
     // Array.find stops at the first match, so the test order is the rule.
