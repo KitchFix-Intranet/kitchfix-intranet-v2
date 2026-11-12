@@ -3,11 +3,18 @@
 // renders the plain app/not-found page. In protected APIs the helper returns
 // a Response the handler returns verbatim.
 //
-// Two tiers:
+// Three tiers:
 //
 //   requireOwnerPage / requireOwnerApi
 //     The historical gate. Admin pages + admin APIs call these; they
 //     stay owner-only regardless of the release switch below.
+//
+//   requireQuestionsAuthor / requireQuestionsAuthorApi
+//     The Academy Questions authoring gate. Owners pass automatically;
+//     non-owners pass when they hold an academy_questions_author row in
+//     academy_grants. Narrower than academy_admin on purpose - lets Britt
+//     author questions without handing her the company-wide Records /
+//     People / Team visibility academy_admin carries.
 //
 //   requireAppAccess / requireAppAccessApi
 //     The release-controlled app-access gate. Added for the v2
@@ -20,6 +27,7 @@
 import { notFound } from "next/navigation";
 import { sessionEmail } from "./supabase/ssr";
 import { appOpenToNonOwners, ownerEmails } from "./supabase/env";
+import { serviceClient } from "./supabase/service";
 import {
   resolveViewerRole,
   isOpenedPath,
@@ -39,6 +47,43 @@ export async function requireOwnerApi(): Promise<Response | { email: string }> {
   if (!email) return new Response(null, { status: 401 });
   const owners = ownerEmails();
   if (!owners.has(email)) return new Response(null, { status: 404 });
+  return { email };
+}
+
+// Academy Questions authoring gate. Owners pass automatically (first branch);
+// non-owners pass when they hold grant_type='academy_questions_author' in
+// academy_grants. Narrower than academy_admin on purpose.
+export async function requireQuestionsAuthor(): Promise<{ email: string }> {
+  const email = await sessionEmail();
+  if (!email) notFound();
+  const owners = ownerEmails();
+  if (owners.has(email)) return { email };
+  const supa = serviceClient();
+  const q = await supa
+    .from("academy_grants")
+    .select("email")
+    .eq("email", email)
+    .eq("grant_type", "academy_questions_author")
+    .maybeSingle();
+  if (q.error || !q.data) notFound();
+  return { email };
+}
+
+export async function requireQuestionsAuthorApi(): Promise<
+  Response | { email: string }
+> {
+  const email = await sessionEmail();
+  if (!email) return new Response(null, { status: 401 });
+  const owners = ownerEmails();
+  if (owners.has(email)) return { email };
+  const supa = serviceClient();
+  const q = await supa
+    .from("academy_grants")
+    .select("email")
+    .eq("email", email)
+    .eq("grant_type", "academy_questions_author")
+    .maybeSingle();
+  if (q.error || !q.data) return new Response(null, { status: 404 });
   return { email };
 }
 

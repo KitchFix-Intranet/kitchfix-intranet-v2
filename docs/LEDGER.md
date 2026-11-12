@@ -23,7 +23,7 @@ entry in its PR (the ledger-in-PR convention, see GOVERNANCE.md).
 
 ## In flight
 - F4 - shared promotion: head wash + earned-column system move from academy.css into the shell (tokens.css/components.css). Was gated on the Stockpot lane vacating shared CSS; that lane is inactive, so re-confirm nothing is uncommitted there, then it can proceed.
-- E2 - Questions (Academy): the content-authoring tool and the real launch gate. Prompt drafted; next Academy train.
+- E2 - Questions (Academy): /academy/admin/questions ships. Author-grant gate (requireQuestionsAuthor, third tier) in src/lib/gate.ts; owners pass automatically, non-owners pass with grant_type='academy_questions_author' in academy_grants (Britt). Coverage view + editor island; lifecycle Save / Save as draft / Approve / Retire (no delete - service_role has no DELETE grant; retire is terminal). Learner path in module.ts is unchanged, still .eq('status','approved'); drafts + retired are invisible to learners (SQL-verified 8 -> 9 -> 8 across the draft/approve/retire cycle). Rail entry + title/crumb in Shell.tsx + (shell)/layout.tsx deferred - People Portal lane owns those files this week.
 - People Portal v2: T2 (2026-11-12) - /people stops being the ReservedDoor and renders My team (owner-only, read-only); four scope rules server-enforced; person-card drawer with R-PP10 contact rule; ?as= owner preview. The four quick-action doors + the card's two buttons are inert. people_v2_01..04 migrations still only in Studio - repo copy is a follow-up.
 
 ## Deploy rule
