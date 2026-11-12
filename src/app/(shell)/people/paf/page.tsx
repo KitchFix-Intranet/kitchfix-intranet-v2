@@ -1,11 +1,10 @@
-// /people/paf - PAF form (T4a). Read-only shell + the three
-// simplest sheets (one-time bonus, one-time deduction, gratuity)
-// + Check + drafts. Owner-only, ?as= preview, ?for=<worker_id>
-// direct entry, ?draft=<uuid> resume.
+// /people/paf - PAF form. Owner-only, ?as= preview, ?for= direct
+// entry, ?draft= resume. Expanded in T4b-1 to feed the new sheet
+// state model + the accounts list used by Reclassification.
 //
-// Nothing here writes `submissions`, sends email or posts to
-// Slack. The only mutation is through /api/people/drafts, which
-// writes `people_drafts` exclusively and refuses under ?as=.
+// Nothing here writes submissions, sends email or posts to Slack.
+// The only mutation is through /api/people/drafts, which writes
+// people_drafts exclusively and refuses under ?as=.
 
 import { notFound } from "next/navigation";
 import { requireOwnerPage } from "@/lib/gate";
@@ -20,6 +19,8 @@ import { PafFlow } from "@/components/people/paf/PafFlow";
 import type { PafAction } from "@/components/people/paf/WhatStep";
 import { OwnerPreviewBanner } from "@/components/people/OwnerPreviewBanner";
 import { IdentBand } from "@/components/ui/IdentBand";
+import { EMPTY_FIELDS, type SheetFields } from "@/components/people/paf/sheetFields";
+import type { SelectOption } from "@/components/people/paf/Select";
 import "../people.css";
 import "./paf.css";
 
@@ -29,6 +30,34 @@ function step(value: string | string[] | undefined, fallback: Step): Step {
   const v = (Array.isArray(value) ? value[0] : value) ?? "";
   if (v === "who" || v === "what" || v === "details" || v === "check") return v;
   return fallback;
+}
+
+// Hydrate SheetFields from a draft payload record. Unknown keys
+// stay out (type cast is just for TypeScript narrowing - every key
+// in EMPTY_FIELDS is a string).
+function fieldsFromPayload(p: Record<string, unknown>): SheetFields {
+  const grab = (k: keyof SheetFields): string => {
+    const v = p[k];
+    return typeof v === "string" ? v : "";
+  };
+  return {
+    amount: grab("amount"),
+    effectiveDate: grab("effectiveDate"),
+    lastDayWorked: grab("lastDayWorked"),
+    actionGroup: (grab("actionGroup") as SheetFields["actionGroup"]),
+    separationReason: grab("separationReason"),
+    rehireEligible: (grab("rehireEligible") as SheetFields["rehireEligible"]),
+    explanation: grab("explanation"),
+    oldTitle: grab("oldTitle"),
+    newTitle: grab("newTitle"),
+    reclassChangeRate: (grab("reclassChangeRate") as SheetFields["reclassChangeRate"]),
+    newRate: grab("newRate"),
+    statusChangeDirection: grab("statusChangeDirection"),
+    reclassFrom: grab("reclassFrom"),
+    reclassTo: grab("reclassTo"),
+    reclassTitleChange: (grab("reclassTitleChange") as SheetFields["reclassTitleChange"]),
+    cellFrequency: (grab("cellFrequency") as SheetFields["cellFrequency"]),
+  };
 }
 
 export default async function Page({
@@ -75,56 +104,76 @@ export default async function Page({
 
   const team = await loadTeam(sb, viewer);
 
-  // Draft hydration. The owner_email filter inside loadDraft is the
-  // sole enforcement point; a draft that is not the viewer's returns
-  // null here and we 404 (never leak a 403 body).
-  //
-  // PREVIEW NOTE. Even though previews cannot WRITE, they can still
-  // READ their own drafts via loadDraft - the filter uses the
-  // viewer's work_email (not the ?as= target's), so a preview read
-  // only sees the real owner's drafts. The PafFlow then refuses to
-  // save updates while preview is active.
+  // Accounts: active rows only, labelled "TEAM - NAME" like the
+  // render. Used by the Reclassification From / To dropdowns.
+  const acctQ = await sb.from("accounts").select("team_key, name, active, region");
+  const accounts = (acctQ.data ?? []).filter((a) => a.active !== false);
+  const accountOptions: readonly SelectOption[] = accounts
+    .map((a) => ({
+      value: a.team_key as string,
+      label: `${a.team_key} - ${((a.name as string | null) ?? "").trim() || a.team_key}`,
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+
   const viewerOwnerEmail = (viewer.work_email ?? "").toLowerCase();
+
+  // Resolve person identity for the SheetAbout second line
+  // ("<title> · <club>"). The actual authoritative values live on
+  // people + accounts; title is the person's role, site_name comes
+  // from accounts.name for their account_key.
+  async function enrichPerson(workerId: string, displayName: string | null, accountKey: string | null): Promise<{
+    worker_id: string; display_name: string; account_key: string;
+    title: string | null; site_name: string | null;
+  }> {
+    let title: string | null = null;
+    let site_name: string | null = null;
+    if (accountKey) {
+      const match = accounts.find((a) => a.team_key === accountKey);
+      if (match) site_name = ((match.name as string | null) ?? "").trim() || null;
+    }
+    const pQ = await sb.from("people").select("title").eq("worker_id", workerId).eq("status", "ACTIVE").maybeSingle();
+    if (pQ.data) title = ((pQ.data.title as string | null) ?? "").trim() || null;
+    return {
+      worker_id: workerId,
+      display_name: displayName ?? "",
+      account_key: accountKey ?? "",
+      title,
+      site_name,
+    };
+  }
+
   let initial: {
     step: Step;
     draftId: string | null;
-    personWorkerId: string | null;
-    personName: string | null;
-    personAccountKey: string | null;
+    person: Awaited<ReturnType<typeof enrichPerson>> | null;
     action: PafAction | null;
-    amount: string;
-    effectiveDate: string;
-    explanation: string;
+    fields: SheetFields;
   } = {
     step: "who",
     draftId: null,
-    personWorkerId: null,
-    personName: null,
-    personAccountKey: null,
+    person: null,
     action: null,
-    amount: "",
-    effectiveDate: "",
-    explanation: "",
+    fields: EMPTY_FIELDS,
   };
+
   if (draftId) {
     const draft = await loadDraft(sb, viewerOwnerEmail, draftId);
     if (!draft) notFound();
     const p = draft.payload as Record<string, unknown>;
+    const pwid = typeof p.person_worker_id === "string" ? p.person_worker_id : "";
+    const enriched = pwid
+      ? await enrichPerson(pwid, draft.person_name, typeof p.locationKey === "string" ? p.locationKey : null)
+      : null;
     initial = {
       step: "details",
       draftId: draft.id,
-      personWorkerId: (p.person_worker_id as string | null) ?? null,
-      personName: draft.person_name ?? ((p.employeeName as string | null) ?? null),
-      personAccountKey: (p.locationKey as string | null) ?? null,
+      person: enriched,
       action: (draft.action_type as PafAction | null) ?? null,
-      amount: String(p.amount ?? ""),
-      effectiveDate: String(p.effectiveDate ?? ""),
-      explanation: String(p.explanation ?? ""),
+      fields: fieldsFromPayload(p),
     };
   } else if (forWorkerId) {
-    // ?for=<worker_id>. Same scope check as ?card=: out of scope is
-    // notFound(). Loads a narrow projection just for the scope test
-    // and the display name + account_key the flow needs.
+    // ?for=<worker_id>. Same scope check as ?card=. The person row
+    // is enriched with title + site_name for the SheetAbout line.
     const rawQ = await sb
       .from("people")
       .select("worker_id, display_name, title, account_key, region, work_email, manager_worker_id, is_corp, is_salaried, is_site_leader, is_regional_director, pp_full_access, pp_review, status")
@@ -133,29 +182,23 @@ export default async function Page({
       .maybeSingle();
     const raw = (rawQ.data as PeopleRow | null) ?? null;
     if (!raw) notFound();
-    const accQ = await sb.from("accounts").select("team_key, region");
-    const accountRegionByKey = new Map<string, string | null>(
-      (accQ.data ?? []).map((a) => [a.team_key, (a.region as string | null) ?? null]),
-    );
-    if (!inScope(viewer, raw, accountRegionByKey)) notFound();
+    const accMap = new Map(accounts.map((a) => [a.team_key as string, (a.region as string | null) ?? null]));
+    if (!inScope(viewer, raw, accMap)) notFound();
+    const enriched = await enrichPerson(raw.worker_id, raw.display_name, raw.account_key);
     initial = {
-      ...initial,
       step: "what",
-      personWorkerId: raw.worker_id,
-      personName: raw.display_name,
-      personAccountKey: raw.account_key,
+      draftId: null,
+      person: enriched,
+      action: null,
+      fields: EMPTY_FIELDS,
     };
   }
-  // Explicit ?step= wins when it is consistent with what we loaded.
   initial.step = step(sp.step, initial.step);
 
-  // Who-sees-it is always for the finance route in T4a (the three
-  // selectable actions are finance). Build it once per load so the
-  // Check step does not re-read the roster.
   const whoSeesIt = await buildWhoSeesIt(
     sb,
     viewer,
-    initial.personAccountKey,
+    initial.person?.account_key ?? null,
     initial.action,
   );
 
@@ -179,6 +222,7 @@ export default async function Page({
           reviewers: whoSeesIt.reviewers,
           copied: whoSeesIt.copied,
         }}
+        accountOptions={accountOptions}
         isPreview={isPreview}
         asWorkerId={asWorkerId}
       />

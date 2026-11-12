@@ -25,6 +25,7 @@
 // note under all four groups says the rest arrive next.
 
 import { useState } from "react";
+import { SheetAbout } from "./SheetAbout";
 
 export type PafAction =
   | "add_bonus"
@@ -54,10 +55,10 @@ const GROUPS: GroupDef[] = [
     heading: "HR actions",
     countLine: "4 actions · goes to HR",
     actions: [
-      { id: "separation",       label: "Separation",             sub: "Someone is leaving KitchFix",    enabled: false },
-      { id: "title_change",     label: "Change in title",        sub: "Same person, new title",         enabled: false },
-      { id: "status_change",    label: "Part-time or full-time", sub: "Hours status changes",           enabled: false },
-      { id: "reclassification", label: "Reclassification",       sub: "Moves to another department",    enabled: false },
+      { id: "separation",       label: "Separation",             sub: "Someone is leaving KitchFix",    enabled: true  },
+      { id: "title_change",     label: "Change in title",        sub: "Same person, new title",         enabled: true  },
+      { id: "status_change",    label: "Part-time or full-time", sub: "Hours status changes",           enabled: true  },
+      { id: "reclassification", label: "Reclassification",       sub: "Moves to another department",    enabled: true  },
     ],
   },
   {
@@ -77,7 +78,7 @@ const GROUPS: GroupDef[] = [
     countLine: "3 actions · goes to finance",
     actions: [
       { id: "travel_reimbursement", label: "Travel reimbursement",     sub: "Per diem for days away",       enabled: false },
-      { id: "add_cell_phone",       label: "Cell phone reimbursement", sub: "Monthly phone stipend",        enabled: false },
+      { id: "add_cell_phone",       label: "Cell phone reimbursement", sub: "Monthly phone stipend",        enabled: true  },
       { id: "other_reimbursement",  label: "Other reimbursement",      sub: "Something else you paid for",  enabled: false },
     ],
   },
@@ -94,7 +95,7 @@ const GROUPS: GroupDef[] = [
 export function WhatStep({
   person, chosen, onChoose, onChange,
 }: {
-  person: { worker_id: string; display_name: string } | null;
+  person: { display_name: string; title?: string | null; site_name?: string | null } | null;
   chosen: PafAction | null;
   onChoose: (a: PafAction) => void;
   onChange: () => void;
@@ -109,18 +110,7 @@ export function WhatStep({
 
   return (
     <>
-      {/* About row with Change back to Who. */}
-      {person ? (
-        <div className="kf-pe-about">
-          <span className="kf-pe-ava" aria-hidden>
-            {(person.display_name || "?").split(/\s+/).map((s) => s[0]).join("").slice(0, 2).toUpperCase()}
-          </span>
-          <span className="kf-pe-about__who">
-            <b data-about="name">{person.display_name}</b>
-          </span>
-          <button type="button" className="kf-btn kf-btn--ghost" onClick={onChange}>Change</button>
-        </div>
-      ) : null}
+      {person ? <SheetAbout person={person} onChange={onChange} /> : null}
 
       {GROUPS.map((g) => {
         const open = openKey === g.key;
@@ -176,7 +166,7 @@ export function WhatStep({
       })}
 
       <p className="kf-pe-muted kf-pe-small kf-pe-group-note">
-        The other nine arrive in the next release.
+        The other four arrive in the next release.
       </p>
     </>
   );

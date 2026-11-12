@@ -153,16 +153,23 @@ export function detailPairs(
   }
 
   if (a === "separation") {
-    // T3.1 fix 7 (2026-11-13). Type is derived from the separation
-    // REASON (Voluntary / Involuntary), never from
-    // `statusChangeDirection` - that is the part-time / full-time
-    // toggle for a status change, not a separation signal.
+    // T4b-1 (2026-11-14). Type is Voluntary or Involuntary. New
+    // drafts + sends carry it in `actionGroup` (the field the viewer
+    // picked); older rows that predate the form rebuild fall back to
+    // deriving the type from the reason via separationType(). All 75
+    // existing separations in the DB today have actionGroup set, so
+    // the fallback only runs on a defective row.
     const reason = str(payload.separationReason ?? payload.replacementReason);
+    const ag = str(payload.actionGroup);
+    const typeDisplay =
+      ag === "Voluntary" || ag === "Involuntary"
+        ? ag
+        : separationType(reason);
     return [
       ["For", forLine(payload, resolvedPersonName)],
       ["Site", siteLine(payload, submissionsLocation, siteIndex)],
       ["Effective date", dateOr(payload.effectiveDate)],
-      ["Type", separationType(reason)],
+      ["Type", typeDisplay],
       ["Reason", reason || NOT_GIVEN],
       ["Last day worked", dateOr(payload.lastDayWorked)],
       ["Eligible to rehire", yesNo(payload.rehireEligible)],

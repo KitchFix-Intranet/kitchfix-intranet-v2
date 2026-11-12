@@ -1,113 +1,116 @@
 "use client";
 
-// T4a.1 (2026-11-14). Three sheets share the same shape, matching
-// the render:
-//   - person card at the top (same .kf-pe-about as What),
-//   - Amount (money input with "$"),
-//   - Effective date (custom date picker + per-action hint under),
-//   - What it is for (textarea with the render's placeholder).
-//
-// All three required. R-PP50 shows the one-line summary at the top
-// only when the viewer presses Check with something missing, and
-// "Needed" on each missing field.
+// T4b-1 (2026-11-14). Details step is a DISPATCHER that renders
+// the right sheet for the chosen action. Shared chrome:
+//   - person strip at the top (SheetAbout with title + club name),
+//   - "Still needed: ..." summary at the top when missing fields
+//     have been flagged (R-PP50).
+// The three T4a sheets (bonus, deduction, gratuity) share the
+// same field set so they collapse into one inline component.
 
+import { SheetAbout } from "./SheetAbout";
 import { Field } from "./Field";
 import { MoneyInput } from "./MoneyInput";
 import { DatePicker } from "./DatePicker";
+import { SeparationSheet } from "./sheets/SeparationSheet";
+import { TitleChangeSheet } from "./sheets/TitleChangeSheet";
+import { StatusChangeSheet } from "./sheets/StatusChangeSheet";
+import { ReclassificationSheet } from "./sheets/ReclassificationSheet";
+import { CellPhoneSheet } from "./sheets/CellPhoneSheet";
 import type { PafAction } from "./WhatStep";
+import type { SheetFields, MissingSet } from "./sheetFields";
+import { missingSummary } from "./sheetFields";
+import type { SelectOption } from "./Select";
 
-type Missing = { amount: boolean; effectiveDate: boolean; explanation: boolean };
-
-export function DetailsStep({
-  action, person, amount, effectiveDate, explanation,
-  missing, onChange,
+function SimpleMoneySheet({
+  action, f, missing, onChange,
 }: {
-  action: PafAction;
-  person: { worker_id: string; display_name: string } | null;
-  amount: string;
-  effectiveDate: string;
-  explanation: string;
-  missing: Missing | null;
-  onChange: (patch: { amount?: string; effectiveDate?: string; explanation?: string }) => void;
+  action: "add_bonus" | "add_deduction" | "add_gratuity";
+  f: SheetFields;
+  missing: MissingSet;
+  onChange: (patch: Partial<SheetFields>) => void;
 }) {
-  // Render's placeholder per action.
   const whatForPlaceholder =
     action === "add_bonus" ? "One line is enough: 'Spring training coverage bonus'." :
     action === "add_deduction" ? "One line is enough: 'Reimburse the advance paid Nov 3'." :
     "One line is enough: 'Tips from Oct 25 service'.";
-
-  // T4a.1 fix 18: the Effective date hint flips for deductions.
-  // Bonus + gratuity add to a pay period; a deduction comes out of
-  // a pay period.
   const dateHint = action === "add_deduction"
     ? "The pay period it comes out of."
     : "The pay period it lands in.";
-
-  const missingNames: string[] = [];
-  if (missing?.amount) missingNames.push("Amount");
-  if (missing?.effectiveDate) missingNames.push("Effective date");
-  if (missing?.explanation) missingNames.push("What it is for");
-
   return (
     <>
-      {/* Person card on Details too, matching the render. */}
-      {person ? (
-        <div className="kf-pe-about">
-          <span className="kf-pe-ava" aria-hidden>
-            {(person.display_name || "?").split(/\s+/).map((s) => s[0]).join("").slice(0, 2).toUpperCase()}
-          </span>
-          <span className="kf-pe-about__who">
-            <b data-about="name">{person.display_name}</b>
-          </span>
-        </div>
-      ) : null}
-
-      {missingNames.length > 0 ? (
-        <div className="kf-pe-note kf-pe-note--warn" role="status">
-          <b>Still needed</b> {missingNames.join(", ")}
-        </div>
-      ) : null}
-
-      <Field
-        label="Amount"
-        htmlFor="paf-amount"
-        error={missing?.amount ? "Needed" : null}
-      >
+      <Field label="Amount" htmlFor="paf-amount" error={missing.amount ? "Needed" : null}>
         <MoneyInput
           id="paf-amount"
-          value={amount}
+          value={f.amount}
           onChange={(v) => onChange({ amount: v })}
-          ariaInvalid={missing?.amount || undefined}
+          ariaInvalid={missing.amount || undefined}
         />
       </Field>
-
-      <Field
-        label="Effective date"
-        htmlFor="paf-date"
-        hint={dateHint}
-        error={missing?.effectiveDate ? "Needed" : null}
-      >
-        <DatePicker
-          id="paf-date"
-          value={effectiveDate}
-          onChange={(v) => onChange({ effectiveDate: v })}
-          errorId={missing?.effectiveDate ? "paf-date-err" : undefined}
-        />
+      <Field label="Effective date" htmlFor="paf-eff" hint={dateHint} error={missing.effectiveDate ? "Needed" : null}>
+        <DatePicker id="paf-eff" value={f.effectiveDate} onChange={(v) => onChange({ effectiveDate: v })} />
       </Field>
-
-      <Field
-        label="What it is for"
-        htmlFor="paf-explanation"
-        error={missing?.explanation ? "Needed" : null}
-      >
+      <Field label="What it is for" htmlFor="paf-expl" error={missing.explanation ? "Needed" : null}>
         <textarea
-          id="paf-explanation"
+          id="paf-expl"
           rows={3}
-          value={explanation}
+          value={f.explanation}
           onChange={(e) => onChange({ explanation: e.currentTarget.value })}
           placeholder={whatForPlaceholder}
         />
       </Field>
+    </>
+  );
+}
+
+export function DetailsStep({
+  action, person, fields, missing, onChange, accountOptions,
+}: {
+  action: PafAction;
+  person: { display_name: string; title?: string | null; site_name?: string | null } | null;
+  fields: SheetFields;
+  missing: MissingSet;
+  onChange: (patch: Partial<SheetFields>) => void;
+  accountOptions: readonly SelectOption[];
+}) {
+  const names = missingSummary(missing);
+  return (
+    <>
+      {person ? <SheetAbout person={person} /> : null}
+
+      {names.length > 0 ? (
+        <div className="kf-pe-note kf-pe-note--warn" role="status">
+          <b>Still needed</b> {names.length === 1
+            ? names[0]
+            : names.length === 2
+              ? `${names[0]} and 1 more`
+              : `${names[0]} and ${names.length - 1} more`}
+        </div>
+      ) : null}
+
+      {action === "add_bonus" || action === "add_deduction" || action === "add_gratuity" ? (
+        <SimpleMoneySheet action={action} f={fields} missing={missing} onChange={onChange} />
+      ) : null}
+
+      {action === "separation" ? (
+        <SeparationSheet f={fields} missing={missing} onChange={onChange} />
+      ) : null}
+
+      {action === "title_change" ? (
+        <TitleChangeSheet f={fields} missing={missing} onChange={onChange} />
+      ) : null}
+
+      {action === "status_change" ? (
+        <StatusChangeSheet f={fields} missing={missing} onChange={onChange} />
+      ) : null}
+
+      {action === "reclassification" ? (
+        <ReclassificationSheet f={fields} missing={missing} onChange={onChange} accountOptions={accountOptions} />
+      ) : null}
+
+      {action === "add_cell_phone" ? (
+        <CellPhoneSheet f={fields} missing={missing} onChange={onChange} />
+      ) : null}
     </>
   );
 }

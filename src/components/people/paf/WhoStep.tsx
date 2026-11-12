@@ -48,7 +48,16 @@ function PersonRow({
         <b>{p.display_name || "Unnamed"}</b>
         <small>{(p.title ?? "").trim() || "No role"}</small>
       </span>
-      <span className="kf-pe-person__tags" />
+      {/* T4b-1 Part 0 #3 (2026-11-14). Show ONE tag per row, same
+       * rule as My team: Site leader beats Salaried; corporate rows
+       * get nothing. */}
+      <span className="kf-pe-person__tags" aria-label="Tags">
+        {p.is_site_leader ? (
+          <span className="kf-skew-tag"><span>Site leader</span></span>
+        ) : p.is_salaried && !p.is_corp ? (
+          <span className="kf-skew-tag"><span>Salaried</span></span>
+        ) : null}
+      </span>
       <span className="kf-pe-flight" />
       <svg
         className="kf-pe-person__chev"
