@@ -1,12 +1,10 @@
 "use client";
 
-// T4b-1 (2026-11-14). Details step is a DISPATCHER that renders
-// the right sheet for the chosen action. Shared chrome:
+// T4b-2 (2026-11-14). Details step dispatcher. Picks the right
+// sheet for the chosen action. Shared chrome:
 //   - person strip at the top (SheetAbout with title + club name),
 //   - "Still needed: ..." summary at the top when missing fields
 //     have been flagged (R-PP50).
-// The three T4a sheets (bonus, deduction, gratuity) share the
-// same field set so they collapse into one inline component.
 
 import { SheetAbout } from "./SheetAbout";
 import { Field } from "./Field";
@@ -17,6 +15,10 @@ import { TitleChangeSheet } from "./sheets/TitleChangeSheet";
 import { StatusChangeSheet } from "./sheets/StatusChangeSheet";
 import { ReclassificationSheet } from "./sheets/ReclassificationSheet";
 import { CellPhoneSheet } from "./sheets/CellPhoneSheet";
+import { PayIncreaseSheet, type ClientBandSlice } from "./sheets/PayIncreaseSheet";
+import { TravelReimbursementSheet } from "./sheets/TravelReimbursementSheet";
+import { OtherReimbursementSheet } from "./sheets/OtherReimbursementSheet";
+import { EquipmentRequestSheet } from "./sheets/EquipmentRequestSheet";
 import type { PafAction } from "./WhatStep";
 import type { SheetFields, MissingSet } from "./sheetFields";
 import { missingSummary } from "./sheetFields";
@@ -64,7 +66,7 @@ function SimpleMoneySheet({
 }
 
 export function DetailsStep({
-  action, person, fields, missing, onChange, accountOptions,
+  action, person, fields, missing, onChange, accountOptions, bands, draftId, asWorkerId, isPreview,
 }: {
   action: PafAction;
   person: { display_name: string; title?: string | null; site_name?: string | null } | null;
@@ -72,6 +74,10 @@ export function DetailsStep({
   missing: MissingSet;
   onChange: (patch: Partial<SheetFields>) => void;
   accountOptions: readonly SelectOption[];
+  bands: ClientBandSlice;
+  draftId: string | null;
+  asWorkerId: string | null;
+  isPreview: boolean;
 }) {
   const names = missingSummary(missing);
   return (
@@ -110,6 +116,29 @@ export function DetailsStep({
 
       {action === "add_cell_phone" ? (
         <CellPhoneSheet f={fields} missing={missing} onChange={onChange} />
+      ) : null}
+
+      {action === "pay_increase" ? (
+        <PayIncreaseSheet f={fields} missing={missing} onChange={onChange} bands={bands} />
+      ) : null}
+
+      {action === "travel_reimbursement" ? (
+        <TravelReimbursementSheet
+          f={fields} missing={missing} onChange={onChange}
+          accountOptions={accountOptions}
+          draftId={draftId} asWorkerId={asWorkerId} isPreview={isPreview}
+        />
+      ) : null}
+
+      {action === "other_reimbursement" ? (
+        <OtherReimbursementSheet
+          f={fields} missing={missing} onChange={onChange}
+          draftId={draftId} asWorkerId={asWorkerId} isPreview={isPreview}
+        />
+      ) : null}
+
+      {action === "equipment_request" ? (
+        <EquipmentRequestSheet f={fields} missing={missing} onChange={onChange} />
       ) : null}
     </>
   );

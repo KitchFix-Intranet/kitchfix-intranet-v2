@@ -26,6 +26,8 @@ import type { SelfRosterPerson, SiteNavEntry, SitePanel } from "@/lib/people/typ
 import type { SelectOption } from "./Select";
 import type { SheetFields } from "./sheetFields";
 import { EMPTY_FIELDS, missingFor } from "./sheetFields";
+import type { ClientBandSlice } from "./sheets/PayIncreaseSheet";
+import type { PerDiemDay } from "@/lib/people/perDiem";
 
 type Step = "who" | "what" | "details" | "check";
 
@@ -55,6 +57,7 @@ type Props = {
   };
   whoSeesIt: WhoSeesItView;
   accountOptions: readonly SelectOption[];
+  bands: ClientBandSlice;
   isPreview: boolean;
   asWorkerId: string | null;
 };
@@ -70,11 +73,12 @@ function stepIndex(step: Step): 0 | 1 | 2 | 3 {
 // action. Fields that are irrelevant for the action never reach
 // the server (the API whitelist is the ultimate gate, but we
 // filter client-side so the draft payload stays small + readable).
-function fieldsForDraft(action: PafAction | null, f: SheetFields): Record<string, string> {
-  const out: Record<string, string> = {};
+// T4b-2 extends this map to the four new actions.
+function fieldsForDraft(action: PafAction | null, f: SheetFields): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
   const emit = (k: keyof SheetFields) => {
     const v = f[k];
-    if (v) out[k] = String(v);
+    if (v) out[k] = Array.isArray(v) ? v : String(v);
   };
   if (!action) return out;
   emit("effectiveDate");
@@ -96,11 +100,33 @@ function fieldsForDraft(action: PafAction | null, f: SheetFields): Record<string
     emit("reclassChangeRate");
     if (f.reclassChangeRate === "Yes") emit("newRate");
     emit("explanation");
+  } else if (action === "pay_increase") {
+    emit("increaseType"); emit("employeeLevel"); emit("role");
+    if (f.role === "Other") emit("customRole");
+    emit("oldRate"); emit("newRate");
+    emit("eligSeasonComplete"); emit("eligNoDiscipline"); emit("eligCertsCurrent"); emit("eligManagerApproved");
+    emit("explanation");
+  } else if (action === "travel_reimbursement") {
+    emit("travelStartDate"); emit("travelEndDate");
+    if (f.perDiemDays.length > 0) out.perDiemDays = f.perDiemDays as PerDiemDay[];
+    emit("travelSupplementEnabled");
+    emit("explanation");
+  } else if (action === "other_reimbursement") {
+    emit("amount"); emit("explanation");
+  } else if (action === "equipment_request") {
+    emit("equipmentRequestType");
+    if (f.equipmentRequestType === "replacement") {
+      emit("replacementReason"); emit("currentDeviceDetails"); emit("confirmReturn");
+      if (f.replacementReason === "Lost" || f.replacementReason === "Stolen") emit("confirmReported");
+    }
+    if (f.equipmentRequestType === "new") emit("explanation");
+    emit("equipmentShipTo");
+    if (f.equipmentNotes) emit("equipmentNotes");
   }
   return out;
 }
 
-export function PafFlow({ initial, team, whoSeesIt, accountOptions, isPreview, asWorkerId }: Props) {
+export function PafFlow({ initial, team, whoSeesIt, accountOptions, bands, isPreview, asWorkerId }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
@@ -276,6 +302,10 @@ export function PafFlow({ initial, team, whoSeesIt, accountOptions, isPreview, a
     if (a === "status_change") return "Which way?";
     if (a === "reclassification") return "Where are they moving?";
     if (a === "add_cell_phone") return "How much, and how often?";
+    if (a === "pay_increase") return "How much, and why?";
+    if (a === "travel_reimbursement") return "Which days were you away?";
+    if (a === "other_reimbursement") return "What did you pay for?";
+    if (a === "equipment_request") return "What do they need?";
     return "How much, and why?";
   }
   const title =
@@ -284,26 +314,86 @@ export function PafFlow({ initial, team, whoSeesIt, accountOptions, isPreview, a
     step === "details" ? detailsTitle(action) :
     "Ready to send?";
 
-  // Side-column note per step. Who: static sentence describing the
-  // routing (derivable from the four groups in WhatStep); What +
-  // Details: empty in T4b-1 (reserved for "Already pending"); Check:
-  // no side note (the body carries "Who sees it").
-  function sideContent() {
-    if (isPreview) {
-      return (
-        <div className="kf-pe-note">
-          <b>Preview mode</b> The form works, but nothing saves and nothing sends.
-        </div>
-      );
-    }
-    if (step === "who") {
+  // T4b-2 Part 0 #2 (2026-11-14). "Who sees it" shows in the side
+  // column on EVERY desktop step (Who, What, Details) - production
+  // T4b-1 had it on Who only. Check keeps the Who-sees-it note in
+  // the body.
+  //
+  // Who: before an action is chosen, show the render's static
+  //      routing sentence (not a reviewer list, because the action
+  //      is unknown).
+  // What: before an action is chosen, same sentence; after an
+  //       action is chosen, show the resolved reviewers + copied
+  //       for that action.
+  // Details: always show the resolved reviewers + copied.
+  // Preview notice stacks as a SECOND note under Who-sees-it.
+  function whoSeesItNote() {
+    if (!action || step === "who") {
       return (
         <div className="kf-pe-note">
           <b>Who sees it</b> Depends on the action. HR actions and equipment go to HR; payroll and expenses go to finance.
         </div>
       );
     }
-    return null;
+    const route = action === "separation"
+      || action === "title_change"
+      || action === "status_change"
+      || action === "reclassification"
+      || action === "equipment_request"
+      ? "HR"
+      : "finance";
+    const reviewersText = whoSeesIt.reviewers.length === 0
+      ? "nobody is set up to review yet"
+      : whoSeesIt.reviewers.join(", ");
+    const copiedText = whoSeesIt.copied.length === 0
+      ? ""
+      : ` ${whoSeesIt.copied.join(", ")} ${whoSeesIt.copied.length === 1 ? "is" : "are"} copied.`;
+    return (
+      <div className="kf-pe-note">
+        <b>Who sees it</b> Sent to {route}. {reviewersText}
+        {whoSeesIt.reviewers.length === 1 ? " reviews it." : whoSeesIt.reviewers.length > 1 ? " review it." : "."}
+        {copiedText}
+      </div>
+    );
+  }
+  // T4b-2 (2026-11-14). Pay increase carries a MID-SEASON side note
+  // for effective dates between Apr 1 and Sep 30 (any year) - only
+  // promotions qualify, with extra approvers. Shows whenever the
+  // user is on Details or Check for pay_increase AND an effective
+  // date is set. Outside the window the note still shows but reads
+  // "does not apply" so the viewer knows it was considered.
+  function midSeasonNote(): React.ReactNode | null {
+    if (action !== "pay_increase") return null;
+    if (step !== "details" && step !== "check") return null;
+    const d = fields.effectiveDate;
+    if (!d) return null;
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
+    if (!m) return null;
+    const mon = Number(m[2]);
+    const day = Number(m[3]);
+    const inWindow = (mon > 4 && mon < 9) || (mon === 4 && day >= 1) || (mon === 9 && day <= 30);
+    const isPromotion = fields.increaseType === "Promotion";
+    return (
+      <div className={`kf-pe-note${inWindow ? " kf-pe-note--warn" : ""}`} key="midseason">
+        <b>Mid-season</b> An effective date between April 1 and September 30 needs VP Ops, the RDO and People Ops to approve; only promotions qualify.{inWindow ? (isPromotion ? " This one is a promotion, so it is in scope." : " This one is not a promotion, so it does not qualify under the mid-season rule.") : " This one is outside the window, so it does not apply."}
+      </div>
+    );
+  }
+
+  function sideContent() {
+    // Check carries Who-sees-it in the body; do not duplicate.
+    const parts: React.ReactNode[] = [];
+    if (step !== "check") parts.push(whoSeesItNote());
+    const mid = midSeasonNote();
+    if (mid) parts.push(mid);
+    if (isPreview) {
+      parts.push(
+        <div className="kf-pe-note" key="preview">
+          <b>Preview mode</b> The form works, but nothing saves and nothing sends.
+        </div>,
+      );
+    }
+    return parts.length > 0 ? <>{parts}</> : null;
   }
 
   // Send-button copy keyed off the action's route (title_change +
@@ -313,6 +403,7 @@ export function PafFlow({ initial, team, whoSeesIt, accountOptions, isPreview, a
     || action === "title_change"
     || action === "status_change"
     || action === "reclassification"
+    || action === "equipment_request"
     ? "HR"
     : whoSeesIt.route;
 
@@ -356,6 +447,10 @@ export function PafFlow({ initial, team, whoSeesIt, accountOptions, isPreview, a
               missing={missing ?? {}}
               onChange={onChangeFields}
               accountOptions={accountOptions}
+              bands={bands}
+              draftId={draftId}
+              asWorkerId={asWorkerId}
+              isPreview={isPreview}
             />
           ) : null}
 

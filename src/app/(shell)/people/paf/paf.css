@@ -599,7 +599,15 @@
   .kf-pe-sheet__foot .kf-pe-foot__spacer { display: none; }
   /* Back on phone becomes the arrow icon only. */
   .kf-pe-sheet__foot .kf-pe-foot__back span { display: none; }
-  .kf-pe-side { display: none; }
+  /* T4b-2 Part 0 #2 (2026-11-14). The side column used to be
+   * hidden on phone. Keep its notes visible, but move them into
+   * the body flow (under the fields, above the fixed footer) by
+   * showing it as a block below the sheet. */
+  .kf-pe-side {
+    display: flex; flex-direction: column; gap: var(--sp-sp-3);
+    padding: 0 var(--sp-sp-4) calc(var(--sp-sp-4) + var(--sp-floor-chef));
+    margin-top: calc(var(--sp-sp-3) * -1);
+  }
 }
 
 /* ---------- T4b-1 primitives: Select, Seg, Chips, grid2, notes --- */
@@ -624,10 +632,14 @@
   border-radius: var(--sp-r-ctl);
   padding: 3px;
   gap: 2px;
-  width: 100%;
+  /* T4b-2 Part 0 #1 (2026-11-14). Desktop: sits at its natural
+   * width (as wide as the longest button). Phone: fills the row
+   * with equal segments so thumbs can land anywhere. T4b-1 set
+   * width: 100% unconditionally, which stretched Voluntary /
+   * Involuntary + Yes / No across the whole sheet at 1440. */
+  align-self: flex-start;
 }
 .kf-pe-seg button {
-  flex: 1 1 0;
   min-height: var(--sp-floor-chef);
   padding: 0 var(--sp-sp-4);
   border: none; background: transparent;
@@ -637,6 +649,10 @@
   cursor: pointer;
   justify-content: center;
   white-space: nowrap;
+}
+@media (max-width: 640px) {
+  .kf-pe-seg { width: 100%; align-self: stretch; }
+  .kf-pe-seg button { flex: 1 1 0; }
 }
 .kf-pe-seg button[aria-pressed="true"] {
   background: var(--sp-card); box-shadow: var(--sp-shadow);
@@ -738,3 +754,143 @@
   color: var(--sp-body);
   cursor: default;
 }
+
+/* T4b-2 (2026-11-14). Pay band bar - shown under the rate inputs on
+ * Pay increase recommendation. Ends row carries min / current-pos /
+ * max; the dot (i) sits at 0..100% along the bar. */
+.kf-pe-band {
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-ctl);
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  margin-bottom: var(--sp-sp-4);
+  display: flex; flex-direction: column; gap: var(--sp-sp-2);
+}
+.kf-pe-band__row,
+.kf-pe-band__ends {
+  display: flex; justify-content: space-between; gap: var(--sp-sp-3);
+  font-size: var(--sp-t-label); color: var(--sp-muted);
+  font-variant-numeric: tabular-nums;
+}
+.kf-pe-band__row b { color: var(--sp-good); font-size: var(--sp-t-body); }
+.kf-pe-band__row--out b { color: var(--sp-warn-strong); }
+.kf-pe-band__bar {
+  position: relative; height: 8px; border-radius: var(--sp-r-pill);
+  background: var(--sp-sky-tint);
+}
+.kf-pe-band__bar i {
+  position: absolute; top: -4px; width: 4px; height: 16px;
+  border-radius: var(--sp-r-pill); background: var(--sp-navy);
+}
+
+/* T4b-2 (2026-11-14). Travel per-diem day list. */
+.kf-pe-days {
+  list-style: none; margin: 0 0 var(--sp-sp-4); padding: 0;
+  display: flex; flex-direction: column; gap: var(--sp-sp-2);
+}
+.kf-pe-day {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr) 72px;
+  gap: var(--sp-sp-3);
+  align-items: center;
+}
+.kf-pe-day__date {
+  font-weight: 600; color: var(--sp-ink);
+}
+.kf-pe-day__amt {
+  text-align: right; font-weight: 700;
+  font-variant-numeric: tabular-nums; color: var(--sp-navy);
+}
+.kf-pe-daytotal {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  border-radius: var(--sp-r-ctl); background: var(--sp-sky-soft);
+}
+.kf-pe-daytotal span { display: flex; flex-direction: column; }
+.kf-pe-daytotal small { font-size: var(--sp-t-label); color: var(--sp-muted); }
+.kf-pe-daytotal > b {
+  font: 700 var(--sp-t-body) var(--sp-ui); color: var(--sp-navy);
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 640px) {
+  .kf-pe-day { grid-template-columns: minmax(0, 1fr) auto; }
+  .kf-pe-day__date { grid-column: 1 / -1; }
+  .kf-pe-day .kf-pe-select { grid-column: 1 / -1; grid-row: 2; }
+  .kf-pe-day__amt { grid-column: 1 / -1; text-align: right; }
+}
+
+/* T4b-2 (2026-11-14). Eligibility checklist on Pay increase. */
+.kf-pe-field--elig { position: relative; }
+.kf-pe-elig {
+  position: absolute; right: 0; top: 0;
+  font-style: normal; font-size: var(--sp-t-label);
+  font-weight: 700; color: var(--sp-muted);
+  font-variant-numeric: tabular-nums;
+}
+.kf-pe-elig.is-done { color: var(--sp-good); }
+.kf-pe-check {
+  position: relative;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  column-gap: var(--sp-sp-3);
+  align-items: start;
+  min-height: var(--sp-floor-chef);
+  padding: var(--sp-sp-3) 0;
+  cursor: pointer;
+  border-bottom: 1px solid var(--sp-line-soft);
+}
+.kf-pe-check:last-child { border-bottom: none; }
+.kf-pe-check input {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  opacity: 0; cursor: pointer; margin: 0;
+}
+.kf-pe-check__box {
+  width: 24px; height: 24px;
+  border: 2px solid var(--sp-muted);
+  border-radius: calc(var(--sp-r-sm) / 2);
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--sp-card);
+}
+.kf-pe-check__box svg { visibility: hidden; color: var(--sp-card); }
+.kf-pe-check input:checked + .kf-pe-check__box {
+  background: var(--sp-navy); border-color: var(--sp-navy);
+}
+.kf-pe-check input:checked + .kf-pe-check__box svg { visibility: visible; }
+.kf-pe-check input:focus-visible + .kf-pe-check__box {
+  outline: 2px solid var(--sp-navy); outline-offset: 2px;
+}
+.kf-pe-check__text { display: flex; flex-direction: column; gap: 2px; line-height: 1.35; }
+.kf-pe-check__text b { font-size: var(--sp-t-body); font-weight: 600; color: var(--sp-ink); }
+.kf-pe-check__text small { font-size: var(--sp-t-label); color: var(--sp-muted); }
+
+/* Hint that appears ABOVE / tight to the control (rather than below).
+ * Render uses it on the Travel supplement hint. */
+.kf-pe-hint--up {
+  display: block;
+  margin: calc(var(--sp-sp-3) * -1) 0 var(--sp-sp-4);
+  color: var(--sp-muted); font-size: var(--sp-t-label);
+}
+
+/* T4b-2 receipt control. .kf-pe-recdrop is the inline list of files
+ * attached to the draft. Each row shows name + size + a remove X. */
+.kf-pe-recdrop {
+  display: flex; flex-direction: column; gap: var(--sp-sp-2);
+  margin-top: var(--sp-sp-2);
+}
+.kf-pe-recdrop__row {
+  display: flex; align-items: center; gap: var(--sp-sp-3);
+  padding: var(--sp-sp-2) var(--sp-sp-3);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-ctl);
+  background: var(--sp-card);
+}
+.kf-pe-recdrop__name { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kf-pe-recdrop__size { font-size: var(--sp-t-label); color: var(--sp-muted); font-variant-numeric: tabular-nums; }
+.kf-pe-recdrop__rm {
+  border: none; background: transparent; cursor: pointer;
+  color: var(--sp-muted); padding: 4px; border-radius: var(--sp-r-sm);
+}
+.kf-pe-recdrop__rm:hover { color: var(--sp-warn-strong); background: var(--sp-sky-soft); }
+.kf-pe-recdrop__err {
+  font-size: var(--sp-t-label); color: var(--sp-warn-strong);
+}
+
