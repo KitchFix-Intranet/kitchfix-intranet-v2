@@ -19,15 +19,15 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
-import { Search as SearchIcon, ChevronRight, ChevronDown, Plus } from "lucide-react";
+import { Search as SearchIcon, ChevronRight, ChevronDown } from "lucide-react";
 import type { RosterPerson, SelfRosterPerson, SiteNavEntry, SitePanel } from "@/lib/people/types";
 
 type Props = {
   // T2.2.1: the viewer's own row carries a WaitingItem (with label);
-  // every other row in `panels` carries a RosterWaiting (no label).
-  // The type split is enforced at build time - PersonRow below cannot
-  // read a label off a non-self row because the field is not in the
-  // type.
+  // every other row in `panels` has no request fields at all (only
+  // waiting_count). The type split in src/lib/people/types.ts is the
+  // enforcement - PersonRow below cannot read a label off a non-self
+  // row because the field is not in the type.
   selfRow: SelfRosterPerson | null;
   sites: SiteNavEntry[];                 // [] when only one site in scope
   panels: Record<string, SitePanel>;
@@ -71,9 +71,10 @@ function PendingPill({ label }: { label: string }) {
 // (flight(name, detail=False) for non-self people).
 //
 // The label is NOT in the roster payload for non-self rows at all -
-// see RosterPerson.waiting: RosterWaiting (no label field) vs
-// SelfRosterPerson.waiting: WaitingItem (has label) in types.ts.
-// The caller passes `pendingLabel` only on the You card.
+// see RosterPerson (no `waiting` field) vs SelfRosterPerson (has
+// `waiting: WaitingItem | null`) in types.ts. The caller passes
+// `pendingLabel` only on the You card. On phone the label is hidden
+// in CSS so even the self row shows just the Pending pill (item 9).
 function PersonRow({
   p, isSelf, divider, pendingLabel, onOpen,
 }: {
@@ -320,8 +321,13 @@ export function MyTeam({ selfRow, sites, panels, defaultSiteKey, viewerWorkerId,
                 const label = region === "CORP" ? "Corporate" : (region || "Other");
                 return (
                   <div key={region || "no-region"}>
+                    {/* T2.3 item 3 (2026-11-13). Render shows the
+                     * region label and count as a single left-aligned
+                     * string ("CORPORATE · 10"). The earlier `<b>`
+                     * carrying margin-left:auto pushed the count to
+                     * the far right - removed. */}
                     <div className="kf-pe-sitenav__region">
-                      {label} <b>· {sum}</b>
+                      {label} · {sum}
                     </div>
                     {list.map((s) => {
                       const isActive = s.account_key === activeSiteKey;
@@ -428,15 +434,6 @@ export function MyTeam({ selfRow, sites, panels, defaultSiteKey, viewerWorkerId,
         ) : null}
       </div>
 
-      {/* Docked "New" button (phone, inert). No navigation. */}
-      <span
-        className="kf-btn kf-btn--primary kf-pe-dock kf-only-phone kf-pe-disabled"
-        aria-disabled="true"
-        aria-label="New - coming with its own build step"
-      >
-        <Plus size={16} strokeWidth={1.75} aria-hidden />
-        <span>New</span>
-      </span>
     </>
   );
 }
