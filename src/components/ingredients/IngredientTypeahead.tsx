@@ -31,6 +31,11 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { createPortal } from "react-dom";
 import { Search, X } from "lucide-react";
 import { uomLabel } from "@/lib/ingredients/pack";
+// N13.1 R2: own the sheet instead of depending on each host page
+// loading review.css. Mounts in three places (panel on every surface,
+// review-queue ReviewActions, admin MatchRunButton); each one now
+// picks up the field + list rules through this import.
+import "./ingredient-typeahead.css";
 
 // N10 §2e + R3 + R7: optional category + base_unit let the typeahead
 // render a second micro line on each result (`showResultMeta`).

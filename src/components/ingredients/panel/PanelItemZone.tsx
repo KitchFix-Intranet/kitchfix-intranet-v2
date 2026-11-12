@@ -17,7 +17,7 @@
 // goes on the row's muted micro sub-line beneath the summary.
 
 import { useEffect, useState } from "react";
-import { fmtUsd } from "@/lib/fmt";
+import { fmtPackNumber, fmtPackNumbersInText, fmtUsd } from "@/lib/fmt";
 import { DIM_BY_UOM } from "@/lib/ingredients/pack";
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 import { ItemGradeBlock } from "./ItemGradeBlock";
@@ -83,8 +83,11 @@ export function PanelItemZone({
   // weight/volume dim makes the math meaningful.
   function packSegment(): string | null {
     if (!parsed) return null;
+    // Math uses the exact parsed qty + size. fmtPackNumber only
+    // governs the printed LHS; the RHS total is computed on raw
+    // values and rounded at output time.
     const { qty, size, uom } = parsed;
-    const base = `${qty} x ${size} ${uom}`;
+    const base = `${fmtPackNumber(qty)} x ${fmtPackNumber(size)} ${uom}`;
     const dim = DIM_BY_UOM[uom] ?? null;
     if (dim === "weight" || dim === "volume") {
       const total = qty * size;
@@ -157,7 +160,7 @@ export function PanelItemZone({
             <div className="kf-ipanel__row-hint">{sourceLabel}</div>
           ) : null}
           {item.packNote ? (
-            <div className="kf-ipanel__row-hint">{item.packNote}</div>
+            <div className="kf-ipanel__row-hint">{fmtPackNumbersInText(item.packNote)}</div>
           ) : null}
           {item.perBaseNote && !parsed ? (
             <div className="kf-ipanel__row-hint">{item.perBaseNote}</div>

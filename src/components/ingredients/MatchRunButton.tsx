@@ -18,6 +18,9 @@ import { useRouter } from "next/navigation";
 import { Play, Check, AlertTriangle } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount } from "@/lib/fmt";
+// N13.1 R2: pick up the .kf-dpn__label primitive directly instead of
+// depending on the admin page loading review.css.
+import "./ingredient-typeahead.css";
 
 type MatchCounts = {
   items_read?: number;

@@ -14,11 +14,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check, Pencil, Scale } from "lucide-react";
-import { fmtCount, fmtDate, fmtUsd, fmtUsdLong, monthsAgo } from "@/lib/fmt";
+import { fmtCount, fmtDate, fmtPackNumbersInText, fmtUsd, fmtUsdLong, monthsAgo } from "@/lib/fmt";
 import { deriveRecipePrice } from "@/lib/ingredients/eachMeasure";
 import { uomLabel } from "@/lib/ingredients/pack";
 import { ReviewActions } from "./ReviewActions";
 import { DetailPanel, type DetailPanelOpen } from "./DetailPanel";
+// N13.1 §3: site-pill primitives lifted out of review.css so each
+// reader loads its own source. ReviewCard renders .kf-site-pill /
+// .kf-site-pill--more; this import keeps the card self-sufficient
+// against future review.css moves.
+import "./site-pills.css";
 import { RowFlagToggle } from "./RowFlagToggle";
 import { computeReviewCardSpread } from "./reviewCardSpread";
 import type { ReviewCardIngredient, ReviewGroupItem } from "./itemTypes";
@@ -355,7 +360,7 @@ export function ReviewCard({
                   <div>
                     {it.packNormalized || it.pack ? (
                       <>
-                        {it.packNormalized ?? it.pack}
+                        {fmtPackNumbersInText(it.packNormalized ?? it.pack)}
                         {it.billedUnit ? (
                           <span className="kf-muted"> / {it.billedUnit}</span>
                         ) : null}

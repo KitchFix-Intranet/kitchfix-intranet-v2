@@ -1,0 +1,102 @@
+/* N13.1 R2: IngredientAllergens's own stylesheet. The component
+ * mounts in two places - panel/PanelIngredientZone (every panel
+ * surface) and IngredientMastersFilter (Ingredients tab filter) - so
+ * the component imports its sheet directly. Previously only
+ * review.css carried the base rule + narrow media, and
+ * ingredients-tab.css held a wide-window-narrow-detail container
+ * override; on Vendor items neither sheet loaded and the toggles
+ * rendered as default browser buttons.
+ *
+ * Carries byte-identical from review.css: the `.kf-allergens__grid`
+ * base + the `@media (max-width: 860px)` narrow media; `.kf-allergen`
+ * + `::before` + `:hover` + `:focus-visible` + `:disabled`; the
+ * `.kf-allergen--on` + `--on:hover`; and `.kf-allergen--none`. Also
+ * carries the `@media (min-width: 861px) @container detail (max-width:
+ * 639px)` override lifted from ingredients-tab.css so the three rules
+ * that govern the grid live in one file (the override follows the base
+ * + narrow in source order, so load order no longer matters).
+ *
+ * The orphan wrapper rules in review.css (`.kf-allergens`,
+ * `__head`, `__label`, `__state`, `__state--warn`, `__state--ok`) have
+ * no .tsx reader and are deliberately NOT moved; flag for later
+ * cleanup.
+ *
+ * Cascade note: no competing `.kf-allergen*` definitions in any sheet
+ * loaded by the four consumer pages (review, ingredients, retail,
+ * vendor items, admin) after this move. drawer.css:981 still carries
+ * the `.kf-ipanel__row-value > .kf-allergens .kf-allergen` min-height
+ * overlay; that selector targets an ancestor `.kf-allergens` which
+ * the current IngredientAllergens.tsx does not render, so the rule is
+ * already a no-op (pre-existing, flagged, not touched).
+ * --------------------------------------------------------------------- */
+.kf-allergens__grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--sp-sp-1);
+  min-width: 0;
+  width: 100%;
+}
+@media (max-width: 860px) {
+  .kf-allergens__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+/* N12.1 R2: allergen grid drops to three columns when the DETAIL
+ * pane is below 640. Base is 5-col (above), phone (window <= 860) is
+ * 2-col (above). The @media (min-width: 861px) gate keeps the 2-col
+ * phone rule effective (both would fire on phone otherwise and the
+ * later-declared container rule would win); the three rules target
+ * different situations:
+ *   phone (narrow window + narrow pane)       -> 2 cols (above)
+ *   wide window with narrow detail (desktop)  -> 3 cols (this rule)
+ *   wide detail                                -> 5 cols (base) */
+@media (min-width: 861px) {
+  @container detail (max-width: 639px) {
+    .kf-allergens__grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+}
+.kf-allergen {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 40px;
+  padding: var(--sp-sp-1) var(--sp-sp-3);
+  background: var(--sp-card);
+  color: var(--sp-body);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-pill);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--sp-fast) var(--sp-ease),
+              color var(--sp-fast) var(--sp-ease),
+              border-color var(--sp-fast) var(--sp-ease);
+}
+/* 44px hit target around the 32px visual - mirrors the chip rule
+ * (notch-toggle precedent per DESIGN.md section 2). */
+.kf-allergen::before {
+  content: "";
+  position: absolute;
+  inset: -6px -2px;
+}
+.kf-allergen:hover:not(:disabled) { background: var(--sp-sky-tint); }
+.kf-allergen:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
+.kf-allergen:disabled { opacity: 0.55; cursor: not-allowed; }
+.kf-allergen--on {
+  background: var(--sp-navy);
+  color: var(--sp-on-navy);
+  border-color: var(--sp-navy);
+}
+.kf-allergen--on:hover:not(:disabled) {
+  background: var(--sp-navy-deep);
+  border-color: var(--sp-navy-deep);
+}
+/* None pill shares every property; this rule exists so a future
+ * change to the None style has a scoped home. Visually identical
+ * today - the semantic difference (None is a positive choice, not
+ * a selection) is carried by the state line + the hint text. */
+.kf-allergen--none { /* same tokens as .kf-allergen */ }

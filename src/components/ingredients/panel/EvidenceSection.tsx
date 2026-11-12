@@ -7,7 +7,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Check, Info } from "lucide-react";
-import { fmtCount, fmtDate, fmtUsd } from "@/lib/fmt";
+import { fmtCount, fmtDate, fmtPackNumbersInText, fmtUsd } from "@/lib/fmt";
 import type { ReviewGroupItem } from "../itemTypes";
 import { fmtUsdCents } from "./packHelpers";
 
@@ -246,7 +246,7 @@ function EvidenceBody({
                       <div className="kf-cell-strong kf-cell-ellipsis">{s.vendor}</div>
                       <div className="kf-cell-sub kf-cell-ellipsis">{s.name}</div>
                     </td>
-                    <td>{s.pack ?? "-"}</td>
+                    <td>{s.pack ? fmtPackNumbersInText(s.pack) : "-"}</td>
                     <td className="kf-evi__num">
                       {s.perBase != null ? (
                         <>

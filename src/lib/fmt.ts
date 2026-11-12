@@ -166,6 +166,28 @@ export function fmtStatus(s: string): string {
   return STATUS_LABELS[s] ?? s;
 }
 
+// Pack-number display helpers (N13.1). Rounding happens on the way to the
+// screen only; the stored `packNormalized` + raw pack_* columns the math
+// readers (parsePackNormalized + packSegment) rely on stay exact.
+//
+// fmtPackNumber rounds one number to 2 decimals and drops trailing zeros.
+// Integers stay whole. Returned as a string for interpolation.
+//
+// fmtPackNumbersInText walks a string and rounds every embedded decimal
+// with 3+ fractional digits; numbers with 0, 1, or 2 decimals pass
+// through (barcode / item-code / 2-dp dollar strings are unchanged).
+export function fmtPackNumber(n: number): string {
+  if (!Number.isFinite(n)) return String(n);
+  const rounded = Math.round(n * 100) / 100;
+  if (Number.isInteger(rounded)) return String(rounded);
+  return rounded.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+export function fmtPackNumbersInText(s: string | null | undefined): string {
+  if (!s) return s ?? "";
+  return s.replace(/\d+\.\d{3,}/g, (m) => fmtPackNumber(Number(m)));
+}
+
 export function fmtDuration(startIso: string, endIso: string | null): string {
   const start = Date.parse(startIso);
   const end = endIso ? Date.parse(endIso) : Date.now();

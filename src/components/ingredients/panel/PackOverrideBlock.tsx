@@ -12,7 +12,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/ui/Toaster";
-import { fmtCount, fmtUsd } from "@/lib/fmt";
+import { fmtCount, fmtPackNumbersInText, fmtUsd } from "@/lib/fmt";
 import { convertPer, uomLabel } from "@/lib/ingredients/pack";
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 import { SaveFlash } from "./SaveFlash";
@@ -519,6 +519,10 @@ export function PackOverrideBlock({
   } else {
     readAsBody = item.packNormalized ?? item.pack ?? "(not available)";
   }
+  // Display-side rounding only: the math above uses the raw parsed
+  // qty/size; the printed string rounds long decimals (3+ dp) so the
+  // Read-as line reads cleanly without changing any stored number.
+  readAsBody = fmtPackNumbersInText(readAsBody);
 
   // Result row: derived $/unit + verdict against the ingredient's base_unit.
   // N6 A1: resolve ingredient dimension and base uom through the shared
