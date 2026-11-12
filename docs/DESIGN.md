@@ -29,8 +29,8 @@ Anatomy:
 
 | slot      | content                                                                 |
 |-----------|-------------------------------------------------------------------------|
-| title     | page title (`<h1>`, `--sp-t-title`, navy display)                       |
-| crumb     | short context line in `--sp-muted`; on Home carries long date + a `.kf-skew-tag` "Period N, week M" from `fiscal_periods` |
+| title     | page title (`<h1>`, `--sp-t-title`, navy display). On phones the title never truncates; it stays at its intrinsic width and the crumb is what gives way. If the title alone cannot fit beside `actions`, only then does it ellipse |
+| crumb     | short context line in `--sp-muted`; on Home carries long date + a `.kf-skew-tag` "Period N, week M" from `fiscal_periods`. On phones the crumb absorbs all row shrinkage, ellipses, and disappears before the title is ever touched |
 | actions   | 1-2 controls from a parallel route slot (`src/app/(shell)/@topbar/<route>/page.tsx`), server-rendered - no portal, no context |
 | progress  | 2-px `--sp-red` bar on the bottom edge; `.is-busy` scales X to 0.85 over 600 ms, completes to 1 and fades |
 
