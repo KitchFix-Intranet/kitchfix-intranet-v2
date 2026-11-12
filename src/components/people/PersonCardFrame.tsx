@@ -86,3 +86,31 @@ export function PersonCardCloseButton() {
     </button>
   );
 }
+
+// T2.2.1 (2026-11-12). Phone-only Close in the drawer footer, per
+// the render's footer. Same exit animation path as the head-icon
+// close + the backdrop + Escape - all four routes clear ?card=
+// through the same 340ms setTimeout.
+export function PersonCardFooterClose() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const sp = useSearchParams();
+  const [exiting, setExiting] = useState(false);
+  const close = useCallback(() => {
+    if (exiting) return;
+    setExiting(true);
+    const next = new URLSearchParams(sp.toString());
+    next.delete("card");
+    const s = next.toString();
+    window.setTimeout(() => router.push(s ? `${pathname}?${s}` : pathname), 340);
+  }, [router, sp, pathname, exiting]);
+  return (
+    <button
+      type="button"
+      className="kf-btn kf-btn--ghost kf-only-phone"
+      onClick={close}
+    >
+      <span>Close</span>
+    </button>
+  );
+}

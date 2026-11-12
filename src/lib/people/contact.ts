@@ -15,7 +15,16 @@
 // stripped. Every loader goes through them. Do not construct a
 // `RosterPerson` or `CardPerson` by hand.
 
-import type { PeopleRow, RosterPerson, CardPerson, WaitingItem, HistoryRow } from "./types";
+import type {
+  PeopleRow,
+  RosterPerson,
+  SelfRosterPerson,
+  CardPerson,
+  WaitingItem,
+  RosterWaiting,
+  HistoryRow,
+  InFlightRow,
+} from "./types";
 
 // T2.1 fix 1 (2026-11-12). people.phone arrives as
 // "tel:+1-312-555-0100". Never trust the shape - strip a leading
@@ -47,17 +56,62 @@ export function initialsOf(display_name: string | null, work_email: string | nul
   return (local[0] ?? "?").toUpperCase();
 }
 
+// T2.2.1 (2026-11-13). Drop the `label` field from a WaitingItem
+// so the resulting RosterWaiting can never carry it. Used on
+// every non-self roster row (see toRosterPerson). Changing the
+// WaitingItem shape will fail to compile here, which is the point.
+function stripLabel(w: WaitingItem | null): RosterWaiting | null {
+  if (!w) return null;
+  // Explicit field copy - do NOT spread a WaitingItem into a
+  // RosterWaiting-typed slot, because spread would leak the label
+  // onto the roster payload at runtime (TypeScript cannot see it).
+  return {
+    id: w.id,
+    module: w.module,
+    action_type: w.action_type,
+    submitted_at: w.submitted_at,
+    submitter_worker_id: w.submitter_worker_id,
+    submitter_name: w.submitter_name,
+  };
+}
+
 // ROSTER mapper. The only way to produce a RosterPerson. Drops
 // personal_email + phone + start_date + birthday + manager_worker_id
-// before the row ever leaves the server. The compile-time shape
-// guarantees we cannot forget a field: the output type does not
-// carry the stripped columns at all.
+// before the row ever leaves the server. T2.2.1: also drops the
+// pending `label` - only SelfRosterPerson may carry it.
 export function toRosterPerson(
   row: PeopleRow,
   account_region: string | null,
   waiting: WaitingItem | null,
   waiting_count: number,
 ): RosterPerson {
+  return {
+    worker_id: row.worker_id,
+    display_name: row.display_name ?? "",
+    title: row.title,
+    account_key: row.account_key,
+    account_region,
+    work_email: row.work_email,
+    is_corp: !!row.is_corp,
+    is_salaried: !!row.is_salaried,
+    is_site_leader: !!row.is_site_leader,
+    is_regional_director: !!row.is_regional_director,
+    initials: initialsOf(row.display_name, row.work_email),
+    waiting: stripLabel(waiting),
+    waiting_count,
+  };
+}
+
+// SELF mapper. Returns a SelfRosterPerson - the one roster-shape
+// payload where the pending `label` may land. The viewer sees
+// their OWN pending label on the "You" card per the render; no
+// other row carries it.
+export function toSelfRosterPerson(
+  row: PeopleRow,
+  account_region: string | null,
+  waiting: WaitingItem | null,
+  waiting_count: number,
+): SelfRosterPerson {
   return {
     worker_id: row.worker_id,
     display_name: row.display_name ?? "",
@@ -77,7 +131,9 @@ export function toRosterPerson(
 
 // CARD mapper. Applies the R-PP10 contact rule explicitly. Call
 // sites pass the already-resolved manager name (pin 4) and the
-// already-computed tenure / history strings.
+// already-computed tenure / history / in-flight strings, plus the
+// render-shape chrome strings (eyebrow club name, title suffix,
+// role line, site line, started line).
 export interface ToCardInput {
   row: PeopleRow;
   account_region: string | null;
@@ -89,6 +145,16 @@ export interface ToCardInput {
   anniversary_line: string | null;
   historyVisible: boolean;
   history: HistoryRow[];
+  // T2.2 (2026-11-12).
+  eyebrow: string;
+  title_suffix: string;
+  role_display: string;
+  site_display: string;
+  started_line: string | null;
+  inFlightVisible: boolean;
+  inFlightCount: number;
+  inFlightRows: InFlightRow[];
+  inFlightNotes: string[];
 }
 
 export function toCardPerson(input: ToCardInput): CardPerson {
@@ -106,6 +172,17 @@ export function toCardPerson(input: ToCardInput): CardPerson {
     workEmail.length === 0 && !row.is_salaried && personalEmail.length > 0;
   const personal_email_for_display = showPersonalEmail ? personalEmail : null;
 
+  // T2.2: one selected email + the matching KV label. work_email
+  // wins; personal_email is picked only by the R-PP10 gate above.
+  // email_label is null when nothing can be shown.
+  const email_label: CardPerson["email_label"] =
+    workEmail ? "Work email" :
+    showPersonalEmail ? "Personal email" :
+    null;
+  const email_for_display =
+    workEmail ? workEmail :
+    personal_email_for_display;
+
   // Phone branch of R-PP10. For salaried: print it + power tel:.
   // For hourly: tel:/sms: hrefs only, never printed. normalisePhone
   // (T2.1 fix 1) parses the stored `tel:+1-###-###-####` shape and
@@ -119,13 +196,24 @@ export function toCardPerson(input: ToCardInput): CardPerson {
     ...roster,
     showPersonalEmail,
     personal_email_for_display,
+    email_label,
+    email_for_display,
     phone_for_display,
     phone_href,
     manager_name: input.manager_name,
     started_full: input.started_full,
     tenure_line: input.tenure_line,
     anniversary_line: input.anniversary_line,
+    eyebrow: input.eyebrow,
+    title_suffix: input.title_suffix,
+    role_display: input.role_display,
+    site_display: input.site_display,
+    started_line: input.started_line,
     historyVisible: input.historyVisible,
     history: input.history,
+    inFlightVisible: input.inFlightVisible,
+    inFlightCount: input.inFlightCount,
+    inFlightRows: input.inFlightRows,
+    inFlightNotes: input.inFlightNotes,
   };
 }

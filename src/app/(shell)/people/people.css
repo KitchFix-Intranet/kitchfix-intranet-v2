@@ -1,4 +1,4 @@
-/* People Portal T2 (kf-pe-*). Tokens only; no raw colours.
+/* People Portal T2.2 (kf-pe-*). Tokens only; no raw colours.
  * Ported from renders/people-portal-v2-render-CC-COPY.html,
  * subset matching this train (My team + the person card).
  * Form control borders use --sp-line-field (R-PP63). */
@@ -6,11 +6,9 @@
 /* ---------- Surface + floor (chef workbench) ----------
  * T2.1 fix 2 (2026-11-12). My team and the person card are chef-
  * floor screens: every control >= var(--sp-floor-chef) (48px).
- * `.kf-pe-surface` was declared but never applied in markup, so
- * `--pe-floor` collapsed to the browser default and the search
- * field rendered at 23px. page.tsx now applies the class, and
- * every consumer passes `var(--sp-floor-chef)` as the fallback
- * so a future orphaned consumer never collapses silently. */
+ * page.tsx applies .kf-pe-surface so --pe-floor is defined.
+ * Every consumer also carries a fallback to var(--sp-floor-chef)
+ * so an orphaned wrapper never collapses silently. */
 .kf-pe-surface { --pe-floor: var(--sp-floor-chef); }
 
 /* ---------- Owner preview ribbon ---------- */
@@ -23,11 +21,6 @@
   font-size: var(--sp-t-table); font-weight: 700;
   margin-bottom: var(--sp-sp-3);
 }
-/* T2.1 fix 8 (2026-11-12). Exit link is >= --sp-floor-corp (44px)
- * at every width. Owner-only control, so the corporate floor is
- * fine; the link is padded + inline-flex to deliver the minimum
- * hit area without expanding the ribbon vertically at the chef
- * floor. */
 .kf-pe-preview__exit,
 .kf-pe-preview a {
   margin-left: auto;
@@ -45,61 +38,103 @@
 .kf-pe-preview__exit:focus-visible,
 .kf-pe-preview a:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
 
-/* ---------- Phone head (only shown at <=860) ---------- */
+/* ---------- Phone head (<=860) ---------- */
 .kf-pe-phonehead { margin-bottom: var(--sp-sp-3); }
 .kf-pe-phonehead__line {
   font-size: var(--sp-t-body); font-weight: 700;
   color: var(--sp-ink); margin-top: var(--sp-sp-1);
 }
+/* T2.2.1 (2026-11-12). "What is this?" blurb in the phone head.
+ * Scoped to the <details> element so the rules do not touch the
+ * in-flight table's .kf-pe-what <td> cells. */
+details.kf-pe-what { margin-top: var(--sp-sp-1); display: block; }
+details.kf-pe-what > summary {
+  list-style: none; display: inline-flex; width: auto;
+}
+details.kf-pe-what > summary::-webkit-details-marker { display: none; }
+details.kf-pe-what > p {
+  color: var(--sp-body); font-size: var(--sp-t-body);
+  margin-top: var(--sp-sp-2);
+}
 
-/* ---------- Quick-action doors (inert) ---------- */
-.kf-pe-doors {
+/* ---------- Quick actions (vertical rows, render shape) ----------
+ * T2.2 (2026-11-12). Render uses a 4-col grid of row-shaped items,
+ * not full-height door cards. */
+.kf-pe-qas {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: var(--sp-sp-4);
-  margin-bottom: var(--sp-sp-5);
+  margin: 0 0 var(--sp-sp-5);
 }
-@media (max-width: 1100px) { .kf-pe-doors { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 640px)  { .kf-pe-doors { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 1100px) { .kf-pe-qas { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px)  { .kf-pe-qas { grid-template-columns: minmax(0, 1fr); } }
 
-.kf-pe-door {
-  display: flex; flex-direction: column; gap: var(--sp-sp-3);
-  background: var(--sp-card); border: 1px solid var(--sp-line);
-  border-radius: var(--sp-r-card); box-shadow: var(--sp-shadow);
-  padding: var(--sp-sp-4) var(--sp-sp-4) var(--sp-sp-3);
-  color: var(--sp-ink); position: relative; min-height: 152px;
+.kf-pe-qa {
+  display: flex; align-items: center; gap: var(--sp-sp-3);
+  min-height: 72px;
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  box-shadow: var(--sp-shadow);
+  color: var(--sp-ink);
+  text-decoration: none;
+  transition: background var(--sp-base) var(--sp-ease);
+  font: inherit;
+  text-align: left;
 }
-.kf-pe-door[aria-disabled="true"] { cursor: default; opacity: .78; }
-.kf-pe-door__icon {
-  width: 40px; height: 40px; border-radius: var(--sp-r-sm);
+.kf-pe-qa[aria-disabled="true"] { cursor: default; opacity: .78; }
+.kf-pe-qa__icon {
+  width: 40px; height: 40px; flex: 0 0 40px;
+  border-radius: var(--sp-r-sm);
   background: var(--sp-sky-tint); color: var(--sp-navy);
   display: inline-flex; align-items: center; justify-content: center;
 }
-.kf-pe-door__body h3 { color: var(--sp-navy); font-size: var(--sp-t-h3); }
-.kf-pe-door__body p {
-  color: var(--sp-muted); font-size: var(--sp-t-label);
-  margin-top: var(--sp-sp-1); line-height: 1.4;
+.kf-pe-qa__text {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column; line-height: 1.25;
 }
-.kf-pe-door__facts {
-  margin-top: auto; font-size: var(--sp-t-label);
-  color: var(--sp-body);
-  display: inline-flex; align-items: center; gap: var(--sp-sp-2);
+.kf-pe-qa__text b {
+  font-family: var(--sp-disp);
+  font-size: var(--sp-t-h3);
+  color: var(--sp-navy);
+  letter-spacing: .3px;
+}
+.kf-pe-qa__text small {
+  font-size: var(--sp-t-label); color: var(--sp-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.kf-pe-qa__chev { color: var(--sp-muted); flex: 0 0 auto; }
+
+/* ---------- Team grid (search + You top; sitenav + panel main) --- */
+.kf-pe-teamgrid {
+  display: grid;
+  grid-template-columns: minmax(320px, 400px) minmax(0, 1fr);
+  gap: var(--sp-sp-4);
+  align-items: start;
+}
+.kf-pe-teamgrid--top {
+  margin-bottom: var(--sp-sp-4);
+  align-items: stretch;
+}
+@media (max-width: 860px) {
+  .kf-pe-teamgrid, .kf-pe-teamgrid--top { grid-template-columns: minmax(0, 1fr); }
+}
+.kf-pe-teamgrid--solo {
+  grid-template-columns: minmax(0, 1fr);
 }
 
-/* ---------- Search ("Find a person, a role or a site") ----------
- * T2.1 fix 2 (2026-11-12). The whole field is >= var(--sp-floor-
- * chef) at every width, border is var(--sp-line-field), click
- * anywhere on the label focuses the nested <input>. var(--pe-floor)
- * takes the surface variable; the fallback to var(--sp-floor-chef)
- * keeps the 48px floor even if the surface wrapper is accidentally
- * stripped. */
-.kf-pe-field--search {
+/* ---------- Search field ---------- */
+.kf-pe-field--search,
+.kf-pe-search {
   display: flex; align-items: center; gap: var(--sp-sp-2);
-  background: var(--sp-card); border: 1px solid var(--sp-line-field);
-  border-radius: var(--sp-r-ctl); padding: 0 var(--sp-sp-3);
-  color: var(--sp-muted); max-width: 560px;
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line-field);
+  border-radius: var(--sp-r-ctl);
+  padding: 0 var(--sp-sp-3);
+  color: var(--sp-muted);
   min-height: var(--pe-floor, var(--sp-floor-chef));
-  margin: 0 0 var(--sp-sp-4);
+  margin: 0;
   cursor: text;
 }
 .kf-pe-field--search input {
@@ -113,21 +148,27 @@
   border-color: var(--sp-navy);
   box-shadow: 0 0 0 1px var(--sp-navy);
 }
+.kf-pe-search__ico { display: inline-flex; color: var(--sp-muted); }
 
-/* ---------- Two-column layout (sitenav left, roster right) ---------- */
-.kf-pe-cols {
-  display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
-  gap: var(--sp-sp-5);
-  align-items: start;
+/* ---------- Team mark (badge, 36px) ---------- */
+.kf-pe-mark {
+  width: 36px; height: 36px; flex: 0 0 36px;
+  border-radius: var(--sp-r-sm);
+  background: var(--sp-sky-tint); color: var(--sp-navy);
+  display: inline-flex; align-items: center; justify-content: center;
+  font: 800 var(--sp-t-micro) var(--sp-disp);
+  letter-spacing: .5px;
 }
-@media (max-width: 1280px) { .kf-pe-cols { grid-template-columns: 260px minmax(0, 1fr); } }
-@media (max-width: 860px)  { .kf-pe-cols { grid-template-columns: minmax(0, 1fr); } .kf-pe-sitenav { display: none; } }
+.kf-pe-sitenav__item.is-empty .kf-pe-mark {
+  background: var(--sp-sky-soft); color: var(--sp-muted);
+}
 
-/* ---------- Site nav ---------- */
+/* ---------- Site nav (left rail, desktop) ---------- */
 .kf-pe-sitenav {
-  background: var(--sp-card); border: 1px solid var(--sp-line);
-  border-radius: var(--sp-r-card); box-shadow: var(--sp-shadow);
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  box-shadow: var(--sp-shadow);
   padding: 0; overflow: hidden;
   position: sticky;
   top: calc(var(--sp-topbar) + var(--sp-sp-4));
@@ -147,10 +188,6 @@
   margin-left: auto; font-variant-numeric: tabular-nums;
   font-family: var(--sp-ui); letter-spacing: 0;
 }
-/* T2.1 fix 3 (2026-11-12). `button` elements do not inherit font
- * from body; the browser default is 13.3333px. `font: inherit` on
- * every sitenav + roster button restores the body type scale.
- * Line heights stay tight via the __who line-height. */
 .kf-pe-sitenav__item {
   width: 100%; display: flex; align-items: center; gap: var(--sp-sp-3);
   min-height: 56px; padding: var(--sp-sp-2) var(--sp-sp-4);
@@ -166,8 +203,6 @@
   box-shadow: inset 3px 0 0 var(--sp-navy);
 }
 .kf-pe-sitenav__item:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: -2px; }
-/* T2.1 fix 4 (2026-11-12). Two-line sitenav label: name (body
- * size) + sub (label size: place, leader, N people). */
 .kf-pe-sitenav__who {
   flex: 1; min-width: 0; display: flex; flex-direction: column;
   line-height: 1.25;
@@ -180,49 +215,80 @@
   font-size: var(--sp-t-label); color: var(--sp-muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-/* Kept for the "All sites" row (single-line); the typed-row
- * version uses __who above. */
-.kf-pe-sitenav__name {
-  flex: 1; min-width: 0;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  font-size: var(--sp-t-body);
+.kf-pe-sitenav__place {
+  color: var(--sp-muted); font-weight: 500;
+  margin-left: var(--sp-sp-2);
 }
-.kf-pe-sitenav__count {
-  font-variant-numeric: tabular-nums; font-weight: 700;
-  color: var(--sp-muted);
-  font-size: var(--sp-t-label);
+.kf-pe-sitenav__slot {
+  width: 36px; display: inline-flex; justify-content: flex-end;
+  flex: 0 0 36px;
 }
-.kf-pe-sitenav__count b { color: var(--sp-warn); margin-left: var(--sp-sp-2); }
+.kf-pe-sitenav__chev { color: var(--sp-muted); flex: 0 0 auto; }
 
-/* ---------- Roster card ---------- */
-.kf-pe-roster {
-  list-style: none; margin: 0 0 var(--sp-sp-4); padding: 0;
-  background: var(--sp-card); border: 1px solid var(--sp-line);
-  border-radius: var(--sp-r-card); box-shadow: var(--sp-shadow);
+/* ---------- Site panels (right, desktop) ---------- */
+.kf-pe-sitepanels { display: block; }
+.kf-pe-site {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  box-shadow: var(--sp-shadow);
   overflow: hidden;
+  margin: 0;
 }
-.kf-pe-roster__head {
-  display: flex; align-items: center; gap: var(--sp-sp-3);
+.kf-pe-site--panel { display: none; }
+.kf-pe-site--panel.is-active { display: block; }
+
+/* You card (top strip) */
+.kf-pe-site--you .kf-pe-roster .kf-pe-person {
+  min-height: 60px;
+  background: var(--sp-sky-soft);
+}
+
+/* ---------- Site head (panel + phone-stack button share chrome) --- */
+.kf-pe-sitehead {
+  width: 100%; display: flex; align-items: center; gap: var(--sp-sp-3);
   padding: var(--sp-sp-3) var(--sp-sp-4);
   background: var(--sp-sky-soft);
-  border-bottom: 1px solid var(--sp-line);
-  min-height: 44px;
+  border: none; border-bottom: 1px solid var(--sp-line);
+  color: var(--sp-ink); text-align: left; font: inherit;
+  min-height: 56px; cursor: pointer;
 }
-.kf-pe-roster__head h3 {
-  font-size: var(--sp-t-label); letter-spacing: 1.5px;
-  color: var(--sp-muted);
+.kf-pe-sitehead--static { cursor: default; }
+.kf-pe-sitehead__who {
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
+  line-height: 1.25;
 }
-.kf-pe-roster__meta {
-  margin-left: auto; color: var(--sp-muted);
-  font-size: var(--sp-t-label); font-weight: 600;
+.kf-pe-sitehead__who b {
+  font-size: var(--sp-t-body); color: var(--sp-navy); font-weight: 700;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-/* T2.1 fix 3: `font: inherit` so the body size cascades (buttons
- * default to 13.3333px otherwise). The row stays 48px min to
- * satisfy the chef-row floor; `align-items: flex-start` + a bit
- * of vertical padding lets a two-line (wrapped) name expand the
- * row instead of clipping when the name is long. */
+.kf-pe-sitehead__who small {
+  font-size: var(--sp-t-label); color: var(--sp-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.kf-pe-sitehead__flight { display: inline-flex; align-items: center; gap: var(--sp-sp-2); }
+.kf-pe-sitehead__chev { color: var(--sp-muted); transition: transform var(--sp-base) var(--sp-ease); }
+
+/* ---------- Pending pill (shared shape; border included) ---------- */
+.kf-pe-pill {
+  min-height: 24px;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 0 var(--sp-sp-2);
+  font-size: var(--sp-t-label); font-weight: 700;
+}
+.kf-pe-pill--count {
+  min-width: 28px; justify-content: center;
+  font-variant-numeric: tabular-nums;
+}
+.kf-pe-dot {
+  width: 6px; height: 6px; border-radius: var(--sp-r-pill);
+  background: currentColor; display: inline-block;
+}
+
+/* ---------- Roster card ---------- */
+.kf-pe-roster { list-style: none; margin: 0; padding: 0; }
 .kf-pe-person {
-  display: flex; align-items: flex-start; gap: var(--sp-sp-3);
+  display: flex; align-items: center; gap: var(--sp-sp-3);
   min-height: 56px; padding: var(--sp-sp-3) var(--sp-sp-4);
   border: none; border-bottom: 1px solid var(--sp-line-soft);
   background: transparent; text-align: left; color: var(--sp-ink);
@@ -232,7 +298,7 @@
 .kf-pe-person:last-child { border-bottom: none; }
 .kf-pe-person:hover { background: var(--sp-raise); }
 .kf-pe-person:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: -2px; }
-.kf-pe-person--self { background: var(--sp-sky-soft); }
+.kf-pe-person--you { background: var(--sp-sky-soft); }
 .kf-pe-person--divider { border-top: 1px solid var(--sp-line); }
 
 .kf-pe-ava {
@@ -241,20 +307,11 @@
   background: var(--sp-sky); color: var(--sp-navy-deep);
   display: inline-flex; align-items: center; justify-content: center;
   font: 700 var(--sp-t-label) var(--sp-ui);
-  /* Keeps the avatar aligned with the first line when the name
-   * wraps to two lines (align-items: flex-start on the parent). */
-  margin-top: 2px;
 }
 .kf-pe-person__who {
   flex: 1; min-width: 0; display: flex; flex-direction: column;
   line-height: 1.25;
 }
-/* T2.1 fix 6 (2026-11-12). Names are never truncated at any width
- * from 360 to 1920. `white-space: normal` lets them wrap; `overflow-
- * wrap: anywhere` breaks a single long token (unlikely for real
- * names, defensive against e.g. an email-local accidentally used
- * as a display name). The subline keeps the ellipsis-truncation
- * from the earlier rule. */
 .kf-pe-person__who b {
   font-size: var(--sp-t-body); font-weight: 700;
   white-space: normal; overflow-wrap: anywhere;
@@ -267,18 +324,39 @@
   display: inline-flex; gap: var(--sp-sp-2); align-items: center;
   flex: 0 0 auto;
 }
-.kf-pe-person__chev { color: var(--sp-muted); flex: 0 0 auto; }
 @media (max-width: 860px) { .kf-pe-person__tags .kf-skew-tag { display: none; } }
+.kf-pe-person__chev { color: var(--sp-muted); flex: 0 0 auto; }
 
-/* Waiting state chip ("Nov 9 · 3 days") */
 .kf-pe-flight {
   display: inline-flex; align-items: center; gap: var(--sp-sp-2);
-  min-width: 92px; justify-content: flex-end;
+  justify-content: flex-end;
   font-variant-numeric: tabular-nums;
 }
 .kf-pe-flight__what {
   font-size: var(--sp-t-label); color: var(--sp-muted);
-  white-space: nowrap;
+  white-space: nowrap; max-width: 220px;
+  overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ---------- Site stack (phone layout) ---------- */
+.kf-pe-sitestack { display: none; }
+@media (max-width: 860px) {
+  .kf-pe-sitestack { display: grid; gap: var(--sp-sp-3); }
+  .kf-pe-sitenav, .kf-pe-sitepanels { display: none; }
+}
+.kf-pe-sitestack .kf-pe-sitehead[aria-expanded="false"] + .kf-pe-roster { display: none; }
+.kf-pe-sitestack .kf-pe-sitehead[aria-expanded="false"] .kf-pe-sitehead__chev {
+  transform: rotate(-90deg);
+}
+
+/* ---------- Docked "New" button (phone only) ---------- */
+.kf-pe-dock {
+  position: fixed;
+  left: var(--sp-sp-4); right: var(--sp-sp-4);
+  bottom: calc(var(--sp-tabbar) + var(--sp-sp-3));
+  z-index: calc(var(--sp-z-rail-phone) - 5);
+  box-shadow: var(--sp-shadow-float);
+  justify-content: center;
 }
 
 /* ---------- Empty + no-match states ---------- */
@@ -312,9 +390,7 @@
   animation: kf-pe-slide var(--sp-slow) var(--sp-ease-io);
 }
 @keyframes kf-pe-slide { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
-@media (max-width: 860px) {
-  .kf-pe-drawer { width: 100%; }
-}
+@media (max-width: 860px) { .kf-pe-drawer { width: 100%; } }
 @media (prefers-reduced-motion: reduce) {
   .kf-pe-drawer, .kf-pe-backdrop { animation: none; }
 }
@@ -329,12 +405,19 @@
   padding: var(--sp-sp-4) var(--sp-sp-5);
   border-bottom: 1px solid var(--sp-line);
 }
+.kf-pe-drawer__head > div { min-width: 0; }
+.kf-pe-hist__more {
+  font-size: var(--sp-t-label); color: var(--sp-muted);
+  padding: var(--sp-sp-2) var(--sp-sp-4);
+  margin: 0;
+}
 .kf-pe-drawer__head h3 {
   color: var(--sp-navy);
   font-size: var(--sp-t-h3); margin: var(--sp-sp-1) 0;
 }
 .kf-pe-drawer__chips {
   display: flex; gap: var(--sp-sp-2); flex-wrap: wrap; align-items: center;
+  margin-top: var(--sp-sp-2);
 }
 .kf-pe-drawer__body {
   overflow-y: auto;
@@ -346,21 +429,12 @@
   border-top: 1px solid var(--sp-line);
   background: var(--sp-card); flex-wrap: wrap;
 }
-
-/* Disabled control styling used by inert .kf-btn / .kf-pe-door
- * descendants (aria-disabled="true"). Same approach the four doors
- * use - a single class drives the visual state; no inline styles. */
 .kf-pe-disabled[aria-disabled="true"] { opacity: .6; cursor: default; }
-
-/* Footer caption below the two inert buttons on the card. */
 .kf-pe-foot__cap {
   flex-basis: 100%;
   font-size: var(--sp-t-label);
   color: var(--sp-muted);
 }
-
-/* Icon button inside the drawer head (close X). Chef floor:
- * 48 by 48 via --sp-floor-chef. */
 .kf-pe-iconbtn {
   width: var(--sp-floor-chef); height: var(--sp-floor-chef);
   flex: 0 0 var(--sp-floor-chef);
@@ -372,85 +446,87 @@
 .kf-pe-iconbtn:hover { background: var(--sp-sky-tint); }
 .kf-pe-iconbtn:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
 
-/* ---------- Drawer contact buttons ---------- */
-.kf-pe-contact--2,
-.kf-pe-contact--3 {
-  display: grid;
+.kf-pe-contact {
+  display: inline-flex;
   gap: var(--sp-sp-2);
-  margin-bottom: var(--sp-sp-4);
+  margin-top: var(--sp-sp-2);
+  flex-wrap: wrap;
 }
-.kf-pe-contact--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.kf-pe-contact--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.kf-pe-contact .kf-btn {
-  width: 100%; justify-content: center;
-  border: 1px solid var(--sp-line);
-}
+.kf-pe-contact .kf-btn { min-height: var(--sp-floor-chef); }
 
-/* ---------- KV list (Role / Site / Reports to / ...) ---------- */
-.kf-pe-kvlist { margin: var(--sp-sp-3) 0 var(--sp-sp-5); }
-.kf-pe-kvlist__row {
-  display: grid; grid-template-columns: 140px minmax(0, 1fr);
-  gap: var(--sp-sp-3);
-  padding: var(--sp-sp-3) 0;
-  border-bottom: 1px solid var(--sp-line-soft);
+/* ---------- Card body sections ---------- */
+.kf-pe-sechead {
+  display: flex; align-items: center; gap: var(--sp-sp-3);
+  margin: var(--sp-sp-5) 0 var(--sp-sp-3);
+  min-height: 32px; flex-wrap: wrap;
 }
-.kf-pe-kvlist__row:last-child { border-bottom: none; }
-.kf-pe-kvlist__row dt {
-  color: var(--sp-muted); font-size: var(--sp-t-label);
-  font-weight: 700;
+.kf-pe-sechead h3 {
+  color: var(--sp-navy);
+  font-size: var(--sp-t-h3);
+  white-space: nowrap;
 }
-.kf-pe-kvlist__row dd {
-  color: var(--sp-ink); font-size: var(--sp-t-table);
-  margin: 0;
-}
-.kf-pe-kvlist__row dd small {
-  display: block; color: var(--sp-muted);
-  font-size: var(--sp-t-label); margin-top: 2px;
-}
-@media (max-width: 640px) {
-  .kf-pe-kvlist__row { grid-template-columns: minmax(0, 1fr); gap: 0; }
-  .kf-pe-kvlist__row dt { padding-bottom: 2px; }
-}
-
-/* ---------- Waiting panel on the card ---------- */
-.kf-pe-waiting {
-  border: 1px solid var(--sp-warn-strong);
-  background: var(--sp-warn-bg);
-  color: var(--sp-ink);
-  border-radius: var(--sp-r-ctl);
-  padding: var(--sp-sp-3) var(--sp-sp-4);
-  margin: 0 0 var(--sp-sp-4);
-}
-.kf-pe-waiting b { display: block; color: var(--sp-warn); margin-bottom: 2px; }
-.kf-pe-waiting small { display: block; color: var(--sp-muted); font-size: var(--sp-t-label); margin-top: 2px; }
-
-/* ---------- History list on the card ---------- */
-.kf-pe-hist__h {
-  font: 700 var(--sp-t-label) var(--sp-disp);
-  letter-spacing: 1.5px;
-  text-transform: uppercase;
+.kf-pe-sechead__meta {
   color: var(--sp-muted);
-  margin: 0 0 var(--sp-sp-2);
+  font-size: var(--sp-t-label);
+  font-weight: 600;
+  white-space: nowrap;
 }
-.kf-pe-hist__none { font-size: var(--sp-t-label); color: var(--sp-muted); }
-.kf-pe-hist__more { font-size: var(--sp-t-label); color: var(--sp-muted); }
-.kf-pe-hist { list-style: none; margin: 0 0 var(--sp-sp-4); padding: 0; }
-.kf-pe-hist li {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas: "what time" "sub time";
-  column-gap: var(--sp-sp-3); align-items: start;
-  padding: var(--sp-sp-2) 0;
+
+/* T2.2.1 (2026-11-12). Restricted-viewer notes list that stands in
+ * for the In flight rows when a viewer may not open the request.
+ * One <li> per pending item (no bullet markers, no table chrome). */
+.kf-pe-noteslist {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: var(--sp-sp-2);
+}
+.kf-pe-noteslist > li { margin: 0; }
+
+/* ---------- In flight + History tables (compact) ---------- */
+.kf-pe-tablecard {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  overflow: hidden;
+}
+.kf-pe-table { width: 100%; border-collapse: collapse; }
+.kf-pe-table td {
+  padding: var(--sp-sp-2) var(--sp-sp-4);
   border-bottom: 1px solid var(--sp-line-soft);
+  font-size: var(--sp-t-table);
+  color: var(--sp-ink); vertical-align: middle;
 }
-.kf-pe-hist li:last-child { border-bottom: none; }
-.kf-pe-hist__what { grid-area: what; font-weight: 700; font-size: var(--sp-t-table); }
-.kf-pe-hist__sub { grid-area: sub; color: var(--sp-muted); font-size: var(--sp-t-label); }
-.kf-pe-hist__time {
-  grid-area: time;
-  color: var(--sp-muted); font-size: var(--sp-t-micro);
-  white-space: nowrap; font-variant-numeric: tabular-nums;
+.kf-pe-table tr:last-child td { border-bottom: none; }
+.kf-pe-row { cursor: default; }
+.kf-pe-what {
+  display: flex; align-items: center; gap: var(--sp-sp-3);
+  min-width: 0;
 }
+.kf-pe-what__text {
+  display: flex; flex-direction: column; min-width: 0;
+  line-height: 1.25;
+}
+.kf-pe-what__text b {
+  font-size: var(--sp-t-body); font-weight: 700;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.kf-pe-what__text small {
+  font-size: var(--sp-t-label); color: var(--sp-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.kf-pe-kind {
+  width: 32px; height: 32px; flex: 0 0 32px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--sp-r-sm);
+  background: var(--sp-sky-tint); color: var(--sp-navy);
+}
+.kf-pe-kind--incident { background: var(--sp-warn-bg); color: var(--sp-warn); }
+.kf-pe-when {
+  text-align: right;
+  color: var(--sp-muted);
+  font-size: var(--sp-t-label);
+  white-space: nowrap;
+}
+.kf-pe-when.is-late time { color: var(--sp-warn); font-weight: 700; }
 
 /* ---------- Loading skeleton rows ---------- */
 .kf-pe-skelrow {
@@ -466,10 +542,14 @@
 .kf-pe-skelrow > .kf-skel:first-child { width: 32px; height: 32px; }
 .kf-pe-skelrow > .kf-skel--line { height: 14px; }
 
-/* ---------- Band facts link (People / Pending in the band) ---------- */
+/* ---------- Small helpers used by the card ---------- */
+.kf-pe-small { font-size: var(--sp-t-label); }
+.kf-pe-muted { color: var(--sp-muted); }
+
+/* ---------- Band fact as link + hover (retained from T2) ---------- */
 .kf-pe-fact--link { text-decoration: none; color: inherit; border-radius: var(--sp-r-sm); }
 .kf-pe-fact--link:hover { text-decoration: none; }
-.kf-pe-fact--link:hover .kf-band-fact__value { text-decoration: underline; text-underline-offset: var(--sp-sp-1); }
-
-/* ---------- Muted helper ---------- */
-.kf-pe-muted { color: var(--sp-muted); }
+.kf-pe-fact--link:hover .kf-band-fact__value {
+  text-decoration: underline;
+  text-underline-offset: var(--sp-sp-1);
+}
