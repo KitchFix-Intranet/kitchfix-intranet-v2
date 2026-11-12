@@ -131,27 +131,38 @@ export default async function Page({
         title={`Welcome, ${firstName(viewer.display_name)}`}
         facts={[
           { label: "People", value: String(team.totals.people) },
-          { label: "Pending", value: String(team.totals.pending), tone: team.totals.pending > 0 ? "warn" : "muted" },
+          { label: "Pending", value: String(team.totals.pending), tone: team.totals.pending_late > 0 ? "warn" : "muted" },
         ]}
       />
 
       {/* Phone head: a non-chrome second header that matches the
          render's kf-pe-phonehead pattern (shell topbar carries the
          real title + crumb; this gives phone a short restatement
-         with the live counts). */}
+         with the live counts). T2.2.1 (2026-11-12): add the
+         render's "What is this?" <details> blurb underneath. */}
       <div className="kf-pe-phonehead kf-only-phone">
         <span className="kf-eyebrow kf-eyebrow--plain">My team</span>
         <p className="kf-pe-phonehead__line">
           {bandTitle} · {team.totals.people} {team.totals.people === 1 ? "person" : "people"}
           {team.totals.pending > 0 ? ` · ${team.totals.pending} pending` : ""}
         </p>
+        <details className="kf-pe-what">
+          <summary className="kf-btn kf-btn--ghost">What is this?</summary>
+          <p>
+            Your people by site, with a pill on anyone who has
+            something waiting. Tap a person to start a PAF or report
+            an incident for them.
+          </p>
+        </details>
       </div>
 
       <QuickActions />
 
       <MyTeam
-        people={team.people}
+        selfRow={team.selfRow}
         sites={team.sites}
+        panels={team.panels}
+        defaultSiteKey={team.defaultSiteKey}
         viewerWorkerId={viewer.worker_id}
         singleSiteView={viewer.role === "site_leader" || viewer.role === "site_manager"}
       />
