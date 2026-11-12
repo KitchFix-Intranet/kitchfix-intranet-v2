@@ -540,6 +540,15 @@
   border-collapse: collapse;
   table-layout: fixed;
 }
+/* N12.1 R3 fix 1: narrow the Grade column from 150 to 112. The
+ * .kf-grade-row pill is ~75 px wide; 150 was the spec but at a 663
+ * detail that left Item at 171 and long names wrapped to three
+ * lines. 112 keeps the pill fully inside its column and hands the
+ * difference to Item. The inline style on <col> has specificity
+ * 1000, so !important is the one route from a CSS-only override.
+ * In the stacked (@container) layout the colgroup is display: none
+ * so this rule has no visible effect there. */
+.kf-ingp__items col:nth-child(2) { width: 112px !important; }
 .kf-ingp__items th {
   text-align: left;
   padding: var(--sp-sp-2) 0 var(--sp-sp-2) 0;
@@ -669,6 +678,15 @@
     white-space: nowrap;
   }
   .kf-ingp__items td:nth-child(5) { grid-area: act; }
+  /* N12.1 R3 fix 2: reset the last-td padding-left the table-layout
+   * rule carries. Outside the container the 16 px padding-left is
+   * the visible gap between the 12 mo column and Send back; inside
+   * the stacked layout it leaked into the full-width action row,
+   * pushing the Send back button 16 px in from the pane's 25 px
+   * inset (41 px instead of 25). The `td, td + td` rule above has
+   * specificity 0,1,1; this rule is 0,2,1 to beat the table-layout
+   * block's own 0,2,1 last-child rule by source order. */
+  .kf-ingp__items td:last-child { padding-left: 0; }
   .kf-ingp__items td:nth-child(5) .kf-btn {
     width: 100%;
     justify-content: center;
