@@ -175,10 +175,19 @@
   font-size: var(--sp-t-label); font-weight: 600;
 }
 
-/* Search field in Who: single border, icon inside left, no inner box. */
+/* Search field in Who. T4b-1 Part 0 #1 (2026-11-14): the .kf-pe-field
+ * parent above applies `flex-direction: column` (label above the
+ * control). The render's search field is a SINGLE ROW: icon + input
+ * inside one box with one border. Override both flex-direction and
+ * the parent's inner-border rule for the input, matching the
+ * render's .kf-pe-field--search + .kf-pe-field--search input
+ * declarations. */
 .kf-pe-field--search,
 .kf-pe-search {
-  display: flex; align-items: center; gap: var(--sp-sp-2);
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--sp-sp-2);
   background: var(--sp-card);
   border: 1px solid var(--sp-line-field);
   border-radius: var(--sp-r-ctl);
@@ -187,6 +196,7 @@
   min-height: var(--pe-floor, var(--sp-floor-chef));
   margin: 0 0 var(--sp-sp-4);
   cursor: text;
+  max-width: 560px;
 }
 .kf-pe-field--search input {
   border: none; background: transparent; padding: 0;
@@ -199,7 +209,7 @@
   border-color: var(--sp-navy);
   box-shadow: 0 0 0 1px var(--sp-navy);
 }
-.kf-pe-search__ico { display: inline-flex; color: var(--sp-muted); }
+.kf-pe-search__ico { display: inline-flex; color: var(--sp-muted); flex: 0 0 auto; }
 
 /* ---------- Money input ---------- */
 .kf-pe-money {
@@ -590,4 +600,141 @@
   /* Back on phone becomes the arrow icon only. */
   .kf-pe-sheet__foot .kf-pe-foot__back span { display: none; }
   .kf-pe-side { display: none; }
+}
+
+/* ---------- T4b-1 primitives: Select, Seg, Chips, grid2, notes --- */
+
+/* Two-column grid for From/To and Current/New role rows. */
+.kf-pe-grid2 {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--sp-sp-4);
+}
+@media (max-width: 640px) {
+  .kf-pe-grid2 { grid-template-columns: minmax(0, 1fr); gap: var(--sp-sp-2); }
+}
+
+/* Two-way switch (.kf-pe-seg) with a role=group + two aria-pressed
+ * buttons. Render shows a pill-skinned control: unpressed is
+ * transparent navy text on sky tint, pressed is a white card with
+ * shadow. Inherits the chef floor height. */
+.kf-pe-seg {
+  display: inline-flex;
+  background: var(--sp-sky-tint);
+  border-radius: var(--sp-r-ctl);
+  padding: 3px;
+  gap: 2px;
+  width: 100%;
+}
+.kf-pe-seg button {
+  flex: 1 1 0;
+  min-height: var(--sp-floor-chef);
+  padding: 0 var(--sp-sp-4);
+  border: none; background: transparent;
+  border-radius: var(--sp-r-sm);
+  color: var(--sp-navy);
+  font: 700 var(--sp-t-table) var(--sp-ui);
+  cursor: pointer;
+  justify-content: center;
+  white-space: nowrap;
+}
+.kf-pe-seg button[aria-pressed="true"] {
+  background: var(--sp-card); box-shadow: var(--sp-shadow);
+}
+.kf-pe-seg button:focus-visible {
+  outline: 2px solid var(--sp-navy); outline-offset: 2px;
+}
+
+/* Pick-one chips (render's .kf-pe-chips.kf-pe-chips--wrap). Each
+ * .kf-pe-chip is a pill button that renders unpressed as a hairline
+ * border and pressed as navy fill. */
+.kf-pe-chips {
+  display: flex; gap: var(--sp-sp-2); flex-wrap: wrap;
+}
+.kf-pe-chip {
+  min-height: var(--sp-floor-chef);
+  padding: 0 var(--sp-sp-4);
+  border-radius: 999px;
+  border: 1px solid var(--sp-line-field);
+  background: var(--sp-card);
+  color: var(--sp-body);
+  font: 700 var(--sp-t-table) var(--sp-ui);
+  cursor: pointer;
+}
+.kf-pe-chip[aria-pressed="true"] {
+  background: var(--sp-navy); color: var(--sp-on-navy);
+  border-color: var(--sp-navy);
+}
+.kf-pe-chip:focus-visible {
+  outline: 2px solid var(--sp-navy); outline-offset: 2px;
+}
+
+/* Inline note under a row (separation "Check the dates"). */
+.kf-pe-note.kf-pe-inline {
+  margin-top: calc(var(--sp-sp-3) * -1 + var(--sp-sp-2));
+  margin-bottom: var(--sp-sp-3);
+}
+
+/* Optional-field marker inside the field label. */
+.kf-pe-opt {
+  font: 600 var(--sp-t-micro) var(--sp-ui);
+  color: var(--sp-muted);
+  letter-spacing: 0;
+  text-transform: lowercase;
+  margin-left: var(--sp-sp-1);
+}
+
+/* Select / Listbox. The trigger reuses .kf-pe-select__btn. The
+ * popup list is .kf-pe-menu. T4b-1: adds a --up variant so the
+ * menu opens upward when there is not enough room below (phone
+ * footer + tab bar). */
+.kf-pe-select { position: relative; display: block; }
+.kf-pe-select__btn {
+  justify-content: space-between;
+  gap: var(--sp-sp-3);
+}
+.kf-pe-menu {
+  position: absolute; z-index: 40;
+  top: calc(100% + 4px); left: 0; right: 0;
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  box-shadow: var(--sp-shadow);
+  margin: 0; padding: var(--sp-sp-1) 0;
+  list-style: none;
+  max-height: 360px;
+  overflow: auto;
+}
+.kf-pe-menu--up {
+  top: auto; bottom: calc(100% + 4px);
+}
+.kf-pe-menu li {
+  display: flex; align-items: center; gap: var(--sp-sp-3);
+  min-height: var(--sp-floor-chef);
+  padding: 0 var(--sp-sp-4);
+  color: var(--sp-ink);
+  cursor: pointer;
+}
+.kf-pe-menu li:hover:not(.is-disabled),
+.kf-pe-menu li:focus-visible {
+  background: var(--sp-sky-soft);
+  outline: none;
+}
+.kf-pe-menu li[aria-selected="true"] { background: var(--sp-sky-tint); color: var(--sp-navy); font-weight: 700; }
+.kf-pe-menu li.is-disabled { opacity: 0.45; cursor: not-allowed; }
+.kf-pe-menu__check {
+  width: 18px; flex: 0 0 18px;
+  color: var(--sp-navy);
+  display: inline-flex; justify-content: center;
+}
+
+/* Cal popup --up variant for Part 0 #5. */
+.kf-pe-cal--up { top: auto; bottom: calc(100% + 4px); }
+
+/* Readonly inputs render in muted colour so the viewer can tell
+ * them apart from editable fields. */
+.kf-pe-field input[readonly] {
+  background: var(--sp-sky-soft);
+  color: var(--sp-body);
+  cursor: default;
 }

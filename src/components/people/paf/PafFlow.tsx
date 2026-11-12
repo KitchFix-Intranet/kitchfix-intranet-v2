@@ -1,22 +1,17 @@
 "use client";
 
-// PAF flow. One client component orchestrates the four steps and
-// autosaves Details. The URL holds the step + the draft id so
-// Back works and a reload keeps the viewer on the right step.
+// T4b-1 (2026-11-14). PAF flow. Four steps (Who · What · Details ·
+// Check). State model now carries the full SheetFields object so
+// every action in this + T4a's sheet set can autosave + check.
 //
-// Query params (produced by this component):
+// Route params produced by this component:
 //   ?step=who|what|details|check
-//   ?for=<worker_id>     (set when the user picks a person; mirrors
-//                        the entry path from a person card)
-//   ?draft=<uuid>        (set after the first autosave create)
+//   ?for=<worker_id>   (set when the user picks a person)
+//   ?draft=<uuid>      (set after the first autosave create)
 //
-// Autosave rules:
-//   - A draft is created the FIRST TIME the sender changes a field
-//     on Details. From then on each change is a debounced update.
-//   - "Save and exit" fires on Details only, saves if dirty, and
-//     navigates to /people.
-//   - Preview (viewer.previewOf !== null) never autosaves and the
-//     Save-and-exit button is disabled with one line of caption.
+// Autosave: on every Details change, debounced 600ms. First save
+// creates the row; subsequent saves PATCH it. Under ?as= nothing
+// autosaves and Save-and-exit is disabled with a caption.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
@@ -28,23 +23,28 @@ import { WhatStep, type PafAction } from "./WhatStep";
 import { DetailsStep } from "./DetailsStep";
 import { CheckStep, type WhoSeesItView } from "./CheckStep";
 import type { SelfRosterPerson, SiteNavEntry, SitePanel } from "@/lib/people/types";
+import type { SelectOption } from "./Select";
+import type { SheetFields } from "./sheetFields";
+import { EMPTY_FIELDS, missingFor } from "./sheetFields";
 
 type Step = "who" | "what" | "details" | "check";
 
+interface EnrichedPerson {
+  worker_id: string;
+  display_name: string;
+  account_key: string;
+  title: string | null;
+  site_name: string | null;
+}
+
 type Props = {
-  // Initial state hydrated from the server (draft or ?for=).
   initial: {
     step: Step;
     draftId: string | null;
-    personWorkerId: string | null;
-    personName: string | null;
-    personAccountKey: string | null;
+    person: EnrichedPerson | null;
     action: PafAction | null;
-    amount: string;
-    effectiveDate: string;
-    explanation: string;
+    fields: SheetFields;
   };
-  // Team data for Who.
   team: {
     selfRow: SelfRosterPerson | null;
     sites: SiteNavEntry[];
@@ -53,15 +53,11 @@ type Props = {
     viewerWorkerId: string;
     singleSiteView: boolean;
   };
-  // For Check.
   whoSeesIt: WhoSeesItView;
-  // Preview mode: autosave disabled, Save-and-exit disabled.
+  accountOptions: readonly SelectOption[];
   isPreview: boolean;
-  // When preview, the ?as= value to carry into any URL.
   asWorkerId: string | null;
 };
-
-type Missing = { amount: boolean; effectiveDate: boolean; explanation: boolean };
 
 function stepIndex(step: Step): 0 | 1 | 2 | 3 {
   if (step === "who") return 0;
@@ -70,37 +66,58 @@ function stepIndex(step: Step): 0 | 1 | 2 | 3 {
   return 3;
 }
 
-export function PafFlow({ initial, team, whoSeesIt, isPreview, asWorkerId }: Props) {
+// Pick which fields to keep on the draft payload for a given
+// action. Fields that are irrelevant for the action never reach
+// the server (the API whitelist is the ultimate gate, but we
+// filter client-side so the draft payload stays small + readable).
+function fieldsForDraft(action: PafAction | null, f: SheetFields): Record<string, string> {
+  const out: Record<string, string> = {};
+  const emit = (k: keyof SheetFields) => {
+    const v = f[k];
+    if (v) out[k] = String(v);
+  };
+  if (!action) return out;
+  emit("effectiveDate");
+  if (action === "add_bonus" || action === "add_deduction" || action === "add_gratuity") {
+    emit("amount"); emit("explanation");
+  } else if (action === "add_cell_phone") {
+    emit("amount"); emit("cellFrequency");
+  } else if (action === "separation") {
+    emit("lastDayWorked"); emit("actionGroup"); emit("separationReason"); emit("rehireEligible"); emit("explanation");
+  } else if (action === "title_change") {
+    emit("newTitle"); emit("reclassChangeRate");
+    if (f.reclassChangeRate === "Yes") emit("newRate");
+    emit("explanation");
+  } else if (action === "status_change") {
+    emit("statusChangeDirection"); emit("explanation");
+  } else if (action === "reclassification") {
+    emit("reclassFrom"); emit("reclassTo"); emit("reclassTitleChange");
+    if (f.reclassTitleChange === "Yes") emit("newTitle");
+    emit("reclassChangeRate");
+    if (f.reclassChangeRate === "Yes") emit("newRate");
+    emit("explanation");
+  }
+  return out;
+}
+
+export function PafFlow({ initial, team, whoSeesIt, accountOptions, isPreview, asWorkerId }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
 
   const [step, setStep] = useState<Step>(initial.step);
-  const [person, setPerson] = useState<{ worker_id: string; display_name: string; account_key: string } | null>(
-    initial.personWorkerId ? {
-      worker_id: initial.personWorkerId,
-      display_name: initial.personName ?? "",
-      account_key: initial.personAccountKey ?? "",
-    } : null,
-  );
+  const [person, setPerson] = useState<EnrichedPerson | null>(initial.person);
   const [action, setAction] = useState<PafAction | null>(initial.action);
-  const [amount, setAmount] = useState(initial.amount);
-  const [effectiveDate, setEffectiveDate] = useState(initial.effectiveDate);
-  const [explanation, setExplanation] = useState(initial.explanation);
-  const [missing, setMissing] = useState<Missing | null>(null);
+  const [fields, setFields] = useState<SheetFields>(initial.fields);
+  const [missing, setMissing] = useState<ReturnType<typeof missingFor> | null>(null);
   const [draftId, setDraftId] = useState<string | null>(initial.draftId);
   const [saving, setSaving] = useState<"idle" | "saving" | "saved" | "failed">("idle");
   const [savedAt, setSavedAt] = useState<number | null>(null);
-  // T4a (2026-11-13). In-page confirm for Discard draft: one click
-  // flips to "confirm" so the viewer sees the consequence before the
-  // row is deleted. No browser confirm().
   const [confirmDiscard, setConfirmDiscard] = useState(false);
 
-  // Debounce ref for autosave.
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipFirstSaveRef = useRef(true);
 
-  // Keep the URL step/draft in sync when we advance.
   const pushParams = useCallback((patch: Record<string, string | null>) => {
     const next = new URLSearchParams(sp.toString());
     for (const [k, v] of Object.entries(patch)) {
@@ -117,7 +134,18 @@ export function PafFlow({ initial, team, whoSeesIt, isPreview, asWorkerId }: Pro
   }, [pushParams]);
 
   const onPickPerson = useCallback((p: { worker_id: string; display_name: string; account_key: string }) => {
-    setPerson(p);
+    // When a person is picked on Who we only have the roster-level
+    // fields. The title + site_name second line gets filled by the
+    // server on the next page render (the ?for=<worker_id> round
+    // trip). For the transient state here, leave them null; the
+    // SheetAbout falls back to a single line.
+    setPerson({
+      worker_id: p.worker_id,
+      display_name: p.display_name,
+      account_key: p.account_key,
+      title: null,
+      site_name: null,
+    });
     setStep("what");
     pushParams({ step: "what", for: p.worker_id });
   }, [pushParams]);
@@ -125,32 +153,28 @@ export function PafFlow({ initial, team, whoSeesIt, isPreview, asWorkerId }: Pro
   const onChangePerson = useCallback(() => {
     setPerson(null);
     setAction(null);
-    setAmount("");
-    setEffectiveDate("");
-    setExplanation("");
+    setFields(EMPTY_FIELDS);
+    setMissing(null);
     setStep("who");
     pushParams({ step: "who", for: null });
   }, [pushParams]);
 
-  const onChooseAction = useCallback((a: PafAction) => {
-    setAction(a);
+  const onChooseAction = useCallback((a: PafAction) => { setAction(a); }, []);
+
+  const onChangeFields = useCallback((patch: Partial<SheetFields>) => {
+    setFields((cur) => ({ ...cur, ...patch }));
   }, []);
 
-  // Save implementation. Builds the payload shape T4c will reuse
-  // when writing `submissions` so recordDetail reads both without
-  // branching.
   const buildPayload = useCallback(() => {
     return {
       _v: 2 as const,
       employeeName: person?.display_name ?? "",
       locationKey: person?.account_key ?? "",
-      locationName: "", // T4c resolves this at send time
+      locationName: person?.site_name ?? "",
       person_worker_id: person?.worker_id ?? "",
-      amount: amount || "",
-      effectiveDate: effectiveDate || "",
-      explanation: explanation || "",
+      ...fieldsForDraft(action, fields),
     };
-  }, [person, amount, effectiveDate, explanation]);
+  }, [person, action, fields]);
 
   const doSave = useCallback(async () => {
     if (isPreview) return;
@@ -171,24 +195,27 @@ export function PafFlow({ initial, team, whoSeesIt, isPreview, asWorkerId }: Pro
         body: JSON.stringify(body),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as { draft: { id: string } };
+      const data = (await res.json()) as { draft: { id: string; payload?: Record<string, unknown> } };
       if (!draftId && data.draft?.id) {
         setDraftId(data.draft.id);
-        // Patch URL to include the new id so a reload can rehydrate.
         const next = new URLSearchParams(sp.toString());
         next.set("draft", data.draft.id);
         router.replace(`${pathname}?${next.toString()}`);
+      }
+      // Pull server-authoritative oldTitle back onto the fields so
+      // Check shows the current role immediately after save.
+      const srvOld = String(data.draft?.payload?.oldTitle ?? "");
+      if (srvOld && srvOld !== fields.oldTitle) {
+        setFields((cur) => ({ ...cur, oldTitle: srvOld }));
       }
       setSaving("saved");
       setSavedAt(Date.now());
     } catch {
       setSaving("failed");
     }
-  }, [isPreview, action, asWorkerId, draftId, person, buildPayload, sp, pathname, router]);
+  }, [isPreview, action, asWorkerId, draftId, person, buildPayload, sp, pathname, router, fields.oldTitle]);
 
-  // Debounced autosave. Fires on every Details change after the
-  // first (skipFirstSaveRef avoids a save on the initial render
-  // of the Details step when nothing has changed).
+  // Debounced autosave on any Details change.
   useEffect(() => {
     if (step !== "details") return;
     if (isPreview) return;
@@ -197,27 +224,14 @@ export function PafFlow({ initial, team, whoSeesIt, isPreview, asWorkerId }: Pro
     timerRef.current = setTimeout(() => { void doSave(); }, 600);
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [amount, effectiveDate, explanation, step]);
-
-  const detailsComplete = useMemo(() => {
-    return Number(amount) > 0 && !!effectiveDate && !!explanation.trim();
-  }, [amount, effectiveDate, explanation]);
+  }, [fields, step]);
 
   const onCheckClick = useCallback(() => {
-    // R-PP50: run the required-field check, show "Needed" on each
-    // missing field + one summary at the top.
-    const miss: Missing = {
-      amount: !(Number(amount) > 0),
-      effectiveDate: !effectiveDate,
-      explanation: !explanation.trim(),
-    };
-    if (miss.amount || miss.effectiveDate || miss.explanation) {
-      setMissing(miss);
-      return;
-    }
+    const miss = missingFor(action, fields);
+    if (Object.values(miss).some(Boolean)) { setMissing(miss); return; }
     setMissing(null);
     goTo("check");
-  }, [amount, effectiveDate, explanation, goTo]);
+  }, [action, fields, goTo]);
 
   const onBack = useCallback(() => {
     if (step === "what") goTo("who");
@@ -233,19 +247,11 @@ export function PafFlow({ initial, team, whoSeesIt, isPreview, asWorkerId }: Pro
 
   const onDiscard = useCallback(async () => {
     if (isPreview) return;
-    if (!draftId) {
-      // No draft yet - "discard" just means abandon what was typed.
-      router.push("/people/inbox");
-      return;
-    }
+    if (!draftId) { router.push("/people/inbox"); return; }
     const base = asWorkerId
       ? `/api/people/drafts?id=${encodeURIComponent(draftId)}&as=${encodeURIComponent(asWorkerId)}`
       : `/api/people/drafts?id=${encodeURIComponent(draftId)}`;
-    try {
-      await fetch(base, { method: "DELETE" });
-    } catch {
-      // Swallow - the viewer is navigating away regardless.
-    }
+    try { await fetch(base, { method: "DELETE" }); } catch { /* swallow */ }
     router.push("/people/inbox");
   }, [isPreview, draftId, asWorkerId, router]);
 
@@ -256,26 +262,64 @@ export function PafFlow({ initial, team, whoSeesIt, isPreview, asWorkerId }: Pro
     return "";
   }, [saving, savedAt]);
 
-  // T4a.1 (2026-11-14). Eyebrow carries the action word on Details
-  // and Check, like the render: "PAF" on Who/What; "PAF · ONE-TIME
-  // BONUS" on Details + Check once an action is chosen. The shared
-  // .kf-eyebrow renders ALL CAPS via its text-transform rule in
-  // app/components.css, so we pass the label in sentence case.
   const eyebrow = (step === "details" || step === "check") && action
     ? `PAF · ${ACTION_LABEL[action] ?? action}`
     : "PAF";
+
+  // Titles per action on Details + Check. Each action's Details
+  // sheet has its own h2 in the render; T4a used "How much, and
+  // why?" for all three money sheets. T4b-1 adds the five new
+  // sheet titles.
+  function detailsTitle(a: PafAction | null): string {
+    if (a === "separation") return "When, and why?";
+    if (a === "title_change") return "What is the new role?";
+    if (a === "status_change") return "Which way?";
+    if (a === "reclassification") return "Where are they moving?";
+    if (a === "add_cell_phone") return "How much, and how often?";
+    return "How much, and why?";
+  }
   const title =
     step === "who" ? "Who is this about?" :
     step === "what" ? "What needs to happen?" :
-    step === "details" ? "How much, and why?" :
+    step === "details" ? detailsTitle(action) :
     "Ready to send?";
+
+  // Side-column note per step. Who: static sentence describing the
+  // routing (derivable from the four groups in WhatStep); What +
+  // Details: empty in T4b-1 (reserved for "Already pending"); Check:
+  // no side note (the body carries "Who sees it").
+  function sideContent() {
+    if (isPreview) {
+      return (
+        <div className="kf-pe-note">
+          <b>Preview mode</b> The form works, but nothing saves and nothing sends.
+        </div>
+      );
+    }
+    if (step === "who") {
+      return (
+        <div className="kf-pe-note">
+          <b>Who sees it</b> Depends on the action. HR actions and equipment go to HR; payroll and expenses go to finance.
+        </div>
+      );
+    }
+    return null;
+  }
+
+  // Send-button copy keyed off the action's route (title_change +
+  // reclassification + separation + status_change -> HR; everything
+  // else -> finance). Button stays disabled in T4b-1.
+  const sendRoute = action === "separation"
+    || action === "title_change"
+    || action === "status_change"
+    || action === "reclassification"
+    ? "HR"
+    : whoSeesIt.route;
 
   return (
     <div className="kf-pe-formwrap">
       <div className="kf-pe-sheet">
         <header className="kf-pe-sheet__head">
-          {/* Plain kf-eyebrow (not --plain) carries the red skew-rule
-           * underneath via components.css. */}
           <span className="kf-eyebrow">{eyebrow}</span>
           <h2>{title}</h2>
           <Stepper step={stepIndex(step)} />
@@ -297,7 +341,7 @@ export function PafFlow({ initial, team, whoSeesIt, isPreview, asWorkerId }: Pro
 
           {step === "what" ? (
             <WhatStep
-              person={person ? { worker_id: person.worker_id, display_name: person.display_name } : null}
+              person={person ? { display_name: person.display_name, title: person.title, site_name: person.site_name } : null}
               chosen={action}
               onChoose={onChooseAction}
               onChange={onChangePerson}
@@ -307,27 +351,21 @@ export function PafFlow({ initial, team, whoSeesIt, isPreview, asWorkerId }: Pro
           {step === "details" && action ? (
             <DetailsStep
               action={action}
-              person={person ? { worker_id: person.worker_id, display_name: person.display_name } : null}
-              amount={amount}
-              effectiveDate={effectiveDate}
-              explanation={explanation}
-              missing={missing}
-              onChange={(patch) => {
-                if (patch.amount !== undefined) setAmount(patch.amount);
-                if (patch.effectiveDate !== undefined) setEffectiveDate(patch.effectiveDate);
-                if (patch.explanation !== undefined) setExplanation(patch.explanation);
-              }}
+              person={person ? { display_name: person.display_name, title: person.title, site_name: person.site_name } : null}
+              fields={fields}
+              missing={missing ?? {}}
+              onChange={onChangeFields}
+              accountOptions={accountOptions}
             />
           ) : null}
 
           {step === "check" && action ? (
             <CheckStep
               action={action}
-              person={person ? { worker_id: person.worker_id, display_name: person.display_name } : null}
-              amount={amount}
-              effectiveDate={effectiveDate}
-              explanation={explanation}
+              person={person ? { display_name: person.display_name, title: person.title, site_name: person.site_name } : null}
+              fields={fields}
               whoSeesIt={whoSeesIt}
+              accountOptions={accountOptions}
             />
           ) : null}
         </div>
@@ -354,28 +392,12 @@ export function PafFlow({ initial, team, whoSeesIt, isPreview, asWorkerId }: Pro
               >
                 Save and exit
               </button>
-              {/* T4a Discard draft: one-click flip to "Really
-               * discard?" then DELETE via the API. No browser
-               * confirm(). */}
               {draftId ? (
                 confirmDiscard ? (
                   <>
                     <span className="kf-pe-muted kf-pe-small">Really discard?</span>
-                    <button
-                      type="button"
-                      className="kf-btn kf-btn--line"
-                      onClick={() => setConfirmDiscard(false)}
-                    >
-                      Keep it
-                    </button>
-                    <button
-                      type="button"
-                      className="kf-btn kf-btn--ghost kf-pe-warn"
-                      onClick={onDiscard}
-                      disabled={isPreview}
-                    >
-                      Discard draft
-                    </button>
+                    <button type="button" className="kf-btn kf-btn--line" onClick={() => setConfirmDiscard(false)}>Keep it</button>
+                    <button type="button" className="kf-btn kf-btn--ghost kf-pe-warn" onClick={onDiscard} disabled={isPreview}>Discard draft</button>
                   </>
                 ) : (
                   <button
@@ -406,11 +428,7 @@ export function PafFlow({ initial, team, whoSeesIt, isPreview, asWorkerId }: Pro
           ) : null}
 
           {step === "details" ? (
-            <button
-              type="button"
-              className="kf-btn kf-btn--primary"
-              onClick={onCheckClick}
-            >
+            <button type="button" className="kf-btn kf-btn--primary" onClick={onCheckClick}>
               <span>Check</span>
               <ArrowRight size={16} strokeWidth={1.5} aria-hidden />
             </button>
@@ -425,24 +443,15 @@ export function PafFlow({ initial, team, whoSeesIt, isPreview, asWorkerId }: Pro
                 title="Sending arrives with the forms train."
               >
                 <Send size={16} strokeWidth={1.5} aria-hidden />
-                <span>Send to {whoSeesIt.route}</span>
+                <span>Send to {sendRoute}</span>
               </span>
             </>
           ) : null}
         </footer>
       </div>
 
-      {/* T4a.1 (2026-11-14). Side column, as rendered: a 320px
-       * column to the right of the sheet at >=1281. Holds one or
-       * more .kf-pe-note blocks. "Who sees it" + context notes land
-       * here in later trains; this release prints only an "Already
-       * pending" marker when there is one, plus the preview notice. */}
       <aside className="kf-pe-side" aria-label="Side notes">
-        {isPreview ? (
-          <div className="kf-pe-note">
-            <b>Preview mode</b> The form works, but nothing saves and nothing sends.
-          </div>
-        ) : null}
+        {sideContent()}
       </aside>
     </div>
   );

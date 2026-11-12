@@ -45,26 +45,60 @@ import type { PeopleRow, Viewer } from "@/lib/people/types";
 
 export const dynamic = "force-dynamic";
 
-// T4a hardening constants.
+// T4b-1 hardening constants. Five new actions become selectable in
+// this train; their draft payload keys extend the whitelist. All
+// unknown keys are still dropped server-side.
 const MODULE_PAF = "paf" as const;
 const VALID_ACTIONS: ReadonlySet<string> = new Set([
   "add_bonus",
   "add_deduction",
   "add_gratuity",
+  "add_cell_phone",
+  "separation",
+  "title_change",
+  "status_change",
+  "reclassification",
 ]);
 const PAYLOAD_KEYS = [
-  "amount",
-  "effectiveDate",
-  "explanation",
+  // identity (server-authoritative)
   "employeeName",
   "locationKey",
   "locationName",
   "person_worker_id",
+  // schema version
   "_v",
+  // shared
+  "amount",
+  "effectiveDate",
+  "explanation",
+  // separation
+  "lastDayWorked",
+  "actionGroup",
+  "separationReason",
+  "rehireEligible",
+  // title_change + reclassification
+  "oldTitle",
+  "newTitle",
+  "reclassChangeRate",
+  "newRate",
+  // status_change
+  "statusChangeDirection",
+  // reclassification
+  "reclassFrom",
+  "reclassTo",
+  "reclassTitleChange",
+  // add_cell_phone
+  "cellFrequency",
 ] as const;
 const BODY_MAX_BYTES = 16 * 1024;
 const EXPLANATION_MAX = 2000;
 const STRING_MAX = 200;
+// Actions that trigger server-side oldTitle resolution: the body's
+// value is overridden with the person's current title from people.
+const TITLE_SERVER_AUTH: ReadonlySet<string> = new Set([
+  "title_change",
+  "reclassification",
+]);
 
 const PEOPLE_SELECT =
   "worker_id, display_name, title, account_key, region, work_email, manager_worker_id, is_corp, is_salaried, is_site_leader, is_regional_director, pp_full_access, pp_review, status";
@@ -168,13 +202,45 @@ export async function sanitizeBody(
     payload.locationKey = person.account_key;
     payload.locationName = accountNameByKey.get(person.account_key) ?? "";
     person_name = displayName;
+
+    // T4b-1 (2026-11-14). Server-authoritative Current role for
+    // title_change + reclassification. The viewer never types into
+    // Current role; the person's own `people.title` wins over
+    // anything the body sends. On actions that do not use this
+    // key, strip it entirely so a careless client cannot leak it.
+    if (action_type && TITLE_SERVER_AUTH.has(action_type)) {
+      payload.oldTitle = (person.title ?? "").trim();
+    } else {
+      delete payload.oldTitle;
+    }
+
+    // T4b-1 (2026-11-14). Validate reclassFrom + reclassTo against
+    // the accounts table (active rows). An invalid team_key never
+    // reaches the draft payload; the client either picked one of
+    // our options or the body is tampered.
+    if (action_type === "reclassification") {
+      const activeTeamKeys = new Set<string>();
+      const a2Q = await sb.from("accounts").select("team_key, active");
+      for (const a of a2Q.data ?? []) {
+        if (a.active !== false) activeTeamKeys.add(a.team_key as string);
+      }
+      if (payload.reclassFrom && !activeTeamKeys.has(payload.reclassFrom as string)) {
+        return { ok: false, status: 400, error: "reclassFrom_not_active" };
+      }
+      if (payload.reclassTo && !activeTeamKeys.has(payload.reclassTo as string)) {
+        return { ok: false, status: 400, error: "reclassTo_not_active" };
+      }
+      if (payload.reclassFrom && payload.reclassFrom === payload.reclassTo) {
+        return { ok: false, status: 400, error: "reclass_same_account" };
+      }
+    }
   } else {
-    // No person set - keep employeeName / locationKey / locationName
-    // empty. (The client never sends person-identity fields without
-    // the worker_id, but strip them to be safe.)
+    // No person set - keep identity fields empty. The client never
+    // sends them without a worker_id, but strip them to be safe.
     payload.employeeName = "";
     payload.locationKey = "";
     payload.locationName = "";
+    delete payload.oldTitle;
   }
 
   return { ok: true, body: { action_type, payload, person_name } };

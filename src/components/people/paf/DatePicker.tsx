@@ -88,6 +88,11 @@ export function DatePicker({
   errorId?: string;
 }) {
   const [open, setOpen] = useState(false);
+  // T4b-1 Part 0 #5 (2026-11-14). On phone the fixed sheet footer +
+  // tab bar can hide the lower weeks of the calendar. When there is
+  // not enough room below the trigger we flip the popup upward so
+  // the whole grid is reachable without scrolling behind the bars.
+  const [openUp, setOpenUp] = useState(false);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const popRef = useRef<HTMLDivElement | null>(null);
   const [cursor, setCursor] = useState(() => parseYMD(value) ?? todayParts());
@@ -99,11 +104,26 @@ export function DatePicker({
   }, [value]);
 
   // On open: focus the selected day (or today when no selection).
+  // Also decide whether to open upward (Part 0 #5): on phone, the
+  // fixed footer (~72px) + tab bar (56px) eat the viewport bottom;
+  // if the rendered grid will not fit below, flip up. Scrolling
+  // the trigger into view keeps the chosen day visible.
   useEffect(() => {
     if (!open) return;
     const want = parseYMD(value) ?? todayParts();
     setCursor(want);
-    // focus after render
+    const r = triggerRef.current?.getBoundingClientRect();
+    if (r) {
+      const isPhone = window.innerWidth <= 640;
+      const gap = isPhone ? (56 + 72 + 12) : 24;
+      const spaceBelow = window.innerHeight - r.bottom - gap;
+      const spaceAbove = r.top - 24;
+      const needed = 380; // rough: head + dow + 6 rows at ~48-56
+      setOpenUp(spaceBelow < needed && spaceAbove > spaceBelow);
+      if (isPhone) {
+        requestAnimationFrame(() => triggerRef.current?.scrollIntoView({ block: "center", behavior: "smooth" }));
+      }
+    }
     requestAnimationFrame(() => {
       const root = popRef.current;
       if (!root) return;
@@ -236,7 +256,7 @@ export function DatePicker({
       {open ? (
         <div
           ref={popRef}
-          className="kf-pe-cal"
+          className={`kf-pe-cal${openUp ? " kf-pe-cal--up" : ""}`}
           role="dialog"
           aria-modal="false"
           aria-labelledby={titleId}
