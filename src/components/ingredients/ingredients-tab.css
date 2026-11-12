@@ -530,6 +530,15 @@
 }
 .kf-ingp__items th + th,
 .kf-ingp__items td + td { padding-left: var(--sp-sp-4); }
+/* Round 4 fix 2: the 16 px gap applies between cols 1-2, 2-3, 3-4.
+ * The last col (Send back, 104) already sits flush with the pane's
+ * inset on its right edge, and the kf-btn--sm (102 px with "Send
+ * back") overhung by ~6 px when 16 px of padding ate into its
+ * content box. Drop the padding-left on the last col so the button
+ * has the full 104 to work with; cols 3 and 4 still show spacing
+ * to col 5 because both are right-aligned. */
+.kf-ingp__items th:last-child,
+.kf-ingp__items td:last-child { padding-left: 0; }
 .kf-ingp__items th.kf-ingp__items-num { text-align: right; }
 .kf-ingp__items td {
   padding: var(--sp-sp-3) 0;
@@ -574,6 +583,65 @@
   flex-direction: column;
   align-items: flex-end;
   gap: 2px;
+}
+
+/* Round 4 fix 1: phone linked-items. Under 860 the fixed 150 + 112 +
+ * 76 + 104 columns cannot fit a 356 px pane (table ends up 442 wide,
+ * horizontal overflow, Send back off the right edge). Each <tr>
+ * becomes a stacked block using the same markup + handlers:
+ *   line 1: item name (button) + vendor sub + warn sub (the first
+ *           cell's existing stack)
+ *   line 2: grade (left) · price with tag (right) · 12 mo (far right)
+ *   line 3: Send back, full width
+ * Same table, same colgroup (hidden), same handlers; CSS-only. */
+@media (max-width: 860px) {
+  .kf-ingp__items,
+  .kf-ingp__items tbody { display: block; width: 100%; }
+  .kf-ingp__items colgroup,
+  .kf-ingp__items thead { display: none; }
+  .kf-ingp__items tr {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "name  name  name  name"
+      "grade .     price usd"
+      "act   act   act   act";
+    column-gap: var(--sp-sp-3);
+    row-gap: var(--sp-sp-2);
+    padding: var(--sp-sp-3) 0;
+    border-bottom: 1px solid var(--sp-line-soft);
+  }
+  .kf-ingp__items tbody tr:last-child td { border-bottom: 0; }
+  .kf-ingp__items tr:last-child { border-bottom: 0; }
+  .kf-ingp__items td,
+  .kf-ingp__items td + td {
+    display: block;
+    padding: 0;
+    border: 0;
+    height: auto;
+    min-height: 0;
+    white-space: normal;
+    text-align: left;
+  }
+  .kf-ingp__items td:nth-child(1) { grid-area: name; }
+  .kf-ingp__items td:nth-child(2) { grid-area: grade; justify-self: start; align-self: center; }
+  .kf-ingp__items td:nth-child(3) {
+    grid-area: price;
+    align-self: center;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .kf-ingp__items td:nth-child(4) {
+    grid-area: usd;
+    align-self: center;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .kf-ingp__items td:nth-child(5) { grid-area: act; }
+  .kf-ingp__items td:nth-child(5) .kf-btn {
+    width: 100%;
+    justify-content: center;
+  }
 }
 
 /* Fix 2: RowGradeToggle chrome. Restored from the deleted review.css
