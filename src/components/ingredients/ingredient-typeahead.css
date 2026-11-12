@@ -1,0 +1,192 @@
+/* N13.1 R2: IngredientTypeahead's own stylesheet. Mounted in three
+ * places - panel/PanelClosedRows (Merge editor, on every panel
+ * surface), ReviewActions (review-queue card), and the admin page
+ * indirectly via MatchRunButton - so the component imports its sheet
+ * directly instead of depending on each surface loading review.css.
+ *
+ * Carries two blocks lifted byte-identical from review.css:
+ *   1. `.kf-dpn__label` + children. The typeahead wraps its search
+ *      input in `.kf-dpn__label`; MatchRunButton (admin) uses the
+ *      same primitive for the limit input, so MatchRunButton also
+ *      imports this sheet.
+ *   2. `.kf-ingtype*` family - position, field chrome, portaled list,
+ *      option row, meta/parent/empty states.
+ *
+ * Cascade note: these selectors have no competing rule in drawer.css,
+ * vendor-items-tab.css, table.css, site-pills.css, ingredients.css,
+ * chips.css, ingredients-tab.css, or components.css (verified by grep
+ * at the N13.1 R2 move). Loading order on every surface places this
+ * sheet alongside the other primitive sheets.
+ * --------------------------------------------------------------------- */
+
+/* Shared form-field label primitive. */
+.kf-dpn__label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 700;
+  color: var(--sp-body);
+}
+.kf-dpn__label span { color: var(--sp-muted); font-weight: 700; letter-spacing: .5px; text-transform: uppercase; font-size: var(--sp-t-label); }
+.kf-dpn__label input,
+.kf-dpn__label select {
+  min-height: 44px;
+  padding: var(--sp-sp-2) var(--sp-sp-3);
+  background: var(--sp-card);
+  color: var(--sp-ink);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  font-weight: 400;
+}
+.kf-dpn__label input:focus-visible,
+.kf-dpn__label select:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
+
+/* IngredientTypeahead field + dropdown. */
+.kf-ingtype { position: relative; }
+.kf-ingtype__field {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  min-height: 44px;
+  padding: 0 var(--sp-sp-2);
+  background: var(--sp-card);
+  color: var(--sp-ink);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+}
+/* Polish 2: ring replaces border emphasis, no double outline. The field
+ * owns the focus ring via :focus-within; the inner <input> explicitly
+ * kills its own :focus-visible ring - without the pseudo-class the
+ * global `*:focus-visible` + table.css's `.kf-field input:focus-visible`
+ * (specificity 0,2,1) were stacking a second ring on top of the field's.
+ * Three descendant classes = specificity 0,3,1, wins both. */
+.kf-ingtype__field:focus-within {
+  border-color: var(--sp-navy);
+  outline: 2px solid var(--sp-navy);
+  outline-offset: 2px;
+}
+.kf-ingtype .kf-ingtype__field input:focus-visible { outline: none; }
+/* Polish 2: the global .kf-field__icon / .kf-field__clear in table.css
+ * are position:absolute (anchored to the nearest positioned ancestor -
+ * which here is .kf-ingtype). On this control the field is flex with
+ * gap: sp-sp-2, so the icons already have their own layout slot - the
+ * absolute positioning from table.css was floating them on top of the
+ * input text (icon x 10-26 overlapping placeholder; clear x covering
+ * the trailing characters). Reset to static so they participate in
+ * the flex row. Three descendant classes = specificity 0,3,0 beats
+ * table.css's 0,1,0. */
+.kf-ingtype .kf-ingtype__field .kf-field__icon,
+.kf-ingtype .kf-ingtype__field .kf-field__clear {
+  position: static;
+  bottom: auto;
+  left: auto;
+  right: auto;
+  height: auto;
+}
+.kf-ingtype__field .kf-field__icon { color: var(--sp-muted); }
+.kf-ingtype__field input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  font-weight: 400;
+  /* The field padding + the flex gap handle left/right whitespace; the
+   * input must not carry its own padding reservation from the shared
+   * .kf-field input padding rule (table.css:52 sets padding-left: 40px
+   * for the sticky-search variant on the review page). Reset so text
+   * starts right of the search icon and never runs under the clear. */
+  padding: 0;
+}
+.kf-ingtype__field input:disabled { color: var(--sp-muted); }
+.kf-ingtype__field .kf-field__clear {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--sp-floor-corp);
+  height: var(--sp-floor-corp);
+  background: transparent;
+  color: var(--sp-muted);
+  border: none;
+  border-radius: var(--sp-r-sm);
+  cursor: pointer;
+  /* Give the clear a hover-visible feel but keep it quiet at rest. */
+  transition: color 120ms ease;
+}
+/* Polish 2: 6px invisible pad extends the tap target to the icon-button
+ * floor without changing the visual size. */
+.kf-ingtype__field .kf-field__clear::before {
+  content: "";
+  position: absolute;
+  inset: -6px;
+}
+.kf-ingtype__field .kf-field__clear:hover:not([disabled]),
+.kf-ingtype__field .kf-field__clear:focus-visible { color: var(--sp-ink); }
+.kf-ingtype__field .kf-field__clear:focus-visible {
+  outline: 2px solid var(--sp-navy);
+  outline-offset: 2px;
+}
+
+.kf-ingtype__list {
+  /* Polish 2: portaled to document.body. The component writes
+   * position:fixed + top/left/width inline from the input's bounding
+   * rect; CSS owns everything else. z-index above the topbar so the
+   * menu is never covered by sticky-top chrome. overscroll-behavior
+   * contain so wheel at the ends doesn't scroll the drawer/page
+   * behind it. */
+  position: fixed;
+  z-index: calc(var(--sp-z-topbar) + 10);
+  margin: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+  box-shadow: var(--sp-shadow-float);
+  list-style: none;
+  padding: var(--sp-sp-1) 0;
+}
+.kf-ingtype__opt {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--sp-sp-2);
+  padding: var(--sp-sp-2) var(--sp-sp-3);
+  cursor: pointer;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  color: var(--sp-ink);
+}
+.kf-ingtype__opt--on { background: var(--sp-sky-tint); }
+/* N10 §2e: when Relink opts in to showResultMeta, each result stacks
+ * name over a second micro line (`{category} · {parent} · per {unit}`).
+ * PanelClosedRows (Merge) does not opt in; its rendering is byte-
+ * identical to today via .kf-ingtype__parent. */
+.kf-ingtype__opt { flex-direction: column; align-items: flex-start; }
+.kf-ingtype__name { font-weight: 700; }
+.kf-ingtype__meta {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-body);
+}
+.kf-ingtype__parent {
+  color: var(--sp-muted);
+  font-size: var(--sp-t-micro);
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  white-space: nowrap;
+}
+.kf-ingtype__empty {
+  padding: var(--sp-sp-3);
+  color: var(--sp-muted);
+  font-size: var(--sp-t-micro);
+}

@@ -693,22 +693,10 @@
   }
 }
 
-/* N12.1 R2: allergen grid drops to three columns when the DETAIL
- * pane is below 640. Base is 5-col (review.css), phone (window <=
- * 860) is 2-col in review.css. The @media (min-width: 861px) gate
- * keeps the 2-col phone rule effective (both would fire on phone
- * otherwise and the later-declared container rule would win); the
- * two rules target different situations:
- *   phone (narrow window + narrow pane)       -> 2 cols (review.css)
- *   wide window with narrow detail (desktop)  -> 3 cols (this rule)
- *   wide detail                                -> 5 cols (base) */
-@media (min-width: 861px) {
-  @container detail (max-width: 639px) {
-    .kf-allergens__grid {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
-  }
-}
+/* N13.1 R2: the wide-window-narrow-detail `.kf-allergens__grid`
+ * @container override moved to ./ingredient-allergens.css where the
+ * base + narrow-phone rules now also live. One source governs the
+ * three breakpoints. */
 
 /* Fix 2: RowGradeToggle chrome. Restored from the deleted review.css
  * block (lines 2107-2128 at 682a08f). One-click pill in the linked-

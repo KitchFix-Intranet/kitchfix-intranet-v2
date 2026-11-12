@@ -21,6 +21,10 @@ import {
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/ui/Toaster";
 import { ALLERGENS, type Allergen } from "@/lib/ingredients/allergens";
+// N13.1 R2: own the sheet. Mounted only by PanelIngredientZone today,
+// so the panel reaches the grid + toggle rules through this import on
+// every surface including Vendor items (where review.css is absent).
+import "./ingredient-allergens.css";
 
 export type AllergensHandle = { confirm: () => Promise<void> };
 export type AllergensState = {

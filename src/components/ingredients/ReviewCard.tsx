@@ -20,9 +20,9 @@ import { uomLabel } from "@/lib/ingredients/pack";
 import { ReviewActions } from "./ReviewActions";
 import { DetailPanel, type DetailPanelOpen } from "./DetailPanel";
 // N13.1 §3: site-pill primitives lifted out of review.css so each
-// reader loads its own source. ReviewCard mounts on surfaces that
-// don't always import review.css (e.g. embedded previews), so the
-// shared sheet rides with the card.
+// reader loads its own source. ReviewCard renders .kf-site-pill /
+// .kf-site-pill--more; this import keeps the card self-sufficient
+// against future review.css moves.
 import "./site-pills.css";
 import { RowFlagToggle } from "./RowFlagToggle";
 import { computeReviewCardSpread } from "./reviewCardSpread";
