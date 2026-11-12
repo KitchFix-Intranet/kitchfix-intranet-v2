@@ -104,6 +104,9 @@ export function ReviewCard({
           vendor: it.vendor,
           pack: it.pack,
           billedUnit: it.billedUnit,
+          // N10 §2c: fed to inferBaseUnit() in the New-ingredient
+          // panel's Costed-per readout.
+          packUom: it.packUom,
           usd12m: it.usd12m,
         })),
     [checked, group.items]

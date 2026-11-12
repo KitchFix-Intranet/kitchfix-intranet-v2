@@ -7,6 +7,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { categoryForParent, inferBaseUnit, type SuperCategory } from "@/lib/ingredients/categories";
+import { canonicalIngredientName } from "@/lib/ingredients/nameNorm";
 import { estimateFromOverride } from "@/lib/ingredients/estimate";
 import {
   parsePack,
@@ -736,7 +737,10 @@ export async function createIngredient(
 ): Promise<{ id: string; baseUnit: BaseUnit }> {
   const trimmed = args.name.trim();
   if (trimmed.length < 2) throw new Error("Ingredient name is required");
-  const nameNorm = trimmed.toLowerCase().replace(/\s+/g, " ");
+  // N10 §2b: swap the inline expression for the shared helper so the
+  // client's name-match detection reads the same answer this lookup
+  // gives. The rule itself is unchanged.
+  const nameNorm = canonicalIngredientName(trimmed);
 
   // Try to find an existing active ingredient by name_norm first.
   // N4: when a match is found this returns it AS-IS - the caller's
@@ -922,9 +926,9 @@ export async function splitToNewIngredient(
 // Detail-panel edits (step 5): rename, category/sub, resale, pack override.
 // ---------------------------------------------------------------------------
 
-function normName(s: string): string {
-  return s.trim().toLowerCase().replace(/\s+/g, " ");
-}
+// N10 §2b: the local normName helper is gone - callers use the shared
+// canonicalIngredientName import at the top of this file. One rule,
+// one home, so a client-side match reads the same answer.
 
 // Rename an ingredient. The old name is preserved as a `kind='rename'`
 // alias so that any future vendor-item whose description_key matches the
@@ -939,7 +943,7 @@ export async function renameIngredient(
   const { ingredientId, newName, actorEmail } = args;
   const trimmed = newName.trim();
   if (trimmed.length < 2) return { ok: false, error: "Name is too short", aliasWritten: false };
-  const newNorm = normName(trimmed);
+  const newNorm = canonicalIngredientName(trimmed);
 
   // Load current for the before/after + the old-name alias.
   const { data: cur, error: curErr } = await client

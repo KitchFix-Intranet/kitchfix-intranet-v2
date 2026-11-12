@@ -24,6 +24,10 @@ export type ReviewGroupItem = {
   itemNumber: string | null;
   pack: string | null;
   packNormalized: string | null;
+  // N10 §3: raw pr_vendor_items.pack_uom, fed to inferBaseUnit() in
+  // the New-ingredient panel's "Costed per" preview. Already selected
+  // at ReviewQueue:145; one row-object field add, no SELECT change.
+  packUom: string | null;
   packState: string;
   // P1 correction 2c: 'catalog_sibling' names a pack that came from
   // a proven same-vendor expansion (invoice pack_text matches >=2

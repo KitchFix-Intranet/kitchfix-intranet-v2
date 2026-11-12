@@ -30,8 +30,19 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Search, X } from "lucide-react";
+import { uomLabel } from "@/lib/ingredients/pack";
 
-type Ingredient = { id: string; name: string; parent: string | null };
+// N10 §2e + R3 + R7: optional category + base_unit let the typeahead
+// render a second micro line on each result (`showResultMeta`).
+// Required for the Relink flow, opt-in so PanelClosedRows' Merge
+// disclosure (which passes a different shape) is byte-identical.
+type Ingredient = {
+  id: string;
+  name: string;
+  parent: string | null;
+  category?: string | null;
+  base_unit?: string;
+};
 
 const MAX_RESULTS = 12;
 
@@ -47,6 +58,17 @@ function matches(ing: Ingredient, needle: string): boolean {
   return false;
 }
 
+// N10 §2e R7: shared meta-line formatter. The picked card (frame G)
+// renders the same string, from the same function, so the search and
+// the picked state cannot drift.
+export function formatIngredientMeta(ing: Ingredient): string | null {
+  const bits: string[] = [];
+  if (ing.category) bits.push(ing.category);
+  if (ing.parent) bits.push(ing.parent);
+  if (ing.base_unit) bits.push(`per ${uomLabel(ing.base_unit)}`);
+  return bits.length > 0 ? bits.join(" · ") : null;
+}
+
 export function IngredientTypeahead({
   ingredients,
   excludeId,
@@ -55,6 +77,10 @@ export function IngredientTypeahead({
   pickedId,
   onPick,
   busy = false,
+  showResultMeta = false,
+  autoFocusInput = false,
+  initialQuery = "",
+  selectOnFocus = false,
 }: {
   ingredients: Ingredient[];
   excludeId?: string | null;
@@ -63,8 +89,21 @@ export function IngredientTypeahead({
   pickedId: string | null;
   onPick: (id: string | null, name: string | null) => void;
   busy?: boolean;
+  // N10 §2e: opt-in. Relink turns it on; PanelClosedRows (Merge) leaves
+  // it off so the Merge dropdown is byte-identical to today.
+  showResultMeta?: boolean;
+  // N10 round 2 fix 3: Relink wants focus in the search when the
+  // panel opens. Other call sites leave this off.
+  autoFocusInput?: boolean;
+  // N10 round 2 fix 4: Change returns to the search with the
+  // previously-picked name pre-filled. Seeds the internal query on
+  // mount only.
+  initialQuery?: string;
+  // N10 round 2 fix 4: with initialQuery + autoFocusInput, select
+  // the text on the first focus so a keystroke replaces it.
+  selectOnFocus?: boolean;
 }) {
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
   const [open, setOpen] = useState(false);
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -83,6 +122,18 @@ export function IngredientTypeahead({
     const match = ingredients.find((i) => i.id === pickedId);
     if (match) setQuery(match.name);
   }, [pickedId, ingredients]);
+
+  // N10 round 2 fix 3 + 4: optional autoFocus on the input, optional
+  // select-all on the first focus so a typed key replaces the seed.
+  useEffect(() => {
+    if (!autoFocusInput) return;
+    const el = inputRef.current;
+    if (!el) return;
+    el.focus();
+    if (selectOnFocus) el.select();
+    // Once; mount-time only. Deps left narrow by design.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const filtered = useMemo(() => {
     const pool = excludeId ? ingredients.filter((i) => i.id !== excludeId) : ingredients;
@@ -233,19 +284,26 @@ export function IngredientTypeahead({
               style={{ top: anchor.top, left: anchor.left, width: anchor.width }}
               onMouseDown={(e) => e.preventDefault() /* keep focus on input */}
             >
-              {filtered.map((ing, i) => (
-                <li
-                  key={ing.id}
-                  role="option"
-                  aria-selected={i === cursor}
-                  className={`kf-ingtype__opt${i === cursor ? " kf-ingtype__opt--on" : ""}`}
-                  onClick={() => commit(ing)}
-                  onMouseEnter={() => setCursor(i)}
-                >
-                  <span className="kf-ingtype__name">{ing.name}</span>
-                  {ing.parent ? <span className="kf-ingtype__parent">{ing.parent}</span> : null}
-                </li>
-              ))}
+              {filtered.map((ing, i) => {
+                const meta = showResultMeta ? formatIngredientMeta(ing) : null;
+                return (
+                  <li
+                    key={ing.id}
+                    role="option"
+                    aria-selected={i === cursor}
+                    className={`kf-ingtype__opt${i === cursor ? " kf-ingtype__opt--on" : ""}`}
+                    onClick={() => commit(ing)}
+                    onMouseEnter={() => setCursor(i)}
+                  >
+                    <span className="kf-ingtype__name">{ing.name}</span>
+                    {meta ? (
+                      <span className="kf-ingtype__meta">{meta}</span>
+                    ) : ing.parent ? (
+                      <span className="kf-ingtype__parent">{ing.parent}</span>
+                    ) : null}
+                  </li>
+                );
+              })}
             </ul>,
             document.body
           )

@@ -641,38 +641,318 @@
 .kf-rvc__flagbtn--on:hover { color: var(--sp-warn-strong); }
 .kf-rvc__flagbtn.is-busy { opacity: 0.4; cursor: default; }
 
+/* N10: review-card action panel (Relink + New ingredient). One
+ * shell primitive used by both, stacked under the action bar.
+ * Everything below reuses the item panel's .kf-ipanel__editor-field
+ * for labels + inputs - one primitive, one home. */
 .kf-rvc__panel {
   background: var(--sp-card);
-  border: 1px solid var(--sp-line);
+  border: 1px solid var(--sp-sky-line);
   border-radius: var(--sp-r-ctl);
-  padding: var(--sp-sp-3);
+  overflow: hidden;
+}
+.kf-rvc__panel-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sp-3);
+  padding: var(--sp-sp-2) var(--sp-sp-2) var(--sp-sp-2) var(--sp-sp-5);
+  border-bottom: 2px solid var(--sp-navy);
+}
+.kf-rvc__panel-head-title {
+  margin: 0;
+  color: var(--sp-navy);
+  font-family: var(--sp-disp);
+  font-weight: 800;
+  font-size: var(--sp-t-h3);
+  line-height: 1;
+  text-transform: uppercase;
+}
+.kf-rvc__panel-close {
+  margin-left: auto;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--sp-r-sm);
+  color: var(--sp-body);
+  cursor: pointer;
+}
+.kf-rvc__panel-close:hover:not(:disabled) { background: var(--sp-sky-tint); color: var(--sp-navy); }
+.kf-rvc__panel-close:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
+
+.kf-rvc__panel-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--sp-sp-6);
+  padding: var(--sp-sp-5);
+}
+.kf-rvc__panel-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+}
+.kf-rvc__panel-form-grid2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-sp-3);
+}
+.kf-rvc__panel-from {
+  font-weight: 400;
+  color: var(--sp-body);
+  font-size: var(--sp-t-micro);
+  text-transform: none;
+  letter-spacing: 0;
+  margin-left: var(--sp-sp-1);
+}
+.kf-rvc__panel-sublink {
+  align-self: flex-start;
+  min-height: 44px;
+  padding: var(--sp-sp-2) 0;
+  background: transparent;
+  border: 0;
+  color: var(--sp-link);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+  cursor: pointer;
+  text-align: left;
+}
+.kf-rvc__panel-sublink:hover:not(:disabled) { text-decoration: underline; }
+.kf-rvc__panel-sublink:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
+
+/* "What happens" box - sky-soft tint, aligned with the form's top. */
+.kf-rvc__panel-what {
+  background: var(--sp-sky-soft);
+  border-radius: var(--sp-r-sm);
+  padding: var(--sp-sp-4);
   display: flex;
   flex-direction: column;
   gap: var(--sp-sp-2);
+  align-self: start;
+  min-width: 0;
 }
-.kf-rvc__panel label {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-sp-1);
+.kf-rvc__panel-what-label {
   font-family: var(--sp-ui);
   font-size: var(--sp-t-micro);
-  color: var(--sp-muted);
+  font-weight: 800;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--sp-body);
 }
-.kf-rvc__panel input,
-.kf-rvc__panel select {
-  min-height: var(--sp-floor-corp);
-  padding: 0 var(--sp-sp-3);
-  border: 1px solid var(--sp-line);
-  border-radius: var(--sp-r-ctl);
+.kf-rvc__panel-what-l1 {
+  margin: 0;
   font-family: var(--sp-ui);
-  font-size: var(--sp-t-body);
+  font-size: var(--sp-t-table);
+  line-height: 1.5;
   color: var(--sp-ink);
-  background: var(--sp-card);
 }
-.kf-rvc__panel-btns {
+.kf-rvc__panel-what-l1 b { font-weight: 800; }
+.kf-rvc__panel-what-l2 {
+  margin: 0;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  color: var(--sp-body);
+  line-height: 1.5;
+}
+.kf-rvc__panel-what-list {
+  list-style: none;
+  margin: var(--sp-sp-1) 0 0;
+  padding: 0;
+  border-top: 1px solid var(--sp-sky-line);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+}
+.kf-rvc__panel-what-list > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 130px 56px;
+  gap: var(--sp-sp-3);
+  padding: var(--sp-sp-2) 0;
+  border-bottom: 1px solid var(--sp-sky-line);
+  align-items: baseline;
+}
+.kf-rvc__panel-what-list > li:last-child { border-bottom: 0; }
+/* N10 round 2 fix 9: item names wrap, never truncate. The list is
+ * at most five rows + a "+ k more" overflow, so a wrapped name
+ * costs at worst a second line, never an ellipsis. */
+.kf-rvc__panel-what-item {
+  color: var(--sp-ink);
+  min-width: 0;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.4;
+}
+.kf-rvc__panel-what-vendor { color: var(--sp-body); }
+.kf-rvc__panel-what-usd {
+  text-align: right;
+  font-weight: 800;
+  color: var(--sp-ink);
+  font-variant-numeric: tabular-nums;
+}
+.kf-rvc__panel-what-more {
+  color: var(--sp-body);
+  padding: var(--sp-sp-2) 0;
+}
+.kf-rvc__panel-what-kv {
   display: flex;
   gap: var(--sp-sp-2);
+  align-items: baseline;
+  margin-top: var(--sp-sp-1);
+  padding-top: var(--sp-sp-3);
+  border-top: 1px solid var(--sp-sky-line);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+}
+.kf-rvc__panel-what-kv-k {
+  font-size: var(--sp-t-micro);
+  font-weight: 800;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--sp-body);
+  white-space: nowrap;
+}
+.kf-rvc__panel-what-kv b { color: var(--sp-ink); font-weight: 800; }
+.kf-rvc__panel-what-kv-r { color: var(--sp-body); font-size: var(--sp-t-micro); }
+
+/* Shared note style (info / warn). Reused by the name-match info
+ * note + the self-match warn note in the New-ingredient form. */
+.kf-rvc__panel-note {
+  display: flex;
+  gap: var(--sp-sp-3);
+  align-items: flex-start;
+  background: var(--sp-sky-tint);
+  border-radius: var(--sp-r-sm);
+  padding: var(--sp-sp-3);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  line-height: 1.45;
+  color: var(--sp-ink);
+}
+.kf-rvc__panel-note svg { flex-shrink: 0; color: var(--sp-navy); margin-top: 1px; }
+.kf-rvc__panel-note b { font-weight: 800; }
+.kf-rvc__panel-note--warn { background: var(--sp-warn-bg); color: var(--sp-ink); }
+.kf-rvc__panel-note--warn svg { color: var(--sp-warn); }
+
+/* Picked-ingredient card for Relink's commit state (frame G). */
+.kf-rvc__panel-picked {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-sp-3);
+  border: 1px solid var(--sp-sky-line);
+  border-radius: var(--sp-r-sm);
+  padding: var(--sp-sp-3);
+  background: var(--sp-card);
+}
+.kf-rvc__panel-picked b {
+  font-weight: 800;
+  color: var(--sp-ink);
+}
+
+/* Error band (role="alert"). Block tone; sits between body and foot. */
+.kf-rvc__panel-err {
+  display: flex;
+  gap: var(--sp-sp-3);
+  align-items: flex-start;
+  margin: 0 var(--sp-sp-5) var(--sp-sp-3);
+  padding: var(--sp-sp-3);
+  background: var(--sp-block-bg);
+  border-left: 3px solid var(--sp-block);
+  border-radius: var(--sp-r-sm);
+  color: var(--sp-block);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  line-height: 1.45;
+}
+.kf-rvc__panel-err svg { flex-shrink: 0; margin-top: 1px; }
+.kf-rvc__panel-err b { font-weight: 800; }
+
+.kf-rvc__panel-foot {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--sp-sp-2);
   flex-wrap: wrap;
+  padding: 0 var(--sp-sp-5) var(--sp-sp-5);
+}
+.kf-rvc__panel-link {
+  min-height: 44px;
+  padding: 0 var(--sp-sp-2);
+  margin-right: var(--sp-sp-1);
+  background: transparent;
+  border: 0;
+  color: var(--sp-link);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.kf-rvc__panel-link:hover:not(:disabled) { color: var(--sp-navy-deep); }
+.kf-rvc__panel-link:disabled { color: var(--sp-muted); cursor: not-allowed; text-decoration: none; }
+.kf-rvc__panel-link:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
+
+/* kf-ctl: shared text-input / select chrome inside the panel form.
+ * Mirrors kf-ipanel__ctl's measurements (44 px, 0 12px padding,
+ * 1 px sky-line, --sp-r-sm, --sp-card, --sp-ui, --sp-t-table,
+ * --sp-ink) so the review-card panels match the item panel. */
+.kf-rvc__panel-form .kf-ctl {
+  height: 44px;
+  box-sizing: border-box;
+  padding: 0 var(--sp-sp-3);
+  border: 1px solid var(--sp-sky-line);
+  border-radius: var(--sp-r-sm);
+  background: var(--sp-card);
+  color: var(--sp-ink);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  width: 100%;
+}
+.kf-rvc__panel-form .kf-ctl:focus-visible {
+  outline: 2px solid var(--sp-navy);
+  outline-offset: 2px;
+}
+.kf-rvc__panel-form .kf-ctl:disabled {
+  background: var(--sp-ground);
+  color: var(--sp-body);
+  border-color: var(--sp-line);
+  cursor: not-allowed;
+}
+
+/* N10 §2a: bar button renders filled when its panel is open. */
+.kf-rvc__actions-row .kf-btn--line.is-on {
+  background: var(--sp-navy);
+  color: var(--sp-on-navy);
+  border-color: var(--sp-navy);
+}
+
+/* Phone: stack the body, foot column with primary on top. */
+@media (max-width: 860px) {
+  .kf-rvc__panel-body {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--sp-sp-3);
+    padding: var(--sp-sp-4);
+  }
+  .kf-rvc__panel-form-grid2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .kf-rvc__panel-foot {
+    flex-direction: column-reverse;
+    align-items: stretch;
+    padding: 0 var(--sp-sp-4) var(--sp-sp-4);
+  }
+  .kf-rvc__panel-foot .kf-btn { justify-content: center; }
+  .kf-rvc__panel-link { text-align: center; margin: 0; }
+  .kf-rvc__panel-what-list > li {
+    grid-template-columns: minmax(0, 1fr) 56px;
+  }
+  .kf-rvc__panel-what-vendor { display: none; }
 }
 
 /* N9: .kf-rvc__foot deleted. The right-side moves/select line now
@@ -1166,7 +1446,17 @@
   color: var(--sp-ink);
 }
 .kf-ingtype__opt--on { background: var(--sp-sky-tint); }
+/* N10 §2e: when Relink opts in to showResultMeta, each result stacks
+ * name over a second micro line (`{category} · {parent} · per {unit}`).
+ * PanelClosedRows (Merge) does not opt in; its rendering is byte-
+ * identical to today via .kf-ingtype__parent. */
+.kf-ingtype__opt { flex-direction: column; align-items: flex-start; }
 .kf-ingtype__name { font-weight: 700; }
+.kf-ingtype__meta {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-body);
+}
 .kf-ingtype__parent {
   color: var(--sp-muted);
   font-size: var(--sp-t-micro);
@@ -1180,127 +1470,10 @@
   font-size: var(--sp-t-micro);
 }
 
-/* ---------------------------------------------------------------------
- * New-ingredient split form (ReviewActions showNew). Carries the items
- * preview under the required category / sub-category pickers so Kevin
- * sees what the new ingredient will be built from.
- * --------------------------------------------------------------------- */
-.kf-newing { display: flex; flex-direction: column; gap: var(--sp-sp-3); }
-.kf-newing__intro {
-  color: var(--sp-body);
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-micro);
-  padding: var(--sp-sp-2) 0;
-  border-bottom: 1px dashed var(--sp-line-soft);
-}
-/* `.kf-newing__row` is applied alongside `.kf-dpn__row`, which sets
- * flex-direction: column. Without an explicit row direction here the
- * three fields (Qty / Size / UOM in the override editor; Name / Super
- * / Sub in the create form) stack vertically with the parent's gap,
- * which looked like large empty vertical gaps between the inputs.
- * Force row direction so they sit side-by-side (wrapping on narrow
- * widths). */
-.kf-newing__row {
-  display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
-  gap: var(--sp-sp-3);
-  align-items: flex-end;
-}
-.kf-newing__row > .kf-dpn__label { flex: 1 1 220px; min-width: 0; }
-.kf-newing__sub-toggle {
-  align-self: flex-start;
-  background: transparent;
-  border: 1px solid var(--sp-line);
-  border-radius: var(--sp-r-sm);
-  padding: var(--sp-sp-1) var(--sp-sp-3);
-  color: var(--sp-link);
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-micro);
-  font-weight: 700;
-  cursor: pointer;
-  min-height: 32px;
-}
-.kf-newing__sub-toggle:hover { background: var(--sp-sky-tint); }
-.kf-newing__sub-toggle:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
-
-/* Q2 §1: create-and-confirm checkbox on the new-ingredient panel.
- * Sits above the Create button; default checked. Quiet styling -
- * this is a single decision point, not a form row. */
-.kf-newing__confirm {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-sp-2);
-  margin-top: var(--sp-sp-3);
-  color: var(--sp-body);
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-body);
-  cursor: pointer;
-  user-select: none;
-}
-.kf-newing__confirm input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  cursor: pointer;
-  accent-color: var(--sp-ink);
-}
-
-.kf-newing__preview {
-  background: var(--sp-ground);
-  border: 1px solid var(--sp-line);
-  border-radius: var(--sp-r-sm);
-  padding: var(--sp-sp-3);
-}
-.kf-newing__preview-head {
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-micro);
-  color: var(--sp-muted);
-  text-transform: uppercase;
-  letter-spacing: .5px;
-  margin-bottom: var(--sp-sp-2);
-}
-.kf-newing__preview ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-sp-2);
-}
-.kf-newing__preview li {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: var(--sp-sp-2) 0;
-  border-bottom: 1px dashed var(--sp-line-soft);
-}
-.kf-newing__preview li:last-child { border-bottom: none; }
-.kf-newing__preview-name {
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-body);
-  color: var(--sp-ink);
-  font-weight: 700;
-}
-.kf-newing__preview-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-sp-2);
-  align-items: baseline;
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-micro);
-  color: var(--sp-body);
-}
-.kf-newing__preview-usd {
-  margin-left: auto;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-.kf-newing__preview-more {
-  color: var(--sp-muted);
-  font-size: var(--sp-t-micro);
-  font-style: italic;
-}
+/* N10: .kf-newing* family is gone. The N10 review-card panels (both
+ * Relink and New ingredient) live under .kf-rvc__panel-* near the
+ * top of this file; the shared field primitive is the item panel's
+ * .kf-ipanel__editor-field. One rule, one place. */
 
 /* Inline "Saved" / error flash next to each DetailPanel Save button. */
 .kf-dpn__flash {
