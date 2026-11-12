@@ -29,7 +29,6 @@ Anatomy:
 
 | slot      | content                                                                 |
 |-----------|-------------------------------------------------------------------------|
-| burger    | phone only, 48-px borderless                                            |
 | title     | page title (`<h1>`, `--sp-t-title`, navy display)                       |
 | crumb     | short context line in `--sp-muted`; on Home carries long date + a `.kf-skew-tag` "Period N, week M" from `fiscal_periods` |
 | actions   | 1-2 controls from a parallel route slot (`src/app/(shell)/@topbar/<route>/page.tsx`), server-rendered - no portal, no context |
@@ -50,7 +49,8 @@ Drawers open on the right at `min(480px, 100%)` width. A URL-param drawer cannot
 
 ## 3. Phone (viewport 860px or less)
 
-- Rail is off-canvas, revealed by a 48px borderless hamburger in the 56-px topbar; topbar title is 20px.
+- Rail is off-canvas, revealed by the Menu slot in the bottom tab bar. There is no hamburger in the top bar. 56-px topbar; topbar title is 20px.
+- One way in: the drawer has exactly one opener on phones, the Menu slot (R-PP80, 2026-11-12).
 - Bottom tab bar: `--sp-tabbar` (64px), `--sp-navy-deep`, five slots. Active icon in `--sp-sky`.
   - At shell level: Home, Stockpot, People, Ops, Menu.
   - Inside Stockpot: Ingredients, Recipes, Menus, Signs, Menu.

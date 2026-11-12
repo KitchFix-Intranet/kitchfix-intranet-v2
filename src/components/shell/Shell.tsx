@@ -436,14 +436,6 @@ export function Shell({
         <header
           className={`kf-topbar${busy === "busy" ? " is-busy" : busy === "complete" ? " is-busy-complete" : ""}`}
         >
-          <button
-            type="button"
-            className="kf-topbar__burger kf-only-phone"
-            onClick={() => setDrawerOpen(true)}
-            aria-label="Open menu"
-          >
-            <MenuIcon size={20} strokeWidth={1.5} />
-          </button>
           <div className="kf-topbar__title">
             <h1>{title}</h1>
             {crumb ? <span className="kf-topbar__crumb">{crumb}</span> : null}
