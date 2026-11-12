@@ -33,6 +33,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { AccountMenu } from "./AccountMenu";
+import { titleFor } from "./routeTitles";
 import "./shell.css";
 
 export type NavItem = {
@@ -166,8 +167,12 @@ type Props = {
   topbar: ReactNode;
   email: string;
   name: string;
-  title: string;
-  crumb?: ReactNode;
+  // Shell patch 3 (2026-11-12): title + crumb are no longer props.
+  // Shell computes both from usePathname() + titleFor(), so client
+  // navigations update the h1 without a reload. The two values below
+  // are the only inputs titleFor needs for the Home branch.
+  dateLong: string;
+  periodTag: string | null;
   // Count of remaining Academy requirements for the viewer. The server
   // layout computes this only on academy routes (one extra query);
   // elsewhere it is null and the badge never renders.
@@ -191,13 +196,19 @@ export function Shell({
   topbar,
   email,
   name,
-  title,
-  crumb,
+  dateLong,
+  periodTag,
   todoCount = null,
   isOwner = false,
   role = "learner",
 }: Props) {
   const pathname = usePathname();
+  // Shell patch 3: title + crumb are derived here on every render.
+  // Server render reads the request pathname (no rewrites + no proxy
+  // URL mutation in this app, so usePathname() matches x-pathname at
+  // hydration); client navigation re-renders the header with the new
+  // route's title + crumb without a reload.
+  const { title, crumb } = titleFor(pathname, dateLong, periodTag);
   const inStockpot = isStockpotRoute(pathname);
   const inAcademy = isAcademyRoute(pathname);
   const inAdmin = isAdminRoute(pathname);
