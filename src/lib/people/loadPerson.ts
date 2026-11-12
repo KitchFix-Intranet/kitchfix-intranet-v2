@@ -21,6 +21,7 @@ import { toCardPerson } from "./contact";
 import { fmtShort, fmtFull, fmtDaysWaiting } from "./dates";
 import { LATE_DAYS } from "./thresholds";
 import { labelForAction } from "./labels";
+import { viewerIsInChain } from "./chain";
 
 const PERSON_SELECT =
   "worker_id, display_name, title, account_key, region, work_email, personal_email, phone, manager_worker_id, start_date, birthday, is_corp, is_salaried, is_site_leader, is_regional_director, pp_full_access, pp_review, status";
@@ -78,22 +79,11 @@ async function visibleHistory(
   const isSelf = person.worker_id === viewer.worker_id;
   const grant_full = viewer.pp_full_access || viewer.pp_review;
 
-  let grant_reports = false;
-  if (!isSelf) {
-    const seen = new Set<string>();
-    let cursor: string | null = person.manager_worker_id;
-    while (cursor && !seen.has(cursor)) {
-      if (cursor === viewer.worker_id) { grant_reports = true; break; }
-      seen.add(cursor);
-      const q = await sb
-        .from("people")
-        .select("manager_worker_id")
-        .eq("worker_id", cursor)
-        .maybeSingle();
-      if (q.error || !q.data) break;
-      cursor = (q.data.manager_worker_id as string | null) ?? null;
-    }
-  }
+  // T3 (2026-11-13). Chain walk extracted to src/lib/people/chain.ts
+  // so loadRecord.ts (Inbox record drawer) can use it too.
+  const grant_reports = isSelf
+    ? false
+    : await viewerIsInChain(sb, viewer.worker_id, person.manager_worker_id);
 
   // Build the query. Narrow to viewer-sent rows when either:
   //   (a) no full/reports grant applies - the only way the viewer
@@ -119,7 +109,7 @@ async function visibleHistory(
   const rowsQ = await q;
   if (rowsQ.error) return { visible: grant_full || grant_reports, rows: [] };
   const rows = (rowsQ.data ?? []) as Array<{
-    id: number; module: string | null; action_type: string | null;
+    id: string; module: string | null; action_type: string | null;
     submitted_at: string; submitter_worker_id: string | null; status: string;
   }>;
 
@@ -303,7 +293,7 @@ export async function loadPerson(
     for (const r of wRows) {
       const d = daysSince((r.submitted_at ?? "") as string, now);
       inFlightRows.push({
-        id: r.id as number,
+        id: (r.id ?? "") as string,
         kind: kindFromModule(r.module as string | null),
         label: labelForAction(r.module as string | null, r.action_type as string | null),
         submitter_name: subNames.get((r.submitter_worker_id as string) ?? "") ?? null,

@@ -71,7 +71,7 @@ async function loadWaitingByPerson(sb: SupabaseClient): Promise<Map<string, Wait
     const pid = r.person_worker_id as string;
     const list = byPerson.get(pid) ?? [];
     list.push({
-      id: r.id as number,
+      id: (r.id ?? "") as string,
       module: (r.module ?? "") as string,
       action_type: (r.action_type as string | null) ?? null,
       submitted_at: (r.submitted_at ?? "") as string,
@@ -261,6 +261,15 @@ export async function loadTeam(
     ?? (sites[0]?.account_key)
     ?? "";
 
+  // T3 Part 0 #2 (2026-11-13). Club name for a single-site viewer.
+  // SL and SM live on one site; use its accounts.name so the phone
+  // head reads "St Louis Cardinals · 9 people" instead of leaking
+  // the account key "STL - FL". Null for corporate + RD (they see
+  // multiple sites and do not get a single-site phone head).
+  const viewerSiteName = (viewer.role === "site_leader" || viewer.role === "site_manager")
+    ? ((accountByKey.get(viewer.account_key)?.name ?? "").trim() || viewer.account_key)
+    : null;
+
   const total_pending = inScopeRows.reduce((s, r) => s + r.waiting_count, 0);
 
   // T2.2.2 (2026-11-13). Count pending items that have waited
@@ -286,5 +295,6 @@ export async function loadTeam(
     panels,
     defaultSiteKey,
     selfRow,
+    viewerSiteName,
   };
 }

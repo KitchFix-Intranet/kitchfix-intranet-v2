@@ -20,7 +20,11 @@ export function PersonCardFrame({ children }: { children: React.ReactNode }) {
 
   const closeHref = (() => {
     const next = new URLSearchParams(sp.toString());
+    // T3 (2026-11-13). The same frame hosts the person card (?card=)
+    // and the inbox record drawer (?rec=). Clearing both on close is
+    // safe because only one is ever set at a time.
     next.delete("card");
+    next.delete("rec");
     const s = next.toString();
     return s ? `${pathname}?${s}` : pathname;
   })();
@@ -74,7 +78,11 @@ export function PersonCardCloseButton() {
     if (exiting) return;
     setExiting(true);
     const next = new URLSearchParams(sp.toString());
+    // T3 (2026-11-13). The same frame hosts the person card (?card=)
+    // and the inbox record drawer (?rec=). Clearing both on close is
+    // safe because only one is ever set at a time.
     next.delete("card");
+    next.delete("rec");
     const s = next.toString();
     window.setTimeout(() => router.push(s ? `${pathname}?${s}` : pathname), 340);
   }, [router, sp, pathname, exiting]);
@@ -100,7 +108,11 @@ export function PersonCardFooterClose() {
     if (exiting) return;
     setExiting(true);
     const next = new URLSearchParams(sp.toString());
+    // T3 (2026-11-13). The same frame hosts the person card (?card=)
+    // and the inbox record drawer (?rec=). Clearing both on close is
+    // safe because only one is ever set at a time.
     next.delete("card");
+    next.delete("rec");
     const s = next.toString();
     window.setTimeout(() => router.push(s ? `${pathname}?${s}` : pathname), 340);
   }, [router, sp, pathname, exiting]);

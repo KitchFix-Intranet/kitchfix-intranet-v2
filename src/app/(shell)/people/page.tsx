@@ -117,6 +117,12 @@ export default async function Page({
                     viewer.role === "site_leader" ? viewer.account_key :
                     /* site_manager */ viewer.account_key;
 
+  // T3 Part 0 #2 (2026-11-13). Phone head for a single-site viewer
+  // reads the club name, not the account key. loadTeam resolves it
+  // from accounts.name; falls back to bandTitle for corp + RD who
+  // see multiple sites (no single-site line applies).
+  const phoneHeadTitle = team.viewerSiteName ?? bandTitle;
+
   return (
     // T2.1 fix 2 (2026-11-12). `.kf-pe-surface` defines --pe-floor
     // for every descendant; without it the search field + other
@@ -142,7 +148,7 @@ export default async function Page({
       <div className="kf-pe-phonehead kf-only-phone">
         <span className="kf-eyebrow kf-eyebrow--plain">My team</span>
         <p className="kf-pe-phonehead__line">
-          {bandTitle} · {team.totals.people} {team.totals.people === 1 ? "person" : "people"}
+          {phoneHeadTitle} · {team.totals.people} {team.totals.people === 1 ? "person" : "people"}
           {team.totals.pending > 0 ? ` · ${team.totals.pending} pending` : ""}
         </p>
       </div>

@@ -83,7 +83,10 @@ export interface Viewer {
 // RosterPerson below, which carries `waiting_count` and nothing
 // else about the request.
 export interface WaitingItem {
-  id: number;
+  // T3 (2026-11-13). submissions.id is a uuid in Postgres. T2
+  // typed it as number, which was wrong (worked only because the
+  // id never reached a numeric op). Strings everywhere now.
+  id: string;
   module: string; // 'paf' | 'incident' | 'termination' etc., not 'newhire'
   action_type: string | null;
   submitted_at: string; // ISO; drives "N days" waiting
@@ -176,7 +179,7 @@ export interface CardPerson extends RosterPerson {
 }
 
 export interface InFlightRow {
-  id: number;
+  id: string;
   kind: "paf" | "incident" | "termination" | "other";
   label: string;        // "PAF: Transfer"
   submitter_name: string | null;
@@ -188,7 +191,7 @@ export interface InFlightRow {
 }
 
 export interface HistoryRow {
-  id: number;
+  id: string;
   action: string; // short label - "PAF submitted" etc.
   date: string; // ISO; shown as "Nov 9" on the card
   dateLong: string; // "Nov 9, 2026" - used in the title attribute
@@ -255,4 +258,10 @@ export interface TeamView {
   // carries a WaitingItem. Every other RosterPerson in `people` /
   // `panels` has no request fields at all - only `waiting_count`.
   selfRow: SelfRosterPerson | null;
+  // T3 Part 0 #2 (2026-11-13). Club name for a single-site viewer,
+  // used by the phone head so the line reads "St Louis Cardinals · 9
+  // people" instead of the account key "STL - FL". Null for
+  // corporate + regional-director viewers (they do not get a
+  // single-site phone head).
+  viewerSiteName: string | null;
 }

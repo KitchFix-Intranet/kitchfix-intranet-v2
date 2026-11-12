@@ -26,6 +26,31 @@ import type { CardPerson, InFlightRow } from "@/lib/people/types";
 import { fmtShort } from "@/lib/people/dates";
 import { PersonCardCloseButton, PersonCardFooterClose } from "./PersonCardFrame";
 
+// T3 Part 0 #3 (2026-11-13). Hint the browser to break a long email
+// after the '@' and before each '.' - never in the middle of a
+// username or domain label. Returns an array of strings separated
+// by <wbr> elements; CSS turns anywhere-break off on the email dd
+// so these are the only break opportunities short of overflow.
+function wrapEmail(addr: string): React.ReactNode {
+  const parts: React.ReactNode[] = [];
+  const at = addr.indexOf("@");
+  if (at < 0) return addr;
+  // local-part: no breaks inside; push it as-is
+  parts.push(addr.slice(0, at + 1));
+  parts.push(<wbr key="at" />);
+  // domain: break opportunity before each dot
+  const domain = addr.slice(at + 1);
+  const segs = domain.split(".");
+  segs.forEach((seg, i) => {
+    if (i > 0) {
+      parts.push(<wbr key={`wbr-${i}`} />);
+      parts.push(".");
+    }
+    parts.push(seg);
+  });
+  return <>{parts}</>;
+}
+
 // T2.3 item 8 (2026-11-13). Status pill tone, matching the render's
 // pill styles. Approved -> good (green); Rejected -> block (red);
 // Withdrawn + anything else -> muted. R-PP7 word mapping already
@@ -184,9 +209,16 @@ export function PersonCardBody({ person }: { person: CardPerson }) {
             </div>
           ) : null}
           {person.email_label && person.email_for_display ? (
-            <div>
+            /* T3 Part 0 #3 (2026-11-13). Long emails like
+             *   last.name.with.many.dots@kitchfix.com
+             * used to break mid-word on phone because dd had
+             * overflow-wrap: anywhere. Give the browser explicit
+             * <wbr> break opportunities after the '@' and before
+             * each '.', and let CSS drop the font to the label size
+             * below 400px if the address is still too wide. */
+            <div className="kf-pe-kv-email">
               <dt>{person.email_label}</dt>
-              <dd>{person.email_for_display}</dd>
+              <dd>{wrapEmail(person.email_for_display)}</dd>
             </div>
           ) : null}
           {person.phone_for_display ? (

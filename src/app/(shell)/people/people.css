@@ -263,9 +263,19 @@
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 /* Phone: shrink the panel head name back to the item size so a long
- * team name like "Cincinnati Reds" is not clipped at 390. */
+ * team name like "Cincinnati Reds" is not clipped at 390.
+ * T3 Part 0 #4 (2026-11-13). At 360 a long name still didn't fit
+ * on one line and clipped with "...". Let it wrap to two lines
+ * (line-clamp: 2) instead of truncating. */
 @media (max-width: 860px) {
-  .kf-pe-sitehead__who b { font-size: var(--sp-t-item); }
+  .kf-pe-sitehead__who b {
+    font-size: var(--sp-t-item);
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
 }
 .kf-pe-sitehead__who small {
   font-size: var(--sp-t-label); color: var(--sp-muted);
@@ -486,6 +496,18 @@
   text-align: left;
   color: var(--sp-ink); font-weight: 600;
   overflow-wrap: anywhere;
+}
+/* T3 Part 0 #3 (2026-11-13). Email dd: discourage mid-word breaks
+ * (overflow-wrap: break-word) and rely on <wbr> opportunities after
+ * '@' and before each '.' injected by wrapEmail() in
+ * PersonCardBody. If the address still does not fit at narrow
+ * widths, drop the value to the label size - never truncate. */
+.kf-pe-drawer .kf-kv .kf-pe-kv-email dd {
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+@media (max-width: 400px) {
+  .kf-pe-drawer .kf-kv .kf-pe-kv-email dd { font-size: var(--sp-t-label); }
 }
 @media (max-width: 640px) {
   /* Phone: narrower label column so "Reports to" and "Work email"
