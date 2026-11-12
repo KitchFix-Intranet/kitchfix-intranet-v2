@@ -79,6 +79,17 @@
   overflow: hidden;
 }
 
+/* N12.1 R2: the detail pane is a size container so the linked-items
+ * table and the allergen grid can switch on the PANE's width instead
+ * of the window's. At narrow workspace widths the detail pane goes
+ * below 640 px without the window going phone - the window rules
+ * never fire but the content still needs to adapt. Named container
+ * so a future sibling container can't be confused for this one. */
+.kf-ingp__pane--detail {
+  container-type: inline-size;
+  container-name: detail;
+}
+
 .kf-ingp__pane-scroll {
   flex: 1;
   min-height: 0;
@@ -603,16 +614,18 @@
   gap: 2px;
 }
 
-/* Round 4 fix 1: phone linked-items. Under 860 the fixed 150 + 112 +
- * 76 + 104 columns cannot fit a 356 px pane (table ends up 442 wide,
- * horizontal overflow, Send back off the right edge). Each <tr>
- * becomes a stacked block using the same markup + handlers:
+/* N12.1 R2: linked-items stack when the DETAIL pane is narrower than
+ * 640 px (a container query, not a window query). Round 4's phone
+ * media rule is replaced by this one source: the same restructure
+ * fires on phone (whole window is the detail) AND on wide windows
+ * whose detail pane is narrow (the 1024 case with 560 pane the
+ * window-rule never saw). Markup, handlers and colgroup unchanged;
+ * each <tr> becomes a stacked block:
  *   line 1: item name (button) + vendor sub + warn sub (the first
  *           cell's existing stack)
  *   line 2: grade (left) · price with tag (right) · 12 mo (far right)
- *   line 3: Send back, full width
- * Same table, same colgroup (hidden), same handlers; CSS-only. */
-@media (max-width: 860px) {
+ *   line 3: Send back, full width */
+@container detail (max-width: 639px) {
   .kf-ingp__items,
   .kf-ingp__items tbody { display: block; width: 100%; }
   .kf-ingp__items colgroup,
@@ -659,6 +672,23 @@
   .kf-ingp__items td:nth-child(5) .kf-btn {
     width: 100%;
     justify-content: center;
+  }
+}
+
+/* N12.1 R2: allergen grid drops to three columns when the DETAIL
+ * pane is below 640. Base is 5-col (review.css), phone (window <=
+ * 860) is 2-col in review.css. The @media (min-width: 861px) gate
+ * keeps the 2-col phone rule effective (both would fire on phone
+ * otherwise and the later-declared container rule would win); the
+ * two rules target different situations:
+ *   phone (narrow window + narrow pane)       -> 2 cols (review.css)
+ *   wide window with narrow detail (desktop)  -> 3 cols (this rule)
+ *   wide detail                                -> 5 cols (base) */
+@media (min-width: 861px) {
+  @container detail (max-width: 639px) {
+    .kf-allergens__grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
   }
 }
 
