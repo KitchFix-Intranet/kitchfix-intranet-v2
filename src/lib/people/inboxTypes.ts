@@ -11,13 +11,16 @@ export type InboxKind = "paf" | "hire" | "incident";
 export type InboxGroup = "needs" | "news" | "pending" | "earlier";
 
 export interface InboxRow {
-  id: string;                 // submissions.id (uuid)
+  id: string;                 // submissions.id (uuid) OR people_drafts.id when isDraft
   kind: InboxKind;
   title: string;              // "<person name>" or "<club> · <dates>" for travel-self
-  subline: string;            // "PAF · Travel reimbursement · 3 days away · St Louis Cardinals · by Joe"
+  subline: string;            // "PAF · Travel reimbursement · 3 days · St Louis Cardinals · by Joe"
   amount_display: string;     // "$123.45" (formatted) or ""
-  status_display: string;     // R-PP7 word mapping ("Approved", "Rejected", "Withdrawn", "Pending")
-  status_code: "Pending" | "Complete" | "Rejected" | "Withdrawn" | "Cancelled";
+  status_display: string;     // R-PP7 word mapping ("Approved", "Rejected", "Withdrawn", "Pending", "Draft")
+  // T4a (2026-11-13). "Draft" is added for drafts synthesised from
+  // people_drafts; unlike the submissions statuses it never has an
+  // admin_action_at or a submitted_at.
+  status_code: "Pending" | "Complete" | "Rejected" | "Withdrawn" | "Cancelled" | "Draft";
   sent_short: string;         // "Nov 9"
   sent_long: string;          // "Nov 9, 2026"
   decided_short: string | null; // when admin_action_at is set
@@ -30,6 +33,12 @@ export interface InboxRow {
   route: RequestRoute;        // for display ("Sent to finance" in the drawer ledger)
   sender_name: string;        // used for "About my team" subline tail
   action_label: string;       // labelForAction output
+  // T4a (2026-11-13). Draft row shape. When isDraft is true, `id` is
+  // a people_drafts uuid and `href` points to /people/paf?draft=<id>.
+  // The client uses these to render "Keep going" instead of opening
+  // the record drawer.
+  isDraft: boolean;
+  href: string | null;        // null means "default drawer route (?rec=<id>)"
 }
 
 export interface InboxBand {
