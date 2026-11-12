@@ -21,6 +21,8 @@ import { OwnerPreviewBanner } from "@/components/people/OwnerPreviewBanner";
 import { IdentBand } from "@/components/ui/IdentBand";
 import { EMPTY_FIELDS, type SheetFields } from "@/components/people/paf/sheetFields";
 import type { SelectOption } from "@/components/people/paf/Select";
+import { bandsForClient } from "@/lib/people/payBands";
+import type { PerDiemDay } from "@/lib/people/perDiem";
 import "../people.css";
 import "./paf.css";
 
@@ -33,13 +35,24 @@ function step(value: string | string[] | undefined, fallback: Step): Step {
 }
 
 // Hydrate SheetFields from a draft payload record. Unknown keys
-// stay out (type cast is just for TypeScript narrowing - every key
-// in EMPTY_FIELDS is a string).
+// stay out (type cast is just for TypeScript narrowing). perDiemDays
+// is the only non-string field - we validate structure on load so a
+// malformed payload cannot crash the sheet.
 function fieldsFromPayload(p: Record<string, unknown>): SheetFields {
   const grab = (k: keyof SheetFields): string => {
     const v = p[k];
     return typeof v === "string" ? v : "";
   };
+  const rawDays = p.perDiemDays;
+  const perDiemDays: PerDiemDay[] = Array.isArray(rawDays)
+    ? rawDays.flatMap((row): PerDiemDay[] => {
+        if (!row || typeof row !== "object") return [];
+        const d = String((row as Record<string, unknown>).date ?? "").slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return [];
+        const t = String((row as Record<string, unknown>).tier ?? "");
+        return [{ date: d, tier: t }];
+      })
+    : [];
   return {
     amount: grab("amount"),
     effectiveDate: grab("effectiveDate"),
@@ -57,6 +70,28 @@ function fieldsFromPayload(p: Record<string, unknown>): SheetFields {
     reclassTo: grab("reclassTo"),
     reclassTitleChange: (grab("reclassTitleChange") as SheetFields["reclassTitleChange"]),
     cellFrequency: (grab("cellFrequency") as SheetFields["cellFrequency"]),
+    increaseType: grab("increaseType"),
+    employeeLevel: (grab("employeeLevel") as SheetFields["employeeLevel"]),
+    role: grab("role"),
+    customRole: grab("customRole"),
+    oldRate: grab("oldRate"),
+    eligSeasonComplete: (grab("eligSeasonComplete") as SheetFields["eligSeasonComplete"]),
+    eligNoDiscipline: (grab("eligNoDiscipline") as SheetFields["eligNoDiscipline"]),
+    eligCertsCurrent: (grab("eligCertsCurrent") as SheetFields["eligCertsCurrent"]),
+    eligManagerApproved: (grab("eligManagerApproved") as SheetFields["eligManagerApproved"]),
+    locationKey: grab("locationKey"),
+    locationName: grab("locationName"),
+    travelStartDate: grab("travelStartDate"),
+    travelEndDate: grab("travelEndDate"),
+    perDiemDays,
+    travelSupplementEnabled: (grab("travelSupplementEnabled") as SheetFields["travelSupplementEnabled"]),
+    equipmentRequestType: (grab("equipmentRequestType") as SheetFields["equipmentRequestType"]),
+    replacementReason: grab("replacementReason"),
+    confirmReported: (grab("confirmReported") as SheetFields["confirmReported"]),
+    currentDeviceDetails: grab("currentDeviceDetails"),
+    equipmentShipTo: grab("equipmentShipTo"),
+    equipmentNotes: grab("equipmentNotes"),
+    confirmReturn: (grab("confirmReturn") as SheetFields["confirmReturn"]),
   };
 }
 
@@ -105,8 +140,9 @@ export default async function Page({
   const team = await loadTeam(sb, viewer);
 
   // Accounts: active rows only, labelled "TEAM - NAME" like the
-  // render. Used by the Reclassification From / To dropdowns.
-  const acctQ = await sb.from("accounts").select("team_key, name, active, region");
+  // render. Used by Reclassification + Travel site visited dropdowns
+  // + Pay increase band resolution (via state).
+  const acctQ = await sb.from("accounts").select("team_key, name, active, region, state");
   const accounts = (acctQ.data ?? []).filter((a) => a.active !== false);
   const accountOptions: readonly SelectOption[] = accounts
     .map((a) => ({
@@ -204,6 +240,15 @@ export default async function Page({
 
   const isPreview = viewer.previewOf !== null;
 
+  // Pay bands for the client. bandsForClient is the ONLY function
+  // that reads PAY_BANDS; the whole table never reaches the browser.
+  // We resolve the state from the chosen person's account; if there
+  // is no person yet, we hand the client a blank slice and the band
+  // bar on the Pay increase sheet simply does not render.
+  const personAccountKey = initial.person?.account_key ?? null;
+  const personAcc = personAccountKey ? accounts.find((a) => a.team_key === personAccountKey) : null;
+  const bands = bandsForClient(personAccountKey, (personAcc?.state as string | null) ?? null);
+
   return (
     <div className="kf-pe-surface">
       {viewer.previewOf ? <OwnerPreviewBanner name={viewer.previewOf.display_name || viewer.display_name} /> : null}
@@ -223,6 +268,7 @@ export default async function Page({
           copied: whoSeesIt.copied,
         }}
         accountOptions={accountOptions}
+        bands={bands}
         isPreview={isPreview}
         asWorkerId={asWorkerId}
       />

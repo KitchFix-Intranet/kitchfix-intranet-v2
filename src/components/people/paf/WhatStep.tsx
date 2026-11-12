@@ -66,7 +66,7 @@ const GROUPS: GroupDef[] = [
     heading: "Payroll",
     countLine: "4 actions · goes to finance",
     actions: [
-      { id: "pay_increase",  label: "Pay increase recommendation", sub: "Propose a raise",            enabled: false },
+      { id: "pay_increase",  label: "Pay increase recommendation", sub: "Propose a raise",            enabled: true  },
       { id: "add_bonus",     label: "One-time bonus",              sub: "A single extra payment",     enabled: true  },
       { id: "add_deduction", label: "One-time deduction",          sub: "A single payroll deduction", enabled: true  },
       { id: "add_gratuity",  label: "Gratuity",                    sub: "Tips to pay out",            enabled: true  },
@@ -77,9 +77,9 @@ const GROUPS: GroupDef[] = [
     heading: "Expenses",
     countLine: "3 actions · goes to finance",
     actions: [
-      { id: "travel_reimbursement", label: "Travel reimbursement",     sub: "Per diem for days away",       enabled: false },
+      { id: "travel_reimbursement", label: "Travel reimbursement",     sub: "Per diem for days away",       enabled: true  },
       { id: "add_cell_phone",       label: "Cell phone reimbursement", sub: "Monthly phone stipend",        enabled: true  },
-      { id: "other_reimbursement",  label: "Other reimbursement",      sub: "Something else you paid for",  enabled: false },
+      { id: "other_reimbursement",  label: "Other reimbursement",      sub: "Something else you paid for",  enabled: true  },
     ],
   },
   {
@@ -87,7 +87,7 @@ const GROUPS: GroupDef[] = [
     heading: "IT and equipment",
     countLine: "1 action · goes to HR",
     actions: [
-      { id: "equipment_request", label: "Equipment or laptop request", sub: "Hardware for someone", enabled: false },
+      { id: "equipment_request", label: "Equipment or laptop request", sub: "Hardware for someone", enabled: true  },
     ],
   },
 ];

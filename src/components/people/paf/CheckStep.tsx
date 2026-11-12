@@ -18,6 +18,7 @@ import { fmtMoney } from "@/lib/people/money";
 import { SheetAbout } from "./SheetAbout";
 import type { SheetFields } from "./sheetFields";
 import type { SelectOption } from "./Select";
+import { PER_DIEM_TIERS } from "@/lib/people/perDiem";
 
 export type WhoSeesItView = {
   route: RequestRoute;
@@ -107,6 +108,84 @@ function rowsForAction(
     rows.push({ label: "Pay change", value: yesNoOr(fields.reclassChangeRate) });
     if (fields.reclassChangeRate === "Yes") rows.push({ label: "New rate", value: moneyOrNotGiven(fields.newRate) });
     rows.push({ label: "Reason for transfer", value: textOrNotGiven(fields.explanation) });
+    return rows;
+  }
+
+  if (action === "pay_increase") {
+    const rows: Row[] = [
+      { label: "Effective date", value: dateOrNotGiven(fields.effectiveDate) },
+      { label: "Increase type",  value: textOrNotGiven(fields.increaseType) },
+      { label: "Employee level", value: fields.employeeLevel === "hourly" ? "Hourly" : fields.employeeLevel === "leadership" ? "Leadership" : NOT_GIVEN },
+      { label: "Role",           value: textOrNotGiven(fields.role === "Other" ? fields.customRole : fields.role) },
+      { label: "Current rate",   value: moneyOrNotGiven(fields.oldRate) },
+      { label: "Proposed rate",  value: moneyOrNotGiven(fields.newRate) },
+    ];
+    const elig = [
+      { k: "eligSeasonComplete",  label: "Completed a full season or review period" },
+      { k: "eligNoDiscipline",    label: "Not on an active disciplinary track" },
+      { k: "eligCertsCurrent",    label: "Required certifications current" },
+      { k: "eligManagerApproved", label: "Discussed and approved by manager" },
+    ] as const;
+    const met = elig.filter((e) => (fields as unknown as Record<string, string>)[e.k] === "true").map((e) => e.label);
+    rows.push({ label: "Eligibility", value: `${met.length} of ${elig.length}${met.length > 0 ? ` · ${met.join(", ")}` : ""}` });
+    rows.push({ label: "Why", value: textOrNotGiven(fields.explanation) });
+    return rows;
+  }
+
+  if (action === "travel_reimbursement") {
+    const rows: Row[] = [
+      { label: "Site visited", value: labelForAccount(fields.locationKey) },
+      { label: "First day",    value: dateOrNotGiven(fields.travelStartDate) },
+      { label: "Last day",     value: dateOrNotGiven(fields.travelEndDate) },
+    ];
+    // Per-day summary: grouped by tier.
+    if (fields.perDiemDays.length > 0) {
+      const byTier = new Map<string, number>();
+      for (const d of fields.perDiemDays) if (d.tier) byTier.set(d.tier, (byTier.get(d.tier) ?? 0) + 1);
+      const parts: string[] = [];
+      let total = 0;
+      for (const t of PER_DIEM_TIERS) {
+        const n = byTier.get(t.key) ?? 0;
+        if (n > 0) {
+          parts.push(`${n} × ${t.label} ($${t.rate})`);
+          total += n * t.rate;
+        }
+      }
+      rows.push({ label: "Per diem", value: parts.length === 0 ? NOT_GIVEN : `${parts.join("; ")} = $${total.toFixed(2)}` });
+    } else {
+      rows.push({ label: "Per diem", value: NOT_GIVEN });
+    }
+    rows.push({ label: "Travel supplement", value: fields.travelSupplementEnabled === "Yes" ? "Yes" : fields.travelSupplementEnabled === "No" ? "No" : NOT_GIVEN });
+    rows.push({ label: "Business purpose", value: textOrNotGiven(fields.explanation) });
+    return rows;
+  }
+
+  if (action === "other_reimbursement") {
+    return [
+      { label: "Amount",       value: moneyOrNotGiven(fields.amount) },
+      { label: "Date paid",    value: dateOrNotGiven(fields.effectiveDate) },
+      { label: "What it was",  value: textOrNotGiven(fields.explanation) },
+    ];
+  }
+
+  if (action === "equipment_request") {
+    const rows: Row[] = [];
+    rows.push({ label: "Request", value: fields.equipmentRequestType === "new" ? "New device" : fields.equipmentRequestType === "replacement" ? "Replacement" : NOT_GIVEN });
+    if (fields.equipmentRequestType === "replacement") {
+      rows.push({ label: "Reason for replacement", value: textOrNotGiven(fields.replacementReason) });
+      if (fields.replacementReason === "Lost" || fields.replacementReason === "Stolen") {
+        rows.push({ label: "Reported within 24 hours", value: fields.confirmReported === "true" ? "Yes" : "No" });
+      }
+      rows.push({ label: "Current device", value: textOrNotGiven(fields.currentDeviceDetails) });
+    }
+    if (fields.equipmentRequestType === "new") {
+      rows.push({ label: "Why", value: textOrNotGiven(fields.explanation) });
+    }
+    rows.push({ label: "Ship to", value: textOrNotGiven(fields.equipmentShipTo) });
+    if ((fields.equipmentNotes ?? "").trim()) rows.push({ label: "Anything else", value: fields.equipmentNotes });
+    if (fields.equipmentRequestType === "replacement") {
+      rows.push({ label: "Shipped back acknowledgement", value: fields.confirmReturn === "true" ? "Yes" : "No" });
+    }
     return rows;
   }
 
