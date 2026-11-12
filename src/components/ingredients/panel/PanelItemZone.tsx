@@ -186,15 +186,10 @@ export function PanelItemZone({
         ) : null}
       </div>
 
-      {/* Row 2: One each is - item-side override ----------------- */}
+      {/* Row 2: One each is - item-side override (N11 §2 R4: component
+          owns the row so Save sits in the shared action column). */}
       {item.perBaseUom === "EA" ? (
-        <div className="kf-ipanel__row">
-          <div className="kf-ipanel__row-label">One each is</div>
-          <div className="kf-ipanel__row-value">
-            <ItemEachMeasureBlock item={item} ingredient={ingredient} onDone={onDone} />
-          </div>
-          <div className="kf-ipanel__row-action" />
-        </div>
+        <ItemEachMeasureBlock item={item} ingredient={ingredient} onDone={onDone} />
       ) : null}
 
       {/* Row 3: Grade -------------------------------------------- */}
