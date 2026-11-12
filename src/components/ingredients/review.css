@@ -774,12 +774,15 @@
   align-items: baseline;
 }
 .kf-rvc__panel-what-list > li:last-child { border-bottom: 0; }
+/* N10 round 2 fix 9: item names wrap, never truncate. The list is
+ * at most five rows + a "+ k more" overflow, so a wrapped name
+ * costs at worst a second line, never an ellipsis. */
 .kf-rvc__panel-what-item {
   color: var(--sp-ink);
   min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.4;
 }
 .kf-rvc__panel-what-vendor { color: var(--sp-body); }
 .kf-rvc__panel-what-usd {

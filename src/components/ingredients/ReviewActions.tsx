@@ -7,7 +7,7 @@
 // every item row carries a visible checkbox now (ReviewCard owns the
 // per-row rendering).
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Check, X as XIcon, Ban, ShoppingBag, Archive, Loader2, Clock,
@@ -158,18 +158,30 @@ export function ReviewActions({
   }, [lastDone]);
   const [showRelink, setShowRelink] = useState(false);
   const [relinkId, setRelinkId] = useState<string | null>(null);
+  // N10 round 2 fix 3: refocus the opener button when a panel closes
+  // by any route (Esc, X, Cancel). The refs point at the bar buttons.
+  const relinkOpenerRef = useRef<HTMLButtonElement>(null);
+  const newOpenerRef = useRef<HTMLButtonElement>(null);
   const [newName, setNewName] = useState(proposedName ?? "");
-  // Pre-fill the super-category + sub-category from the matcher's
-  // proposed parent (if any). Both are REQUIRED on submit - the form's
-  // Create button is disabled until both are set (a sub-category pick
-  // or a new sub-category text), plus a non-empty name.
+  // N10 round 2 fix 2: starting values on a split (§2a). When the
+  // card has an ingredient, Category + Sub-category seed from THAT
+  // ingredient's own category + parent, not from the matcher's
+  // proposed parent. New groups keep today's "proposed parent"
+  // seed. A null category seeds blank.
+  const splitSourceIng =
+    kind === "existing" && currentIngredientId != null
+      ? ingredients.find((i) => i.id === currentIngredientId) ?? null
+      : null;
   const [newSuper, setNewSuper] = useState<SuperCategory | "">(() => {
+    if (splitSourceIng) {
+      return ((splitSourceIng.category as SuperCategory | null) ?? "") as SuperCategory | "";
+    }
     return (categoryForParent(proposedParent) as SuperCategory | null) ?? "";
   });
-  const [subMode, setSubMode] = useState<"pick" | "new">(
-    proposedParent ? "pick" : "pick"
+  const [subMode, setSubMode] = useState<"pick" | "new">("pick");
+  const [subPick, setSubPick] = useState<string>(
+    splitSourceIng?.parent ?? proposedParent ?? ""
   );
-  const [subPick, setSubPick] = useState<string>(proposedParent ?? "");
   const [subNew, setSubNew] = useState<string>("");
   const [showNew, setShowNew] = useState(false);
   // N10 R4: createAndConfirm state is gone. The primary calls
@@ -313,10 +325,19 @@ export function ReviewActions({
     if (op || noneChecked || !relinkId) return;
     setRelinkError(null);
     setOp("relinking");
-    const r = await postJson("/api/review/relink", {
-      ingredientId: relinkId,
-      itemIds: checkedIds,
-    });
+    let r: { ok: boolean; status: number; data: unknown };
+    try {
+      r = await postJson("/api/review/relink", {
+        ingredientId: relinkId,
+        itemIds: checkedIds,
+      });
+    } catch {
+      const msg = "Could not reach the server. Nothing was sent.";
+      setRelinkError(msg);
+      toast(msg, { tone: "block" });
+      setOp(null);
+      return;
+    }
     if (!r.ok) {
       const msg = errMsg(r.data, `Relink failed (${r.status})`);
       setRelinkError(msg);
@@ -340,10 +361,19 @@ export function ReviewActions({
     if (op || noneChecked || !relinkId) return;
     setRelinkError(null);
     setOp("relinkandconfirm");
-    const r = await postJson("/api/review/confirm", {
-      ingredientId: relinkId,
-      itemIds: checkedIds,
-    });
+    let r: { ok: boolean; status: number; data: unknown };
+    try {
+      r = await postJson("/api/review/confirm", {
+        ingredientId: relinkId,
+        itemIds: checkedIds,
+      });
+    } catch {
+      const msg = "Could not reach the server. Nothing was sent.";
+      setRelinkError(msg);
+      toast(msg, { tone: "block" });
+      setOp(null);
+      return;
+    }
     if (!r.ok) {
       const msg = errMsg(r.data, `Save failed (${r.status})`);
       setRelinkError(msg);
@@ -400,15 +430,25 @@ export function ReviewActions({
     if (!newFormReady) return;
     setNewError(null);
     setOp("creating");
-    // N3: in the retail intent the panel's payload forces confirm +
-    // resale regardless of the checkbox state (the checkbox is hidden
-    // in that intent, see the panel render below). In the default
-    // "confirm" intent the payload is byte-identical to pre-N3.
     const isRetail = createIntent === "retail";
-    const r = await postJson("/api/review/new-ingredient", {
+    // N10 round 2 fix 6: on a name match send the EXISTING
+    // ingredient's parent + category. If the client's list is stale
+    // and the server doesn't actually find the match, the
+    // create-side path still has the real values, not null + null -
+    // which would create an ingredient with no category, the thing
+    // the required fields exist to prevent. Payload is byte-
+    // identical on the no-match path.
+    const payloadParent = nameMatch ? (nameMatch.parent ?? null) : (effectiveSub || null);
+    const payloadCategory = nameMatch ? (nameMatch.category ?? null) : (newSuper || null);
+    // N10 round 2 fix 10: panel submits catch network throws so a
+    // dropped connection does not leave the panel on "Saving..."
+    // forever. Other handlers are untouched.
+    let r: { ok: boolean; status: number; data: unknown };
+    try {
+      r = await postJson("/api/review/new-ingredient", {
       name,
-      parent: effectiveSub || null,
-      category: newSuper || null,
+      parent: payloadParent,
+      category: payloadCategory,
       itemIds: checkedIds,
       // Q2 §1: when the checkbox is on, the server runs confirm in the
       // same request, through the same confirmItems() path a normal
@@ -423,6 +463,13 @@ export function ReviewActions({
       confirm: isRetail ? true : confirmArg,
       resale: isRetail,
     });
+    } catch {
+      const msg = "Could not reach the server. Nothing was sent.";
+      setNewError(msg);
+      toast(msg, { tone: "block" });
+      setOp(null);
+      return;
+    }
     if (!r.ok) {
       const msg = errMsg(r.data, `Save failed (${r.status})`);
       setNewError(msg);
@@ -710,6 +757,7 @@ export function ReviewActions({
         {/* N10 §2a: opening one panel closes the other.
             aria-pressed="true" renders the button filled while open. */}
         <button
+          ref={relinkOpenerRef}
           type="button"
           className={`kf-btn kf-btn--line kf-btn--sm${showRelink ? " is-on" : ""}`}
           aria-pressed={showRelink}
@@ -728,6 +776,7 @@ export function ReviewActions({
 
         {kind === "existing" ? (
           <button
+            ref={newOpenerRef}
             type="button"
             className={`kf-btn kf-btn--line kf-btn--sm${showNew ? " is-on" : ""}`}
             aria-pressed={showNew}
@@ -851,7 +900,12 @@ export function ReviewActions({
           checkedItems={checkedItems}
           op={op}
           error={relinkError}
-          onClose={() => { setShowRelink(false); setRelinkError(null); }}
+          onClose={() => {
+            setShowRelink(false);
+            setRelinkError(null);
+            // N10 round 2 fix 3: focus returns to the opener.
+            relinkOpenerRef.current?.focus();
+          }}
           onPrimary={relinkAndConfirm}
           onQuietLink={relinkChecked}
         />
@@ -885,7 +939,13 @@ export function ReviewActions({
           costedPerUnit={costedPerUnit}
           op={op}
           error={newError}
-          onClose={() => { setShowNew(false); setCreateIntent("confirm"); setNewError(null); }}
+          onClose={() => {
+            setShowNew(false);
+            setCreateIntent("confirm");
+            setNewError(null);
+            // N10 round 2 fix 3: focus returns to the opener.
+            newOpenerRef.current?.focus();
+          }}
           onPrimary={() => doCreateSplit(true)}
           onQuietLink={() => doCreateSplit(false)}
         />
@@ -1037,7 +1097,13 @@ export function computeWhatHappens(x: WhatHappensInput): WhatHappens {
 
   // Line 1 variants.
   let line1: React.ReactNode;
-  if (nameMatch) {
+  if (isSelfMatch && nameMatch) {
+    // N10 round 2 fix 7: own-card match. Line 1 is a plain
+    // statement; Costed per is hidden in this state by the caller.
+    line1 = (
+      <>{openCountBold} worth {openUsdBold} a year are already on {x.cardTitle}.</>
+    );
+  } else if (nameMatch) {
     line1 = x.cardHasIngredient ? (
       <>{openCountBold} worth {openUsdBold} a year leave {x.cardTitle} and join <b>{nameMatch.name}</b>, which already exists.</>
     ) : (
@@ -1101,7 +1167,7 @@ function WhatHappensBox({
             <li key={it.id}>
               <span className="kf-rvc__panel-what-item">{it.displayName}</span>
               <span className="kf-rvc__panel-what-vendor">{it.vendor}</span>
-              <b className="kf-rvc__panel-what-usd">{fmtUsd(it.usd12m)}</b>
+              <b className="kf-rvc__panel-what-usd">{fmtUsdLong(it.usd12m)}</b>
             </li>
           ))}
           {overflow > 0 ? (
@@ -1155,6 +1221,10 @@ function RelinkPanel({
   onQuietLink: () => void;
 }) {
   const picked = pickedId ? ingredients.find((i) => i.id === pickedId) ?? null : null;
+  // N10 round 2 fix 4: when Change clears the pick, the typeahead
+  // remounts with the previous name pre-filled + selected.
+  const [prevPickedName, setPrevPickedName] = useState<string>("");
+  const primaryBtnRef = useRef<HTMLButtonElement>(null);
   const wh = computeWhatHappens({
     mode: "relink",
     cardTitle,
@@ -1166,6 +1236,11 @@ function RelinkPanel({
   });
   const busy = op !== null;
   const ready = picked != null && !busy;
+  // N10 round 2 fix 3: once a result is picked, focus the primary so
+  // a second Enter submits.
+  useEffect(() => {
+    if (picked) primaryBtnRef.current?.focus();
+  }, [picked]);
   return (
     <ReviewCardPanelShell
       title="Relink"
@@ -1185,7 +1260,13 @@ function RelinkPanel({
                   <button
                     type="button"
                     className="kf-btn kf-btn--line kf-btn--sm"
-                    onClick={() => onPick(null)}
+                    onClick={() => {
+                      // N10 round 2 fix 4: stash the current pick's
+                      // name so the typeahead's next mount pre-fills
+                      // it + autofocuses + selects the text.
+                      setPrevPickedName(picked.name);
+                      onPick(null);
+                    }}
                     disabled={busy}
                   >
                     Change
@@ -1202,6 +1283,13 @@ function RelinkPanel({
                 onPick={(id) => onPick(id)}
                 busy={busy}
                 showResultMeta
+                // N10 round 2 fix 3: panel opens with focus in the
+                // search, not on the Relink bar button.
+                autoFocusInput
+                // N10 round 2 fix 4: Change returns with the name
+                // pre-filled + selected.
+                initialQuery={prevPickedName}
+                selectOnFocus={prevPickedName.length > 0}
               />
             )}
           </div>
@@ -1233,6 +1321,7 @@ function RelinkPanel({
             Cancel
           </button>
           <button
+            ref={primaryBtnRef}
             type="button"
             className={`kf-btn kf-btn--primary kf-btn--sm${op === "relinkandconfirm" ? " is-busy" : ""}`}
             onClick={onPrimary}
@@ -1338,6 +1427,9 @@ function NewIngredientPanel({
   });
 
   const costedPer = (() => {
+    // N10 round 2 fix 7: own-card match hides Costed per - the row
+    // is already on this ingredient, there is nothing to decide.
+    if (isSelfMatch) return null;
     if (nameMatch) {
       return {
         unit: nameMatch.base_unit,
@@ -1434,7 +1526,7 @@ function NewIngredientPanel({
                   onChange={(e) => onSuperChange(e.target.value as SuperCategory | "")}
                   disabled={busy || matchDisabled}
                 >
-                  <option value="">(none)</option>
+                  <option value="">Pick a category</option>
                   {SUPER_CATEGORIES.map((c) => (
                     <option key={c} value={c}>{c}</option>
                   ))}
@@ -1457,7 +1549,7 @@ function NewIngredientPanel({
                     onChange={(e) => onSubPick(e.target.value)}
                     disabled={busy || matchDisabled}
                   >
-                    <option value="">(none)</option>
+                    <option value="">Pick a sub-category</option>
                     {parentOptions.map((p) => (
                       <option key={p} value={p}>{p}</option>
                     ))}

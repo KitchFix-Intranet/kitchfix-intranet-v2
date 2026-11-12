@@ -78,6 +78,9 @@ export function IngredientTypeahead({
   onPick,
   busy = false,
   showResultMeta = false,
+  autoFocusInput = false,
+  initialQuery = "",
+  selectOnFocus = false,
 }: {
   ingredients: Ingredient[];
   excludeId?: string | null;
@@ -89,8 +92,18 @@ export function IngredientTypeahead({
   // N10 §2e: opt-in. Relink turns it on; PanelClosedRows (Merge) leaves
   // it off so the Merge dropdown is byte-identical to today.
   showResultMeta?: boolean;
+  // N10 round 2 fix 3: Relink wants focus in the search when the
+  // panel opens. Other call sites leave this off.
+  autoFocusInput?: boolean;
+  // N10 round 2 fix 4: Change returns to the search with the
+  // previously-picked name pre-filled. Seeds the internal query on
+  // mount only.
+  initialQuery?: string;
+  // N10 round 2 fix 4: with initialQuery + autoFocusInput, select
+  // the text on the first focus so a keystroke replaces it.
+  selectOnFocus?: boolean;
 }) {
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
   const [open, setOpen] = useState(false);
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -109,6 +122,18 @@ export function IngredientTypeahead({
     const match = ingredients.find((i) => i.id === pickedId);
     if (match) setQuery(match.name);
   }, [pickedId, ingredients]);
+
+  // N10 round 2 fix 3 + 4: optional autoFocus on the input, optional
+  // select-all on the first focus so a typed key replaces the seed.
+  useEffect(() => {
+    if (!autoFocusInput) return;
+    const el = inputRef.current;
+    if (!el) return;
+    el.focus();
+    if (selectOnFocus) el.select();
+    // Once; mount-time only. Deps left narrow by design.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const filtered = useMemo(() => {
     const pool = excludeId ? ingredients.filter((i) => i.id !== excludeId) : ingredients;
