@@ -10,7 +10,7 @@
 // recipe price appends after when present. perBaseNote belongs on the
 // Pack and price row at rest, not here.
 
-import { fmtCount, fmtDate, fmtUsd, fmtUsdLong } from "@/lib/fmt";
+import { fmtCount, fmtDate, fmtPackNumbersInText, fmtUsd, fmtUsdLong } from "@/lib/fmt";
 import { uomLabel } from "@/lib/ingredients/pack";
 import { deriveRecipePrice } from "@/lib/ingredients/eachMeasure";
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
@@ -22,7 +22,7 @@ export function PanelStrip({
   item: ReviewGroupItem;
   ingredient: ReviewCardIngredient | null;
 }) {
-  const pack = item.packNormalized ?? item.pack ?? "-";
+  const pack = fmtPackNumbersInText(item.packNormalized ?? item.pack ?? "-");
   const isCheck = item.packState === "check";
   const confidenceWord =
     item.perBase == null || !item.perBaseUom || !item.perBaseConfidence

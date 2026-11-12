@@ -34,6 +34,14 @@ import "./drawer.css";
 // Ingredients tab / Vendor items tab; importing here keeps the CSS
 // loaded wherever the panel mounts.
 import "./vendor-items-tab.css";
+// N13.1 §3: EvidenceSection (sibling rows) uses .kf-cell-strong /
+// .kf-cell-ellipsis / .kf-cell-sub. Those rules live in table.css; the
+// panel owns its imports so it renders the same on every surface.
+import "./table.css";
+// N13.1 §3: site pills live in both the strip and the review card;
+// their rules moved out of review.css into a shared sheet so both
+// readers import the one source.
+import "./site-pills.css";
 
 export type DetailPanelOpen =
   | null

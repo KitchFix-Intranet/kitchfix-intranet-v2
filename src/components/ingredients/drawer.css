@@ -383,6 +383,13 @@
   line-height: 1;
   color: var(--sp-ink);
   font-variant-numeric: tabular-nums;
+  /* N13.1 A1: a single long token (e.g. a 15-digit decimal pack
+     bleed) must break inside its own cell instead of painting over
+     Annual spend. `anywhere` lets the break happen mid-token when no
+     opportunity exists; `min-width: 0` prevents the grid track from
+     forcing an intrinsic min-content width wider than the cell. */
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .kf-ipanel__strip-value--accent { color: var(--sp-navy); }
 .kf-ipanel__strip-value-unit {
@@ -1083,4 +1090,110 @@
   .kf-ipanel__measure-note {
     grid-column: 1 / -1;
   }
+}
+
+/* ---------------------------------------------------------------------
+ * N13.1 §3: detail-panel form chrome. These `.kf-dpn__*` primitives
+ * were historically carried in review.css; they style the DetailPanel
+ * body-only (Panel* components under ./panel/) and have no non-panel
+ * readers, so they ride with the panel's own stylesheet. The split
+ * leaves `.kf-dpn__label`, `.kf-dpn__row`, `.kf-dpn__ocr`,
+ * `.kf-dpn__gtin`, and `.kf-dpn__preview*` in review.css because
+ * MatchRunButton + IngredientTypeahead read `.kf-dpn__label` outside
+ * the panel. Text is byte-identical to the review.css source lines
+ * cited in the N13.1 §3 report; only the file changes.
+ * --------------------------------------------------------------------- */
+.kf-dpn__block { background: var(--sp-card); }
+.kf-dpn__hint { color: var(--sp-muted); font-size: var(--sp-t-micro); line-height: 1.4; }
+.kf-dpn__btns { display: flex; gap: var(--sp-sp-2); flex-wrap: wrap; }
+.kf-dpn__toggle { display: flex; flex-direction: column; gap: var(--sp-sp-1); }
+.kf-dpn__toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  min-height: 44px;
+  cursor: pointer;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  font-weight: 700;
+  color: var(--sp-ink);
+}
+.kf-dpn__toggle-label input { width: 18px; height: 18px; cursor: pointer; }
+
+/* Inline "Saved" / error flash next to each DetailPanel Save button. */
+.kf-dpn__flash {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-1);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 700;
+  padding: 2px var(--sp-sp-2);
+  border-radius: var(--sp-r-sm);
+  animation: kf-dpn-flash 180ms var(--sp-ease) both;
+}
+.kf-dpn__flash--ok { background: var(--sp-good-bg); color: var(--sp-good); }
+.kf-dpn__flash--err { background: var(--sp-warn-bg); color: var(--sp-warn); }
+@keyframes kf-dpn-flash {
+  from { opacity: 0; transform: translateX(-4px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kf-dpn__flash { animation: none; }
+}
+
+/* Per-item change ledger inside the DetailPanel. Read-only list, newest
+ * first, last ~10 events. Timestamps use Chicago-friendly formatting
+ * via the existing fmt helpers. */
+.kf-dpn__ledger-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+}
+.kf-dpn__ledger-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: var(--sp-sp-3);
+  row-gap: 2px;
+  padding: var(--sp-sp-2) 0;
+  border-bottom: 1px dashed var(--sp-line-soft);
+}
+.kf-dpn__ledger-item:last-child { border-bottom: none; }
+.kf-dpn__ledger-kind {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+  letter-spacing: .5px;
+  text-transform: uppercase;
+  color: var(--sp-muted);
+  white-space: nowrap;
+}
+.kf-dpn__ledger-body {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-ink);
+  line-height: 1.4;
+  min-width: 0;
+}
+.kf-dpn__ledger-body strong { font-weight: 700; }
+.kf-dpn__ledger-meta {
+  grid-column: 2 / 3;
+  color: var(--sp-muted);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  letter-spacing: .3px;
+}
+.kf-dpn__ledger-empty {
+  color: var(--sp-muted);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-style: italic;
+}
+.kf-dpn__ledger-loading {
+  color: var(--sp-muted);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
 }
