@@ -29,6 +29,20 @@ function titleFromCode(code: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
+// T3 (2026-11-13). Where a submission routes: HR handles people
+// moves (separation, title change, status change, new hire);
+// everything else is payroll / finance. Used for the "Needs you"
+// "why" text ("14 days with finance") and the record drawer
+// ledger's "Sent to ..." line. One function, one source of truth.
+export type RequestRoute = "HR" | "finance";
+const HR_ACTIONS: ReadonlySet<string> = new Set([
+  "separation", "title_change", "status_change", "new_hire",
+]);
+export function routeFor(action_type: string | null): RequestRoute {
+  const a = (action_type ?? "").trim();
+  return HR_ACTIONS.has(a) ? "HR" : "finance";
+}
+
 // Short human label for a submission. `module` is retained in the
 // signature (and used for fallbacks: incident, termination) but
 // the primary signal is `action_type` - the thing that happened.

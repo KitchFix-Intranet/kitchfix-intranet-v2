@@ -418,20 +418,32 @@ export function MyTeam({ selfRow, sites, panels, defaultSiteKey, viewerWorkerId,
       </div>
 
       {/* Phone stack: collapsible site sections. First site with
-       * pending is expanded; the rest start collapsed. */}
+       * pending is expanded; the rest start collapsed.
+       * T3 Part 0 #1 (2026-11-13). Iterate in the same order as the
+       * desktop nav (sites[]: Corporate first, then by region, then
+       * by name). Prior iteration used `Object.values(panels)` which
+       * preserves bySite insertion order from the people loop - that
+       * order is the scope-filter order on the raw people table,
+       * unrelated to anything a viewer should see. */}
       <div className="kf-pe-sitestack" aria-label="Sites (phone)">
-        {Object.keys(panels).length > 0 ? (
-          <>
-            {Object.values(panels).map((panel) => (
+        {(() => {
+          // SL + SM (single-site viewer): sites is [] from the
+          // loader; fall back to the one-entry panels map. Otherwise
+          // use the sorted sites list.
+          const order = sites.length > 0 ? sites : Object.values(panels).map((p) => p.entry);
+          return order.map((entry) => {
+            const panel = panels[entry.account_key];
+            if (!panel) return null;
+            return (
               <PhoneSiteBlock
-                key={panel.entry.account_key}
+                key={entry.account_key}
                 panel={panel}
-                defaultOpen={panel.entry.account_key === activeSiteKey}
+                defaultOpen={entry.account_key === activeSiteKey}
                 onOpen={openCard}
               />
-            ))}
-          </>
-        ) : null}
+            );
+          });
+        })()}
       </div>
 
     </>
