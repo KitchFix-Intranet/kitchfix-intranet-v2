@@ -8,6 +8,16 @@
 //   - navigate to ?card=<worker_id> on row click (soft-nav)
 //
 // No fetch, no mutation, no state outside the three params above.
+//
+// T2.1 (2026-11-12):
+//   - Fix 5: subline is "<title> - <account_key>" with no region,
+//     and drops account_key for single-site viewers (site_leader +
+//     site_manager).
+//   - Fix 6: person names wrap instead of truncate (CSS handles it;
+//     markup already carries .kf-pe-person__who b).
+//   - Fix 7: roster-head "pending" is the sum of waiting ITEMS,
+//     not the count of distinct people.
+//   - Fix 4: site nav rows render place + leader + N people.
 
 import { useCallback, useMemo, useState } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
@@ -19,18 +29,38 @@ type Props = {
   people: RosterPerson[];
   sites: SiteNavEntry[];
   viewerWorkerId: string;
+  // T2.1 fix 5. True for site_leader + site_manager (the viewer
+  // only ever sees one site). Drops account_key from every row's
+  // subline so the subline becomes title-only.
+  singleSiteView: boolean;
 };
 
 function Tag({ children }: { children: React.ReactNode }) {
   return <span className="kf-skew-tag"><span>{children}</span></span>;
 }
 
+// T2.1 fix 5. Subline = title, one separator, account_key. No
+// region. Never the same word twice. Single-site viewers get
+// title-only. Separator is the middle dot " · " per Kevin ruling
+// 2026-11-12 ("Wherever My team joins separate facts on one line,
+// use the render's middle dot"). Account keys keep their own
+// hyphens ("TXR - AZ") since those hyphens are part of the key.
+function sublineFor(p: RosterPerson, singleSiteView: boolean): string {
+  const title = (p.title ?? "").trim();
+  const acct = (p.account_key ?? "").trim();
+  if (singleSiteView) return title || "No role";
+  if (!title && !acct) return "No role";
+  if (!title) return acct;
+  if (!acct || acct === title) return title;
+  return `${title} · ${acct}`;
+}
+
 function PersonRow({
-  p, isSelf, onOpen,
+  p, isSelf, singleSiteView, onOpen,
 }: {
-  p: RosterPerson; isSelf: boolean; onOpen: (worker_id: string) => void;
+  p: RosterPerson; isSelf: boolean; singleSiteView: boolean; onOpen: (worker_id: string) => void;
 }) {
-  const subtitle = [p.title, p.account_key, p.account_region].filter(Boolean).join(" - ") || "No role";
+  const subtitle = sublineFor(p, singleSiteView);
   return (
     <button
       type="button"
@@ -53,7 +83,7 @@ function PersonRow({
         <span className="kf-pe-flight" aria-label="Pending request">
           <Clock size={14} strokeWidth={1.5} aria-hidden />
           <span className="kf-pe-flight__what">
-            {fmtShort(p.waiting.submitted_at)} - {fmtDaysWaiting(p.waiting.submitted_at)}
+            {fmtShort(p.waiting.submitted_at)} · {fmtDaysWaiting(p.waiting.submitted_at)}
           </span>
         </span>
       ) : null}
@@ -62,12 +92,11 @@ function PersonRow({
   );
 }
 
-export function MyTeam({ people, sites, viewerWorkerId }: Props) {
+export function MyTeam({ people, sites, viewerWorkerId, singleSiteView }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
   const siteParam = sp.get("site") ?? "";
-  const asParam = sp.get("as") ?? "";
   const [query, setQuery] = useState("");
 
   // Build a stable query-string helper so clicks keep ?as= in play
@@ -116,7 +145,9 @@ export function MyTeam({ people, sites, viewerWorkerId }: Props) {
 
   const hasMultipleSites = sites.length > 0; // loader empties when 1
   const total = filtered.length;
-  const pending = filtered.reduce((n, p) => n + (p.waiting_count > 0 ? 1 : 0), 0);
+  // T2.1 fix 7: "N pending" on the roster head counts items, not
+  // people - same grain as the band total and the site-list sum.
+  const pendingItems = filtered.reduce((n, p) => n + p.waiting_count, 0);
 
   return (
     <div className="kf-pe-cols">
@@ -128,7 +159,10 @@ export function MyTeam({ people, sites, viewerWorkerId }: Props) {
             onClick={() => router.push(buildHref({ site: null }))}
             aria-current={siteParam === "" ? "true" : "false"}
           >
-            <span className="kf-pe-sitenav__name">All sites</span>
+            <span className="kf-pe-sitenav__who">
+              <b>All sites</b>
+              <small>Everyone in scope</small>
+            </span>
             <span className="kf-pe-sitenav__count">{people.length}</span>
           </button>
           {siteGroups.map(([region, list]) => (
@@ -137,21 +171,32 @@ export function MyTeam({ people, sites, viewerWorkerId }: Props) {
                 <span>{region || "Other"}</span>
                 <b>{list.reduce((n, s) => n + s.count, 0)}</b>
               </div>
-              {list.map((s) => (
-                <button
-                  key={s.account_key}
-                  type="button"
-                  className="kf-pe-sitenav__item"
-                  onClick={() => router.push(buildHref({ site: s.account_key }))}
-                  aria-current={siteParam === s.account_key ? "true" : "false"}
-                >
-                  <span className="kf-pe-sitenav__name">{s.name}</span>
-                  <span className="kf-pe-sitenav__count">
-                    {s.count}
-                    {s.waiting > 0 ? <b> {s.waiting}</b> : null}
-                  </span>
-                </button>
-              ))}
+              {list.map((s) => {
+                // T2.1 fix 4. Two-line label: name + (place - leader
+                // - N people). `place` falls back to account_key when
+                // accounts has no city; `leader_name` may be null.
+                const leader = s.leader_name ? s.leader_name : "No site leader";
+                const nPeople = `${s.count} ${s.count === 1 ? "person" : "people"}`;
+                const subParts = [s.place, leader, nPeople].filter(Boolean);
+                return (
+                  <button
+                    key={s.account_key}
+                    type="button"
+                    className="kf-pe-sitenav__item"
+                    onClick={() => router.push(buildHref({ site: s.account_key }))}
+                    aria-current={siteParam === s.account_key ? "true" : "false"}
+                  >
+                    <span className="kf-pe-sitenav__who">
+                      <b>{s.name}</b>
+                      <small>{subParts.join(" · ")}</small>
+                    </span>
+                    <span className="kf-pe-sitenav__count">
+                      {s.count}
+                      {s.waiting > 0 ? <b> {s.waiting}</b> : null}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           ))}
         </aside>
@@ -175,7 +220,7 @@ export function MyTeam({ people, sites, viewerWorkerId }: Props) {
             <h3>Your team</h3>
             <span className="kf-pe-roster__meta">
               {total} {total === 1 ? "person" : "people"}
-              {pending > 0 ? ` - ${pending} pending` : ""}
+              {pendingItems > 0 ? ` · ${pendingItems} pending` : ""}
             </span>
           </header>
           {filtered.length === 0 ? (
@@ -184,11 +229,12 @@ export function MyTeam({ people, sites, viewerWorkerId }: Props) {
               <span>Try a shorter search, or clear the filter.</span>
             </div>
           ) : (
-            filtered.map((p, i) => (
+            filtered.map((p) => (
               <PersonRow
                 key={p.worker_id}
                 p={p}
                 isSelf={p.worker_id === viewerWorkerId}
+                singleSiteView={singleSiteView}
                 onOpen={openCard}
               />
             ))

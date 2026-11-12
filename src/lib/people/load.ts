@@ -123,21 +123,51 @@ export async function loadTeam(
   inScopeRows.sort((a, b) => a.display_name.localeCompare(b.display_name));
   const peopleOut = self ? [self, ...inScopeRows] : inScopeRows;
 
+  // T2.1 fix 4: site leaders per account. First alphabetical active
+  // is_site_leader wins when multiple exist (rare; the loud-log
+  // discipline for viewer dupes does not extend here - site
+  // leaders are the thing we are READING, not the signed-in
+  // identity).
+  const siteLeaders = new Map<string, string>();
+  for (const p of people) {
+    if (!p.is_site_leader) continue;
+    const prev = siteLeaders.get(p.account_key);
+    const name = (p.display_name ?? "").trim();
+    if (!prev || name.localeCompare(prev) < 0) siteLeaders.set(p.account_key, name);
+  }
+
+  // T2.1 fix 4: place for a site is "<city>, <state>" when accounts
+  // has them, else the account key. Never invent a place name.
+  const placeFor = (team_key: string): string => {
+    const a = accountByKey.get(team_key);
+    const city = (a?.city ?? "").trim();
+    const state = (a?.state ?? "").trim();
+    if (city && state) return `${city}, ${state}`;
+    if (city) return city;
+    return team_key;
+  };
+
   // 7. Site nav. One entry per account_key present in the in-scope
   // set. `name` falls back to the team_key when accounts.name is
   // empty (corp rows frequently are). Totals come from the same
   // in-scope list so the count never disagrees with the roster.
+  //
+  // T2.1 fix 7: `waiting` is the sum of pending ITEMS per person,
+  // NOT the count of distinct people with >=1 pending. "requests
+  // waiting" is item-grain across band / roster head / site list.
   const bySite = new Map<string, { count: number; waiting: number; region: string | null }>();
   for (const r of peopleOut) {
     const cur = bySite.get(r.account_key) ?? { count: 0, waiting: 0, region: r.account_region };
     cur.count += 1;
-    cur.waiting += r.waiting_count > 0 ? 1 : 0;
+    cur.waiting += r.waiting_count;
     bySite.set(r.account_key, cur);
   }
   const sites: SiteNavEntry[] = [...bySite.entries()]
     .map(([k, v]) => ({
       account_key: k,
       name: (accountByKey.get(k)?.name && accountByKey.get(k)!.name!.trim()) || k,
+      place: placeFor(k),
+      leader_name: siteLeaders.get(k) ?? null,
       region: v.region,
       count: v.count,
       waiting: v.waiting,
@@ -150,7 +180,7 @@ export async function loadTeam(
       return a.name.localeCompare(b.name);
     });
 
-  // Totals.
+  // Totals. T2.1 fix 7: pending is item-grain, matching sites[].waiting.
   const total_pending = peopleOut.reduce((s, r) => s + r.waiting_count, 0);
 
   return {
