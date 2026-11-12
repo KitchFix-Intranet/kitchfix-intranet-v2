@@ -29,6 +29,7 @@ import type {
 import { inScope } from "./scope";
 import { toRosterPerson, toSelfRosterPerson } from "./contact";
 import { isLate } from "./thresholds";
+import { labelForAction } from "./labels";
 
 // Narrow projection for the roster + scope. personal_email, phone,
 // start_date and birthday are DELIBERATELY absent - the roster never
@@ -36,19 +37,6 @@ import { isLate } from "./thresholds";
 // payload. The card loader (loadPerson.ts) pulls the full projection.
 const PEOPLE_SELECT =
   "worker_id, display_name, title, account_key, region, work_email, manager_worker_id, is_corp, is_salaried, is_site_leader, is_regional_director, pp_full_access, pp_review, status";
-
-// T2.2 (2026-11-12). Short label for the "In flight" chip and the
-// row's flight pill. Mirrors the render's wording: "PAF: Transfer",
-// "Incident: Injury", etc. Payload bodies never leak through here.
-function labelForWaiting(module: string | null, action_type: string | null): string {
-  const m = (module ?? "").trim().toLowerCase();
-  const a = (action_type ?? "").trim();
-  if (m === "paf") return a ? `PAF: ${a}` : "PAF";
-  if (m === "incident") return a ? `Incident: ${a}` : "Incident";
-  if (m === "termination") return a ? `Termination: ${a}` : "Termination";
-  if (m) return a ? `${m}: ${a}` : m.toUpperCase();
-  return a || "Request";
-}
 
 // A submissions row is "waiting" for a person when status='Pending'
 // AND module != 'newhire' (R-PP21: new hires are not about a
@@ -89,7 +77,7 @@ async function loadWaitingByPerson(sb: SupabaseClient): Promise<Map<string, Wait
       submitted_at: (r.submitted_at ?? "") as string,
       submitter_worker_id: (r.submitter_worker_id as string | null) ?? null,
       submitter_name: submitterNames.get((r.submitter_worker_id as string) ?? "") ?? null,
-      label: labelForWaiting(r.module as string | null, r.action_type as string | null),
+      label: labelForAction(r.module as string | null, r.action_type as string | null),
     });
     byPerson.set(pid, list);
   }
@@ -109,11 +97,16 @@ function markFor(account_key: string): string {
 // T2.2 (2026-11-12). Level label on the panel head. accounts.level
 // when present; the site_manager override to "hourly team" applied
 // here when the viewer only sees the hourly population of this site.
+// T2.3 (2026-11-13): the CORP account carries level "CORP" in the
+// DB; render it as "Corporate" so the site head reads
+// "Chicago, IL · Corporate · 10 people" instead of leaking the code.
 function levelFor(
+  team_key: string,
   acct: AccountRow | undefined,
   overrideHourlyTeam: boolean,
 ): string | null {
   if (overrideHourlyTeam) return "hourly team";
+  if (team_key === "CORP") return "Corporate";
   const s = (acct?.level ?? "").trim();
   return s || null;
 }
@@ -210,7 +203,7 @@ export async function loadTeam(
     // site_manager viewers see only hourly team members; use the
     // "hourly team" override on their own site panel.
     const isManagerOwnSite = viewer.role === "site_manager" && team_key === viewer.account_key;
-    const level = levelFor(acct, isManagerOwnSite);
+    const level = levelFor(team_key, acct, isManagerOwnSite);
 
     const entry: SiteNavEntry = {
       account_key: team_key,

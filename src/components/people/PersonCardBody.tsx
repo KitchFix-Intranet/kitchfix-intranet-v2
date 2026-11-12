@@ -26,6 +26,16 @@ import type { CardPerson, InFlightRow } from "@/lib/people/types";
 import { fmtShort } from "@/lib/people/dates";
 import { PersonCardCloseButton, PersonCardFooterClose } from "./PersonCardFrame";
 
+// T2.3 item 8 (2026-11-13). Status pill tone, matching the render's
+// pill styles. Approved -> good (green); Rejected -> block (red);
+// Withdrawn + anything else -> muted. R-PP7 word mapping already
+// applied upstream (Complete->Approved, Cancelled->Withdrawn).
+function historyPillTone(status: string): string {
+  if (status === "Approved") return "kf-pill--good";
+  if (status === "Rejected") return "kf-pill--block";
+  return "kf-pill--muted";
+}
+
 // ONE skew tag per the render:
 //   - site_leader   -> "Site leader"
 //   - salaried      -> "Salaried" (not for corporate)
@@ -110,36 +120,36 @@ export function PersonCardBody({ person }: { person: CardPerson }) {
           </div>
           <div className="kf-pe-contact">
             {hasPhoneHref ? (
-              <a className="kf-btn kf-btn--ghost" href={`tel:${person.phone_href}`}>
+              <a className="kf-btn kf-btn--line" href={`tel:${person.phone_href}`}>
                 <Phone size={16} strokeWidth={1.5} aria-hidden />
                 <span>Call</span>
               </a>
             ) : (
-              <span className="kf-btn kf-btn--ghost kf-pe-disabled" aria-disabled="true">
+              <span className="kf-btn kf-btn--line kf-pe-disabled" aria-disabled="true">
                 <Phone size={16} strokeWidth={1.5} aria-hidden />
                 <span>Call</span>
               </span>
             )}
             {isHourly ? (
               hasPhoneHref ? (
-                <a className="kf-btn kf-btn--ghost" href={`sms:${person.phone_href}`}>
+                <a className="kf-btn kf-btn--line" href={`sms:${person.phone_href}`}>
                   <MessageCircle size={16} strokeWidth={1.5} aria-hidden />
                   <span>Text</span>
                 </a>
               ) : (
-                <span className="kf-btn kf-btn--ghost kf-pe-disabled" aria-disabled="true">
+                <span className="kf-btn kf-btn--line kf-pe-disabled" aria-disabled="true">
                   <MessageCircle size={16} strokeWidth={1.5} aria-hidden />
                   <span>Text</span>
                 </span>
               )
             ) : null}
             {emailHref ? (
-              <a className="kf-btn kf-btn--ghost" href={emailHref}>
+              <a className="kf-btn kf-btn--line" href={emailHref}>
                 <Mail size={16} strokeWidth={1.5} aria-hidden />
                 <span>Email</span>
               </a>
             ) : (
-              <span className="kf-btn kf-btn--ghost kf-pe-disabled" aria-disabled="true">
+              <span className="kf-btn kf-btn--line kf-pe-disabled" aria-disabled="true">
                 <Mail size={16} strokeWidth={1.5} aria-hidden />
                 <span>Email</span>
               </span>
@@ -214,42 +224,46 @@ export function PersonCardBody({ person }: { person: CardPerson }) {
         ) : null}
 
         {/* History (R-PP54). When not visible, the section is hidden
-         * entirely (the "waiting state" has already been shown above). */}
+         * entirely (the "waiting state" has already been shown above).
+         * T2.3 item 8 (2026-11-13): render as a plain .kf-pe-hist list
+         * matching the render - request label, "<date> · sent by
+         * <name>", status pill on the right. Not a bordered table. */}
         {person.historyVisible ? (
           <>
             <div className="kf-pe-sechead">
               <h3>History</h3>
+              {person.history.length > 0 ? (
+                <span className="kf-pe-sechead__meta">
+                  {person.history.length} this year
+                </span>
+              ) : null}
             </div>
             {person.history.length === 0 ? (
               <p className="kf-pe-muted kf-pe-small">Nothing sent for this person this year.</p>
             ) : (
-              <div className="kf-pe-tablecard">
-                <table className="kf-pe-table">
-                  <tbody>
-                    {person.history.slice(0, 5).map((h) => (
-                      <tr key={h.id} className="kf-pe-row">
-                        <td className="kf-pe-what">
-                          <span className="kf-pe-what__text">
-                            <b title={h.action}>{h.action}</b>
-                            <small>
-                              {h.status_display}
-                              {h.submitter_name ? ` · ${h.submitter_name}` : ""}
-                            </small>
-                          </span>
-                        </td>
-                        <td className="kf-pe-when">
-                          <time dateTime={h.date} title={h.dateLong}>{fmtShort(h.date)}</time>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <>
+                <ul className="kf-pe-hist">
+                  {person.history.slice(0, 5).map((h) => (
+                    <li key={h.id}>
+                      <span className="kf-pe-hist__what">
+                        <b title={h.action}>{h.action}</b>
+                        <small title={h.dateLong}>
+                          {fmtShort(h.date)}
+                          {h.submitter_name ? ` · sent by ${h.submitter_name}` : ""}
+                        </small>
+                      </span>
+                      <span className={`kf-pill ${historyPillTone(h.status_display)} kf-pe-pill`}>
+                        {h.status_display}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
                 {person.history.length > 5 ? (
                   <p className="kf-pe-hist__more">
                     See all {person.history.length}
                   </p>
                 ) : null}
-              </div>
+              </>
             )}
           </>
         ) : null}

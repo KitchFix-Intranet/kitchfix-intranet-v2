@@ -20,6 +20,7 @@ import type {
 import { toCardPerson } from "./contact";
 import { fmtShort, fmtFull, fmtDaysWaiting } from "./dates";
 import { LATE_DAYS } from "./thresholds";
+import { labelForAction } from "./labels";
 
 const PERSON_SELECT =
   "worker_id, display_name, title, account_key, region, work_email, personal_email, phone, manager_worker_id, start_date, birthday, is_corp, is_salaried, is_site_leader, is_regional_director, pp_full_access, pp_review, status";
@@ -136,14 +137,6 @@ async function visibleHistory(
     if (!sQ.error) for (const s of sQ.data ?? []) submitterNames.set(s.worker_id, s.display_name ?? "");
   }
 
-  const actionLabel = (module: string | null, action_type: string | null): string => {
-    const m = (module ?? "").trim();
-    const a = (action_type ?? "").trim();
-    if (m === "paf") return a ? `PAF: ${a}` : "PAF";
-    if (m === "incident") return a ? `Incident: ${a}` : "Incident";
-    if (m) return a ? `${m}: ${a}` : m;
-    return a || "Request";
-  };
   // R-PP7 word mapping. Three mappings named by spec: Complete reads
   // "Approved"; Cancelled reads "Withdrawn"; Pending reads "Pending".
   // Rejected and Withdrawn pass through as-is (they already read as
@@ -157,7 +150,7 @@ async function visibleHistory(
 
   const historyRows: HistoryRow[] = rows.map((r) => ({
     id: r.id,
-    action: actionLabel(r.module, r.action_type),
+    action: labelForAction(r.module, r.action_type),
     date: r.submitted_at,
     dateLong: fmtFull(r.submitted_at),
     submitter_name: submitterNames.get(r.submitter_worker_id ?? "") ?? "",
@@ -203,16 +196,6 @@ function tenureStrings(start_date: string | null | undefined, now: Date = new Da
   };
 }
 
-// T2.2 (2026-11-12). Short waiting label, matching load.ts.
-function labelForWaiting(module: string | null, action_type: string | null): string {
-  const m = (module ?? "").trim().toLowerCase();
-  const a = (action_type ?? "").trim();
-  if (m === "paf") return a ? `PAF: ${a}` : "PAF";
-  if (m === "incident") return a ? `Incident: ${a}` : "Incident";
-  if (m === "termination") return a ? `Termination: ${a}` : "Termination";
-  if (m) return a ? `${m}: ${a}` : m.toUpperCase();
-  return a || "Request";
-}
 function kindFromModule(m: string | null): InFlightRow["kind"] {
   const s = (m ?? "").toLowerCase();
   if (s === "paf") return "paf";
@@ -322,7 +305,7 @@ export async function loadPerson(
       inFlightRows.push({
         id: r.id as number,
         kind: kindFromModule(r.module as string | null),
-        label: labelForWaiting(r.module as string | null, r.action_type as string | null),
+        label: labelForAction(r.module as string | null, r.action_type as string | null),
         submitter_name: subNames.get((r.submitter_worker_id as string) ?? "") ?? null,
         sent_short: fmtShort((r.submitted_at ?? "") as string),
         wait_days: fmtDaysWaiting((r.submitted_at ?? "") as string, now),

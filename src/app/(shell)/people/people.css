@@ -44,18 +44,6 @@
   font-size: var(--sp-t-body); font-weight: 700;
   color: var(--sp-ink); margin-top: var(--sp-sp-1);
 }
-/* T2.2.1 (2026-11-12). "What is this?" blurb in the phone head.
- * Scoped to the <details> element so the rules do not touch the
- * in-flight table's .kf-pe-what <td> cells. */
-details.kf-pe-what { margin-top: var(--sp-sp-1); display: block; }
-details.kf-pe-what > summary {
-  list-style: none; display: inline-flex; width: auto;
-}
-details.kf-pe-what > summary::-webkit-details-marker { display: none; }
-details.kf-pe-what > p {
-  color: var(--sp-body); font-size: var(--sp-t-body);
-  margin-top: var(--sp-sp-2);
-}
 
 /* ---------- Quick actions (vertical rows, render shape) ----------
  * T2.2 (2026-11-12). Render uses a 4-col grid of row-shaped items,
@@ -67,7 +55,15 @@ details.kf-pe-what > p {
   margin: 0 0 var(--sp-sp-5);
 }
 @media (max-width: 1100px) { .kf-pe-qas { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 640px)  { .kf-pe-qas { grid-template-columns: minmax(0, 1fr); } }
+/* T2.3 item 10 (2026-11-13). Phone stays 2x2 (not 1x4). Compact
+ * tiles: shorter height, tighter padding, subline + chev hidden so
+ * only the icon and the title read. Matches the render at 390. */
+@media (max-width: 860px) {
+  .kf-pe-qas { gap: var(--sp-sp-3); margin-bottom: var(--sp-sp-4); }
+  .kf-pe-qa { min-height: 64px; padding: var(--sp-sp-3); }
+  .kf-pe-qa__text small { display: none; }
+  .kf-pe-qa__chev { display: none; }
+}
 
 .kf-pe-qa {
   display: flex; align-items: center; gap: var(--sp-sp-3);
@@ -258,9 +254,18 @@ details.kf-pe-what > p {
   flex: 1; min-width: 0; display: flex; flex-direction: column;
   line-height: 1.25;
 }
+/* T2.3 item 4 (2026-11-13). Site panel head name uses the display
+ * face at the h3 size, matching the render. Live was body face. */
 .kf-pe-sitehead__who b {
-  font-size: var(--sp-t-body); color: var(--sp-navy); font-weight: 700;
+  font-family: var(--sp-disp);
+  font-size: var(--sp-t-h3); color: var(--sp-navy); font-weight: 700;
+  letter-spacing: .3px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Phone: shrink the panel head name back to the item size so a long
+ * team name like "Cincinnati Reds" is not clipped at 390. */
+@media (max-width: 860px) {
+  .kf-pe-sitehead__who b { font-size: var(--sp-t-item); }
 }
 .kf-pe-sitehead__who small {
   font-size: var(--sp-t-label); color: var(--sp-muted);
@@ -312,9 +317,13 @@ details.kf-pe-what > p {
   flex: 1; min-width: 0; display: flex; flex-direction: column;
   line-height: 1.25;
 }
+/* T2.3 item 9 (2026-11-13). `overflow-wrap: anywhere` broke the
+ * name mid-letter on phone when the Pending column squeezed the
+ * "You" row ("Kevin F / i / e / t / e / k" one per line). Use
+ * break-word so words wrap only when they cannot fit at all. */
 .kf-pe-person__who b {
   font-size: var(--sp-t-body); font-weight: 700;
-  white-space: normal; overflow-wrap: anywhere;
+  white-space: normal; overflow-wrap: break-word; word-break: normal;
 }
 .kf-pe-person__who small {
   font-size: var(--sp-t-label); color: var(--sp-muted);
@@ -337,6 +346,13 @@ details.kf-pe-what > p {
   white-space: nowrap; max-width: 220px;
   overflow: hidden; text-overflow: ellipsis;
 }
+/* T2.3 item 9 (2026-11-13). Phone: hide the pending-request label
+ * even on the "You" row so it does not squeeze the name column.
+ * The Pending pill still renders beside it. Matches the render. */
+@media (max-width: 860px) {
+  .kf-pe-flight { min-width: 0; }
+  .kf-pe-flight__what { display: none; }
+}
 
 /* ---------- Site stack (phone layout) ---------- */
 .kf-pe-sitestack { display: none; }
@@ -347,16 +363,6 @@ details.kf-pe-what > p {
 .kf-pe-sitestack .kf-pe-sitehead[aria-expanded="false"] + .kf-pe-roster { display: none; }
 .kf-pe-sitestack .kf-pe-sitehead[aria-expanded="false"] .kf-pe-sitehead__chev {
   transform: rotate(-90deg);
-}
-
-/* ---------- Docked "New" button (phone only) ---------- */
-.kf-pe-dock {
-  position: fixed;
-  left: var(--sp-sp-4); right: var(--sp-sp-4);
-  bottom: calc(var(--sp-tabbar) + var(--sp-sp-3));
-  z-index: calc(var(--sp-z-rail-phone) - 5);
-  box-shadow: var(--sp-shadow-float);
-  justify-content: center;
 }
 
 /* ---------- Empty + no-match states ---------- */
@@ -453,6 +459,69 @@ details.kf-pe-what > p {
   flex-wrap: wrap;
 }
 .kf-pe-contact .kf-btn { min-height: var(--sp-floor-chef); }
+
+/* T2.3 items 6 + 7 (2026-11-13). Facts list inside the drawer: one
+ * row per fact, label in a fixed-width left column, value
+ * left-aligned in a second column that starts at the same x on
+ * every row, one full-width divider under each row. Scoped to
+ * `.kf-pe-drawer` so the shared `.kf-kv` component used elsewhere
+ * (nav, forms) is untouched. Matches render @media (min-width: 641)
+ * and the drawer-level overrides. */
+.kf-pe-drawer .kf-kv { display: block; margin-bottom: var(--sp-sp-4); }
+.kf-pe-drawer .kf-kv > div {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  gap: var(--sp-sp-4);
+  align-items: baseline;
+  padding: var(--sp-sp-3) 0;
+  border-bottom: 1px solid var(--sp-line-soft);
+}
+.kf-pe-drawer .kf-kv dt {
+  font-size: var(--sp-t-label); color: var(--sp-muted);
+  white-space: normal;
+  padding: 0; border: none; margin: 0;
+}
+.kf-pe-drawer .kf-kv dd {
+  padding: 0; border: none; margin: 0;
+  text-align: left;
+  color: var(--sp-ink); font-weight: 600;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 640px) {
+  /* Phone: narrower label column so "Reports to" and "Work email"
+   * still fit on one line beside their value at 360. */
+  .kf-pe-drawer .kf-kv > div {
+    grid-template-columns: 116px minmax(0, 1fr);
+    gap: var(--sp-sp-3);
+    padding: 11px 0;
+  }
+  .kf-pe-drawer .kf-kv dd { font-size: var(--sp-t-table); }
+}
+
+/* T2.3 item 8 (2026-11-13). History as a plain list, not a table.
+ * Request label on the left, "<date> · sent by <name>" underneath,
+ * status pill pushed right. Row divider on each <li>. */
+.kf-pe-hist { list-style: none; margin: 0; padding: 0; }
+.kf-pe-hist li {
+  display: flex; align-items: center; gap: var(--sp-sp-3);
+  padding: var(--sp-sp-3) 0;
+  border-bottom: 1px solid var(--sp-line-soft);
+}
+.kf-pe-hist li:last-child { border-bottom: none; }
+.kf-pe-hist__what {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column; line-height: 1.25;
+}
+.kf-pe-hist__what b {
+  display: block; color: var(--sp-ink);
+  font-size: var(--sp-t-table); font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.kf-pe-hist__what small {
+  color: var(--sp-muted); font-size: var(--sp-t-label);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.kf-pe-hist .kf-pill { flex: 0 0 auto; }
 
 /* ---------- Card body sections ---------- */
 .kf-pe-sechead {
