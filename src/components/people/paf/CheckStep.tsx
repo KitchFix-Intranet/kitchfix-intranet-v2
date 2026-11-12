@@ -1,7 +1,10 @@
 "use client";
 
-// Check step. Person · every answered field as label and value ·
-// Who sees it · Send (disabled in T4a).
+// T4a.1 (2026-11-14). Check mirrors the render:
+//   - Person card at the top (.kf-pe-about).
+//   - KV list, Action first, then the answered fields.
+//   - "Who sees it" NOTE box under the KV list (not a sechead).
+// Send button is rendered in PafFlow's footer (disabled in T4a).
 
 import type { PafAction } from "./WhatStep";
 import { ACTION_LABEL, type RequestRoute } from "@/lib/people/labels";
@@ -29,21 +32,33 @@ export function CheckStep({
   const dateFull = effectiveDate ? fmtFull(effectiveDate) : "";
 
   const reviewersText = whoSeesIt.reviewers.length === 0
-    ? "nobody right now"
+    ? "nobody is set up to review yet"
     : whoSeesIt.reviewers.join(", ");
-  const copiedText = whoSeesIt.copied.length === 0
+  const copiedTail = whoSeesIt.copied.length === 0
     ? ""
-    : whoSeesIt.copied.join(", ");
+    : ` ${whoSeesIt.copied.join(", ")} ${whoSeesIt.copied.length === 1 ? "is" : "are"} copied.`;
 
   return (
     <>
-      <div className="kf-pe-check-eyebrow">
-        <span className="kf-eyebrow kf-eyebrow--plain">You are about to send</span>
-        <h3>{actionLabel}{person ? ` for ${person.display_name}` : ""}</h3>
-      </div>
+      {person ? (
+        <div className="kf-pe-about">
+          <span className="kf-pe-ava" aria-hidden>
+            {(person.display_name || "?").split(/\s+/).map((s) => s[0]).join("").slice(0, 2).toUpperCase()}
+          </span>
+          <span className="kf-pe-about__who">
+            <b data-about="name">{person.display_name}</b>
+          </span>
+        </div>
+      ) : null}
 
       <div className="kf-pe-kvlist">
         <dl className="kf-kv" aria-label="What is in the request">
+          {/* Action row first - matches the render's _row detail
+           * array ordering for every PAF action. */}
+          <div>
+            <dt>Action</dt>
+            <dd>{actionLabel}</dd>
+          </div>
           <div>
             <dt>For</dt>
             <dd>{person?.display_name || "-"}</dd>
@@ -69,12 +84,10 @@ export function CheckStep({
         </dl>
       </div>
 
-      <div className="kf-pe-sechead">
-        <h3>Who sees it</h3>
-      </div>
       <div className="kf-pe-note">
-        <b>Sent to {whoSeesIt.route}.</b> {reviewersText} {whoSeesIt.reviewers.length === 1 ? "reviews it" : "review it"}
-        {copiedText ? `; ${copiedText} are copied.` : "."}
+        <b>Who sees it</b> Sent to {whoSeesIt.route}. {reviewersText}
+        {whoSeesIt.reviewers.length === 1 ? " reviews it." : whoSeesIt.reviewers.length > 1 ? " review it." : "."}
+        {copiedTail}
       </div>
     </>
   );

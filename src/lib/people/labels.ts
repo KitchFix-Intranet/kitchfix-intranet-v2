@@ -10,21 +10,32 @@
 // action_type added in the DB still renders as words.
 
 export const ACTION_LABEL: Record<string, string> = {
+  // T4a.1 (2026-11-14). Labels aligned to the render's PAF What
+  // group names so Inbox + form say the same thing. Five shifted:
+  //   title_change    "Title change"    -> "Change in title"
+  //   status_change   "Status change"   -> "Part-time or full-time"
+  //   add_cell_phone  "Cell phone"      -> "Cell phone reimbursement"
+  //   pay_increase    "Pay increase"    -> "Pay increase recommendation"
+  //   add_deduction   "Deduction"       -> "One-time deduction"
   travel_reimbursement: "Travel reimbursement",
   other_reimbursement: "Other reimbursement",
   separation: "Separation",
   add_bonus: "One-time bonus",
-  // T4a (2026-11-13). `add_gratuity` is v1's action_type code for a
-  // one-time gratuity payment (grep-verified in v1 PAFForm.js). No
-  // live `submissions` row uses it yet; T4c will write it.
+  // T4a. `add_gratuity` is v1's action_type for a one-time gratuity
+  // payment (grep-verified in v1 PAFForm.js). T4c writes it.
   add_gratuity: "Gratuity",
-  title_change: "Title change",
-  add_deduction: "Deduction",
+  title_change: "Change in title",
+  add_deduction: "One-time deduction",
   rate_change: "Rate change",
-  add_cell_phone: "Cell phone",
-  pay_increase: "Pay increase",
-  status_change: "Status change",
+  add_cell_phone: "Cell phone reimbursement",
+  pay_increase: "Pay increase recommendation",
+  status_change: "Part-time or full-time",
   new_hire: "New Hire",
+  // T4a.1: two render-only actions without live submissions yet;
+  // T4b will pick them up. Codes are snake_case of the render's
+  // data-action attribute values.
+  reclassification: "Reclassification",
+  equipment_request: "Equipment or laptop request",
 };
 
 function titleFromCode(code: string): string {

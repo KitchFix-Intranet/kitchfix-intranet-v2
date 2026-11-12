@@ -20,7 +20,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
-import { ChevronLeft, ArrowRight } from "lucide-react";
+import { ChevronLeft, ArrowRight, Send } from "lucide-react";
+import { ACTION_LABEL } from "@/lib/people/labels";
 import { Stepper } from "./Stepper";
 import { WhoStep } from "./WhoStep";
 import { WhatStep, type PafAction } from "./WhatStep";
@@ -255,19 +256,28 @@ export function PafFlow({ initial, team, whoSeesIt, isPreview, asWorkerId }: Pro
     return "";
   }, [saving, savedAt]);
 
+  // T4a.1 (2026-11-14). Eyebrow carries the action word on Details
+  // and Check, like the render: "PAF" on Who/What; "PAF · ONE-TIME
+  // BONUS" on Details + Check once an action is chosen. The shared
+  // .kf-eyebrow renders ALL CAPS via its text-transform rule in
+  // app/components.css, so we pass the label in sentence case.
+  const eyebrow = (step === "details" || step === "check") && action
+    ? `PAF · ${ACTION_LABEL[action] ?? action}`
+    : "PAF";
+  const title =
+    step === "who" ? "Who is this about?" :
+    step === "what" ? "What needs to happen?" :
+    step === "details" ? "How much, and why?" :
+    "Ready to send?";
+
   return (
     <div className="kf-pe-formwrap">
       <div className="kf-pe-sheet">
         <header className="kf-pe-sheet__head">
-          <span className="kf-eyebrow kf-eyebrow--plain">
-            {step === "who" ? "PAF · who" : step === "what" ? "PAF · what" : step === "details" ? "PAF · details" : "PAF · check"}
-          </span>
-          <h2>
-            {step === "who" ? "Who is this for?" :
-             step === "what" ? "What happened?" :
-             step === "details" ? "Tell finance what and when" :
-             "Last look"}
-          </h2>
+          {/* Plain kf-eyebrow (not --plain) carries the red skew-rule
+           * underneath via components.css. */}
+          <span className="kf-eyebrow">{eyebrow}</span>
+          <h2>{title}</h2>
           <Stepper step={stepIndex(step)} />
           {savedText ? <span className="kf-pe-saved" role="status">{savedText}</span> : null}
         </header>
@@ -297,6 +307,7 @@ export function PafFlow({ initial, team, whoSeesIt, isPreview, asWorkerId }: Pro
           {step === "details" && action ? (
             <DetailsStep
               action={action}
+              person={person ? { worker_id: person.worker_id, display_name: person.display_name } : null}
               amount={amount}
               effectiveDate={effectiveDate}
               explanation={explanation}
@@ -323,11 +334,13 @@ export function PafFlow({ initial, team, whoSeesIt, isPreview, asWorkerId }: Pro
 
         <footer className="kf-pe-sheet__foot">
           {step !== "who" ? (
-            <button type="button" className="kf-btn kf-btn--ghost" onClick={onBack}>
+            <button type="button" className="kf-btn kf-btn--ghost kf-pe-foot__back" onClick={onBack}>
               <ChevronLeft size={16} strokeWidth={1.5} aria-hidden />
               <span>Back</span>
             </button>
           ) : null}
+
+          <span className="kf-pe-foot__spacer" />
 
           {step === "details" ? (
             <>
@@ -341,9 +354,9 @@ export function PafFlow({ initial, team, whoSeesIt, isPreview, asWorkerId }: Pro
               >
                 Save and exit
               </button>
-              {/* T4a (2026-11-13). Discard draft: one click flips to
-               * "Really discard?" so the viewer sees the consequence
-               * before the row is deleted. No browser confirm(). */}
+              {/* T4a Discard draft: one-click flip to "Really
+               * discard?" then DELETE via the API. No browser
+               * confirm(). */}
               {draftId ? (
                 confirmDiscard ? (
                   <>
@@ -379,8 +392,6 @@ export function PafFlow({ initial, team, whoSeesIt, isPreview, asWorkerId }: Pro
             </>
           ) : null}
 
-          <span className="kf-pe-foot__spacer" />
-
           {step === "what" ? (
             <button
               type="button"
@@ -413,6 +424,7 @@ export function PafFlow({ initial, team, whoSeesIt, isPreview, asWorkerId }: Pro
                 aria-disabled="true"
                 title="Sending arrives with the forms train."
               >
+                <Send size={16} strokeWidth={1.5} aria-hidden />
                 <span>Send to {whoSeesIt.route}</span>
               </span>
             </>
@@ -420,11 +432,18 @@ export function PafFlow({ initial, team, whoSeesIt, isPreview, asWorkerId }: Pro
         </footer>
       </div>
 
-      {isPreview ? (
-        <p className="kf-pe-muted kf-pe-small kf-pe-preview-note">
-          Preview mode. The form works, but nothing saves and nothing sends.
-        </p>
-      ) : null}
+      {/* T4a.1 (2026-11-14). Side column, as rendered: a 320px
+       * column to the right of the sheet at >=1281. Holds one or
+       * more .kf-pe-note blocks. "Who sees it" + context notes land
+       * here in later trains; this release prints only an "Already
+       * pending" marker when there is one, plus the preview notice. */}
+      <aside className="kf-pe-side" aria-label="Side notes">
+        {isPreview ? (
+          <div className="kf-pe-note">
+            <b>Preview mode</b> The form works, but nothing saves and nothing sends.
+          </div>
+        ) : null}
+      </aside>
     </div>
   );
 }
