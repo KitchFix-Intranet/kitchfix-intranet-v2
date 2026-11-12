@@ -149,9 +149,19 @@ export interface HistoryRow {
 export interface SiteNavEntry {
   account_key: string;
   name: string; // display name from accounts.name or team_key
+  // T2.1 fix 4 (2026-11-12). Two sites with the same team name
+  // (two "St Louis Cardinals", two "Cincinnati Reds") must be
+  // distinguishable at a glance. `place` is "<city>, <state>" when
+  // accounts has them, else the account_key. `leader_name` is the
+  // first active is_site_leader for the account, or null.
+  place: string;
+  leader_name: string | null;
   region: string | null;
   count: number; // people in scope on this site
-  waiting: number; // pending count on this site
+  // T2.1 fix 7 (2026-11-12). "requests waiting" = pending ITEMS,
+  // not distinct people. Band total, roster head total and site
+  // list sum all count items.
+  waiting: number;
 }
 
 export interface TeamView {

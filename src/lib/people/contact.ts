@@ -17,6 +17,23 @@
 
 import type { PeopleRow, RosterPerson, CardPerson, WaitingItem, HistoryRow } from "./types";
 
+// T2.1 fix 1 (2026-11-12). people.phone arrives as
+// "tel:+1-312-555-0100". Never trust the shape - strip a leading
+// "tel:" and every non-digit, accept 10 digits or 11 starting with
+// 1, return the href-ready form + the display form. Anything that
+// does not parse: null (caller falls back to the disabled state).
+// Exported standalone so a probe can hit it; the only caller is
+// toCardPerson() below.
+export function normalisePhone(raw: string | null | undefined): { href: string; display: string } | null {
+  const digits = (raw ?? "").replace(/^tel:/i, "").replace(/\D/g, "");
+  const ten = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+  if (ten.length !== 10) return null;
+  return {
+    href: `+1${ten}`,
+    display: `(${ten.slice(0, 3)}) ${ten.slice(3, 6)}-${ten.slice(6)}`,
+  };
+}
+
 export function initialsOf(display_name: string | null, work_email: string | null): string {
   const base = (display_name ?? "").trim();
   if (base) {
@@ -90,15 +107,13 @@ export function toCardPerson(input: ToCardInput): CardPerson {
   const personal_email_for_display = showPersonalEmail ? personalEmail : null;
 
   // Phone branch of R-PP10. For salaried: print it + power tel:.
-  // For hourly: tel:/sms: hrefs only, never printed. The field exits
-  // the server via phone_for_display (print) and phone_href (href).
-  const phone = (row.phone ?? "").trim();
-  const phoneHasValue = phone.length > 0;
-  const phone_for_display = phoneHasValue && row.is_salaried ? phone : null;
-  // phone_href is the raw digits. It only lands in `tel:`/`sms:`
-  // attribute values at render time - never in a text node and
-  // never in a data-* attribute.
-  const phone_href = phoneHasValue ? phone : null;
+  // For hourly: tel:/sms: hrefs only, never printed. normalisePhone
+  // (T2.1 fix 1) parses the stored `tel:+1-###-###-####` shape and
+  // yields a tel-safe href + "(###) ###-####" display; anything that
+  // does not parse is treated as no phone.
+  const norm = normalisePhone(row.phone ?? null);
+  const phone_for_display = norm && row.is_salaried ? norm.display : null;
+  const phone_href = norm ? norm.href : null;
 
   return {
     ...roster,

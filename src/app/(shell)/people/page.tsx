@@ -118,7 +118,12 @@ export default async function Page({
                     /* site_manager */ viewer.account_key;
 
   return (
-    <>
+    // T2.1 fix 2 (2026-11-12). `.kf-pe-surface` defines --pe-floor
+    // for every descendant; without it the search field + other
+    // control rules fell back to the browser default and the
+    // field rendered at 23px. The wrapper is purely a CSS custom-
+    // property scope - no layout change.
+    <div className="kf-pe-surface">
       {viewer.previewOf ? <OwnerPreviewBanner name={viewer.previewOf.display_name || viewer.display_name} /> : null}
 
       <IdentBand
@@ -137,8 +142,8 @@ export default async function Page({
       <div className="kf-pe-phonehead kf-only-phone">
         <span className="kf-eyebrow kf-eyebrow--plain">My team</span>
         <p className="kf-pe-phonehead__line">
-          {bandTitle} - {team.totals.people} {team.totals.people === 1 ? "person" : "people"}
-          {team.totals.pending > 0 ? ` - ${team.totals.pending} pending` : ""}
+          {bandTitle} · {team.totals.people} {team.totals.people === 1 ? "person" : "people"}
+          {team.totals.pending > 0 ? ` · ${team.totals.pending} pending` : ""}
         </p>
       </div>
 
@@ -148,10 +153,11 @@ export default async function Page({
         people={team.people}
         sites={team.sites}
         viewerWorkerId={viewer.worker_id}
+        singleSiteView={viewer.role === "site_leader" || viewer.role === "site_manager"}
       />
 
       {cardNode}
-    </>
+    </div>
   );
 }
 

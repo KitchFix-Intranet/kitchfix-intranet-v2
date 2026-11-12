@@ -3,8 +3,15 @@
  * subset matching this train (My team + the person card).
  * Form control borders use --sp-line-field (R-PP63). */
 
-/* ---------- Surface + floor (corp workbench) ---------- */
-.kf-pe-surface { --pe-floor: var(--sp-floor-corp); }
+/* ---------- Surface + floor (chef workbench) ----------
+ * T2.1 fix 2 (2026-11-12). My team and the person card are chef-
+ * floor screens: every control >= var(--sp-floor-chef) (48px).
+ * `.kf-pe-surface` was declared but never applied in markup, so
+ * `--pe-floor` collapsed to the browser default and the search
+ * field rendered at 23px. page.tsx now applies the class, and
+ * every consumer passes `var(--sp-floor-chef)` as the fallback
+ * so a future orphaned consumer never collapses silently. */
+.kf-pe-surface { --pe-floor: var(--sp-floor-chef); }
 
 /* ---------- Owner preview ribbon ---------- */
 .kf-pe-preview {
@@ -16,7 +23,27 @@
   font-size: var(--sp-t-table); font-weight: 700;
   margin-bottom: var(--sp-sp-3);
 }
-.kf-pe-preview a { margin-left: auto; color: var(--sp-link); font-weight: 700; }
+/* T2.1 fix 8 (2026-11-12). Exit link is >= --sp-floor-corp (44px)
+ * at every width. Owner-only control, so the corporate floor is
+ * fine; the link is padded + inline-flex to deliver the minimum
+ * hit area without expanding the ribbon vertically at the chef
+ * floor. */
+.kf-pe-preview__exit,
+.kf-pe-preview a {
+  margin-left: auto;
+  color: var(--sp-link);
+  font-weight: 700;
+  min-height: var(--sp-floor-corp);
+  padding: 0 var(--sp-sp-3);
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--sp-r-sm);
+  text-decoration: none;
+}
+.kf-pe-preview__exit:hover,
+.kf-pe-preview a:hover { text-decoration: underline; }
+.kf-pe-preview__exit:focus-visible,
+.kf-pe-preview a:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
 
 /* ---------- Phone head (only shown at <=860) ---------- */
 .kf-pe-phonehead { margin-bottom: var(--sp-sp-3); }
@@ -59,17 +86,24 @@
   display: inline-flex; align-items: center; gap: var(--sp-sp-2);
 }
 
-/* ---------- Search ("Find a person, a role or a site") ---------- */
+/* ---------- Search ("Find a person, a role or a site") ----------
+ * T2.1 fix 2 (2026-11-12). The whole field is >= var(--sp-floor-
+ * chef) at every width, border is var(--sp-line-field), click
+ * anywhere on the label focuses the nested <input>. var(--pe-floor)
+ * takes the surface variable; the fallback to var(--sp-floor-chef)
+ * keeps the 48px floor even if the surface wrapper is accidentally
+ * stripped. */
 .kf-pe-field--search {
   display: flex; align-items: center; gap: var(--sp-sp-2);
   background: var(--sp-card); border: 1px solid var(--sp-line-field);
   border-radius: var(--sp-r-ctl); padding: 0 var(--sp-sp-3);
   color: var(--sp-muted); max-width: 560px;
-  min-height: var(--pe-floor);
+  min-height: var(--pe-floor, var(--sp-floor-chef));
   margin: 0 0 var(--sp-sp-4);
+  cursor: text;
 }
 .kf-pe-field--search input {
-  border: none; min-height: var(--pe-floor);
+  border: none; min-height: var(--pe-floor, var(--sp-floor-chef));
   padding: 0; background: transparent;
   font: 400 var(--sp-t-body) var(--sp-ui); color: var(--sp-ink);
   width: 100%;
@@ -113,12 +147,17 @@
   margin-left: auto; font-variant-numeric: tabular-nums;
   font-family: var(--sp-ui); letter-spacing: 0;
 }
+/* T2.1 fix 3 (2026-11-12). `button` elements do not inherit font
+ * from body; the browser default is 13.3333px. `font: inherit` on
+ * every sitenav + roster button restores the body type scale.
+ * Line heights stay tight via the __who line-height. */
 .kf-pe-sitenav__item {
   width: 100%; display: flex; align-items: center; gap: var(--sp-sp-3);
   min-height: 56px; padding: var(--sp-sp-2) var(--sp-sp-4);
   border: none; border-bottom: 1px solid var(--sp-line-soft);
   background: transparent; color: var(--sp-ink);
   text-align: left; cursor: pointer;
+  font: inherit;
 }
 .kf-pe-sitenav__item:last-child { border-bottom: none; }
 .kf-pe-sitenav__item:hover { background: var(--sp-sky-soft); }
@@ -127,13 +166,31 @@
   box-shadow: inset 3px 0 0 var(--sp-navy);
 }
 .kf-pe-sitenav__item:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: -2px; }
+/* T2.1 fix 4 (2026-11-12). Two-line sitenav label: name (body
+ * size) + sub (label size: place, leader, N people). */
+.kf-pe-sitenav__who {
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
+  line-height: 1.25;
+}
+.kf-pe-sitenav__who b {
+  font-size: var(--sp-t-body); font-weight: 700;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.kf-pe-sitenav__who small {
+  font-size: var(--sp-t-label); color: var(--sp-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Kept for the "All sites" row (single-line); the typed-row
+ * version uses __who above. */
 .kf-pe-sitenav__name {
   flex: 1; min-width: 0;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: var(--sp-t-body);
 }
 .kf-pe-sitenav__count {
   font-variant-numeric: tabular-nums; font-weight: 700;
   color: var(--sp-muted);
+  font-size: var(--sp-t-label);
 }
 .kf-pe-sitenav__count b { color: var(--sp-warn); margin-left: var(--sp-sp-2); }
 
@@ -159,12 +216,18 @@
   margin-left: auto; color: var(--sp-muted);
   font-size: var(--sp-t-label); font-weight: 600;
 }
+/* T2.1 fix 3: `font: inherit` so the body size cascades (buttons
+ * default to 13.3333px otherwise). The row stays 48px min to
+ * satisfy the chef-row floor; `align-items: flex-start` + a bit
+ * of vertical padding lets a two-line (wrapped) name expand the
+ * row instead of clipping when the name is long. */
 .kf-pe-person {
-  display: flex; align-items: center; gap: var(--sp-sp-3);
-  min-height: 56px; padding: var(--sp-sp-2) var(--sp-sp-4);
+  display: flex; align-items: flex-start; gap: var(--sp-sp-3);
+  min-height: 56px; padding: var(--sp-sp-3) var(--sp-sp-4);
   border: none; border-bottom: 1px solid var(--sp-line-soft);
   background: transparent; text-align: left; color: var(--sp-ink);
   cursor: pointer; width: 100%;
+  font: inherit;
 }
 .kf-pe-person:last-child { border-bottom: none; }
 .kf-pe-person:hover { background: var(--sp-raise); }
@@ -178,14 +241,23 @@
   background: var(--sp-sky); color: var(--sp-navy-deep);
   display: inline-flex; align-items: center; justify-content: center;
   font: 700 var(--sp-t-label) var(--sp-ui);
+  /* Keeps the avatar aligned with the first line when the name
+   * wraps to two lines (align-items: flex-start on the parent). */
+  margin-top: 2px;
 }
 .kf-pe-person__who {
   flex: 1; min-width: 0; display: flex; flex-direction: column;
   line-height: 1.25;
 }
+/* T2.1 fix 6 (2026-11-12). Names are never truncated at any width
+ * from 360 to 1920. `white-space: normal` lets them wrap; `overflow-
+ * wrap: anywhere` breaks a single long token (unlikely for real
+ * names, defensive against e.g. an email-local accidentally used
+ * as a display name). The subline keeps the ellipsis-truncation
+ * from the earlier rule. */
 .kf-pe-person__who b {
-  font-size: var(--sp-t-body);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: var(--sp-t-body); font-weight: 700;
+  white-space: normal; overflow-wrap: anywhere;
 }
 .kf-pe-person__who small {
   font-size: var(--sp-t-label); color: var(--sp-muted);
