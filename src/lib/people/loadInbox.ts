@@ -20,6 +20,7 @@ import { LATE_DAYS, decidedAfterCutover } from "./thresholds";
 import { fmtShort, fmtFull, fmtRangeShort } from "./dates";
 import { fmtMoney } from "./money";
 import { buildSiteIndex, resolveSite, type SiteIndex } from "./site";
+import { listDrafts } from "./drafts";
 
 // A submissions row shape, after a narrow server-side SELECT. The
 // payload is a TEXT column holding one JSON object; parse once per
@@ -279,6 +280,46 @@ function toInboxRow(
     route: routeFor(row.action_type),
     sender_name: senderName,
     action_label,
+    isDraft: false,
+    href: null,
+  };
+}
+
+// T4a (2026-11-13). Build an InboxRow for a people_drafts row. Draft
+// rows live in the Needs you group (always), always unread, no sent
+// or decided dates, and route the row click to /people/paf.
+function toDraftRow(draft: {
+  id: string;
+  action_type: string | null;
+  person_name: string | null;
+  payload: Record<string, unknown>;
+  updated_at: string;
+}): InboxRow {
+  const kind: InboxKind = "paf";
+  const action_label = labelForAction("paf", draft.action_type);
+  const title = (draft.person_name ?? String(draft.payload.employeeName ?? "")).trim() || "New request";
+  const subline = ["PAF", action_label, "Draft"].filter(Boolean).join(" · ");
+  const amount_display = fmtMoney(draft.payload.amount);
+  return {
+    id: draft.id,
+    kind,
+    title,
+    subline,
+    amount_display,
+    status_display: "Draft",
+    status_code: "Draft",
+    sent_short: fmtShort(draft.updated_at),
+    sent_long: fmtFull(draft.updated_at),
+    decided_short: null,
+    decided_long: null,
+    unread: false,
+    group: "needs",
+    why_text: "Not sent yet",
+    route: routeFor(draft.action_type),
+    sender_name: "",
+    action_label,
+    isDraft: true,
+    href: `/people/paf?draft=${encodeURIComponent(draft.id)}`,
   };
 }
 
@@ -415,7 +456,27 @@ export async function loadInbox(sb: SupabaseClient, viewer: Viewer): Promise<Inb
     team.push(toInboxRow(row, viewer, unread, now, senderName, siteIndex));
   }
 
-  // 7. Band is derived from `mine` only.
+  // 7. T4a (2026-11-13). Draft rows from people_drafts, owned by
+  //    this viewer. They land in Needs you alongside Rejected +
+  //    Pending-late rows (never in team - drafts are per-sender).
+  //    The owner_email filter inside listDrafts means a preview
+  //    viewer sees the REAL owner's drafts, not the previewed
+  //    worker's (there is no such thing as "their drafts"
+  //    anyway - preview never writes). Sorted newest-updated first,
+  //    which matches render.
+  const viewerOwnerEmail = (viewer.work_email ?? "").trim().toLowerCase();
+  const drafts = viewerOwnerEmail ? await listDrafts(sb, viewerOwnerEmail) : [];
+  const draftRows = drafts.map((d) => toDraftRow({
+    id: d.id,
+    action_type: d.action_type,
+    person_name: d.person_name,
+    payload: d.payload ?? {},
+    updated_at: d.updated_at,
+  }));
+  // Prepend drafts to `mine` so they render at the top of Needs you.
+  mine.unshift(...draftRows);
+
+  // 8. Band is derived from `mine` only (drafts included).
   const band = bandFor(mine);
 
   return { hasTeamSwitch, mine, team, band };

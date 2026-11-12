@@ -35,6 +35,13 @@ export function buildSiteIndex(accounts: Array<{ team_key: string; name: string 
 // Resolve a site name from the three possible inputs. Returns null
 // when nothing is set at all; the caller decides between omitting
 // the site (title fallback) and printing "Not given" (drawer).
+//
+// T4a Part 0 fix 3 (2026-11-13). On a miss we now return the WHOLE
+// code, not the tail after the first " - ". T3.1 returned the tail,
+// which was wrong: a bare team_key "STL - FL" that did not match the
+// index would print as "FL". The code should either resolve through
+// the index (preferred) or print as-is so the operator can see what
+// shape it has.
 export function resolveSite(
   payloadLocationName: unknown,
   payloadLocationKey: unknown,
@@ -45,22 +52,11 @@ export function resolveSite(
   if (name) return name;
   const key = String(payloadLocationKey ?? "").trim();
   if (key) {
-    const resolved = index.byKey.get(key);
-    if (resolved) return resolved;
-    // A combo string we do not recognise: strip a "TEAM - " prefix
-    // so an unmapped site still prints as its tail. If no " - "
-    // is in the string, fall back to the literal.
-    const parts = key.split(" - ");
-    if (parts.length >= 2) return parts.slice(1).join(" - ");
-    return key;
+    return index.byKey.get(key) ?? key;
   }
   const loc = (submissionsLocation ?? "").trim();
   if (loc) {
-    const resolved = index.byKey.get(loc);
-    if (resolved) return resolved;
-    const parts = loc.split(" - ");
-    if (parts.length >= 2) return parts.slice(1).join(" - ");
-    return loc;
+    return index.byKey.get(loc) ?? loc;
   }
   return null;
 }

@@ -102,17 +102,21 @@ export function detailPairs(
     const first = str(payload.firstName);
     const last = str(payload.lastName);
     const both = [first, last].filter(Boolean).join(" ") || NOT_GIVEN;
-    // T3.1 fix 8 (2026-11-13). Tools and access uses the render's
-    // four names, not the terse form checkbox labels.
+    // T3.1 fix 8 + T4a Part 0 fix 4 (2026-11-13).
+    // Tools and access uses the render's four names; render joins
+    // them with ", " (comma), not " · ".
     const tools: string[] = [];
     if (payload.needsCard) tools.push("Company card");
     if (payload.needsEmail) tools.push("KitchFix email");
     if (payload.needsLaptop) tools.push("Company laptop");
     if (payload.needsCell) tools.push("Cell phone reimbursement");
-    // Site is the club name only (not "STL - FL - St Louis Cardinals").
-    // `operation` carries the combo string on hire forms; resolveSite
-    // peels the team-key prefix off via the SiteIndex.
-    const siteName = resolveSite(payload.operation, payload.operation, submissionsLocation, siteIndex) ?? NOT_GIVEN;
+    // T4a Part 0 fix 2 (2026-11-13). Site must go through
+    // resolveSite as a KEY (not a name) so the combined
+    // "STL - FL - St Louis Cardinals" shape in payload.operation
+    // resolves to the clean club name via the SiteIndex. Passing
+    // it as the first arg hit the "return the name as-is" branch
+    // and leaked the combo string onto the card.
+    const siteName = resolveSite(null, payload.operation, submissionsLocation, siteIndex) ?? NOT_GIVEN;
     // Worked here before -> "New to KitchFix" or "Returning".
     const isRehireVal = payload.isRehire;
     const workedHere = (isRehireVal === true || isRehireVal === "true" || isRehireVal === "Yes" || isRehireVal === "yes")
@@ -131,7 +135,7 @@ export function detailPairs(
       ["Rate", moneyOr(payload.payRate)],
       ["Full-time", yesNo(payload.isFullTime)],
       ["Start date", dateOr(payload.startDate)],
-      ["Tools and access", tools.length ? tools.join(" · ") : "None"],
+      ["Tools and access", tools.length ? tools.join(", ") : "None"],
     ];
   }
 

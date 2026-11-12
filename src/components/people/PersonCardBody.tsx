@@ -301,15 +301,20 @@ export function PersonCardBody({ person }: { person: CardPerson }) {
         ) : null}
       </div>
 
-      {/* Footer: caption + Start a PAF (inert) + Report an incident
-       * (inert) + Close (phone only). No "New request". */}
+      {/* Footer: caption + Start a PAF (live in T4a) + Report an
+       * incident (inert; T7) + Close (phone only). R-PP22: the two
+       * entry paths for PAF are the rail (opens Who) and this card
+       * button (opens What with the person already filled). */}
       <footer className="kf-pe-drawer__foot">
         <span className="kf-pe-foot__cap">
           PAF: A change to their role, pay or hours, or something to pay back.
         </span>
-        <span className="kf-btn kf-btn--primary kf-pe-disabled" aria-disabled="true">
+        <a
+          className="kf-btn kf-btn--primary"
+          href={`/people/paf?for=${encodeURIComponent(person.worker_id)}&step=what`}
+        >
           <span>Start a PAF</span>
-        </span>
+        </a>
         <span className="kf-btn kf-btn--ghost kf-pe-disabled" aria-disabled="true">
           <span>Report an incident</span>
         </span>

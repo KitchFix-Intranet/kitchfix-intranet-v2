@@ -14,6 +14,10 @@ export const ACTION_LABEL: Record<string, string> = {
   other_reimbursement: "Other reimbursement",
   separation: "Separation",
   add_bonus: "One-time bonus",
+  // T4a (2026-11-13). `add_gratuity` is v1's action_type code for a
+  // one-time gratuity payment (grep-verified in v1 PAFForm.js). No
+  // live `submissions` row uses it yet; T4c will write it.
+  add_gratuity: "Gratuity",
   title_change: "Title change",
   add_deduction: "Deduction",
   rate_change: "Rate change",
