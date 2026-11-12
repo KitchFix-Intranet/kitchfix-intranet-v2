@@ -8,6 +8,10 @@
 // No link, no card trigger, even when the manager is out of scope.
 // Pin 5 (2026-11-11): dates - full ("Nov 9, 2026") on the card; "N
 // days" only for how long a request has waited.
+//
+// Floors (2026-11-12): chef-floor surface. No kf-btn--sm anywhere
+// on the card. The inert / disabled visual state uses the shared
+// .kf-pe-disabled class + aria-disabled="true" - no inline styles.
 
 import { Phone, MessageCircle, Mail } from "lucide-react";
 import type { CardPerson } from "@/lib/people/types";
@@ -49,38 +53,38 @@ export function PersonCardBody({ person }: { person: CardPerson }) {
 
       <div className="kf-pe-drawer__body">
         {/* Contact buttons row. Hourly: Call + Text. Salaried: Call + Email. */}
-        <div className={isHourly ? "kf-pe-contact kf-pe-contact--2" : "kf-pe-contact kf-pe-contact--2"}>
+        <div className="kf-pe-contact kf-pe-contact--2">
           {hasPhoneHref ? (
-            <a className="kf-btn kf-btn--line kf-btn--sm" href={`tel:${person.phone_href}`}>
+            <a className="kf-btn kf-btn--line" href={`tel:${person.phone_href}`}>
               <Phone size={14} strokeWidth={1.5} aria-hidden />
               <span>Call</span>
             </a>
           ) : (
-            <span className="kf-btn kf-btn--line kf-btn--sm" aria-disabled="true" style={{ opacity: .5 }}>
+            <span className="kf-btn kf-btn--line kf-pe-disabled" aria-disabled="true">
               <Phone size={14} strokeWidth={1.5} aria-hidden />
               <span>Call</span>
             </span>
           )}
           {isHourly ? (
             hasPhoneHref ? (
-              <a className="kf-btn kf-btn--line kf-btn--sm" href={`sms:${person.phone_href}`}>
+              <a className="kf-btn kf-btn--line" href={`sms:${person.phone_href}`}>
                 <MessageCircle size={14} strokeWidth={1.5} aria-hidden />
                 <span>Text</span>
               </a>
             ) : (
-              <span className="kf-btn kf-btn--line kf-btn--sm" aria-disabled="true" style={{ opacity: .5 }}>
+              <span className="kf-btn kf-btn--line kf-pe-disabled" aria-disabled="true">
                 <MessageCircle size={14} strokeWidth={1.5} aria-hidden />
                 <span>Text</span>
               </span>
             )
           ) : (
             emailHref ? (
-              <a className="kf-btn kf-btn--line kf-btn--sm" href={emailHref}>
+              <a className="kf-btn kf-btn--line" href={emailHref}>
                 <Mail size={14} strokeWidth={1.5} aria-hidden />
                 <span>Email</span>
               </a>
             ) : (
-              <span className="kf-btn kf-btn--line kf-btn--sm" aria-disabled="true" style={{ opacity: .5 }}>
+              <span className="kf-btn kf-btn--line kf-pe-disabled" aria-disabled="true">
                 <Mail size={14} strokeWidth={1.5} aria-hidden />
                 <span>Email</span>
               </span>
@@ -159,13 +163,9 @@ export function PersonCardBody({ person }: { person: CardPerson }) {
         {/* History (R-PP54). Hidden when historyVisible is false. */}
         {person.historyVisible ? (
           <section aria-label="History this year">
-            <h4 style={{ font: "700 var(--sp-t-label) var(--sp-disp)", letterSpacing: "1.5px", textTransform: "uppercase", color: "var(--sp-muted)", margin: "0 0 var(--sp-sp-2)" }}>
-              History this year
-            </h4>
+            <h4 className="kf-pe-hist__h">History this year</h4>
             {person.history.length === 0 ? (
-              <p className="kf-pe-muted" style={{ fontSize: "var(--sp-t-label)" }}>
-                No completed requests this year.
-              </p>
+              <p className="kf-pe-hist__none">No completed requests this year.</p>
             ) : (
               <ul className="kf-pe-hist">
                 {person.history.slice(0, 5).map((h) => (
@@ -182,25 +182,21 @@ export function PersonCardBody({ person }: { person: CardPerson }) {
               </ul>
             )}
             {person.history.length > 5 ? (
-              <span className="kf-pe-muted" style={{ fontSize: "var(--sp-t-label)" }}>
-                See all {person.history.length}
-              </span>
+              <span className="kf-pe-hist__more">See all {person.history.length}</span>
             ) : null}
           </section>
         ) : null}
       </div>
 
-      {/* Two card buttons - inert in T2 per prompt. */}
+      {/* Two card buttons - inert in T2 per prompt. Chef floor = no --sm. */}
       <footer className="kf-pe-drawer__foot">
-        <span className="kf-btn kf-btn--line kf-btn--sm" aria-disabled="true" style={{ opacity: .6 }}>
+        <span className="kf-btn kf-btn--line kf-pe-disabled" aria-disabled="true">
           <span>PAF for this person</span>
         </span>
-        <span className="kf-btn kf-btn--primary kf-btn--sm" aria-disabled="true" style={{ opacity: .6 }}>
+        <span className="kf-btn kf-btn--primary kf-pe-disabled" aria-disabled="true">
           <span>New request</span>
         </span>
-        <span className="kf-pe-muted" style={{ fontSize: "var(--sp-t-label)", flexBasis: "100%" }}>
-          Coming with its own build step
-        </span>
+        <span className="kf-pe-foot__cap">Coming with its own build step</span>
       </footer>
     </>
   );

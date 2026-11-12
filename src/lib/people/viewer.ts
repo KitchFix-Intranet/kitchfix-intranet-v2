@@ -32,6 +32,16 @@ import { buildViewer } from "./scope";
 const VIEWER_SELECT =
   "worker_id, display_name, title, account_key, region, work_email, manager_worker_id, is_corp, is_salaried, is_site_leader, is_regional_director, pp_full_access, pp_review, status";
 
+// Case-insensitive exact match on work_email without ilike's
+// wildcards. `.ilike(col, email)` treats `_` and `%` in `email` as
+// LIKE metacharacters - an attacker (or a legit email containing
+// those characters) could broaden the match. Escape both metachars
+// with the default backslash escape so ilike behaves as an exact
+// case-insensitive equal.
+function escapeLike(s: string): string {
+  return s.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
 function pickSingle(
   rows: PeopleRow[],
   email: string,
@@ -63,11 +73,15 @@ export async function resolveViewer(
   // Step 1. The owner's own row. status='ACTIVE' is load-bearing.
   // We take all matching ACTIVE rows (not .maybeSingle()) so we
   // can detect a duplicate loudly instead of throwing.
+  //
+  // Email match is case-insensitive AND exact: escapeLike() turns
+  // any `_` or `%` in the signed-in email into a LIKE-safe literal
+  // so ilike's wildcards do not broaden the match.
   const selfQ = await sb
     .from("people")
     .select(VIEWER_SELECT)
     .eq("status", "ACTIVE")
-    .ilike("work_email", email);
+    .ilike("work_email", escapeLike(email));
   if (selfQ.error) {
     console.error(`[people/viewer] self lookup: ${selfQ.error.message}`);
     return { viewer: null, selfRow: null };

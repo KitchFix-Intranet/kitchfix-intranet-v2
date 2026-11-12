@@ -49,7 +49,7 @@ export default async function Page({
   if (!viewer) {
     return (
       <>
-        <IdentBand eyebrow="People Portal" title="You are not on the roster yet" kick="Reach out to People Operations so your record is added." />
+        <IdentBand eyebrow="People Portal" title="You are not on the roster yet" kick="Reach out to HR so your record is added." />
         <section className="kf-pe-empty">
           <strong>Nothing to show.</strong>
           <span>Once your record is active, your team will appear here.</span>

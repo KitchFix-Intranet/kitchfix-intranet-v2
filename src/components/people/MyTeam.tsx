@@ -57,7 +57,7 @@ function PersonRow({
           </span>
         </span>
       ) : null}
-      <ChevronRight size={16} strokeWidth={1.5} aria-hidden style={{ color: "var(--sp-muted)" }} />
+      <ChevronRight size={16} strokeWidth={1.5} aria-hidden className="kf-pe-person__chev" />
     </button>
   );
 }
