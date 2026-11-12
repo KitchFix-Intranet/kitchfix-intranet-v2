@@ -63,15 +63,13 @@ export function PanelAttention({
       i.kind === "unit_mismatch"
   );
   // N13 R4: "{n} of {lines} invoice lines were flagged when read"
-  // is a warn attention line whenever needsReviewLines > 0. It lives
-  // alongside the derived attention set so the user sees it in the
-  // same primitive. Only fires on item panels (the ingredient
-  // branch early-returns above).
+  // is a warn attention line whenever needsReviewLines > 0. One line,
+  // no body - round 3 fix 3: the prior body sentence was invented;
+  // nothing in the prompt or the old drawer sources it.
   const flaggedLines =
     item?.needsReviewLines && item.needsReviewLines > 0
       ? {
           head: `${item.needsReviewLines} of ${item.lines12m} invoice lines were flagged when read`,
-          body: "Reviewers queue these lines for a second look. Clearing them removes the warn here.",
         }
       : null;
   if (rendered.length === 0 && !flaggedLines) return null;
@@ -91,7 +89,6 @@ export function PanelAttention({
           </span>
           <div className="kf-ipanel__attn-item-text">
             <span className="kf-ipanel__attn-item-head">{flaggedLines.head}</span>
-            <span className="kf-ipanel__attn-item-body">{flaggedLines.body}</span>
           </div>
         </div>
       ) : null}

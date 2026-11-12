@@ -165,6 +165,20 @@
   border-collapse: collapse;
   table-layout: fixed;
 }
+/* Wide tier (default): the N13 §2b colgroup. 180 / flex / 208 /
+ * 148 / 100 / 104 / 112. The flex cell (Item) takes the remainder. */
+.kf-vi__table col:nth-child(1) { width: 180px; }
+.kf-vi__table col:nth-child(3) { width: 208px; }
+.kf-vi__table col:nth-child(4) { width: 148px; }
+.kf-vi__table col:nth-child(5) { width: 100px; }
+.kf-vi__table col:nth-child(6) { width: 104px; }
+.kf-vi__table col:nth-child(7) { width: 112px; }
+
+/* Fold subs hidden at the wide tier - the Vendor column and the
+ * Last-bought column carry those facts. */
+.kf-vi__cell-sub--fold-vendor,
+.kf-vi__cell-sub--fold-lastbot,
+.kf-vi__lb-compact { display: none; }
 .kf-vi__table th {
   text-align: left;
   padding: var(--sp-sp-2) var(--sp-sp-4);
@@ -344,14 +358,31 @@
   color: var(--sp-muted);
 }
 
-/* --- Round 2 fix 3: narrow-container table -> stacked block.
- * When the detail card is below 1040 CSS px the fixed-column table
- * cannot hold the Item column above 240; each <tr> becomes a stacked
- * grid (same content, same handlers, colgroup hidden). The @media
- * phone block below the container query feeds the SAME selectors so
- * phone (where the card IS the viewport) uses the same stack - one
- * source. */
-@container vi-card (max-width: 1040px) {
+/* Round 3 fix 1: MIDDLE tier. Card 720-1039 px. Still a table,
+ * five columns - Vendor and Last-bought fold into the Item and 12 mo
+ * cells respectively. The Item column takes the slack the two folded
+ * columns leave.
+ *   Item flex | Linked to 208 | Pack 148 | Price 100 | 12 mo 120
+ * Cols 1 and 7 collapse (0 width) and their cells are display:none;
+ * the fold-sub lines become visible inside cols 2 and 6. */
+@container vi-card (min-width: 720px) and (max-width: 1039px) {
+  .kf-vi__table col:nth-child(1),
+  .kf-vi__table col:nth-child(7) { visibility: collapse; width: 0; }
+  .kf-vi__table col:nth-child(6) { width: 120px; }
+  .kf-vi__table th:nth-child(1),
+  .kf-vi__table td:nth-child(1),
+  .kf-vi__table th:nth-child(7),
+  .kf-vi__table td:nth-child(7) { display: none; }
+  .kf-vi__cell-sub--fold-vendor { display: block; }
+  .kf-vi__cell-sub--fold-lastbot { display: block; }
+}
+
+/* Round 3 fix 2: NARROW tier. Card < 720 px. Stacked block per
+ * frame D - description + warn, vendor micro, dashed rule, Linked
+ * to | Price, dashed rule, Pack | 12 mo, "last bought {date}" micro.
+ * One source; serves both phone (card is the viewport) and any
+ * desktop context that renders the panel this narrow. */
+@container vi-card (max-width: 719px) {
   .kf-vi__table,
   .kf-vi__table tbody { display: block; width: 100%; }
   .kf-vi__table colgroup,
@@ -361,7 +392,6 @@
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
       "item     item"
-      "vendor   vendor"
       "linkto   price"
       "pack     usd"
       "lastbot  lastbot";
@@ -373,20 +403,32 @@
   .kf-vi__table tr:last-child { border-bottom: 0; }
   .kf-vi__table td { display: block; padding: 0; border: 0; }
   .kf-vi__table td.kf-vi__num { text-align: right; }
-  /* Row-order index -> grid area */
-  .kf-vi__table td:nth-child(1) { grid-area: vendor; }
+  /* Vendor column collapses - vendor fact is folded into the Item
+   * cell's sub below the description + warn. */
+  .kf-vi__table td:nth-child(1) { display: none; }
   .kf-vi__table td:nth-child(2) { grid-area: item; }
   .kf-vi__table td:nth-child(3) { grid-area: linkto; }
   .kf-vi__table td:nth-child(4) { grid-area: pack; }
   .kf-vi__table td:nth-child(5) { grid-area: price; }
   .kf-vi__table td:nth-child(6) { grid-area: usd; }
   .kf-vi__table td:nth-child(7) { grid-area: lastbot; }
-  /* Round 2 fix 5: dashed dividers between the two pair rows so the
-   * four lines read as paired, not loose. */
+  /* Fold-vendor is the micro under the description. */
+  .kf-vi__cell-sub--fold-vendor { display: block; }
+  /* Fold-lastbot stays hidden - last-bought gets its own standalone
+   * row at the bottom (td7 / .kf-vi__lb-compact). */
+  .kf-vi__lb-full { display: none; }
+  .kf-vi__lb-compact { display: block; }
+  /* Dashed dividers above the two pair rows. */
   .kf-vi__table td:nth-child(3),
   .kf-vi__table td:nth-child(5) {
     padding-top: var(--sp-sp-2);
     border-top: 1px dashed var(--sp-line);
+  }
+  /* Last-bought row sits above the lower border of the tr with its
+   * own top spacing so the pair rule stays visually tied to the
+   * pairs above it. */
+  .kf-vi__table td:nth-child(7) {
+    padding-top: var(--sp-sp-2);
   }
 }
 

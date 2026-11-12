@@ -388,13 +388,18 @@ export function VendorItemsView(props: VendorItemsViewProps) {
                 is the viewport) falls inside the narrow branch
                 automatically - no separate phone list. */}
             <colgroup>
-              <col style={{ width: 180 }} />
+              {/* Col widths live in vendor-items-tab.css so the
+                  @container query can collapse cols 1 + 7 on the
+                  middle tier. The size order (180 / flex / 208 /
+                  148 / 100 / 104 / 112) is unchanged at the wide
+                  tier. */}
               <col />
-              <col style={{ width: 208 }} />
-              <col style={{ width: 148 }} />
-              <col style={{ width: 100 }} />
-              <col style={{ width: 104 }} />
-              <col style={{ width: 112 }} />
+              <col />
+              <col />
+              <col />
+              <col />
+              <col />
+              <col />
             </colgroup>
             <thead>
               <tr>
@@ -616,6 +621,13 @@ function TableRow({
               .join(" · ")}
           </div>
         ) : null}
+        {/* N13 round 3 fix 1: vendor folds into the Item cell at
+            card < 1040 (middle + narrow tiers). CSS hides this sub
+            at the wide tier where the Vendor column carries it. */}
+        <div className="kf-vi__cell-sub kf-vi__cell-sub--fold-vendor">
+          {row.vendorName}
+          {row.itemNumber ? ` · #${row.itemNumber}` : ""}
+        </div>
       </td>
       <td>
         <div
@@ -658,13 +670,32 @@ function TableRow({
       </td>
       <td className="kf-vi__num">
         <div className="kf-vi__cell-main kf-vi__cell-main--strong">{fmtUsdLong(row.usd12m)}</div>
-        <div className="kf-vi__cell-sub">{fmtCount(row.lines12m)} line{row.lines12m === 1 ? "" : "s"}</div>
+        <div className="kf-vi__cell-sub">
+          {fmtCount(row.lines12m)} line{row.lines12m === 1 ? "" : "s"}
+        </div>
+        {/* N13 round 3 fix 1: last-bought folds into the 12 mo cell
+            at the MIDDLE tier only. CSS hides at wide + narrow. */}
+        {row.lastSeenISO ? (
+          <div className="kf-vi__cell-sub kf-vi__cell-sub--fold-lastbot">
+            {fmtDate(row.lastSeenISO)}
+            {staleMonthsSuffix(row.lastSeenISO)}
+          </div>
+        ) : null}
       </td>
       <td>
         {row.lastSeenISO ? (
           <>
-            <div className="kf-vi__cell-main">{fmtDate(row.lastSeenISO)}</div>
-            {monthsAgoIfStale(row.lastSeenISO)}
+            {/* Wide tier: date as main + mo-ago sub (current column
+                shape). Hidden at middle (folded into 12 mo cell) and
+                at narrow (replaced by the compact micro below). */}
+            <div className="kf-vi__cell-main kf-vi__lb-full">{fmtDate(row.lastSeenISO)}</div>
+            <div className="kf-vi__lb-full">{monthsAgoIfStale(row.lastSeenISO)}</div>
+            {/* Narrow tier: standalone micro below the pair rows per
+                frame D. Hidden at wide + middle. */}
+            <div className="kf-vi__cell-sub kf-vi__lb-compact">
+              last bought {fmtDate(row.lastSeenISO)}
+              {staleMonthsSuffix(row.lastSeenISO)}
+            </div>
           </>
         ) : (
           <div className="kf-vi__cell-main kf-vi__cell-main--muted">-</div>
@@ -678,6 +709,16 @@ function monthsAgoIfStale(iso: string) {
   const m = monthsAgo(iso);
   if (m == null || m < 3) return null;
   return <div className="kf-vi__cell-sub kf-vi__cell-sub--warn">{m} mo ago</div>;
+}
+
+// N13 round 3 fix 1 + 2: inline form of the stale marker used by
+// the middle-tier fold and the narrow-tier last-bought row -
+// ` · {m} mo ago` in warn when the item is 3+ months old, nothing
+// otherwise.
+function staleMonthsSuffix(iso: string) {
+  const m = monthsAgo(iso);
+  if (m == null || m < 3) return null;
+  return <span className="kf-vi__cell-sub--warn"> · {m} mo ago</span>;
 }
 
 // Round 2 fix 3: PhoneBlock deleted. The table's @container narrow
