@@ -76,26 +76,19 @@ export interface Viewer {
   previewOf: { worker_id: string; display_name: string } | null;
 }
 
-// T2.2.1 (2026-11-13). Two waiting shapes. The roster payload uses
-// the narrow RosterWaiting on every row EXCEPT the viewer's own.
-// The request `label` ("PAF: Transfer") is deliberately absent on
-// the roster type - a non-self row cannot carry it. The TypeScript
-// shape is the enforcement point: the loader cannot forget to drop
-// it, and the client cannot read a field that is not in the type.
-export interface RosterWaiting {
+// Full waiting shape, used ONLY on the viewer's own row on the
+// "You" card (SelfRosterPerson). Never on any other row. Request
+// fields (id, module, action_type, submitted_at, submitter_*) do
+// not appear in the roster payload for anyone else - see
+// RosterPerson below, which carries `waiting_count` and nothing
+// else about the request.
+export interface WaitingItem {
   id: number;
   module: string; // 'paf' | 'incident' | 'termination' etc., not 'newhire'
   action_type: string | null;
   submitted_at: string; // ISO; drives "N days" waiting
   submitter_worker_id: string | null;
   submitter_name: string | null;
-}
-
-// Full waiting shape, used ONLY on:
-//   - the viewer's own row on the "You" card (SelfRosterPerson), and
-//   - CardPerson (person-card drawer).
-// Never on a non-self roster row.
-export interface WaitingItem extends RosterWaiting {
   label: string;
 }
 
@@ -103,11 +96,13 @@ export interface WaitingItem extends RosterWaiting {
 // ever. work_email is included because the roster does not show it
 // but a client-side search by email is cheap and useful.
 //
-// T2.2.1 (2026-11-13). `waiting` is RosterWaiting (no label field).
-// The viewer's own row carries a WaitingItem instead via
-// `SelfRosterPerson` below. Non-self rows cannot carry a label at
-// all - the payload sent to the client for them simply lacks the
-// field.
+// T2.2.2 (2026-11-13). NO request fields on this type. A non-self
+// roster row carries a `waiting_count` only - the Pending pill
+// renders when the count is > 0. Module, action_type, submitted_at,
+// submitter_* all stay server-side. The pending `label`
+// ("PAF: Transfer") was removed in T2.2.1 and the remaining
+// request fields are removed here because the label is trivially
+// rebuilt from module + action_type.
 export interface RosterPerson {
   worker_id: string;
   display_name: string;
@@ -120,14 +115,13 @@ export interface RosterPerson {
   is_site_leader: boolean;
   is_regional_director: boolean;
   initials: string;
-  waiting: RosterWaiting | null;
   waiting_count: number;
 }
 
 // The viewer's own row. The ONE place in the roster payload where
-// the pending `label` is allowed to appear: on the "You" card.
-// Renders the "<label> · Pending" chip per the render.
-export interface SelfRosterPerson extends Omit<RosterPerson, "waiting"> {
+// a WaitingItem is allowed to appear: on the "You" card, where the
+// render shows "<label> · Pending" for the viewer's own request.
+export interface SelfRosterPerson extends RosterPerson {
   waiting: WaitingItem | null;
 }
 
@@ -188,7 +182,9 @@ export interface InFlightRow {
   submitter_name: string | null;
   sent_short: string;   // "Nov 9"
   wait_days: string;    // "18 days" / "today" / "1 day"
-  late: boolean;        // true when wait_days >= 10 (R-PP21 adjacent cue)
+  // True when the submission is >= LATE_DAYS old. Same threshold as
+  // the band warn tone - see src/lib/people/thresholds.ts.
+  late: boolean;
 }
 
 export interface HistoryRow {
@@ -245,14 +241,18 @@ export interface TeamView {
   viewer: Viewer;
   sites: SiteNavEntry[]; // more than one site in scope -> left nav; single site -> empty
   people: RosterPerson[]; // kept for search-across-all compatibility
-  totals: { people: number; pending: number };
+  // `pending` is the full in-scope pending items count. `pending_late`
+  // is the subset >= LATE_DAYS old; the band warn tone keys off it
+  // so the band only warns when something has actually waited too
+  // long, not on every fresh request.
+  totals: { people: number; pending: number; pending_late: number };
   // T2.2 additions. The page renders a selected panel at a time.
   panels: Record<string, SitePanel>;
   defaultSiteKey: string;
   // The viewer's own row (pinned on the top "You" card). Null when
   // the viewer has no in-scope roster entry for themselves (rare).
-  // T2.2.1: this is the ONLY roster-shaped field with a labelled
-  // waiting item - every other RosterPerson in `people` / `panels`
-  // carries RosterWaiting (no label).
+  // T2.2.2 (2026-11-13): this is the ONLY roster-shaped field that
+  // carries a WaitingItem. Every other RosterPerson in `people` /
+  // `panels` has no request fields at all - only `waiting_count`.
   selfRow: SelfRosterPerson | null;
 }

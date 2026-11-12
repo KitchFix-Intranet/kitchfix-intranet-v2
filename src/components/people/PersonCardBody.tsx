@@ -100,7 +100,7 @@ export function PersonCardBody({ person }: { person: CardPerson }) {
           <span className="kf-eyebrow kf-eyebrow--plain">{person.eyebrow}</span>
           <h3 id={titleId}>{person.display_name}{person.title_suffix}</h3>
           <div className="kf-pe-drawer__chips">
-            {person.waiting ? (
+            {person.waiting_count > 0 ? (
               <span className="kf-pill kf-pill--info kf-pe-pill">
                 <i className="kf-pe-dot" aria-hidden />
                 Pending
@@ -189,7 +189,7 @@ export function PersonCardBody({ person }: { person: CardPerson }) {
 
         {/* In flight. Same visibility rule as History (R-PP54). A
          * viewer who may not open the request sees the count only. */}
-        {person.waiting ? (
+        {person.waiting_count > 0 ? (
           <>
             <div className="kf-pe-sechead">
               <h3>In flight</h3>

@@ -14,12 +14,12 @@ import type {
   AccountRow,
   Viewer,
   CardPerson,
-  WaitingItem,
   HistoryRow,
   InFlightRow,
 } from "./types";
 import { toCardPerson } from "./contact";
 import { fmtShort, fmtFull, fmtDaysWaiting } from "./dates";
+import { LATE_DAYS } from "./thresholds";
 
 const PERSON_SELECT =
   "worker_id, display_name, title, account_key, region, work_email, personal_email, phone, manager_worker_id, start_date, birthday, is_corp, is_salaried, is_site_leader, is_regional_director, pp_full_access, pp_review, status";
@@ -304,7 +304,6 @@ export async function loadPerson(
     .neq("module", "newhire")
     .order("submitted_at", { ascending: false });
   const wRows = wQ.data ?? [];
-  let waiting: WaitingItem | null = null;
   let waiting_count = 0;
   const now = new Date();
   const inFlightRows: InFlightRow[] = [];
@@ -318,16 +317,6 @@ export async function loadPerson(
       const sQ = await sb.from("people").select("worker_id, display_name").in("worker_id", subIds);
       if (!sQ.error) for (const s of sQ.data ?? []) subNames.set(s.worker_id, s.display_name ?? "");
     }
-    const first = wRows[0];
-    waiting = {
-      id: first.id as number,
-      module: (first.module ?? "") as string,
-      action_type: (first.action_type as string | null) ?? null,
-      submitted_at: (first.submitted_at ?? "") as string,
-      submitter_worker_id: (first.submitter_worker_id as string | null) ?? null,
-      submitter_name: subNames.get((first.submitter_worker_id as string) ?? "") ?? null,
-      label: labelForWaiting(first.module as string | null, first.action_type as string | null),
-    };
     for (const r of wRows) {
       const d = daysSince((r.submitted_at ?? "") as string, now);
       inFlightRows.push({
@@ -337,7 +326,7 @@ export async function loadPerson(
         submitter_name: subNames.get((r.submitter_worker_id as string) ?? "") ?? null,
         sent_short: fmtShort((r.submitted_at ?? "") as string),
         wait_days: fmtDaysWaiting((r.submitted_at ?? "") as string, now),
-        late: d >= 10,
+        late: d >= LATE_DAYS,
       });
     }
   }
@@ -387,7 +376,6 @@ export async function loadPerson(
     person: toCardPerson({
       row,
       account_region,
-      waiting,
       waiting_count,
       manager_name,
       started_full: t.started_full,

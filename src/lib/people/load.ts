@@ -28,6 +28,7 @@ import type {
 } from "./types";
 import { inScope } from "./scope";
 import { toRosterPerson, toSelfRosterPerson } from "./contact";
+import { isLate } from "./thresholds";
 
 // Narrow projection for the roster + scope. personal_email, phone,
 // start_date and birthday are DELIBERATELY absent - the roster never
@@ -143,17 +144,17 @@ export async function loadTeam(
   // 3. Waiting (Pending submissions) indexed by person_worker_id.
   const waitingByPerson = await loadWaitingByPerson(sb);
 
-  // 4-5. Filter + map. toRosterPerson strips the pending `label`
-  // server-side (see contact.ts stripLabel + types.ts RosterWaiting),
-  // so no non-self row can carry it into the payload. The viewer's
-  // own row is handled separately below with toSelfRosterPerson.
+  // 4-5. Filter + map. toRosterPerson carries no request fields at
+  // all - only `waiting_count` - so no non-self row can leak id,
+  // module, action_type, submitted_at, submitter_* or label. The
+  // viewer's own row is built separately below via toSelfRosterPerson.
   const inScopeRows: RosterPerson[] = [];
   let viewerPeopleRow: PeopleRow | null = null;
   for (const p of people) {
     if (!inScope(viewer, p, accountRegionByKey)) continue;
     const region = accountRegionByKey.get(p.account_key) ?? null;
     const w = waitingByPerson.get(p.worker_id) ?? [];
-    inScopeRows.push(toRosterPerson(p, region, w[0] ?? null, w.length));
+    inScopeRows.push(toRosterPerson(p, region, w.length));
     if (p.worker_id === viewer.worker_id) viewerPeopleRow = p;
   }
 
@@ -269,6 +270,17 @@ export async function loadTeam(
 
   const total_pending = inScopeRows.reduce((s, r) => s + r.waiting_count, 0);
 
+  // T2.2.2 (2026-11-13). Count pending items that have waited
+  // >= LATE_DAYS. The band warn tone keys off this (not on the full
+  // `pending` count), so a fresh request never warns and a 14-day-old
+  // request always does. Same threshold as the card's per-row `late`
+  // flag - one constant, see src/lib/people/thresholds.ts.
+  let total_pending_late = 0;
+  for (const r of inScopeRows) {
+    const items = waitingByPerson.get(r.worker_id) ?? [];
+    for (const item of items) if (isLate(item.submitted_at)) total_pending_late += 1;
+  }
+
   return {
     viewer,
     // T2.2: the site-nav is hidden when exactly one site is in
@@ -277,7 +289,7 @@ export async function loadTeam(
     // to decide whether to render the nav column).
     sites: sites.length > 1 ? sites : [],
     people: flatOut,
-    totals: { people: inScopeRows.length, pending: total_pending },
+    totals: { people: inScopeRows.length, pending: total_pending, pending_late: total_pending_late },
     panels,
     defaultSiteKey,
     selfRow,

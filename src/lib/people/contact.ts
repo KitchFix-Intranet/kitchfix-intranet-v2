@@ -21,7 +21,6 @@ import type {
   SelfRosterPerson,
   CardPerson,
   WaitingItem,
-  RosterWaiting,
   HistoryRow,
   InFlightRow,
 } from "./types";
@@ -56,33 +55,15 @@ export function initialsOf(display_name: string | null, work_email: string | nul
   return (local[0] ?? "?").toUpperCase();
 }
 
-// T2.2.1 (2026-11-13). Drop the `label` field from a WaitingItem
-// so the resulting RosterWaiting can never carry it. Used on
-// every non-self roster row (see toRosterPerson). Changing the
-// WaitingItem shape will fail to compile here, which is the point.
-function stripLabel(w: WaitingItem | null): RosterWaiting | null {
-  if (!w) return null;
-  // Explicit field copy - do NOT spread a WaitingItem into a
-  // RosterWaiting-typed slot, because spread would leak the label
-  // onto the roster payload at runtime (TypeScript cannot see it).
-  return {
-    id: w.id,
-    module: w.module,
-    action_type: w.action_type,
-    submitted_at: w.submitted_at,
-    submitter_worker_id: w.submitter_worker_id,
-    submitter_name: w.submitter_name,
-  };
-}
-
 // ROSTER mapper. The only way to produce a RosterPerson. Drops
 // personal_email + phone + start_date + birthday + manager_worker_id
-// before the row ever leaves the server. T2.2.1: also drops the
-// pending `label` - only SelfRosterPerson may carry it.
+// before the row ever leaves the server. T2.2.2 (2026-11-13): no
+// request fields on the roster at all - only `waiting_count` -
+// so a non-self row cannot carry id, module, action_type,
+// submitted_at, submitter_* or label.
 export function toRosterPerson(
   row: PeopleRow,
   account_region: string | null,
-  waiting: WaitingItem | null,
   waiting_count: number,
 ): RosterPerson {
   return {
@@ -97,15 +78,14 @@ export function toRosterPerson(
     is_site_leader: !!row.is_site_leader,
     is_regional_director: !!row.is_regional_director,
     initials: initialsOf(row.display_name, row.work_email),
-    waiting: stripLabel(waiting),
     waiting_count,
   };
 }
 
 // SELF mapper. Returns a SelfRosterPerson - the one roster-shape
-// payload where the pending `label` may land. The viewer sees
-// their OWN pending label on the "You" card per the render; no
-// other row carries it.
+// payload where a WaitingItem may land. The viewer sees their OWN
+// pending label on the "You" card per the render; no other row
+// carries any request field.
 export function toSelfRosterPerson(
   row: PeopleRow,
   account_region: string | null,
@@ -113,19 +93,8 @@ export function toSelfRosterPerson(
   waiting_count: number,
 ): SelfRosterPerson {
   return {
-    worker_id: row.worker_id,
-    display_name: row.display_name ?? "",
-    title: row.title,
-    account_key: row.account_key,
-    account_region,
-    work_email: row.work_email,
-    is_corp: !!row.is_corp,
-    is_salaried: !!row.is_salaried,
-    is_site_leader: !!row.is_site_leader,
-    is_regional_director: !!row.is_regional_director,
-    initials: initialsOf(row.display_name, row.work_email),
+    ...toRosterPerson(row, account_region, waiting_count),
     waiting,
-    waiting_count,
   };
 }
 
@@ -137,7 +106,6 @@ export function toSelfRosterPerson(
 export interface ToCardInput {
   row: PeopleRow;
   account_region: string | null;
-  waiting: WaitingItem | null;
   waiting_count: number;
   manager_name: string | null;
   started_full: string | null;
@@ -159,7 +127,7 @@ export interface ToCardInput {
 
 export function toCardPerson(input: ToCardInput): CardPerson {
   const { row } = input;
-  const roster = toRosterPerson(row, input.account_region, input.waiting, input.waiting_count);
+  const roster = toRosterPerson(row, input.account_region, input.waiting_count);
 
   // Email branch of R-PP10. Personal email is selected only when:
   //   (a) the person has no work email, AND

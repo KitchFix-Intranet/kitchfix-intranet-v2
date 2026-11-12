@@ -102,7 +102,7 @@ function PersonRow({
         <span className="kf-pe-person__tags" aria-label="Tags">
           {tagFor(p)}
         </span>
-        {p.waiting ? (
+        {p.waiting_count > 0 ? (
           <span className="kf-pe-flight" aria-label="Pending request">
             {pendingLabel ? (
               <span className="kf-pe-flight__what">{pendingLabel}</span>

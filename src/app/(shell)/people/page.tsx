@@ -131,7 +131,7 @@ export default async function Page({
         title={`Welcome, ${firstName(viewer.display_name)}`}
         facts={[
           { label: "People", value: String(team.totals.people) },
-          { label: "Pending", value: String(team.totals.pending), tone: team.totals.pending > 0 ? "warn" : "muted" },
+          { label: "Pending", value: String(team.totals.pending), tone: team.totals.pending_late > 0 ? "warn" : "muted" },
         ]}
       />
 
