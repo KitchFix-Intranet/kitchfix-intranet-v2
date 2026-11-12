@@ -13,7 +13,6 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Undo2 } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
 
 export function RowSendBackButton({
@@ -66,8 +65,7 @@ export function RowSendBackButton({
       onClick={onClick}
       title="Withdraw this confirmation and send the item back to the review queue"
     >
-      <Undo2 size={13} strokeWidth={1.5} aria-hidden />
-      <span>Send back</span>
+      Send back
     </button>
   );
 }

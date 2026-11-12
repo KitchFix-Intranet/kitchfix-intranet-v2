@@ -1,18 +1,17 @@
 "use client";
 
-// N7 B6: extracted from IngredientMastersFilter.tsx so both the
-// Ingredients tab row and the item panel's ingredient zone can mount
-// the same writer. Markup and behaviour are unchanged - BASE_UNIT_GROUPS
-// + uomLabel come from pack.ts so the dropdown is still the one
-// vocabulary N6 established.
+// N7 B6: extracted from IngredientMastersFilter.tsx so the item
+// panel's ingredient zone can mount the same writer. Markup and
+// behaviour are unchanged - BASE_UNIT_GROUPS + uomLabel come from
+// pack.ts so the dropdown is still the one vocabulary N6 established.
 //
-// Prop type narrowed to the three fields the control actually reads
-// (id / name / baseUnit) so the panel can pass a thin shape without a
-// cast through MasterRow.
+// N12: the tab-chrome variant is gone - the Ingredients tab no longer
+// mounts BaseUnitControl directly; the control only renders inside
+// PanelIngredientZone, where the row provides the label and the chrome.
+// Prop type narrowed to the three fields the control actually reads.
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Scale } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
 import { WEIGHT_UOMS, VOLUME_UOMS, uomLabel } from "@/lib/ingredients/pack";
 import { postJson, errMsg } from "./common";
@@ -34,15 +33,9 @@ const BASE_UNIT_GROUPS: { label: string; options: string[] }[] = [
 export function BaseUnitControl({
   row,
   onSaved,
-  // N8 §1g: Ingredients tab keeps its scale icon + "Costed per" label
-  // and chrome. The panel (where the row already has a label and the
-  // ingredient zone owns the chrome) renders the select alone via
-  // chrome="bare". Default preserves the tab call site exactly.
-  chrome = "tab",
 }: {
   row: BaseUnitControlRow;
   onSaved?: () => void;
-  chrome?: "tab" | "bare";
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -65,13 +58,16 @@ export function BaseUnitControl({
     else router.refresh();
   }
 
-  const select = (
+  return (
     <select
       id={`bu-${row.id}`}
-      className={chrome === "bare" ? "kf-ipanel__ctl" : "kf-dt__unitsel"}
+      className="kf-ipanel__ctl"
       value={row.baseUnit}
       disabled={busy}
-      onChange={(e) => save(e.target.value)}
+      onChange={(e) => {
+        const v = e.target.value;
+        save(v);
+      }}
       aria-label="Costed per"
     >
       {BASE_UNIT_GROUPS.map((g) => (
@@ -82,17 +78,5 @@ export function BaseUnitControl({
         </optgroup>
       ))}
     </select>
-  );
-
-  if (chrome === "bare") return select;
-
-  return (
-    <span className="kf-dt__unitctl">
-      <Scale size={13} strokeWidth={1.5} aria-hidden />
-      <label className="kf-dt__unitctl-l" htmlFor={`bu-${row.id}`}>
-        Costed per
-      </label>
-      {select}
-    </span>
   );
 }

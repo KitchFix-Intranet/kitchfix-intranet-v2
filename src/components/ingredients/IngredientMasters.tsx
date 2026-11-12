@@ -32,6 +32,7 @@ import {
 import "./ingredients.css";
 import "./review.css";
 import "./table.css";
+import "./ingredients-tab.css";
 
 type Ingredient = {
   id: string;

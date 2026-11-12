@@ -1,0 +1,792 @@
+/* N12: Ingredients-tab workspace + list chrome.
+ *
+ * The attention box, strip, zones, closed rows, typeahead, each-
+ * measure editor, allergen pills - all primitives from drawer.css
+ * (.kf-ipanel__*). This file carries only what the item panel has
+ * no equivalent for:
+ *   1. the two-pane workspace scaffold (list + detail);
+ *   2. the list row primitive + pane head + colhead;
+ *   3. the detail-pane head above the zones (eyebrow + h2 + meta);
+ *   4. per-item sub-lines inside the linked-items table;
+ *   5. scope-based overrides so the shared .kf-ipanel__* primitives
+ *      sit on this tab's own ground (no tinted zone, one 24 inset,
+ *      no outline on the attention box, no zone header).
+ *
+ * Fill mechanism (round 1 R5 + round 2 fix 19): at >=861w and >=720h
+ * the workspace height is calc(100dvh - --sp-topbar - --sp-sp-5). The
+ * canvas's 24 px bottom padding is accounted for in the height so no
+ * sticky is needed; at full scroll workspace.top sits at topbar.bottom
+ * and the canvas's bottom padding sits below the workspace. Below
+ * 720 px of window height the page flows naturally.
+ */
+
+/* --- Workspace fill ------------------------------------------- */
+.kf-ingp__workspace {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-4);
+  /* round 2 fix 11: 16 px gap between the shell's top bar and the
+   * toolbar (search box top edge). */
+  padding-top: var(--sp-sp-4);
+}
+
+@media (min-width: 861px) and (min-height: 720px) {
+  .kf-ingp__workspace {
+    height: calc(100dvh - var(--sp-topbar) - var(--sp-sp-5));
+    overflow: hidden;
+  }
+}
+
+.kf-ingp__panes {
+  display: grid;
+  grid-template-columns: 420px minmax(0, 1fr);
+  gap: var(--sp-sp-4);
+  min-height: 0;
+  flex: 1;
+}
+
+@media (min-width: 861px) and (min-height: 720px) {
+  .kf-ingp__panes { overflow: hidden; }
+}
+
+/* Phone (<=860): one column; toolbar + list by default, detail swaps
+ * them when open. Round 2 fix 18: on phone with detail open, hide the
+ * whole toolbar block too so only the back link + detail are visible. */
+@media (max-width: 860px) {
+  .kf-ingp__panes { grid-template-columns: minmax(0, 1fr); }
+  .kf-ingp__panes > .kf-ingp__pane--detail { display: none; }
+  .kf-ingp__panes--detail-open > .kf-ingp__pane--list { display: none; }
+  .kf-ingp__panes--detail-open > .kf-ingp__pane--detail { display: flex; }
+  .kf-ingp__workspace--detail-open .kf-ingp__tools { display: none; }
+}
+
+.kf-ingp__pane {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  box-shadow: 0 1px 2px rgba(14, 42, 78, .06), 0 4px 14px rgba(14, 42, 78, .06);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.kf-ingp__pane-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* --- List pane head ------------------------------------------- */
+.kf-ingp__list-head {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--sp-sp-3);
+  padding: var(--sp-sp-4);
+  border-bottom: 1px solid var(--sp-line);
+}
+.kf-ingp__list-head-title h3 {
+  margin: 0 0 var(--sp-sp-1);
+  font-family: var(--sp-disp);
+  font-weight: 800;
+  font-size: var(--sp-t-h3);
+  line-height: 1;
+  color: var(--sp-navy);
+  text-transform: uppercase;
+}
+.kf-ingp__list-head-sub {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+}
+.kf-ingp__list-head-sub b {
+  font-weight: 800;
+  color: var(--sp-ink);
+}
+.kf-ingp__sort {
+  min-height: var(--sp-floor-corp);
+  width: 164px;
+  padding: 0 var(--sp-sp-3);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-ctl);
+  background: var(--sp-card);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  color: var(--sp-ink);
+}
+
+/* --- List column header -------------------------------------- */
+.kf-ingp__list-colhead {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 116px 56px;
+  gap: var(--sp-sp-3);
+  padding: var(--sp-sp-2) var(--sp-sp-4) var(--sp-sp-2) calc(var(--sp-sp-4) + 3px);
+  background: var(--sp-raise);
+  border-bottom: 1px solid var(--sp-line);
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-micro);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--sp-muted);
+}
+.kf-ingp__list-colhead > :nth-child(n+2) { text-align: right; }
+
+/* --- List rows ----------------------------------------------- */
+.kf-ingp__list { list-style: none; margin: 0; padding: 0; }
+.kf-ingp__row {
+  /* Round 2 fix 1: globals.css does not reset <button> borders, so
+   * default user-agent borders print on top and right when only the
+   * bottom + left are declared. Reset the whole border, then set the
+   * two we want. */
+  border: 0;
+  border-bottom: 1px solid var(--sp-line-soft);
+  border-left: 3px solid transparent;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 116px 56px;
+  gap: var(--sp-sp-3);
+  align-items: center;
+  min-height: 64px;
+  padding: var(--sp-sp-2) var(--sp-sp-4);
+  width: 100%;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.kf-ingp__row:hover { background: var(--sp-raise); }
+.kf-ingp__row--att { border-left-color: var(--sp-warn-strong); }
+.kf-ingp__row--sel { background: var(--sp-sky-tint); border-left-color: var(--sp-navy); }
+.kf-ingp__row--sel .kf-ingp__row-name-main { color: var(--sp-navy); }
+.kf-ingp__row:focus-visible {
+  outline: 2px solid var(--sp-navy);
+  outline-offset: -2px;
+}
+
+.kf-ingp__row-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.kf-ingp__row-name-main {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  font-weight: 800;
+  line-height: 1.25;
+  color: var(--sp-ink);
+}
+.kf-ingp__row-sub {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kf-ingp__row-price {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: right;
+  min-width: 0;
+}
+.kf-ingp__row-price-main { font-weight: 800; white-space: nowrap; }
+.kf-ingp__row-price-sub {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kf-ingp__row-price-sub--warn {
+  color: var(--sp-warn);
+  font-weight: 800;
+}
+
+.kf-ingp__row-usd {
+  font-weight: 800;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* Inline chip for Outlier / Mixed units / Out of band / No items.
+ * Lives on the row's sub-line beside the item count. */
+.kf-ingp__row-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: var(--sp-r-pill);
+  background: var(--sp-warn-bg);
+  color: var(--sp-warn);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.kf-ingp__row-retail {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: var(--sp-r-pill);
+  background: var(--sp-sky-tint);
+  color: var(--sp-navy);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+/* --- List empty + loading ------------------------------------ */
+.kf-ingp__list-empty {
+  padding: var(--sp-sp-5);
+  text-align: center;
+}
+.kf-ingp__list-empty-title {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  font-weight: 800;
+  color: var(--sp-ink);
+  margin-bottom: var(--sp-sp-1);
+}
+.kf-ingp__list-empty-body {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  margin-bottom: var(--sp-sp-3);
+}
+
+/* --- Detail pane head ---------------------------------------- */
+.kf-ingp__dhead {
+  flex: 0 0 auto;
+  padding: var(--sp-sp-5);
+  border-bottom: 1px solid var(--sp-line);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+}
+/* Round 2 fix 10: eyebrow is the panel's red, same as .kf-ipanel__eyebrow. */
+.kf-ingp__dhead-eyebrow {
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-label);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--sp-red-deep);
+}
+.kf-ingp__dhead-eyebrow--warn { color: var(--sp-warn-strong); }
+.kf-ingp__dhead h2 {
+  margin: var(--sp-sp-1) 0 var(--sp-sp-1);
+  font-family: var(--sp-disp);
+  font-weight: 800;
+  font-size: var(--sp-t-title);
+  line-height: 1;
+  color: var(--sp-navy);
+  text-transform: uppercase;
+}
+.kf-ingp__dhead-meta {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  flex-wrap: wrap;
+}
+.kf-ingp__dhead-meta b { font-weight: 800; color: var(--sp-ink); }
+
+/* Phone back-link above the detail head */
+.kf-ingp__dback {
+  display: none;
+  align-items: center;
+  gap: var(--sp-sp-1);
+  min-height: var(--sp-floor-corp);
+  padding: 0 var(--sp-sp-4);
+  background: transparent;
+  border: 0;
+  color: var(--sp-navy);
+  font-family: var(--sp-ui);
+  font-weight: 800;
+  font-size: var(--sp-t-body);
+  cursor: pointer;
+}
+@media (max-width: 860px) {
+  .kf-ingp__dback { display: inline-flex; }
+}
+
+/* --- Detail zones: one 24 px inset ------------------------------
+ * Round 2 fix 4 + 5 + 6 + 7: everything inside the detail pane aligns
+ * to one 24 px inset. The shared .kf-ipanel__* primitives render
+ * their own padding, so we scope-override them to drop left/right
+ * padding when they live inside the ingredients-tab detail pane. */
+.kf-ingp__dzone { padding: 0 var(--sp-sp-5); }
+.kf-ingp__dzone--section { padding: 0 var(--sp-sp-5) var(--sp-sp-3); margin-top: var(--sp-sp-5); }
+.kf-ingp__dzone--section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  border-bottom: 2px solid var(--sp-navy);
+  padding-bottom: var(--sp-sp-2);
+  margin-bottom: var(--sp-sp-3);
+}
+.kf-ingp__dzone--section-head h3 {
+  margin: 0;
+  font-family: var(--sp-disp);
+  font-weight: 800;
+  font-size: var(--sp-t-h3);
+  line-height: 1;
+  color: var(--sp-navy);
+  text-transform: uppercase;
+}
+.kf-ingp__dzone--section-head .kf-ingp__dzone-sub {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+}
+.kf-ingp__dzone--attn-wrap { padding: var(--sp-sp-3) var(--sp-sp-5) 0; }
+.kf-ingp__dzone--closed { padding: var(--sp-sp-3) var(--sp-sp-5) var(--sp-sp-5); margin-top: var(--sp-sp-3); border-top: 1px solid var(--sp-line); }
+
+/* Fix 4: strip stretches the full pane width - its first/last cells
+ * carry 24 of padding internally, so no outer wrapper is needed. */
+
+/* Fix 5 + 6: ingredient zone inside the detail pane renders on the
+ * card ground (no sky-tint, no sky-line borders, no inner padding,
+ * no zone header). The item panel keeps its tint via its own mount.
+ */
+.kf-ingp__dzone .kf-ipanel__zone {
+  background: transparent;
+  border-top: 0;
+  border-bottom: 0;
+  padding: 0;
+}
+/* Round 3 fix 2: zone head stays visible on this tab (section
+ * heading + sub line + navy rule); only the " · {name}" suffix is
+ * dropped since the h2 above the strip already prints it. */
+.kf-ingp__dzone .kf-ipanel__zone-head-title-suffix { display: none; }
+
+/* The zone's rows were tuned for a 150 px label column on a tinted
+ * zone. On this tab they also use 150 label, but the sky-tint-only
+ * row border colour needs to swap to the pane's own line colour. */
+.kf-ingp__dzone .kf-ipanel__zone--ing .kf-ipanel__row { border-top-color: var(--sp-line-soft); }
+
+/* Fix 7: attention box inside this pane drops its outline and sits
+ * on the card ground. The item panel keeps its outlined look via its
+ * own mount (this scope override is tab-only). Primitive change for
+ * the --good variant (new in this round) still adds the left 3 px
+ * bar for all tones. */
+.kf-ingp__dzone--attn-wrap .kf-ipanel__attn { padding: 0; }
+.kf-ingp__dzone--attn-wrap .kf-ipanel__attn-item {
+  border: 0;
+  border-left: 3px solid var(--sp-warn-strong);
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  /* Round 3 fix 5: attention body reads at the panel's label size
+   * (13 px, frame B). The shared primitive stays at --sp-t-table on
+   * the item panel via its own mount. */
+  font-size: var(--sp-t-label);
+}
+.kf-ingp__dzone--attn-wrap .kf-ipanel__attn-item-body,
+.kf-ingp__dzone--attn-wrap .kf-ingp__attn-list { font-size: var(--sp-t-label); }
+.kf-ingp__dzone--attn-wrap .kf-ipanel__attn-item--bad { border-left-color: var(--sp-block); }
+.kf-ingp__dzone--attn-wrap .kf-ipanel__attn-item--info { border-left-color: var(--sp-link); }
+.kf-ingp__dzone--attn-wrap .kf-ipanel__attn-item--good { border-left-color: var(--sp-good); }
+
+/* Fix 7: the issue list inside one attention item. Summary head +
+ * nested <ul> of per-issue lines (frame B / C). */
+.kf-ingp__attn-list {
+  margin: var(--sp-sp-1) 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+  font-size: var(--sp-t-label);
+  color: var(--sp-ink);
+}
+.kf-ingp__attn-list li b { font-weight: 800; }
+.kf-ingp__attn-fix {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--sp-link);
+  text-decoration: underline;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: inherit;
+  white-space: nowrap;
+}
+.kf-ingp__attn-fix:hover:not(:disabled) { color: var(--sp-navy); }
+.kf-ingp__attn-fix:disabled { opacity: .6; cursor: default; }
+
+/* --- Strip tweaks (fix 9) -----------------------------------
+ * The value + unit sit on one line; the lens select below the Price
+ * cell is compact but carries a 44 px hit area. */
+.kf-ingp__dzone--section + .kf-ipanel__strip,
+.kf-ipanel__strip {
+  overflow: hidden; /* so a cell cannot push the strip wider than
+                       its parent */
+}
+.kf-ingp__dzone-strip .kf-ipanel__strip-cell { min-width: 0; }
+.kf-ingp__dzone-strip .kf-ipanel__strip-value {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+}
+/* Round 3 fix 3: lens label sizes to its select's content (not the
+ * strip-cell's cross-axis). align-self: flex-start stops the strip-
+ * cell's default stretch; max-content width keeps the chrome tight
+ * around "Blended" / "Standard" / "Premium". An invisible ::before
+ * halo gives the 44 px click target the floor rule asks for while
+ * the visible chrome stays 28 px. */
+.kf-ingp__lens {
+  position: relative;
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
+  min-width: 0;
+  height: 28px;
+  padding: 0 var(--sp-sp-2);
+  margin: var(--sp-sp-1) 0;
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+  background: var(--sp-card);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-ink);
+}
+.kf-ingp__lens::before {
+  content: "";
+  position: absolute;
+  inset: -8px 0;
+}
+.kf-ingp__lens select {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  outline: none;
+  cursor: pointer;
+  height: 100%;
+}
+
+/* Round 3 fix 4: phone strip is 2 x 2 with equal padding on all four
+ * cells. The base primitive carries first/last-child overrides for
+ * desktop; re-equalise them here. Scoped via .kf-ingp__dzone-strip
+ * so the item panel's own strip is unaffected. */
+@media (max-width: 860px) {
+  .kf-ingp__dzone-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .kf-ingp__dzone-strip .kf-ipanel__strip-cell,
+  .kf-ingp__dzone-strip .kf-ipanel__strip-cell:first-child,
+  .kf-ingp__dzone-strip .kf-ipanel__strip-cell:last-child {
+    padding: var(--sp-sp-3) var(--sp-sp-4);
+    border-right: 1px solid var(--sp-line-soft);
+    border-bottom: 1px solid var(--sp-line-soft);
+  }
+  .kf-ingp__dzone-strip .kf-ipanel__strip-cell:nth-child(2n),
+  .kf-ingp__dzone-strip .kf-ipanel__strip-cell:nth-child(2n):first-child {
+    border-right: 0;
+  }
+  .kf-ingp__dzone-strip .kf-ipanel__strip-cell:nth-last-child(-n+2) {
+    border-bottom: 0;
+  }
+}
+
+/* --- Linked-items table (fix 3) -----------------------------
+ * `table-layout: fixed` with explicit col widths; 16 px gap between
+ * columns via td/th padding; tag sits UNDER the price. */
+.kf-ingp__items {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.kf-ingp__items th {
+  text-align: left;
+  padding: var(--sp-sp-2) 0 var(--sp-sp-2) 0;
+  border-bottom: 1px solid var(--sp-line);
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-micro);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--sp-muted);
+  height: 40px;
+}
+.kf-ingp__items th + th,
+.kf-ingp__items td + td { padding-left: var(--sp-sp-4); }
+/* Round 4 fix 2: the 16 px gap applies between cols 1-2, 2-3, 3-4.
+ * The last col (Send back, 104) already sits flush with the pane's
+ * inset on its right edge, and the kf-btn--sm (102 px with "Send
+ * back") overhung by ~6 px when 16 px of padding ate into its
+ * content box. Drop the padding-left on the last col so the button
+ * has the full 104 to work with; cols 3 and 4 still show spacing
+ * to col 5 because both are right-aligned. */
+.kf-ingp__items th:last-child,
+.kf-ingp__items td:last-child { padding-left: 0; }
+.kf-ingp__items th.kf-ingp__items-num { text-align: right; }
+.kf-ingp__items td {
+  padding: var(--sp-sp-3) 0;
+  border-bottom: 1px solid var(--sp-line-soft);
+  vertical-align: middle;
+  min-height: 64px;
+}
+.kf-ingp__items tbody tr:last-child td { border-bottom: 0; }
+.kf-ingp__items td.kf-ingp__items-num { text-align: right; white-space: nowrap; }
+.kf-ingp__items b { font-weight: 800; }
+
+.kf-ingp__item-name {
+  display: block;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  width: 100%;
+  font-family: var(--sp-ui);
+  font-weight: 700;
+  font-size: 13.5px;
+  line-height: 1.3;
+  color: var(--sp-navy);
+  cursor: pointer;
+}
+.kf-ingp__item-name:hover { text-decoration: underline; }
+.kf-ingp__item-sub {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+}
+.kf-ingp__item-sub-warn {
+  font-weight: 800;
+  color: var(--sp-warn);
+}
+
+/* Fix 3: tag UNDER the price, right-aligned, in its own line. */
+.kf-ingp__items-price {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+/* Round 4 fix 1: phone linked-items. Under 860 the fixed 150 + 112 +
+ * 76 + 104 columns cannot fit a 356 px pane (table ends up 442 wide,
+ * horizontal overflow, Send back off the right edge). Each <tr>
+ * becomes a stacked block using the same markup + handlers:
+ *   line 1: item name (button) + vendor sub + warn sub (the first
+ *           cell's existing stack)
+ *   line 2: grade (left) · price with tag (right) · 12 mo (far right)
+ *   line 3: Send back, full width
+ * Same table, same colgroup (hidden), same handlers; CSS-only. */
+@media (max-width: 860px) {
+  .kf-ingp__items,
+  .kf-ingp__items tbody { display: block; width: 100%; }
+  .kf-ingp__items colgroup,
+  .kf-ingp__items thead { display: none; }
+  .kf-ingp__items tr {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "name  name  name  name"
+      "grade .     price usd"
+      "act   act   act   act";
+    column-gap: var(--sp-sp-3);
+    row-gap: var(--sp-sp-2);
+    padding: var(--sp-sp-3) 0;
+    border-bottom: 1px solid var(--sp-line-soft);
+  }
+  .kf-ingp__items tbody tr:last-child td { border-bottom: 0; }
+  .kf-ingp__items tr:last-child { border-bottom: 0; }
+  .kf-ingp__items td,
+  .kf-ingp__items td + td {
+    display: block;
+    padding: 0;
+    border: 0;
+    height: auto;
+    min-height: 0;
+    white-space: normal;
+    text-align: left;
+  }
+  .kf-ingp__items td:nth-child(1) { grid-area: name; }
+  .kf-ingp__items td:nth-child(2) { grid-area: grade; justify-self: start; align-self: center; }
+  .kf-ingp__items td:nth-child(3) {
+    grid-area: price;
+    align-self: center;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .kf-ingp__items td:nth-child(4) {
+    grid-area: usd;
+    align-self: center;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .kf-ingp__items td:nth-child(5) { grid-area: act; }
+  .kf-ingp__items td:nth-child(5) .kf-btn {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+/* Fix 2: RowGradeToggle chrome. Restored from the deleted review.css
+ * block (lines 2107-2128 at 682a08f). One-click pill in the linked-
+ * items table. Standard reads muted; Premium reads amber. */
+.kf-grade-row {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: var(--sp-r-pill);
+  border: 1px solid var(--sp-line);
+  background: transparent;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 700;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
+  min-height: var(--sp-floor-corp);
+}
+.kf-grade-row:hover:not(:disabled) { border-color: var(--sp-ink); color: var(--sp-ink); }
+.kf-grade-row:disabled { cursor: default; opacity: .6; }
+.kf-grade-row.is-busy { opacity: .7; }
+.kf-grade-row--standard { color: var(--sp-muted); border-color: var(--sp-line); background: transparent; }
+.kf-grade-row--premium {
+  color: var(--sp-warn-strong);
+  background: var(--sp-warn-bg);
+  border-color: var(--sp-warn-bg);
+}
+
+/* --- Toolbar ------------------------------------------------- */
+.kf-ingp__tools {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+}
+.kf-ingp__search { position: relative; display: block; }
+.kf-ingp__search input {
+  width: 100%;
+  min-height: var(--sp-floor-corp);
+  padding: 0 var(--sp-sp-3) 0 calc(var(--sp-sp-3) * 2 + 16px);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-ctl);
+  background: var(--sp-card);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  color: var(--sp-ink);
+}
+.kf-ingp__search input::placeholder { color: var(--sp-muted); }
+.kf-ingp__search svg {
+  position: absolute;
+  left: var(--sp-sp-3);
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--sp-muted);
+}
+.kf-ingp__search-clear {
+  position: absolute;
+  right: var(--sp-sp-2);
+  top: 50%;
+  transform: translateY(-50%);
+  width: var(--sp-floor-corp);
+  height: var(--sp-floor-corp);
+  background: transparent;
+  border: 0;
+  color: var(--sp-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kf-ingp__filters {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: var(--sp-sp-2) var(--sp-sp-3);
+  align-items: center;
+}
+.kf-ingp__filters-label {
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-micro);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--sp-muted);
+}
+.kf-ingp__chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+/* Round 2 fix 17: on phone each group is a single row that scrolls
+ * horizontally rather than wrapping into six lines. */
+@media (max-width: 860px) {
+  .kf-ingp__filters { grid-template-columns: minmax(0, 1fr); }
+  .kf-ingp__filters-label { display: none; }
+  .kf-ingp__chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .kf-ingp__chips::-webkit-scrollbar { display: none; }
+}
+.kf-ingp__chip {
+  /* Round 2 fix 16: visible chrome stays 36 px (frame A look); a 4 px
+   * invisible ::before above + below gives the 44 px hit target the
+   * floor rule asks for. Same precedent as .kf-allergen's hit halo. */
+  position: relative;
+  min-height: 36px;
+  padding: 0 var(--sp-sp-3);
+  border-radius: var(--sp-r-pill);
+  border: 1px solid var(--sp-line);
+  background: var(--sp-card);
+  font-family: var(--sp-ui);
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--sp-ink);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.kf-ingp__chip::before {
+  content: "";
+  position: absolute;
+  inset: -4px 0;
+}
+.kf-ingp__chip span { color: var(--sp-muted); font-weight: 400; }
+.kf-ingp__chip--on {
+  background: var(--sp-navy);
+  border-color: var(--sp-navy);
+  color: var(--sp-card);
+}
+.kf-ingp__chip--on span { color: var(--sp-sky-line); }
+.kf-ingp__chip--warn {
+  border-color: var(--sp-warn-strong);
+  color: var(--sp-warn);
+}
+.kf-ingp__chip--warn span { color: var(--sp-warn); }
+.kf-ingp__chip--warn.kf-ingp__chip--on {
+  background: var(--sp-warn-strong);
+  border-color: var(--sp-warn-strong);
+  color: var(--sp-card);
+}
+.kf-ingp__chip--warn.kf-ingp__chip--on span { color: var(--sp-card); }

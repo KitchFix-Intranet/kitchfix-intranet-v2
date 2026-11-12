@@ -224,24 +224,6 @@
   font-size: var(--sp-t-micro);
 }
 .kf-table-legend .kf-pill { margin-left: 0; }
-/* Polish 4 (C): same legend shape now renders the Ingredients tab's
- * attention badges (.kf-master__bdg--spread/coverage/mismatch/outlier).
- * Reset the margin that the inline-on-rows variant carries so the
- * legend row aligns like it does for pills. */
-.kf-table-legend .kf-master__bdg { margin-left: 0; }
-
-/* Polish 7: quiet legend variant for the masters workbench, where
- * the legend now sits OUTSIDE the card (between the sort row and
- * the workbench). Drops the sky-soft band fill so it reads as a
- * horizontal strip, not a header band. Hairlines top + bottom
- * mark the boundary without filling the whole row. Vendor items'
- * default .kf-table-legend (inside .kf-table-wrap) is unchanged. */
-.kf-table-legend--quiet {
-  background: transparent;
-  padding: var(--sp-sp-2) 0;
-  border-top: 1px solid var(--sp-line-soft);
-  border-bottom: 1px solid var(--sp-line-soft);
-}
 
 /* Sort select */
 .kf-sort select {
