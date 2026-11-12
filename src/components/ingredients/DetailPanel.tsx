@@ -26,7 +26,6 @@ import { PanelAttention, computeAttentionCounts } from "./panel/PanelAttention";
 import { PanelItemZone } from "./panel/PanelItemZone";
 import { PanelIngredientZone, PanelIngredientZonePending } from "./panel/PanelIngredientZone";
 import { PanelClosedRows } from "./panel/PanelClosedRows";
-import { ItemHistoryRows } from "./panel/ItemHistoryRows";
 import type { PackHint } from "./panel/packHelpers";
 import "./drawer.css";
 // N13: item-panel extensions (history closed rows + status footer)
@@ -198,8 +197,6 @@ export function DetailPanel({
             proposedParent={proposedParent ?? null}
           />
         )}
-
-        {item ? <ItemHistoryRows itemId={item.id} /> : null}
 
         <PanelClosedRows
           item={item}

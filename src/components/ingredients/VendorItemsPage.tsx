@@ -173,7 +173,12 @@ function linkCell(
     return { kind: "not_food", main: "Not food", sub: "fees and supplies" };
   }
   if (r.status === "resale") {
-    return { kind: "retail", main: ingredientName ?? "Retail", sub: "retail" };
+    // Round 2 fix 10: retail-with-ingredient reads as the ingredient's
+    // name over "retail"; retail-with-no-ingredient reads "Retail" over
+    // "sold as-is" so the sub never repeats the main.
+    return ingredientName
+      ? { kind: "retail", main: ingredientName, sub: "retail" }
+      : { kind: "retail", main: "Retail", sub: "sold as-is" };
   }
   if (r.link_status === "proposed") {
     return { kind: "proposed", main: ingredientName ?? "Proposed", sub: "proposed, needs review" };

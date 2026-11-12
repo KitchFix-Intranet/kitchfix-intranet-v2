@@ -10,6 +10,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { fmtCount, fmtDate, fmtUsd } from "@/lib/fmt";
+import { uomLabel } from "@/lib/ingredients/pack";
 
 type Alias = { description: string; count: number; last_seen: string | null };
 type Site = {
@@ -27,7 +28,17 @@ type State =
   | { phase: "ready"; data: History }
   | { phase: "error"; message: string };
 
-export function ItemHistoryRows({ itemId }: { itemId: string }) {
+export function ItemHistoryRows({
+  itemId,
+  priceUom,
+}: {
+  itemId: string;
+  // N13 round 2 fix 13: the uom the "Last paid" column renders
+  // beside each site's dollar figure (e.g. "$21.44 / each"). The
+  // drawer carried this; the history route omits it, so the
+  // caller (PanelClosedRows) passes item.perBaseUom through.
+  priceUom?: string | null;
+}) {
   const [sitesOpen, setSitesOpen] = useState(false);
   const [wordingOpen, setWordingOpen] = useState(false);
   const [state, setState] = useState<State>({ phase: "idle" });
@@ -91,7 +102,12 @@ export function ItemHistoryRows({ itemId }: { itemId: string }) {
                     <td>{s.account_key}</td>
                     <td className="kf-vi__num">{fmtCount(s.lines)}</td>
                     <td className="kf-vi__num">
-                      {s.last_price != null ? fmtUsd(s.last_price) : "-"}
+                      {s.last_price != null ? (
+                        <>
+                          {fmtUsd(s.last_price)}
+                          {priceUom ? ` / ${uomLabel(priceUom) || priceUom}` : ""}
+                        </>
+                      ) : "-"}
                     </td>
                     <td>{s.last_date ? fmtDate(s.last_date) : "-"}</td>
                   </tr>

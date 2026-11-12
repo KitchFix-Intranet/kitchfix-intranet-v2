@@ -62,7 +62,19 @@ export function PanelAttention({
       i.kind === "pack_unreadable" ||
       i.kind === "unit_mismatch"
   );
-  if (rendered.length === 0) return null;
+  // N13 R4: "{n} of {lines} invoice lines were flagged when read"
+  // is a warn attention line whenever needsReviewLines > 0. It lives
+  // alongside the derived attention set so the user sees it in the
+  // same primitive. Only fires on item panels (the ingredient
+  // branch early-returns above).
+  const flaggedLines =
+    item?.needsReviewLines && item.needsReviewLines > 0
+      ? {
+          head: `${item.needsReviewLines} of ${item.lines12m} invoice lines were flagged when read`,
+          body: "Reviewers queue these lines for a second look. Clearing them removes the warn here.",
+        }
+      : null;
+  if (rendered.length === 0 && !flaggedLines) return null;
 
   const toneRank: Record<string, number> = { bad: 3, info: 2, warn: 1 };
   const fixable = rendered
@@ -72,6 +84,17 @@ export function PanelAttention({
 
   return (
     <div className="kf-ipanel__attn" aria-label="What needs attention">
+      {flaggedLines ? (
+        <div className="kf-ipanel__attn-item">
+          <span className="kf-ipanel__attn-icon">
+            <AttentionIcon tone="warn" />
+          </span>
+          <div className="kf-ipanel__attn-item-text">
+            <span className="kf-ipanel__attn-item-head">{flaggedLines.head}</span>
+            <span className="kf-ipanel__attn-item-body">{flaggedLines.body}</span>
+          </div>
+        </div>
+      ) : null}
       {rendered.map((issue) => {
         const tone: "bad" | "info" | "warn" =
           issue.tone === "bad" ? "bad" : issue.tone === "info" ? "info" : "warn";

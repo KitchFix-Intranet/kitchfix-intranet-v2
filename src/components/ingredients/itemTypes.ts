@@ -124,7 +124,9 @@ export type ReviewGroupItem = {
   needsReviewLines?: number;
   firstSeen?: string | null;
   status?: string;
-  isFood?: boolean;
+  // Tri-state: null = legacy / unknown; the "Not food" pill in the
+  // item panel renders only on strict `false`.
+  isFood?: boolean | null;
   foodReason?: string | null;
 };
 

@@ -325,6 +325,13 @@
   font-weight: 800;
   color: var(--sp-navy);
 }
+/* N13 R4: foodReason beside the "Not food" pill reads as quiet
+ * body text (not a pill). */
+.kf-ipanel__status-note {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+}
 .kf-ipanel__close {
   width: 44px;
   height: 44px;

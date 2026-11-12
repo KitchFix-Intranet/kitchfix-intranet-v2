@@ -96,8 +96,12 @@ const SORT_LABEL: Record<SortKey, string> = {
 };
 
 // Precedence from VendorItemDrawer / StatusChip, verbatim per §2b.
+// Round 2 fix 9: "Not linked" is main WARN 800 + sub plain.
+// Proposed keeps its own treatment (main navy + sub warn).
 const LINK_SUB_WARN: Partial<Record<LinkCell["kind"], true>> = {
   proposed: true,
+};
+const LINK_MAIN_WARN: Partial<Record<LinkCell["kind"], true>> = {
   not_linked: true,
 };
 const LINK_MAIN_MUTED: Partial<Record<LinkCell["kind"], true>> = {
@@ -105,6 +109,22 @@ const LINK_MAIN_MUTED: Partial<Record<LinkCell["kind"], true>> = {
   one_off: true,
   not_food: true,
   rejected: true,
+};
+// Round 2 fix 10 handles retail-with-no-ingredient in VendorItemsPage
+// (shapeRow produces main "Retail" + sub "sold as-is"). This file
+// renders whatever LinkCell comes in.
+
+const CHIP_LABEL: Record<VendorSeg, string> = {
+  all: "All",
+  unlinked: "Not linked",
+  proposed: "Proposed",
+  linked: "Linked",
+  retail: "Retail",
+  catch_weight: "Catch weight",
+  no_number: "No item number",
+  duplicates: "Duplicates",
+  not_food: "Not food",
+  archived: "Archived",
 };
 
 export function VendorItemsView(props: VendorItemsViewProps) {
@@ -222,7 +242,7 @@ export function VendorItemsView(props: VendorItemsViewProps) {
                   onClearSearch();
                 }
               }}
-              placeholder="Description, item number or vendor"
+              placeholder="Description or item number"
               aria-label="Filter vendor items"
             />
             {search ? (
@@ -328,17 +348,25 @@ export function VendorItemsView(props: VendorItemsViewProps) {
 
       {/* --- Card ------------------------------------------- */}
       <section className="kf-vi__card" aria-label="Vendor items">
-        <CardBar
-          title
-          total={props.total}
-          from={props.from}
-          to={props.to}
-          sort={props.sort}
-          onSelectSort={onSelectSort}
-          page={props.page}
-          last={last}
-          onPage={onPage}
-        />
+        {props.rows.length === 0 ? (
+          <div className="kf-vi__card-head">
+            <div className="kf-vi__card-head-title">
+              <h3>0 items match</h3>
+            </div>
+          </div>
+        ) : (
+          <CardBar
+            title
+            total={props.total}
+            from={props.from}
+            to={props.to}
+            sort={props.sort}
+            onSelectSort={onSelectSort}
+            page={props.page}
+            last={last}
+            onPage={onPage}
+          />
+        )}
 
         {props.rows.length === 0 ? (
           <EmptyBlock
@@ -352,60 +380,54 @@ export function VendorItemsView(props: VendorItemsViewProps) {
             onClearAll={onClearAll}
           />
         ) : (
-          <>
-            {/* Desktop table (>=861) */}
-            <div className="kf-only-desktop">
-              <table className="kf-vi__table">
-                <colgroup>
-                  <col style={{ width: 180 }} />
-                  <col />
-                  <col style={{ width: 208 }} />
-                  <col style={{ width: 148 }} />
-                  <col style={{ width: 100 }} />
-                  <col style={{ width: 104 }} />
-                  <col style={{ width: 112 }} />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th>Vendor</th>
-                    <th>Item</th>
-                    <th>Linked to</th>
-                    <th>Pack</th>
-                    <th className="kf-vi__num">Price</th>
-                    <th className="kf-vi__num">12 mo</th>
-                    <th>Last bought</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {props.rows.map((r) => (
-                    <TableRow key={r.id} row={r} onOpen={openRow} />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Phone list (<=860) */}
-            <ul className="kf-vi__phone-list kf-only-phone">
+          <table className="kf-vi__table">
+            {/* Round 2 fix 3: ONE source for the stacked block. The
+                table renders at every width; the container query
+                @container vi-card (max-width: 1040px) swaps the
+                colgroup off and lays each <tr> as a grid. Phone (card
+                is the viewport) falls inside the narrow branch
+                automatically - no separate phone list. */}
+            <colgroup>
+              <col style={{ width: 180 }} />
+              <col />
+              <col style={{ width: 208 }} />
+              <col style={{ width: 148 }} />
+              <col style={{ width: 100 }} />
+              <col style={{ width: 104 }} />
+              <col style={{ width: 112 }} />
+            </colgroup>
+            <thead>
+              <tr>
+                <th>Vendor</th>
+                <th>Item</th>
+                <th>Linked to</th>
+                <th>Pack</th>
+                <th className="kf-vi__num">Price</th>
+                <th className="kf-vi__num">12 mo</th>
+                <th>Last bought</th>
+              </tr>
+            </thead>
+            <tbody>
               {props.rows.map((r) => (
-                <li key={r.id}>
-                  <PhoneBlock row={r} onOpen={openRow} />
-                </li>
+                <TableRow key={r.id} row={r} onOpen={openRow} />
               ))}
-            </ul>
-          </>
+            </tbody>
+          </table>
         )}
 
-        <CardBar
-          footer
-          total={props.total}
-          from={props.from}
-          to={props.to}
-          sort={props.sort}
-          onSelectSort={onSelectSort}
-          page={props.page}
-          last={last}
-          onPage={onPage}
-        />
+        {props.rows.length === 0 ? null : (
+          <CardBar
+            footer
+            total={props.total}
+            from={props.from}
+            to={props.to}
+            sort={props.sort}
+            onSelectSort={onSelectSort}
+            page={props.page}
+            last={last}
+            onPage={onPage}
+          />
+        )}
       </section>
 
       {/* --- Item panel (opens on row click) ----------------- */}
@@ -540,17 +562,16 @@ function EmptyBlock({
   vendorName: string | null;
   onClearAll: () => void;
 }) {
-  const bits: string[] = [];
-  if (q) bits.push(`the search '${q}'`);
-  if (seg !== "all") bits.push(`the '${seg.replace("_", " ")}' chip`);
-  if (vendorName) bits.push(`vendor '${vendorName}'`);
-  const body =
-    bits.length === 0
-      ? "Nothing in the full set."
-      : `Nothing matches ${bits.join(", ")}.`;
+  // Round 2 fix 6: name only the parts in force, using the chip's
+  // label (not its URL key). Pattern: Nothing for "kombucha" in
+  // Not linked at Sysco.
+  const parts: string[] = [];
+  if (q) parts.push(`for "${q}"`);
+  if (seg !== "all") parts.push(`in ${CHIP_LABEL[seg]}`);
+  if (vendorName) parts.push(`at ${vendorName}`);
+  const body = parts.length === 0 ? "Nothing in the full set." : `Nothing ${parts.join(" ")}.`;
   return (
     <div className="kf-vi__empty">
-      <div className="kf-vi__empty-title">No items match</div>
       <div className="kf-vi__empty-body">{body}</div>
       <button type="button" className="kf-btn kf-btn--line kf-btn--sm" onClick={onClearAll}>
         Clear search and filters
@@ -599,6 +620,8 @@ function TableRow({
       <td>
         <div
           className={`kf-vi__cell-main${LINK_MAIN_MUTED[row.link.kind] ? " kf-vi__cell-main--muted" : ""}${
+            LINK_MAIN_WARN[row.link.kind] ? " kf-vi__cell-main--warn" : ""
+          }${
             row.link.kind === "linked" || row.link.kind === "proposed" || row.link.kind === "retail"
               ? " kf-vi__cell-main--navy"
               : ""
@@ -657,60 +680,5 @@ function monthsAgoIfStale(iso: string) {
   return <div className="kf-vi__cell-sub kf-vi__cell-sub--warn">{m} mo ago</div>;
 }
 
-function PhoneBlock({ row, onOpen }: { row: VendorItemViewRow; onOpen: (id: string) => void }) {
-  return (
-    <button
-      type="button"
-      className={`kf-vi__phone-item${row.attention ? " kf-vi__phone-item--att" : ""}`}
-      data-row-id={row.id}
-      onClick={() => onOpen(row.id)}
-    >
-      <div className="kf-vi__phone-name">{row.name}</div>
-      {(row.catchWeight || row.twinOfNumber) ? (
-        <div className="kf-vi__cell-sub kf-vi__cell-sub--warn" style={{ marginBottom: "var(--sp-sp-2)" }}>
-          {[row.catchWeight ? "catch weight" : null, row.twinOfNumber ? `twin of #${row.twinOfNumber}` : null]
-            .filter(Boolean)
-            .join(" · ")}
-        </div>
-      ) : null}
-      <div className="kf-vi__phone-vendor">
-        {row.vendorName} · {row.itemNumber ? `#${row.itemNumber}` : "no item #"}
-      </div>
-      <div className="kf-vi__phone-grid">
-        <div>
-          <div className="kf-vi__cell-main">{row.link.main}</div>
-          <div className={`kf-vi__cell-sub${LINK_SUB_WARN[row.link.kind] ? " kf-vi__cell-sub--warn" : ""}`}>
-            {row.link.sub}
-          </div>
-        </div>
-        <div className="kf-vi__phone-grid-right">
-          {row.perBase != null ? (
-            <>
-              <div className="kf-vi__cell-main kf-vi__cell-main--strong">{fmtUsd(row.perBase)}</div>
-              <div className="kf-vi__cell-sub">per {uomLabel(row.perBaseUom) || row.perBaseUom || "unit"}</div>
-            </>
-          ) : (
-            <>
-              <div className="kf-vi__cell-main kf-vi__cell-main--muted">-</div>
-              <div className="kf-vi__cell-sub">needs a pack</div>
-            </>
-          )}
-        </div>
-        <div>
-          {row.packMissing ? (
-            <div className="kf-vi__cell-main kf-vi__cell-sub--warn">No pack read</div>
-          ) : (
-            <div className="kf-vi__cell-main">{row.packText}</div>
-          )}
-          <div className="kf-vi__cell-sub">
-            {row.billedUnit ? `billed by the ${uomLabel(row.billedUnit) || row.billedUnit}` : "billed unit unknown"}
-          </div>
-        </div>
-        <div className="kf-vi__phone-grid-right">
-          <div className="kf-vi__cell-main kf-vi__cell-main--strong">{fmtUsdLong(row.usd12m)}</div>
-          <div className="kf-vi__cell-sub">{fmtCount(row.lines12m)} line{row.lines12m === 1 ? "" : "s"}</div>
-        </div>
-      </div>
-    </button>
-  );
-}
+// Round 2 fix 3: PhoneBlock deleted. The table's @container narrow
+// branch handles both phone and narrow-detail-desktop.

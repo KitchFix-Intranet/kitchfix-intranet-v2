@@ -302,12 +302,14 @@ export async function GET(req: NextRequest) {
         ? Number(pe.match_score)
         : null,
     // N13 R3: five additive fields so the item panel carries what
-    // VendorItemDrawer displayed (flagged lines, first seen, status,
-    // is_food, food_reason).
+    // VendorItemDrawer displayed. isFood is TRI-STATE on the wire
+    // (round 2 fix 2): null means legacy / unknown, not food. The
+    // "Not food" pill only renders when is_food is strictly false,
+    // so the response must preserve null.
     needsReviewLines: Number(it.needs_review_lines ?? 0),
     firstSeen: it.first_seen,
     status: it.status,
-    isFood: it.is_food === true,
+    isFood: it.is_food,
     foodReason: it.food_reason,
   };
 

@@ -79,6 +79,13 @@
   border-radius: var(--sp-r-card);
   box-shadow: 0 1px 2px rgba(14, 42, 78, .06), 0 4px 14px rgba(14, 42, 78, .06);
   overflow: hidden;
+  /* Round 2 fix 3: the card is a named size container so the table
+   * switches to the stacked block when the CARD gets narrower than
+   * ~1040 (the fixed 180 + 208 + 148 + 100 + 104 + 112 = 852 plus
+   * breathing room for the Item column). Below 1040 the Item col
+   * would be under 240 and names start wrapping; stack instead. */
+  container-type: inline-size;
+  container-name: vi-card;
 }
 .kf-vi__card-head,
 .kf-vi__card-foot {
@@ -199,6 +206,8 @@
 .kf-vi__cell-main--strong { font-weight: 800; }
 .kf-vi__cell-main--navy { color: var(--sp-navy); font-weight: 800; }
 .kf-vi__cell-main--muted { color: var(--sp-muted); font-weight: 700; }
+/* Round 2 fix 9: Not linked reads main-warn 800 over plain sub. */
+.kf-vi__cell-main--warn { color: var(--sp-warn); font-weight: 800; }
 .kf-vi__cell-sub {
   font-family: var(--sp-ui);
   font-size: var(--sp-t-micro);
@@ -333,4 +342,72 @@
   font-family: var(--sp-ui);
   font-size: var(--sp-t-micro);
   color: var(--sp-muted);
+}
+
+/* --- Round 2 fix 3: narrow-container table -> stacked block.
+ * When the detail card is below 1040 CSS px the fixed-column table
+ * cannot hold the Item column above 240; each <tr> becomes a stacked
+ * grid (same content, same handlers, colgroup hidden). The @media
+ * phone block below the container query feeds the SAME selectors so
+ * phone (where the card IS the viewport) uses the same stack - one
+ * source. */
+@container vi-card (max-width: 1040px) {
+  .kf-vi__table,
+  .kf-vi__table tbody { display: block; width: 100%; }
+  .kf-vi__table colgroup,
+  .kf-vi__table thead { display: none; }
+  .kf-vi__table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "item     item"
+      "vendor   vendor"
+      "linkto   price"
+      "pack     usd"
+      "lastbot  lastbot";
+    column-gap: var(--sp-sp-3);
+    row-gap: var(--sp-sp-1);
+    padding: var(--sp-sp-3) var(--sp-sp-4);
+    border-bottom: 1px solid var(--sp-line-soft);
+  }
+  .kf-vi__table tr:last-child { border-bottom: 0; }
+  .kf-vi__table td { display: block; padding: 0; border: 0; }
+  .kf-vi__table td.kf-vi__num { text-align: right; }
+  /* Row-order index -> grid area */
+  .kf-vi__table td:nth-child(1) { grid-area: vendor; }
+  .kf-vi__table td:nth-child(2) { grid-area: item; }
+  .kf-vi__table td:nth-child(3) { grid-area: linkto; }
+  .kf-vi__table td:nth-child(4) { grid-area: pack; }
+  .kf-vi__table td:nth-child(5) { grid-area: price; }
+  .kf-vi__table td:nth-child(6) { grid-area: usd; }
+  .kf-vi__table td:nth-child(7) { grid-area: lastbot; }
+  /* Round 2 fix 5: dashed dividers between the two pair rows so the
+   * four lines read as paired, not loose. */
+  .kf-vi__table td:nth-child(3),
+  .kf-vi__table td:nth-child(5) {
+    padding-top: var(--sp-sp-2);
+    border-top: 1px dashed var(--sp-line);
+  }
+}
+
+/* Round 2 fix 4: phone card head stacks (title + count, then sort
+ * full-width, then pager). Replaces the generic flex row. Rendered
+ * at <=860 by media query so the layout does not trip on container
+ * queries' subtler behaviour. */
+@media (max-width: 860px) {
+  .kf-vi__card-head,
+  .kf-vi__card-foot {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .kf-vi__card-head-right,
+  .kf-vi__card-foot-right {
+    flex-direction: column;
+    gap: var(--sp-sp-2);
+    align-items: stretch;
+  }
+  .kf-vi__card-head-right .kf-vi__sort,
+  .kf-vi__card-foot-right .kf-vi__sort { width: 100%; }
+  .kf-vi__card-head-right .kf-vi__pager,
+  .kf-vi__card-foot-right .kf-vi__pager { justify-content: center; }
 }
