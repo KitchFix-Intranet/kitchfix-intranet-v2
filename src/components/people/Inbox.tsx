@@ -54,24 +54,34 @@ function StatusPill({ row }: { row: InboxRow }) {
 }
 
 function Row({
-  row, needs, onOpen,
-}: { row: InboxRow; needs: boolean; onOpen: (id: string) => void }) {
+  row, needs, onOpenRec, onOpenHref,
+}: {
+  row: InboxRow; needs: boolean;
+  onOpenRec: (id: string) => void;
+  onOpenHref: (href: string) => void;
+}) {
   // T3.1 fix 9 (2026-11-13). The unread dot means "decided and not
   // opened yet". Pending rows never carry it - including the ones
   // that land in Needs you because they have waited >= LATE_DAYS.
-  const showDot = row.unread && row.status_code !== "Pending";
+  // T4a: Draft rows never carry the dot either.
+  const showDot = row.unread && row.status_code !== "Pending" && !row.isDraft;
   const cls = [
     "kf-pe-row",
     showDot ? "is-unread" : "",
+    row.isDraft ? "is-draft" : "",
     row.status_code === "Withdrawn" || row.status_code === "Cancelled" ? "is-gone" : "",
   ].filter(Boolean).join(" ");
+  const open = () => {
+    if (row.href) onOpenHref(row.href);
+    else onOpenRec(row.id);
+  };
   return (
     <tr
       className={cls}
       tabIndex={0}
       role="button"
-      onClick={() => onOpen(row.id)}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(row.id); } }}
+      onClick={open}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } }}
       aria-label={`Open ${row.title}`}
     >
       <td className="kf-pe-what">
@@ -97,18 +107,28 @@ function Row({
         <time>{row.decided_short ?? row.sent_short}</time>
       </td>
       <td className="kf-pe-act">
-        <ChevronRight size={18} strokeWidth={1.5} aria-hidden />
+        {/* T4a (2026-11-13). Draft rows render a "Keep going" button
+         * in the action slot instead of the chevron. Clicking the
+         * button routes to the PAF form, same as clicking the row. */}
+        {row.isDraft ? (
+          <span className="kf-pe-row__cta">
+            <span className="kf-btn kf-btn--soft">Keep going</span>
+          </span>
+        ) : (
+          <ChevronRight size={18} strokeWidth={1.5} aria-hidden />
+        )}
       </td>
     </tr>
   );
 }
 
 function Group({
-  label, note, right, rows, needs, onOpen,
+  label, note, right, rows, needs, onOpenRec, onOpenHref,
 }: {
   label: string; note?: string; right?: React.ReactNode;
   rows: InboxRow[]; needs: boolean;
-  onOpen: (id: string) => void;
+  onOpenRec: (id: string) => void;
+  onOpenHref: (href: string) => void;
 }) {
   if (rows.length === 0) return null;
   return (
@@ -123,7 +143,9 @@ function Group({
           </div>
         </td>
       </tr>
-      {rows.map((r) => <Row key={r.id} row={r} needs={needs} onOpen={onOpen} />)}
+      {rows.map((r) => (
+        <Row key={r.id} row={r} needs={needs} onOpenRec={onOpenRec} onOpenHref={onOpenHref} />
+      ))}
     </>
   );
 }
@@ -152,6 +174,20 @@ export function Inbox({ view }: Props) {
   const openRow = useCallback((id: string) => {
     router.push(buildHref({ rec: id }));
   }, [router, buildHref]);
+  // T4a (2026-11-13). Draft rows carry an explicit href
+  // (/people/paf?draft=<id>). Preserve ?as= across the hop so a
+  // preview session stays in preview.
+  const openHref = useCallback((href: string) => {
+    const as = sp.get("as");
+    if (as) {
+      const [path, rest] = href.split("?");
+      const params = new URLSearchParams(rest ?? "");
+      params.set("as", as);
+      router.push(`${path}?${params.toString()}`);
+    } else {
+      router.push(href);
+    }
+  }, [router, sp]);
 
   const active: InboxRow[] = tab === "team" ? view.team : view.mine;
 
@@ -293,7 +329,7 @@ export function Inbox({ view }: Props) {
           note="newest first"
           rows={sorted}
           needs={false}
-          onOpen={openRow}
+          onOpenRec={openRow} onOpenHref={openHref}
         />
       );
     }
@@ -305,8 +341,8 @@ export function Inbox({ view }: Props) {
       const shown = cut ? rest.slice(0, cap) : rest;
       return (
         <>
-          <Group label="Pending" note="sent by someone else, about your people" rows={open} needs={false} onOpen={openRow} />
-          <Group label="Decided" rows={shown} needs={false} onOpen={openRow} />
+          <Group label="Pending" note="sent by someone else, about your people" rows={open} needs={false} onOpenRec={openRow} onOpenHref={openHref} />
+          <Group label="Decided" rows={shown} needs={false} onOpenRec={openRow} onOpenHref={openHref} />
           {cut ? (
             <tr className="kf-pe-more">
               <td colSpan={5}>
@@ -324,10 +360,10 @@ export function Inbox({ view }: Props) {
     const earlierShown = cutEarlier ? byGroup.earlier.slice(0, earlierCap) : byGroup.earlier;
     return (
       <>
-        <Group label="Needs you" note="finish it, fix it, or chase it" rows={byGroup.needs} needs onOpen={openRow} />
-        <Group label="Just decided" note="not opened yet" rows={byGroup.news} needs={false} onOpen={openRow} />
-        <Group label="Pending" note="someone else has it now" rows={byGroup.pending} needs={false} onOpen={openRow} />
-        <Group label="Earlier" rows={earlierShown} needs={false} onOpen={openRow} />
+        <Group label="Needs you" note="finish it, fix it, or chase it" rows={byGroup.needs} needs onOpenRec={openRow} onOpenHref={openHref} />
+        <Group label="Just decided" note="not opened yet" rows={byGroup.news} needs={false} onOpenRec={openRow} onOpenHref={openHref} />
+        <Group label="Pending" note="someone else has it now" rows={byGroup.pending} needs={false} onOpenRec={openRow} onOpenHref={openHref} />
+        <Group label="Earlier" rows={earlierShown} needs={false} onOpenRec={openRow} onOpenHref={openHref} />
         {cutEarlier ? (
           <tr className="kf-pe-more">
             <td colSpan={5}>
