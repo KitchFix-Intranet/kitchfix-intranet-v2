@@ -14,11 +14,12 @@ import type {
   AccountRow,
   Viewer,
   CardPerson,
-  WaitingItem,
   HistoryRow,
+  InFlightRow,
 } from "./types";
 import { toCardPerson } from "./contact";
-import { fmtShort, fmtFull } from "./dates";
+import { fmtShort, fmtFull, fmtDaysWaiting } from "./dates";
+import { LATE_DAYS } from "./thresholds";
 
 const PERSON_SELECT =
   "worker_id, display_name, title, account_key, region, work_email, personal_email, phone, manager_worker_id, start_date, birthday, is_corp, is_salaried, is_site_leader, is_regional_director, pp_full_access, pp_review, status";
@@ -202,6 +203,72 @@ function tenureStrings(start_date: string | null | undefined, now: Date = new Da
   };
 }
 
+// T2.2 (2026-11-12). Short waiting label, matching load.ts.
+function labelForWaiting(module: string | null, action_type: string | null): string {
+  const m = (module ?? "").trim().toLowerCase();
+  const a = (action_type ?? "").trim();
+  if (m === "paf") return a ? `PAF: ${a}` : "PAF";
+  if (m === "incident") return a ? `Incident: ${a}` : "Incident";
+  if (m === "termination") return a ? `Termination: ${a}` : "Termination";
+  if (m) return a ? `${m}: ${a}` : m.toUpperCase();
+  return a || "Request";
+}
+function kindFromModule(m: string | null): InFlightRow["kind"] {
+  const s = (m ?? "").toLowerCase();
+  if (s === "paf") return "paf";
+  if (s === "incident") return "incident";
+  if (s === "termination") return "termination";
+  return "other";
+}
+function daysSince(iso: string, now: Date): number {
+  const t = Date.parse(iso || "");
+  if (!Number.isFinite(t)) return 0;
+  return Math.max(0, Math.floor((now.getTime() - t) / 86_400_000));
+}
+
+// T2.2 (2026-11-12). "Started" one-liner for the card: date · tenure ·
+// "N on Mon D" next-anniversary clause. Example:
+// "May 18, 2026 · 5 months · 1 year on May 18".
+function startedOneLine(start_date: string | null | undefined, now: Date = new Date()): string | null {
+  if (!start_date) return null;
+  const parts = start_date.slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!parts) return null;
+  const sy = parseInt(parts[1], 10);
+  const sm = parseInt(parts[2], 10);
+  const sd = parseInt(parts[3], 10);
+  const dateStr = fmtFull(start_date);
+
+  // Months + years since start.
+  const ty = now.getFullYear();
+  const tm = now.getMonth() + 1;
+  const td = now.getDate();
+  let months = (ty - sy) * 12 + (tm - sm);
+  if (td < sd) months -= 1;
+  if (months < 0) months = 0;
+  const years = Math.floor(months / 12);
+  const remMonths = months % 12;
+  const tenure =
+    years === 0 && remMonths === 0 ? "less than a month" :
+    years === 0 ? `${remMonths} month${remMonths === 1 ? "" : "s"}` :
+    years === 1 && remMonths === 0 ? "1 year" :
+    years === 1 ? `1 year, ${remMonths} month${remMonths === 1 ? "" : "s"}` :
+    remMonths === 0 ? `${years} years` :
+    `${years} years, ${remMonths} month${remMonths === 1 ? "" : "s"}`;
+
+  // Next anniversary: "1 year on May 18" (years = full years + 1 if
+  // the anniversary has not yet landed this year, else + 1 for next
+  // year's).
+  const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const anniversaryNotYetThisYear = tm < sm || (tm === sm && td < sd);
+  const nextYears = anniversaryNotYetThisYear ? (ty - sy) : (ty - sy + 1);
+  const nextLabel =
+    nextYears === 1 ? "1 year" :
+    `${nextYears} years`;
+  const nextAnniv = `${nextLabel} on ${MONTHS[sm - 1]} ${sd}`;
+
+  return `${dateStr} · ${tenure} · ${nextAnniv}`;
+}
+
 export async function loadPerson(
   sb: SupabaseClient,
   viewer: Viewer,
@@ -216,15 +283,19 @@ export async function loadPerson(
   if (q.error || !q.data) return null;
   const row = q.data as PeopleRow;
 
-  // Account for region + name display.
+  // Account for region + name display + city/state.
   const accQ = await sb
     .from("accounts")
-    .select("team_key, name, region")
+    .select("team_key, name, region, city, state")
     .eq("team_key", row.account_key)
     .maybeSingle();
   const account_region = (accQ.data?.region as string | null) ?? null;
+  const acctName = ((accQ.data?.name as string | null) ?? "").trim();
+  const city = ((accQ.data?.city as string | null) ?? "").trim();
+  const state = ((accQ.data?.state as string | null) ?? "").trim();
+  const city_state = city && state ? `${city}, ${state}` : city || row.account_key;
 
-  // Waiting for this person.
+  // Waiting for this person (full list - used by the In flight table).
   const wQ = await sb
     .from("submissions")
     .select("id, module, action_type, submitted_at, submitter_worker_id")
@@ -233,39 +304,78 @@ export async function loadPerson(
     .neq("module", "newhire")
     .order("submitted_at", { ascending: false });
   const wRows = wQ.data ?? [];
-  let waiting: WaitingItem | null = null;
   let waiting_count = 0;
+  const now = new Date();
+  const inFlightRows: InFlightRow[] = [];
+
   if (wRows.length > 0) {
     waiting_count = wRows.length;
-    const subNamesQ = wRows[0].submitter_worker_id
-      ? await sb.from("people").select("display_name").eq("worker_id", wRows[0].submitter_worker_id).maybeSingle()
-      : null;
-    waiting = {
-      id: wRows[0].id as number,
-      module: (wRows[0].module ?? "") as string,
-      action_type: (wRows[0].action_type as string | null) ?? null,
-      submitted_at: (wRows[0].submitted_at ?? "") as string,
-      submitter_worker_id: (wRows[0].submitter_worker_id as string | null) ?? null,
-      submitter_name: (subNamesQ?.data?.display_name as string | null) ?? null,
-    };
+    // Resolve submitter names once.
+    const subIds = Array.from(new Set(wRows.map((r) => r.submitter_worker_id).filter(Boolean))) as string[];
+    const subNames = new Map<string, string>();
+    if (subIds.length > 0) {
+      const sQ = await sb.from("people").select("worker_id, display_name").in("worker_id", subIds);
+      if (!sQ.error) for (const s of sQ.data ?? []) subNames.set(s.worker_id, s.display_name ?? "");
+    }
+    for (const r of wRows) {
+      const d = daysSince((r.submitted_at ?? "") as string, now);
+      inFlightRows.push({
+        id: r.id as number,
+        kind: kindFromModule(r.module as string | null),
+        label: labelForWaiting(r.module as string | null, r.action_type as string | null),
+        submitter_name: subNames.get((r.submitter_worker_id as string) ?? "") ?? null,
+        sent_short: fmtShort((r.submitted_at ?? "") as string),
+        wait_days: fmtDaysWaiting((r.submitted_at ?? "") as string, now),
+        late: d >= LATE_DAYS,
+      });
+    }
   }
 
   // Manager name (pin 4).
   const manager_name = await resolveManagerName(sb, row.manager_worker_id);
 
-  // Tenure strings.
+  // Tenure strings (T2 compat + T2.2 one-liner).
   const t = tenureStrings(row.start_date);
+  const started_line = startedOneLine(row.start_date);
 
-  // History + visibility.
-  const now = new Date();
+  // History + visibility. T2.2: In flight uses the SAME visibility rule.
   const hist = await visibleHistory(sb, viewer, row, now.getFullYear());
+  const inFlightVisible = hist.visible;
+
+  // T2.2.1 (2026-11-12). Restricted-viewer notes: one short sentence
+  // per pending request. Rendered instead of the In flight rows when
+  // the viewer may not open the request (R-PP54). State only - no
+  // amounts, no notes, no other fields.
+  //
+  // Sender fallback: when submitter_name is unknown, read "sent by
+  // someone" rather than leaking a worker_id or empty " by ,".
+  const inFlightNotes: string[] =
+    inFlightVisible || inFlightRows.length === 0
+      ? []
+      : inFlightRows.map((r) => {
+          const sender = r.submitter_name && r.submitter_name.trim()
+            ? r.submitter_name
+            : "someone";
+          return `${r.label} sent by ${sender}, waiting ${r.wait_days}. Only the sender, their manager chain, HR and finance can open it.`;
+        });
+
+  // Eyebrow, title suffix, role/site display strings for the card
+  // chrome (T2.2 render shape).
+  const eyebrow = acctName || row.account_key;
+  const title_suffix = row.worker_id === viewer.worker_id ? " (you)" : "";
+  const roleSuffix = row.is_site_leader
+    ? " · site leader"
+    : row.is_regional_director
+      ? " · regional director"
+      : "";
+  const role_display = ((row.title ?? "").trim() || "No role") + roleSuffix;
+  const site_display = (acctName || row.account_key) + " · " + city_state;
 
   return {
     row,
     person: toCardPerson({
       row,
       account_region,
-      waiting,
       waiting_count,
       manager_name,
       started_full: t.started_full,
@@ -273,6 +383,15 @@ export async function loadPerson(
       anniversary_line: t.anniversary_line,
       historyVisible: hist.visible,
       history: hist.rows,
+      eyebrow,
+      title_suffix,
+      role_display,
+      site_display,
+      started_line,
+      inFlightVisible,
+      inFlightCount: waiting_count,
+      inFlightRows: inFlightVisible ? inFlightRows : [],
+      inFlightNotes,
     }),
   };
 }

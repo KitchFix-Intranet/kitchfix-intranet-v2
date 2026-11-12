@@ -1,45 +1,46 @@
-// Four quick-action doors on My team. Inert in T2: the routes
-// they would lead to do not exist yet. Each carries aria-disabled
-// and the same short line "Coming with its own build step".
-// No navigation, no href to v1 (per prompt section 3).
+// Four quick actions on My team. Inert in T2.2: the routes they
+// would lead to do not exist yet. Each carries aria-disabled and
+// the render's one-line sub per action. No navigation, no href to
+// v1.
+//
+// T2.2 (2026-11-12). Render uses .kf-pe-qa row shape (not full-
+// height door cards). Icon left, text middle, chevron right.
 
-import { Inbox, UserPlus, ClipboardList, TriangleAlert } from "lucide-react";
+import { Inbox, UserPlus, ClipboardList, TriangleAlert, ChevronRight } from "lucide-react";
 
-type Door = {
+type Action = {
   key: string;
   label: string;
   one_line: string;
   Icon: typeof Inbox;
 };
 
-const DOORS: Door[] = [
-  { key: "inbox",     label: "Inbox",    one_line: "What's waiting on you.",           Icon: Inbox },
-  { key: "new-hire",  label: "New Hire", one_line: "Start someone who is not in the system.", Icon: UserPlus },
-  { key: "paf",       label: "PAF",      one_line: "Change pay, title, hours, home.",  Icon: ClipboardList },
-  { key: "incident",  label: "Incident", one_line: "Report something that happened.",  Icon: TriangleAlert },
+const ACTIONS: Action[] = [
+  { key: "inbox",    label: "Inbox",    one_line: "What you sent",            Icon: Inbox },
+  { key: "newhire",  label: "New Hire", one_line: "Bring someone on",         Icon: UserPlus },
+  { key: "paf",      label: "PAF",      one_line: "For someone on your team", Icon: ClipboardList },
+  { key: "incident", label: "Incident", one_line: "Report what happened",     Icon: TriangleAlert },
 ];
 
 export function QuickActions() {
   return (
-    <div className="kf-pe-doors" aria-label="Quick actions">
-      {DOORS.map((d) => (
-        <article
-          key={d.key}
-          className="kf-pe-door"
+    <div className="kf-pe-qas" aria-label="Quick actions">
+      {ACTIONS.map((a) => (
+        <span
+          key={a.key}
+          className="kf-pe-qa kf-pe-disabled"
           aria-disabled="true"
-          aria-label={`${d.label} - coming with its own build step`}
+          aria-label={`${a.label} - coming with its own build step`}
         >
-          <span className="kf-pe-door__icon" aria-hidden>
-            <d.Icon size={20} strokeWidth={1.5} />
+          <span className="kf-pe-qa__icon" aria-hidden>
+            <a.Icon size={22} strokeWidth={1.5} />
           </span>
-          <div className="kf-pe-door__body">
-            <h3>{d.label}</h3>
-            <p>{d.one_line}</p>
-          </div>
-          <div className="kf-pe-door__facts">
-            <span className="kf-pe-muted">Coming with its own build step</span>
-          </div>
-        </article>
+          <span className="kf-pe-qa__text">
+            <b>{a.label}</b>
+            <small>{a.one_line}</small>
+          </span>
+          <ChevronRight size={18} strokeWidth={1.5} aria-hidden className="kf-pe-qa__chev" />
+        </span>
       ))}
     </div>
   );

@@ -15,7 +15,15 @@
 // stripped. Every loader goes through them. Do not construct a
 // `RosterPerson` or `CardPerson` by hand.
 
-import type { PeopleRow, RosterPerson, CardPerson, WaitingItem, HistoryRow } from "./types";
+import type {
+  PeopleRow,
+  RosterPerson,
+  SelfRosterPerson,
+  CardPerson,
+  WaitingItem,
+  HistoryRow,
+  InFlightRow,
+} from "./types";
 
 // T2.1 fix 1 (2026-11-12). people.phone arrives as
 // "tel:+1-312-555-0100". Never trust the shape - strip a leading
@@ -49,13 +57,13 @@ export function initialsOf(display_name: string | null, work_email: string | nul
 
 // ROSTER mapper. The only way to produce a RosterPerson. Drops
 // personal_email + phone + start_date + birthday + manager_worker_id
-// before the row ever leaves the server. The compile-time shape
-// guarantees we cannot forget a field: the output type does not
-// carry the stripped columns at all.
+// before the row ever leaves the server. T2.2.2 (2026-11-13): no
+// request fields on the roster at all - only `waiting_count` -
+// so a non-self row cannot carry id, module, action_type,
+// submitted_at, submitter_* or label.
 export function toRosterPerson(
   row: PeopleRow,
   account_region: string | null,
-  waiting: WaitingItem | null,
   waiting_count: number,
 ): RosterPerson {
   return {
@@ -70,18 +78,34 @@ export function toRosterPerson(
     is_site_leader: !!row.is_site_leader,
     is_regional_director: !!row.is_regional_director,
     initials: initialsOf(row.display_name, row.work_email),
-    waiting,
     waiting_count,
+  };
+}
+
+// SELF mapper. Returns a SelfRosterPerson - the one roster-shape
+// payload where a WaitingItem may land. The viewer sees their OWN
+// pending label on the "You" card per the render; no other row
+// carries any request field.
+export function toSelfRosterPerson(
+  row: PeopleRow,
+  account_region: string | null,
+  waiting: WaitingItem | null,
+  waiting_count: number,
+): SelfRosterPerson {
+  return {
+    ...toRosterPerson(row, account_region, waiting_count),
+    waiting,
   };
 }
 
 // CARD mapper. Applies the R-PP10 contact rule explicitly. Call
 // sites pass the already-resolved manager name (pin 4) and the
-// already-computed tenure / history strings.
+// already-computed tenure / history / in-flight strings, plus the
+// render-shape chrome strings (eyebrow club name, title suffix,
+// role line, site line, started line).
 export interface ToCardInput {
   row: PeopleRow;
   account_region: string | null;
-  waiting: WaitingItem | null;
   waiting_count: number;
   manager_name: string | null;
   started_full: string | null;
@@ -89,11 +113,21 @@ export interface ToCardInput {
   anniversary_line: string | null;
   historyVisible: boolean;
   history: HistoryRow[];
+  // T2.2 (2026-11-12).
+  eyebrow: string;
+  title_suffix: string;
+  role_display: string;
+  site_display: string;
+  started_line: string | null;
+  inFlightVisible: boolean;
+  inFlightCount: number;
+  inFlightRows: InFlightRow[];
+  inFlightNotes: string[];
 }
 
 export function toCardPerson(input: ToCardInput): CardPerson {
   const { row } = input;
-  const roster = toRosterPerson(row, input.account_region, input.waiting, input.waiting_count);
+  const roster = toRosterPerson(row, input.account_region, input.waiting_count);
 
   // Email branch of R-PP10. Personal email is selected only when:
   //   (a) the person has no work email, AND
@@ -105,6 +139,17 @@ export function toCardPerson(input: ToCardInput): CardPerson {
   const showPersonalEmail =
     workEmail.length === 0 && !row.is_salaried && personalEmail.length > 0;
   const personal_email_for_display = showPersonalEmail ? personalEmail : null;
+
+  // T2.2: one selected email + the matching KV label. work_email
+  // wins; personal_email is picked only by the R-PP10 gate above.
+  // email_label is null when nothing can be shown.
+  const email_label: CardPerson["email_label"] =
+    workEmail ? "Work email" :
+    showPersonalEmail ? "Personal email" :
+    null;
+  const email_for_display =
+    workEmail ? workEmail :
+    personal_email_for_display;
 
   // Phone branch of R-PP10. For salaried: print it + power tel:.
   // For hourly: tel:/sms: hrefs only, never printed. normalisePhone
@@ -119,13 +164,24 @@ export function toCardPerson(input: ToCardInput): CardPerson {
     ...roster,
     showPersonalEmail,
     personal_email_for_display,
+    email_label,
+    email_for_display,
     phone_for_display,
     phone_href,
     manager_name: input.manager_name,
     started_full: input.started_full,
     tenure_line: input.tenure_line,
     anniversary_line: input.anniversary_line,
+    eyebrow: input.eyebrow,
+    title_suffix: input.title_suffix,
+    role_display: input.role_display,
+    site_display: input.site_display,
+    started_line: input.started_line,
     historyVisible: input.historyVisible,
     history: input.history,
+    inFlightVisible: input.inFlightVisible,
+    inFlightCount: input.inFlightCount,
+    inFlightRows: input.inFlightRows,
+    inFlightNotes: input.inFlightNotes,
   };
 }
