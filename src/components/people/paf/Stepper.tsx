@@ -1,23 +1,26 @@
 "use client";
 
-// Four-step strip: Who · What · Details · Check.
-// `step` is the active index (0..3). Steps before the active one
-// render `.is-done` (filled navy dot); the active one renders
-// `.is-current` (ringed dot). Mirrors the render's .kf-pe-stepper.
+// T4a.1 (2026-11-14). Four word pills on desktop (render's
+// .kf-pe-words). On phone (<=640) the CSS collapses the li's into a
+// four-segment thin bar plus one line of text ("Step N of 4 ·
+// <name>") via the ol's data-step attribute + ::after rule.
+//
+// Replaces T4a's dotted-timeline .kf-pe-stepper.
 
 const STEPS = ["Who", "What", "Details", "Check"] as const;
 
 export function Stepper({ step }: { step: 0 | 1 | 2 | 3 }) {
+  const label = STEPS[step] ?? "Who";
+  const dataStep = `Step ${step + 1} of ${STEPS.length} · ${label}`;
   return (
-    <ol className="kf-pe-stepper" aria-label="Progress">
-      {STEPS.map((label, i) => (
+    <ol className="kf-pe-words" aria-label="Progress" data-step={dataStep}>
+      {STEPS.map((s, i) => (
         <li
-          key={label}
+          key={s}
           className={i < step ? "is-done" : i === step ? "is-current" : ""}
           aria-current={i === step ? "step" : undefined}
         >
-          <span className="kf-pe-step__dot" aria-hidden />
-          <span className="kf-pe-step__label">{label}</span>
+          {s}
         </li>
       ))}
     </ol>

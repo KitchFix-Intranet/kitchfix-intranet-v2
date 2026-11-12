@@ -24,14 +24,17 @@ export function Field({
 }) {
   const errId = error && htmlFor ? `${htmlFor}-err` : undefined;
   const hintId = hint && htmlFor ? `${htmlFor}-hint` : undefined;
+  // T4a.1 (2026-11-14). Hint sits BELOW the control (render's
+  // order), not above it. T4a had it above so a long hint pushed
+  // the input down; the render keeps the hint tight to the control.
   return (
     <label className={`kf-pe-field${error ? " is-missing" : ""}`} htmlFor={htmlFor}>
       <span>
         {label}
         {optional ? <small className="kf-pe-field__hint">Optional</small> : null}
       </span>
-      {hint ? <span id={hintId} className="kf-pe-field__hint2">{hint}</span> : null}
       {children}
+      {hint ? <span id={hintId} className="kf-pe-field__hint2">{hint}</span> : null}
       {error ? <span id={errId} role="alert" className="kf-pe-field__err">{error}</span> : null}
     </label>
   );
