@@ -339,7 +339,10 @@ export function PanelIngredientZone({
   return (
     <section className="kf-ipanel__zone kf-ipanel__zone--ing" aria-label="Ingredient">
       <header className="kf-ipanel__zone-head">
-        <span className="kf-ipanel__zone-head-title">Ingredient &middot; {ingredient.name}</span>
+        <span className="kf-ipanel__zone-head-title">
+          Ingredient
+          <span className="kf-ipanel__zone-head-title-suffix"> &middot; {ingredient.name}</span>
+        </span>
         <span className="kf-ipanel__zone-head-sub">Changes here apply to every item linked to it</span>
       </header>
 

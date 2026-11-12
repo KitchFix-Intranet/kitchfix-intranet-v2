@@ -372,7 +372,10 @@
   border-bottom: 0;
   padding: 0;
 }
-.kf-ingp__dzone .kf-ipanel__zone-head { display: none; }
+/* Round 3 fix 2: zone head stays visible on this tab (section
+ * heading + sub line + navy rule); only the " · {name}" suffix is
+ * dropped since the h2 above the strip already prints it. */
+.kf-ingp__dzone .kf-ipanel__zone-head-title-suffix { display: none; }
 
 /* The zone's rows were tuned for a 150 px label column on a tinted
  * zone. On this tab they also use 150 label, but the sky-tint-only
@@ -389,8 +392,13 @@
   border: 0;
   border-left: 3px solid var(--sp-warn-strong);
   padding: var(--sp-sp-3) var(--sp-sp-4);
-  font-size: var(--sp-t-table);
+  /* Round 3 fix 5: attention body reads at the panel's label size
+   * (13 px, frame B). The shared primitive stays at --sp-t-table on
+   * the item panel via its own mount. */
+  font-size: var(--sp-t-label);
 }
+.kf-ingp__dzone--attn-wrap .kf-ipanel__attn-item-body,
+.kf-ingp__dzone--attn-wrap .kf-ingp__attn-list { font-size: var(--sp-t-label); }
 .kf-ingp__dzone--attn-wrap .kf-ipanel__attn-item--bad { border-left-color: var(--sp-block); }
 .kf-ingp__dzone--attn-wrap .kf-ipanel__attn-item--info { border-left-color: var(--sp-link); }
 .kf-ingp__dzone--attn-wrap .kf-ipanel__attn-item--good { border-left-color: var(--sp-good); }
@@ -404,7 +412,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--sp-sp-1);
-  font-size: var(--sp-t-table);
+  font-size: var(--sp-t-label);
   color: var(--sp-ink);
 }
 .kf-ingp__attn-list li b { font-weight: 800; }
@@ -437,11 +445,19 @@
   overflow: hidden;
   text-overflow: clip;
 }
+/* Round 3 fix 3: lens label sizes to its select's content (not the
+ * strip-cell's cross-axis). align-self: flex-start stops the strip-
+ * cell's default stretch; max-content width keeps the chrome tight
+ * around "Blended" / "Standard" / "Premium". An invisible ::before
+ * halo gives the 44 px click target the floor rule asks for while
+ * the visible chrome stays 28 px. */
 .kf-ingp__lens {
-  /* Compact line underneath the price. 28 px visible chrome with 8 px
-   * invisible padding top/bottom to keep the hit area at 44 px. */
+  position: relative;
+  align-self: flex-start;
   display: inline-flex;
   align-items: center;
+  width: max-content;
+  min-width: 0;
   height: 28px;
   padding: 0 var(--sp-sp-2);
   margin: var(--sp-sp-1) 0;
@@ -451,8 +467,11 @@
   font-family: var(--sp-ui);
   font-size: var(--sp-t-micro);
   color: var(--sp-ink);
-  /* 8 px invisible margin keeps the click target at 44 */
-  box-shadow: 0 0 0 8px transparent;
+}
+.kf-ingp__lens::before {
+  content: "";
+  position: absolute;
+  inset: -8px 0;
 }
 .kf-ingp__lens select {
   background: transparent;
@@ -462,6 +481,31 @@
   padding: 0;
   outline: none;
   cursor: pointer;
+  height: 100%;
+}
+
+/* Round 3 fix 4: phone strip is 2 x 2 with equal padding on all four
+ * cells. The base primitive carries first/last-child overrides for
+ * desktop; re-equalise them here. Scoped via .kf-ingp__dzone-strip
+ * so the item panel's own strip is unaffected. */
+@media (max-width: 860px) {
+  .kf-ingp__dzone-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .kf-ingp__dzone-strip .kf-ipanel__strip-cell,
+  .kf-ingp__dzone-strip .kf-ipanel__strip-cell:first-child,
+  .kf-ingp__dzone-strip .kf-ipanel__strip-cell:last-child {
+    padding: var(--sp-sp-3) var(--sp-sp-4);
+    border-right: 1px solid var(--sp-line-soft);
+    border-bottom: 1px solid var(--sp-line-soft);
+  }
+  .kf-ingp__dzone-strip .kf-ipanel__strip-cell:nth-child(2n),
+  .kf-ingp__dzone-strip .kf-ipanel__strip-cell:nth-child(2n):first-child {
+    border-right: 0;
+  }
+  .kf-ingp__dzone-strip .kf-ipanel__strip-cell:nth-last-child(-n+2) {
+    border-bottom: 0;
+  }
 }
 
 /* --- Linked-items table (fix 3) -----------------------------
