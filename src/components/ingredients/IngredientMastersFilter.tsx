@@ -45,7 +45,7 @@ import "./ingredients-tab.css";
 // IngredientMasters.tsx server rollup). "empty" is "no linked items";
 // kept here for the badge + filter chip, even though the price
 // sub-line already names coverage/spread.
-export type MasterIssue = "spread" | "coverage" | "mismatch" | "outlier" | "band" | "empty";
+export type MasterIssue = "spread" | "coverage" | "needs_measure" | "outlier" | "band" | "empty";
 
 export type LensStats = {
   avgPerBase: number | null;
@@ -64,7 +64,12 @@ export type MasterLinkedItem = {
   vendor: string;
   perBase: number | null;
   perBaseUom: string | null;
-  unitMismatch: boolean;
+  // M2 §2.1/2.6: per-item status + price-in-base-unit + which units
+  // the item's price reaches through the ingredient's measures.
+  // Replaces unitMismatch.
+  statusKind: "in_blend" | "check_it" | "needs_measure";
+  perBaseInIngUnit: number | null;
+  reach: string[];
   outlier: boolean;
   priceManualOverride: boolean;
   grade: string | null;
@@ -105,6 +110,13 @@ export type MasterRow = {
   eachMeasureQty: number | null;
   eachMeasureUom: string | null;
   eachMeasureSource: string | null;
+  // M2 §3.7 amendment 1: the Ingredients tab already mounts
+  // PanelIngredientZone off MasterRow at ~756, so measures + yield
+  // ride on the row - no new wrapper, no new /api/review/ingredient
+  // fetch for the basic panel open.
+  measures: Array<{ from_unit: string; qty: number; to_unit: string; source: string }>;
+  yieldPct: number | null;
+  yieldSource: string | null;
 };
 
 type SortMode = "spend" | "name" | "links" | "spread";
@@ -118,9 +130,10 @@ const SORT_LABEL: Record<SortMode, string> = {
 
 // N12 §R8 + §2b: badges for what the price sub-line cannot say.
 // "spread" / "coverage" are dropped - price sub-line names both.
-// "empty" renamed "No items"; "mismatch" renamed "Mixed units".
+// "empty" renamed "No items".
+// M2: "mismatch" renamed "needs_measure", badge "Needs a measure".
 const ISSUE_BADGE: Partial<Record<MasterIssue, string>> = {
-  mismatch: "Mixed units",
+  needs_measure: "Needs a measure",
   outlier: "Outlier",
   band: "Out of band",
   empty: "No items",
@@ -856,8 +869,8 @@ function IngredientAttention({ row, onDone }: { row: MasterRow; onDone: () => vo
       ),
     });
   }
-  if (row.issues.includes("mismatch")) {
-    const n = row.linkedItems.filter((li) => li.unitMismatch).length;
+  if (row.issues.includes("needs_measure")) {
+    const n = row.linkedItems.filter((li) => li.statusKind === "needs_measure").length;
     // N12 round 2 fix 15: suggested base-unit printed through uomLabel
     // so "floz" reads "fl oz", not the raw column form.
     const suggested = row.suggestedBaseUnit
@@ -932,10 +945,10 @@ function IngredientAttention({ row, onDone }: { row: MasterRow; onDone: () => vo
   // per-issue lines (frames B / C). Tone = the strongest tone across
   // the issues.
   const toneRank = (k: MasterIssue): number =>
-    k === "spread" || k === "outlier" ? 3 : k === "mismatch" ? 2 : 1;
+    k === "spread" || k === "outlier" ? 3 : k === "needs_measure" ? 2 : 1;
   const strongestKind = [...row.issues].sort((a, b) => toneRank(b) - toneRank(a))[0];
   const tone =
-    strongestKind === "spread" || strongestKind === "outlier" ? "bad" : strongestKind === "mismatch" ? "info" : "warn";
+    strongestKind === "spread" || strongestKind === "outlier" ? "bad" : strongestKind === "needs_measure" ? "info" : "warn";
 
   return (
     <div className="kf-ipanel__attn" aria-label="What needs attention">
@@ -1015,14 +1028,13 @@ function LinkedItems({
   row: MasterRow;
   onOpenItem: (id: string) => void;
 }) {
-  // N12 §R1 echo: lowest / highest tag among items priced in the
-  // ingredient's dimension (perBaseUom === baseUom, !unitMismatch,
-  // perBase != null). Need 2+; ties tag the first; no tag when
-  // min === max.
+  // N12 §R1 echo: lowest / highest tag among items IN THE BLEND
+  // (priced in the ingredient's dimension through M2's priceInUnit).
+  // Need 2+; ties tag the first; no tag when min === max.
   const tagMap = useMemo(() => {
     const m = new Map<string, "lowest" | "highest">();
     const inDim = row.linkedItems.filter(
-      (li) => li.perBase != null && !li.unitMismatch && li.perBaseUom === row.baseUom
+      (li) => li.perBase != null && li.statusKind !== "needs_measure" && li.perBaseUom === row.baseUom
     );
     if (inDim.length < 2) return m;
     const sorted = [...inDim].sort((a, b) => (a.perBase ?? 0) - (b.perBase ?? 0));
@@ -1070,7 +1082,7 @@ function LinkedItems({
                 </button>
                 <span className="kf-ingp__item-sub">
                   {li.vendor}
-                  {li.unitMismatch ? (
+                  {li.statusKind === "needs_measure" ? (
                     <>
                       {" · "}
                       <span className="kf-ingp__item-sub-warn">

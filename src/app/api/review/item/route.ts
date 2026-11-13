@@ -35,6 +35,8 @@ import {
   shapeIngredientEachFromMeasures,
   shapeItemEachFromCaseWeight,
 } from "@/lib/ingredients/measuresShape";
+import { priceInUnit } from "@/lib/ingredients/measures";
+import { canonicalFromBaseUnit } from "@/lib/ingredients/pack";
 
 export const dynamic = "force-dynamic";
 
@@ -383,11 +385,39 @@ export async function GET(req: NextRequest) {
       : null;
   const yieldSource = ingWithYield?.yield_source ?? null;
 
+  // M2 R1 amendment 3: item API calls priceInUnit so the panel strip
+  // + "How we got there" can read $ in the ingredient's base_unit
+  // from the one price function. Null when no ingredient, no price,
+  // or no reachable path.
+  let perBaseInIngUnit: number | null = null;
+  const pe2 = it.price_estimate ?? null;
+  const rawPerBase = pe2?.per_base != null ? Number(pe2.per_base) : null;
+  const rawBaseUom = pe2?.base_uom ?? null;
+  if (ingredient && rawPerBase != null && rawBaseUom) {
+    const targetUom = canonicalFromBaseUnit(ingredient.base_unit);
+    if (targetUom) {
+      const r = priceInUnit(
+        {
+          perBase: rawPerBase,
+          baseUom: rawBaseUom,
+          packQty: it.pack_qty,
+          packSize: it.pack_size,
+          packUom: it.pack_uom,
+          caseWeightLb,
+        },
+        targetUom,
+        { measures },
+      );
+      perBaseInIngUnit = r?.per ?? null;
+    }
+  }
+
   const itemOut = {
     ...item,
     eachMeasure: itemEachMeasure,
     caseWeightLb,
-  } as ReviewGroupItem & { caseWeightLb: number | null };
+    perBaseInIngUnit,
+  } as ReviewGroupItem & { caseWeightLb: number | null; perBaseInIngUnit: number | null };
   return NextResponse.json({
     item: itemOut,
     ingredient,

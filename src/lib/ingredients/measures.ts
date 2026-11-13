@@ -134,57 +134,165 @@ export function factor(
   return null;
 }
 
-// --- Library-level price helper ---------------------------------------
+// --- The one price function (M2 §2.1) ------------------------------------
 
-// Case price in a target unit. Mirrors the render's priceIn: when the
-// item has a case weight, that weight REPLACES the measure for this
-// item only (§2.2); otherwise the case's own pack (amount + unit)
-// is the start of the conversion through the ingredient's measures.
+// What the case STATES wins; measures only fill what it does not state.
+// Kevin's ruling, M2 R1 amendment 2:
 //
-// `casePrice` is the whole-case dollars. Target total is the case's
-// size in the target unit; per-target = casePrice / total.
+//   count  is stated when pack_uom is count (EA/CT/PC/DZ) via
+//          pack_qty * pack_size (DZ: *12);
+//          OR when pack_qty > 1 and pack_size is in a weight or volume
+//          unit (count = pack_qty).
+//   weight is stated when pack_uom is a weight unit
+//          (pack_qty * pack_size, converted to LB).
+//   volume is stated when pack_uom is a volume unit
+//          (pack_qty * pack_size, converted to FLOZ).
+//   case_weight_lb, when set, REPLACES the weight for that item only;
+//          it does not change the item's stated count or volume.
 //
-// M1 R2 fix 2: caseWeightLb short-circuits the measure graph for this
-// item's price, which is why a count case with its own 10 lb weight
-// prices at casePrice / 10 regardless of the ingredient's count-to-
-// weight row.
-export function priceIn(
-  per: {
-    casePrice: number;
-    packAmt: number;
-    packUnit: string;
+// If the target's kind is stated, price = case price / total in target.
+// No measure involved.
+// Otherwise convert FROM a stated kind THROUGH the ingredient's
+// measures, trying weight -> volume -> count.
+// If pack fields are missing, fall back to per_base / factor(base_uom,
+// target) and ignore case weight.
+
+type StatedKind = "weight" | "volume" | "count";
+type Totals = Partial<Record<StatedKind, { qty: number; uom: string }>>;
+
+function statedTotals(
+  packQty: number | null,
+  packSize: number | null,
+  packUom: string | null,
+  caseWeightLb: number | null,
+): Totals {
+  const out: Totals = {};
+  const pu = (packUom ?? "").toUpperCase();
+  const pq = Number(packQty ?? NaN);
+  const ps = Number(packSize ?? NaN);
+  const havePack = pu && Number.isFinite(pq) && Number.isFinite(ps) && pq > 0 && ps > 0;
+  if (havePack) {
+    const dim = DIM_BY_UOM[pu];
+    if (dim === "count") {
+      const mult = pu === "DZ" ? 12 : 1;
+      out.count = { qty: pq * ps * mult, uom: "EA" };
+    } else if (dim === "weight") {
+      const totalLb = pq * ps * (TO_BASE[pu] ?? 0);
+      if (totalLb > 0) out.weight = { qty: totalLb, uom: "LB" };
+      if (pq > 1) out.count = { qty: pq, uom: "EA" };
+    } else if (dim === "volume") {
+      const totalFloz = pq * ps * (TO_BASE[pu] ?? 0);
+      if (totalFloz > 0) out.volume = { qty: totalFloz, uom: "FLOZ" };
+      if (pq > 1) out.count = { qty: pq, uom: "EA" };
+    }
+  }
+  if (caseWeightLb != null && Number.isFinite(caseWeightLb) && caseWeightLb > 0) {
+    out.weight = { qty: caseWeightLb, uom: "LB" };
+  }
+  return out;
+}
+
+// Case price derived from per-base + pack. casePrice = perBase * case
+// contents in baseUom. The common case has packUom same-dim as baseUom
+// (N6 convention: baseUom is the dim-base of packUom). When they
+// differ, same-dim factor() returns null and we return null -
+// cross-dim items use the fallback path in priceInUnit.
+function casePriceFromPerBase(
+  perBase: number,
+  baseUom: string,
+  packQty: number | null,
+  packSize: number | null,
+  packUom: string | null,
+): number | null {
+  const pu = (packUom ?? "").toUpperCase();
+  const bu = (baseUom ?? "").toUpperCase();
+  const pq = Number(packQty ?? NaN);
+  const ps = Number(packSize ?? NaN);
+  if (!pu || !bu || !Number.isFinite(pq) || !Number.isFinite(ps) || pq <= 0 || ps <= 0) return null;
+  if (DIM_BY_UOM[pu] !== DIM_BY_UOM[bu]) return null;
+  const ratio = TO_BASE[pu] / TO_BASE[bu];
+  if (!Number.isFinite(ratio) || ratio <= 0) return null;
+  const mult = pu === "DZ" ? 12 : 1;
+  const caseInBase = pq * ps * mult * ratio;
+  if (!(caseInBase > 0)) return null;
+  return perBase * caseInBase;
+}
+
+export function priceInUnit(
+  item: {
+    perBase: number;
+    baseUom: string;
+    packQty: number | null;
+    packSize: number | null;
+    packUom: string | null;
     caseWeightLb: number | null;
   },
   targetUom: string,
   m: MeasuresInput,
-): { per: number; total: number; via: string; conv: boolean } | null {
-  if (!Number.isFinite(per.casePrice) || per.casePrice <= 0) return null;
+): { per: number; via: string; stated: StatedKind | null } | null {
+  if (!Number.isFinite(item.perBase) || item.perBase <= 0) return null;
   const target = String(targetUom || "").toUpperCase();
-  let total: number;
-  let via: string;
-  let conv = false;
-  if (per.caseWeightLb != null && per.caseWeightLb > 0) {
-    const k = factor("LB", target, m);
+  const targetDim = DIM_BY_UOM[target];
+  if (!targetDim) return null;
+
+  const casePrice = casePriceFromPerBase(
+    item.perBase,
+    item.baseUom,
+    item.packQty,
+    item.packSize,
+    item.packUom,
+  );
+
+  // Fallback path: no pack fields (or cross-dim pack vs. base). Ignore
+  // case weight per the ruling.
+  if (casePrice == null) {
+    const k = factor(item.baseUom, target, m);
     if (k == null || !Number.isFinite(k) || k <= 0) return null;
-    total = per.caseWeightLb * k;
-    via = `This case weighs ${roundDisplay(per.caseWeightLb)} lb`;
-    conv = DIM_BY_UOM[target] !== "weight";
-  } else {
-    const pu = String(per.packUnit || "").toUpperCase();
-    if (!Number.isFinite(per.packAmt) || per.packAmt <= 0) return null;
-    const k = factor(pu, target, m);
-    if (k == null || !Number.isFinite(k) || k <= 0) return null;
-    total = per.packAmt * k;
-    via = `${roundDisplay(per.packAmt)} ${pu.toLowerCase()} in the case`;
-    conv = DIM_BY_UOM[pu] !== DIM_BY_UOM[target];
+    return { per: item.perBase / k, via: `${item.baseUom} to ${target}`, stated: null };
   }
-  if (!Number.isFinite(total) || total <= 0) return null;
-  return { per: per.casePrice / total, total, via, conv };
+
+  const totals = statedTotals(item.packQty, item.packSize, item.packUom, item.caseWeightLb);
+
+  // 1. Target kind stated → no measure involved.
+  const t = totals[targetDim as StatedKind];
+  if (t) {
+    const totalInTarget = t.qty / TO_BASE[target];
+    if (!(totalInTarget > 0)) return null;
+    return {
+      per: casePrice / totalInTarget,
+      via: viaSentence(targetDim as StatedKind, t.qty, item.caseWeightLb != null && targetDim === "weight"),
+      stated: targetDim as StatedKind,
+    };
+  }
+
+  // 2. Convert from a stated kind through the measures, in order
+  //    weight -> volume -> count.
+  for (const kind of ["weight", "volume", "count"] as const) {
+    const s = totals[kind];
+    if (!s) continue;
+    const k = factor(s.uom, target, m);
+    if (k == null || !Number.isFinite(k) || k <= 0) continue;
+    const totalInTarget = s.qty * k;
+    if (!(totalInTarget > 0)) continue;
+    return {
+      per: casePrice / totalInTarget,
+      via: `${s.qty} ${s.uom.toLowerCase()} in the case, through a measure to ${target.toLowerCase()}`,
+      stated: kind,
+    };
+  }
+
+  return null;
 }
 
-function roundDisplay(n: number): string {
-  const r = Math.round(n * 100) / 100;
-  return Number.isInteger(r) ? String(r) : String(r);
+function viaSentence(kind: StatedKind, qty: number, viaCaseWeight: boolean): string {
+  const q = Math.round(qty * 1000) / 1000;
+  if (kind === "weight") {
+    return viaCaseWeight
+      ? `This case weighs ${q} lb`
+      : `${q} lb in the case`;
+  }
+  if (kind === "volume") return `${q} fl oz in the case`;
+  return `${q} each in the case`;
 }
 
 // --- Reach -----------------------------------------------------------------

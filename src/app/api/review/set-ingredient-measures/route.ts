@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireOwnerApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
-import { factor, rejectReason, type Measure, type MeasureSource } from "@/lib/ingredients/measures";
+import { priceInUnit, rejectReason, type Measure, type MeasureSource } from "@/lib/ingredients/measures";
 import { isMeasuresWorld, readMeasuresForIngredient } from "@/lib/ingredients/measuresRead";
+import { canonicalFromBaseUnit } from "@/lib/ingredients/pack";
 
 export const dynamic = "force-dynamic";
 
@@ -53,15 +54,13 @@ function parseMeasure(raw: IncomingMeasure): { ok: true; m: Measure } | { ok: fa
   };
 }
 
-// M1 R2 fix 3: how many items' price-in-the-INGREDIENT's-base-unit
-// moves between the current measures and the proposed set. Items
-// whose base_uom is same-kind as the ingredient's base_unit use the
-// built-in same-dim path and never move; items with their own
-// case_weight_lb bypass the ingredient measure and never move. Only
-// cross-dim items without a case weight move when the measures graph
-// changes. For Tomatoes, Roma (per-lb ingredient) with a count-to-
-// weight measure: the measure moves count cases without case_weight_lb
-// and leaves weight cases + case-weighted items alone.
+// M2 R1 amendment 3: dry-run now calls priceInUnit, the one price
+// function. For each linked item, compute price-in-base_unit with
+// the old measures and with the proposed ones; count items where
+// the number moves. Items whose case states the target kind (or
+// whose case_weight_lb replaces the weight for them) do not move
+// because priceInUnit does not consult measures when the target's
+// kind is already stated.
 async function computeDryRun(
   supa: ReturnType<typeof serviceClient>,
   ingredientId: string,
@@ -75,10 +74,11 @@ async function computeDryRun(
     .maybeSingle();
   const baseUnit = (ing as { base_unit: string | null } | null)?.base_unit ?? null;
   if (!baseUnit) return { items: 0 };
-  const targetUom = baseUnit.toUpperCase() === "EACH" ? "EA" : baseUnit.toUpperCase();
+  const targetUom = canonicalFromBaseUnit(baseUnit);
+  if (!targetUom) return { items: 0 };
   const { data: items } = await supa
     .from("pr_vendor_items")
-    .select("id,price_estimate,case_weight_lb")
+    .select("id,price_estimate,case_weight_lb,pack_qty,pack_size,pack_uom")
     .eq("ingredient_id", ingredientId);
   if (!items || items.length === 0) return { items: 0 };
   let changed = 0;
@@ -86,17 +86,26 @@ async function computeDryRun(
     const r = row as {
       price_estimate: { per_base?: number; base_uom?: string } | null;
       case_weight_lb: number | null;
+      pack_qty: number | null;
+      pack_size: number | null;
+      pack_uom: string | null;
     };
-    // case_weight_lb bypasses the ingredient measure.
-    if (r.case_weight_lb != null && Number(r.case_weight_lb) > 0) continue;
     const pe = r.price_estimate;
     const perBase = pe?.per_base != null ? Number(pe.per_base) : null;
     const baseUom = pe?.base_uom ?? null;
     if (perBase == null || !baseUom) continue;
-    const before = factor(baseUom, targetUom, { measures: beforeMeasures });
-    const after = factor(baseUom, targetUom, { measures: afterMeasures });
-    const beforeVal = before != null ? perBase / before : null;
-    const afterVal = after != null ? perBase / after : null;
+    const input = {
+      perBase,
+      baseUom,
+      packQty: r.pack_qty,
+      packSize: r.pack_size,
+      packUom: r.pack_uom,
+      caseWeightLb: r.case_weight_lb,
+    };
+    const before = priceInUnit(input, targetUom, { measures: beforeMeasures });
+    const after = priceInUnit(input, targetUom, { measures: afterMeasures });
+    const beforeVal = before?.per ?? null;
+    const afterVal = after?.per ?? null;
     if (beforeVal !== afterVal) changed += 1;
   }
   return { items: changed };
