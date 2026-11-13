@@ -82,7 +82,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: upErr.message }, { status: 400 });
   }
 
-  await supa.from("pr_events").insert({
+  const { error: evErr } = await supa.from("pr_events").insert({
     entity_type: "vendor_item",
     entity_id: itemId,
     kind: "vendor_item_case_weight_set",
@@ -90,6 +90,7 @@ export async function POST(req: NextRequest) {
     after: { case_weight_lb: caseWeightLb },
     actor: actorEmail,
   });
+  if (evErr) return NextResponse.json({ error: evErr.message }, { status: 400 });
 
   return NextResponse.json({ ok: true, caseWeightLb });
 }

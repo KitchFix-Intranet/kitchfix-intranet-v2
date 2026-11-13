@@ -87,17 +87,37 @@ export async function POST(req: NextRequest) {
   try {
     const client = serviceClient();
 
-    // M1 amendment 3: before the write, remember which count-to-X row
-    // we'll be replacing/removing in the measures table (if 0019 is
-    // applied). The dim comes from the OLD uom when clearing, the NEW
-    // uom when setting.
+    // M1 R2 fix 4: in the measures world the new-shape write goes
+    // FIRST. If it fails, the legacy columns are not touched and the
+    // user sees the real error. If the legacy write then fails, the
+    // half-written state is: pr_ingredient_measures has the new row;
+    // pr_ingredients.each_measure_* is stale. The next successful
+    // save through this route repairs it (both writes re-run together
+    // in order).
+    const measuresWorld = await isMeasuresWorld(client);
+
+    // Which count-to-X row is this write governing? When setting, the
+    // new uom's dim; when clearing, the OLD uom's dim read from the
+    // row. Decided BEFORE any write so the new-shape list can be built.
     let dualTargetDim: "weight" | "volume" | null = null;
     if (qty != null && uom) {
       const d = DIM_BY_UOM[uom];
       if (d === "weight" || d === "volume") dualTargetDim = d;
+    } else if (measuresWorld) {
+      // Clearing in measures-world: read from the measures table (the
+      // source of truth now). Null when no count-to-X row exists.
+      const existing = await readMeasuresForIngredient(client, ingredientId);
+      for (const m of existing) {
+        const fd = DIM_BY_UOM[m.from_unit.toUpperCase()];
+        const td = DIM_BY_UOM[m.to_unit.toUpperCase()];
+        if (fd === "count" && (td === "weight" || td === "volume")) {
+          dualTargetDim = td;
+          break;
+        }
+      }
     } else {
-      // Clearing. Read the current stored uom so we know which row to
-      // remove from pr_ingredient_measures. Null if there was none.
+      // Pre-0019 clearing. Read the legacy column so legacy clear is
+      // still exercised correctly.
       const { data: pre } = await client
         .from("pr_ingredients")
         .select("each_measure_uom")
@@ -110,26 +130,9 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const result = await setIngredientEachMeasure(client, {
-      ingredientId,
-      qty,
-      uom,
-      source,
-      actorEmail: gate.email,
-    });
-    if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
-
-    // Dual-write to pr_ingredient_measures when the table exists
-    // (amendment 3). Before 0019 the table is absent and nothing more
-    // happens: the route behaves exactly as today. After 0019 the
-    // ingredient's count-to-weight or count-to-volume row is replaced
-    // (set) or removed (clear), with any volume-to-weight row left
-    // alone.
-    if (await isMeasuresWorld(client)) {
+    // 1. In measures-world: new-shape write via rpc FIRST.
+    if (measuresWorld) {
       const existing = await readMeasuresForIngredient(client, ingredientId);
-      // Keep every row EXCEPT the one count-to-<target> row we're
-      // governing. When dualTargetDim is null (clearing with no prior
-      // dim stored), leave the measures list alone.
       const kept: Measure[] = dualTargetDim
         ? existing.filter((m) => {
             const fd = DIM_BY_UOM[m.from_unit.toUpperCase()];
@@ -146,7 +149,6 @@ export async function POST(req: NextRequest) {
           source: ((source ?? "estimate") as MeasureSource),
         });
       }
-      // No-op guard: if the list is byte-identical to existing, skip.
       const sameList =
         existing.length === nextMeasures.length &&
         existing.every((e, i) => {
@@ -165,13 +167,25 @@ export async function POST(req: NextRequest) {
           p_actor: gate.email,
         });
         if (rpcErr) {
-          // Legacy write already landed; surface the measures-side
-          // failure without a rollback (the legacy columns remain the
-          // backstop while 0019 is still in flight).
-          return NextResponse.json({ ok: true, measuresWarning: rpcErr.message });
+          // New-shape write failed; the legacy columns stay unchanged
+          // on purpose so the system still agrees with itself.
+          return NextResponse.json({ error: rpcErr.message }, { status: 400 });
         }
       }
     }
+
+    // 2. Legacy columns (also pre-0019's only write). If this fails
+    // after a successful measures write, the ingredient reads new
+    // numbers via the shaped payload but the legacy columns are
+    // stale. The next successful save repairs both.
+    const result = await setIngredientEachMeasure(client, {
+      ingredientId,
+      qty,
+      uom,
+      source,
+      actorEmail: gate.email,
+    });
+    if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
 
     return NextResponse.json({ ok: true });
   } catch (e) {

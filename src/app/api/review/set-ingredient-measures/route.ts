@@ -3,7 +3,6 @@ import { requireOwnerApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
 import { factor, rejectReason, type Measure, type MeasureSource } from "@/lib/ingredients/measures";
 import { isMeasuresWorld, readMeasuresForIngredient } from "@/lib/ingredients/measuresRead";
-import { DIM_BY_UOM } from "@/lib/ingredients/pack";
 
 export const dynamic = "force-dynamic";
 
@@ -54,36 +53,48 @@ function parseMeasure(raw: IncomingMeasure): { ok: true; m: Measure } | { ok: fa
   };
 }
 
-type DryRunBefore = { id: string; perBase: number | null; baseUom: string | null };
-
-// For the dry-run response: how many items' price-per-base-unit would
-// change if these measures replaced the current set. The display per
-// a target unit is a function of perBase + baseUom + measures; same
-// perBase + different measures => different displayed $/target.
+// M1 R2 fix 3: how many items' price-in-the-INGREDIENT's-base-unit
+// moves between the current measures and the proposed set. Items
+// whose base_uom is same-kind as the ingredient's base_unit use the
+// built-in same-dim path and never move; items with their own
+// case_weight_lb bypass the ingredient measure and never move. Only
+// cross-dim items without a case weight move when the measures graph
+// changes. For Tomatoes, Roma (per-lb ingredient) with a count-to-
+// weight measure: the measure moves count cases without case_weight_lb
+// and leaves weight cases + case-weighted items alone.
 async function computeDryRun(
   supa: ReturnType<typeof serviceClient>,
   ingredientId: string,
   afterMeasures: Measure[],
   beforeMeasures: Measure[],
 ): Promise<{ items: number }> {
+  const { data: ing } = await supa
+    .from("pr_ingredients")
+    .select("base_unit")
+    .eq("id", ingredientId)
+    .maybeSingle();
+  const baseUnit = (ing as { base_unit: string | null } | null)?.base_unit ?? null;
+  if (!baseUnit) return { items: 0 };
+  const targetUom = baseUnit.toUpperCase() === "EACH" ? "EA" : baseUnit.toUpperCase();
   const { data: items } = await supa
     .from("pr_vendor_items")
-    .select("id,price_estimate")
+    .select("id,price_estimate,case_weight_lb")
     .eq("ingredient_id", ingredientId);
   if (!items || items.length === 0) return { items: 0 };
   let changed = 0;
   for (const row of items) {
-    const pe = (row as { price_estimate: { per_base?: number; base_uom?: string } | null }).price_estimate;
+    const r = row as {
+      price_estimate: { per_base?: number; base_uom?: string } | null;
+      case_weight_lb: number | null;
+    };
+    // case_weight_lb bypasses the ingredient measure.
+    if (r.case_weight_lb != null && Number(r.case_weight_lb) > 0) continue;
+    const pe = r.price_estimate;
     const perBase = pe?.per_base != null ? Number(pe.per_base) : null;
     const baseUom = pe?.base_uom ?? null;
     if (perBase == null || !baseUom) continue;
-    const dim = DIM_BY_UOM[baseUom.toUpperCase()];
-    if (!dim) continue;
-    const dimBase = dim === "weight" ? "LB" : dim === "volume" ? "FLOZ" : "EA";
-    // Compare $/dim-base before vs after. If the measures graph changes
-    // the conversion path, the number moves.
-    const before = factor(baseUom, dimBase, { measures: beforeMeasures });
-    const after = factor(baseUom, dimBase, { measures: afterMeasures });
+    const before = factor(baseUom, targetUom, { measures: beforeMeasures });
+    const after = factor(baseUom, targetUom, { measures: afterMeasures });
     const beforeVal = before != null ? perBase / before : null;
     const afterVal = after != null ? perBase / after : null;
     if (beforeVal !== afterVal) changed += 1;

@@ -31,6 +31,10 @@ import {
   readMeasuresForIngredient,
   legacyEachMeasureToMeasures,
 } from "@/lib/ingredients/measuresRead";
+import {
+  shapeIngredientEachFromMeasures,
+  shapeItemEachFromCaseWeight,
+} from "@/lib/ingredients/measuresShape";
 
 export const dynamic = "force-dynamic";
 
@@ -318,23 +322,33 @@ export async function GET(req: NextRequest) {
     foodReason: it.food_reason,
   };
 
-  const ingredient = (ingredientRes.data as ReviewCardIngredient | null) ?? null;
+  const rawIngredient = (ingredientRes.data as ReviewCardIngredient | null) ?? null;
   const parents = (parentsRes.data ?? []) as ReviewCardIngredient[];
 
-  // M1 amendment 4: one world per request. If pr_ingredient_measures
-  // is available, the measures column is the sole source of the
-  // ingredient's bridge list AND pr_vendor_items.case_weight_lb is the
-  // only item-level override. If not, fall back to the legacy
-  // each_measure_* columns on the ingredient row.
+  // M1 R2 fix 1 + amendment 4: one world per request. In measures-
+  // world, rewrite the LEGACY-SHAPED FIELDS downstream readers feed
+  // into deriveRecipePrice (ingredient.each_measure_* and
+  // item.eachMeasure) so the display pipeline sees the new numbers.
   const newWorld = await isMeasuresWorld(client);
   let measures: ReturnType<typeof legacyEachMeasureToMeasures> = [];
   let caseWeightLb: number | null = null;
+  let ingredient: ReviewCardIngredient | null = rawIngredient;
+  let itemEachMeasure: { qty: number; uom: string } | null = item.eachMeasure;
   if (newWorld) {
-    if (ingredient) {
-      measures = await readMeasuresForIngredient(client, ingredient.id);
+    if (rawIngredient) {
+      measures = await readMeasuresForIngredient(client, rawIngredient.id);
+      // Overwrite the legacy triple so deriveRecipePrice reads the
+      // new world's count-to-X row even though its input shape is
+      // unchanged.
+      const shaped = shapeIngredientEachFromMeasures(measures);
+      ingredient = {
+        ...rawIngredient,
+        each_measure_qty: shaped.qty,
+        each_measure_uom: shaped.uom,
+        each_measure_source: shaped.source,
+      };
     }
-    // case_weight_lb column lands in the same migration as the
-    // measures table; one SELECT at this point is safe.
+    // case_weight_lb + the item's eachMeasure derivation from it.
     const { data: cwRow } = await client
       .from("pr_vendor_items")
       .select("case_weight_lb")
@@ -342,11 +356,20 @@ export async function GET(req: NextRequest) {
       .maybeSingle();
     const raw = (cwRow as { case_weight_lb: number | null } | null)?.case_weight_lb ?? null;
     caseWeightLb = raw == null ? null : Number(raw);
-  } else if (ingredient) {
+    // In measures-world, the item's legacy each_measure columns are
+    // NOT read. eachMeasure derives from case_weight_lb when the pack
+    // is count-based; null otherwise.
+    itemEachMeasure = shapeItemEachFromCaseWeight(
+      caseWeightLb,
+      it.pack_qty,
+      it.pack_size,
+      it.pack_uom,
+    );
+  } else if (rawIngredient) {
     measures = legacyEachMeasureToMeasures(
-      ingredient.each_measure_qty,
-      ingredient.each_measure_uom,
-      ingredient.each_measure_source,
+      rawIngredient.each_measure_qty,
+      rawIngredient.each_measure_uom,
+      rawIngredient.each_measure_source,
     );
   }
   const ingWithYield = ingredient as (ReviewCardIngredient & { yield_pct?: number | null; yield_source?: string | null }) | null;
@@ -356,11 +379,11 @@ export async function GET(req: NextRequest) {
       : null;
   const yieldSource = ingWithYield?.yield_source ?? null;
 
-  // The item payload gains caseWeightLb; the embedded ingredient's
-  // measures + yield ride at the top of the response so a reader does
-  // not have to merge two shapes. Legacy fields stay for every panel
-  // that still reads them.
-  const itemOut = { ...item, caseWeightLb } as ReviewGroupItem & { caseWeightLb: number | null };
+  const itemOut = {
+    ...item,
+    eachMeasure: itemEachMeasure,
+    caseWeightLb,
+  } as ReviewGroupItem & { caseWeightLb: number | null };
   return NextResponse.json({
     item: itemOut,
     ingredient,

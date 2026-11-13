@@ -7,6 +7,8 @@
 import { serviceClient } from "@/lib/supabase/service";
 import { COUNTABLE_OBSERVATIONS_VIEW, applyCountableFilter } from "@/lib/ingredients/countability";
 import { categoryForParent } from "@/lib/ingredients/categories";
+import { isMeasuresWorld, readMeasuresFor } from "@/lib/ingredients/measuresRead";
+import { shapeIngredientEachFromMeasures, shapeItemEachFromCaseWeight } from "@/lib/ingredients/measuresShape";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { Tabs } from "./Tabs";
 import { IdentBand } from "@/components/ui/IdentBand";
@@ -70,6 +72,8 @@ type ProposedItem = {
   // N6: the item's own each measure override. Nulls for most rows.
   each_measure_qty: number | null;
   each_measure_uom: string | null;
+  // M1 R2 fix 1: optional so the SELECT can omit it pre-0019.
+  case_weight_lb?: number | null;
 };
 
 type Ingredient = {
@@ -132,24 +136,35 @@ function parseReason(raw: string | null): { prefix: "ai" | "ai-new" | "ai-notfoo
 async function loadReview() {
   const client = serviceClient();
 
+  // M1 R2 fix 1: detect the migration world once for this request so
+  // the items SELECT can conditionally carry case_weight_lb, and the
+  // ingredient + item each-measure shapes derive from the new tables
+  // instead of the legacy columns.
+  const measuresWorld = await isMeasuresWorld(client);
+
   // Paginated read of every proposed row (PostgREST cap 1000). dollar-ordered.
+  // In measures-world we also carry case_weight_lb so the item's eachMeasure
+  // can be derived from it. Pre-0019 the column does not exist; we omit it.
+  const ITEM_SELECT = measuresWorld
+    ? "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_qty,pack_size,pack_uom,pack_state,pack_override,pack_note,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen,flagged,flag_note,flagged_by,flagged_at,price_estimate,grade,each_measure_qty,each_measure_uom,case_weight_lb"
+    : "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_qty,pack_size,pack_uom,pack_state,pack_override,pack_note,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen,flagged,flag_note,flagged_by,flagged_at,price_estimate,grade,each_measure_qty,each_measure_uom";
   const items: ProposedItem[] = [];
   const page = 1000;
   let from = 0;
   for (;;) {
     const { data, error } = await client
       .from("pr_vendor_items")
-      .select(
-        // N5: each_measure_qty,each_measure_uom added. Additive; no new query - this is
-        // the already-paginated main read of the review queue.
-        "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_qty,pack_size,pack_uom,pack_state,pack_override,pack_note,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen,flagged,flag_note,flagged_by,flagged_at,price_estimate,grade,each_measure_qty,each_measure_uom"
-      )
+      .select(ITEM_SELECT)
       .eq("link_status", "proposed")
       .in("status", ["active", "resale"])
       .order("usd_12m", { ascending: false, nullsFirst: false })
       .range(from, from + page - 1);
     if (error) throw error;
-    const chunk = (data ?? []) as ProposedItem[];
+    // Cast via unknown: the Supabase JS select-string type parser
+    // cannot statically type a template-literal SELECT and bails.
+    // The row shape is enforced by ProposedItem's optional
+    // case_weight_lb.
+    const chunk = (data ?? []) as unknown as ProposedItem[];
     items.push(...chunk);
     if (chunk.length < page) break;
     from += page;
@@ -177,6 +192,28 @@ async function loadReview() {
   ]);
   if (vendorsRes.error) throw vendorsRes.error;
   if (ingredientsRes.error) throw ingredientsRes.error;
+
+  // M1 R2 fix 1: in measures-world, batch-read every ingredient's
+  // measures ONCE and rewrite its legacy each_measure_* triple from
+  // the count-to-X row. The downstream builders at :399 + :528 read
+  // ingredient.each_measure_qty/uom via the ingredients list below;
+  // no per-row query.
+  const measuresByIngredient = measuresWorld
+    ? await readMeasuresFor(
+        client,
+        ((ingredientsRes.data ?? []) as Ingredient[]).map((r) => r.id),
+      )
+    : new Map<string, never>();
+  const ingredientsReshaped: Ingredient[] = ((ingredientsRes.data ?? []) as Ingredient[]).map((r) => {
+    if (!measuresWorld) return r;
+    const shaped = shapeIngredientEachFromMeasures(measuresByIngredient.get(r.id) ?? []);
+    return {
+      ...r,
+      each_measure_qty: shaped.qty,
+      each_measure_uom: shaped.uom,
+      each_measure_source: shaped.source,
+    };
+  });
 
   // Catalog enrichment: read pr_vendor_catalog in batches grouped by
   // vendor_id, keyed on item_number_norm. Only items with a non-null
@@ -260,7 +297,10 @@ async function loadReview() {
   }
 
   const vendors = (vendorsRes.data ?? []) as Vendor[];
-  const ingredients = (ingredientsRes.data ?? []) as Ingredient[];
+  // M1 R2 fix 1: use the reshaped list so downstream ingredient reads
+  // see the new-world each_measure_* triple (derived from
+  // pr_ingredient_measures) in measures-world, legacy columns pre-0019.
+  const ingredients = (ingredientsReshaped as unknown as Ingredient[]);
   const vendorNameById = new Map(vendors.map((v) => [v.id, v.name]));
   const ingredientById = new Map(ingredients.map((i) => [i.id, i]));
 
@@ -393,12 +433,22 @@ async function loadReview() {
           // Q2 §4: pack-note (evidence-strength phrase from the P1/P2
           // backfill). Pass through verbatim; null for most items.
           packNote: it.pack_note ?? null,
-          // N6: per-item each measure override. Null for most rows;
-          // when set it wins over the ingredient's measure in
-          // deriveRecipePrice.
-          eachMeasure: it.each_measure_qty != null && it.each_measure_uom
-            ? { qty: Number(it.each_measure_qty), uom: it.each_measure_uom }
-            : null,
+          // M1 R2 fix 1: in measures-world, the item's eachMeasure is
+          // derived from case_weight_lb when the pack is a count pack
+          // (count * weight_of_one = case_weight_lb). The item's own
+          // legacy each_measure columns are not read. Pre-0019 the
+          // column is absent and we fall back to the legacy columns
+          // unchanged.
+          eachMeasure: measuresWorld
+            ? shapeItemEachFromCaseWeight(
+                it.case_weight_lb ?? null,
+                it.pack_qty,
+                it.pack_size,
+                it.pack_uom,
+              )
+            : it.each_measure_qty != null && it.each_measure_uom
+              ? { qty: Number(it.each_measure_qty), uom: it.each_measure_uom }
+              : null,
         });
       }
       groups.set(key, g);
@@ -522,12 +572,22 @@ async function loadReview() {
           // Q2 §4: pack-note (evidence-strength phrase from the P1/P2
           // backfill). Pass through verbatim; null for most items.
           packNote: it.pack_note ?? null,
-          // N6: per-item each measure override. Null for most rows;
-          // when set it wins over the ingredient's measure in
-          // deriveRecipePrice.
-          eachMeasure: it.each_measure_qty != null && it.each_measure_uom
-            ? { qty: Number(it.each_measure_qty), uom: it.each_measure_uom }
-            : null,
+          // M1 R2 fix 1: in measures-world, the item's eachMeasure is
+          // derived from case_weight_lb when the pack is a count pack
+          // (count * weight_of_one = case_weight_lb). The item's own
+          // legacy each_measure columns are not read. Pre-0019 the
+          // column is absent and we fall back to the legacy columns
+          // unchanged.
+          eachMeasure: measuresWorld
+            ? shapeItemEachFromCaseWeight(
+                it.case_weight_lb ?? null,
+                it.pack_qty,
+                it.pack_size,
+                it.pack_uom,
+              )
+            : it.each_measure_qty != null && it.each_measure_uom
+              ? { qty: Number(it.each_measure_qty), uom: it.each_measure_uom }
+              : null,
         });
       }
       groups.set(key, g);

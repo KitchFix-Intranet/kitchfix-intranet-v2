@@ -12,7 +12,15 @@
 // (each-priced item -> per weight or volume), so no screen lights up
 // a new direction. deriveRecipePrice preserves that exact behaviour.
 
-import { DIM_BY_UOM, TO_BASE } from "./pack";
+import { DIM_BY_UOM, TO_BASE, WEIGHT_UOMS, VOLUME_UOMS } from "./pack";
+
+// M1 R2 fix 5: narrow vocabulary. The DB's pr_unit_dim() knows only EA
+// plus the four weight uoms plus the six volume uoms; anything else
+// (DZ / CT / PC / CAN10) maps to a null kind on the measure path. The
+// library must refuse those at the application boundary so the DB
+// constraint is not relied on to produce a sentence.
+const MEASURE_FROM_UNITS: ReadonlySet<string> = new Set<string>(["EA", ...VOLUME_UOMS]);
+const MEASURE_TO_UNITS: ReadonlySet<string> = new Set<string>([...WEIGHT_UOMS, ...VOLUME_UOMS]);
 
 // --- Types ---------------------------------------------------------------
 
@@ -126,28 +134,57 @@ export function factor(
   return null;
 }
 
-// --- Library-level price helper (for acceptance 1; no M1 screen uses it) ---
+// --- Library-level price helper ---------------------------------------
 
-// Convert a $/baseUom figure into $/targetUom through the measures.
-// Returns { per, via, conv } where `conv` flags a cross-dimension read.
+// Case price in a target unit. Mirrors the render's priceIn: when the
+// item has a case weight, that weight REPLACES the measure for this
+// item only (§2.2); otherwise the case's own pack (amount + unit)
+// is the start of the conversion through the ingredient's measures.
+//
+// `casePrice` is the whole-case dollars. Target total is the case's
+// size in the target unit; per-target = casePrice / total.
+//
+// M1 R2 fix 2: caseWeightLb short-circuits the measure graph for this
+// item's price, which is why a count case with its own 10 lb weight
+// prices at casePrice / 10 regardless of the ingredient's count-to-
+// weight row.
 export function priceIn(
-  per: { perBase: number; baseUom: string; caseWeightLb: number | null },
+  per: {
+    casePrice: number;
+    packAmt: number;
+    packUnit: string;
+    caseWeightLb: number | null;
+  },
   targetUom: string,
   m: MeasuresInput,
-): { per: number; via: string; conv: boolean } | null {
-  if (!Number.isFinite(per.perBase) || per.perBase <= 0) return null;
-  const baseU = String(per.baseUom || "").toUpperCase();
-  const tgtU = String(targetUom || "").toUpperCase();
-  const k = factor(baseU, tgtU, m);
-  if (k == null || !Number.isFinite(k) || k <= 0) return null;
-  const perTarget = per.perBase / k;
-  const fd = DIM_BY_UOM[baseU];
-  const td = DIM_BY_UOM[tgtU];
-  return {
-    per: perTarget,
-    via: `${baseU} to ${tgtU}`,
-    conv: fd !== td,
-  };
+): { per: number; total: number; via: string; conv: boolean } | null {
+  if (!Number.isFinite(per.casePrice) || per.casePrice <= 0) return null;
+  const target = String(targetUom || "").toUpperCase();
+  let total: number;
+  let via: string;
+  let conv = false;
+  if (per.caseWeightLb != null && per.caseWeightLb > 0) {
+    const k = factor("LB", target, m);
+    if (k == null || !Number.isFinite(k) || k <= 0) return null;
+    total = per.caseWeightLb * k;
+    via = `This case weighs ${roundDisplay(per.caseWeightLb)} lb`;
+    conv = DIM_BY_UOM[target] !== "weight";
+  } else {
+    const pu = String(per.packUnit || "").toUpperCase();
+    if (!Number.isFinite(per.packAmt) || per.packAmt <= 0) return null;
+    const k = factor(pu, target, m);
+    if (k == null || !Number.isFinite(k) || k <= 0) return null;
+    total = per.packAmt * k;
+    via = `${roundDisplay(per.packAmt)} ${pu.toLowerCase()} in the case`;
+    conv = DIM_BY_UOM[pu] !== DIM_BY_UOM[target];
+  }
+  if (!Number.isFinite(total) || total <= 0) return null;
+  return { per: per.casePrice / total, total, via, conv };
+}
+
+function roundDisplay(n: number): string {
+  const r = Math.round(n * 100) / 100;
+  return Number.isInteger(r) ? String(r) : String(r);
 }
 
 // --- Reach -----------------------------------------------------------------
@@ -218,6 +255,18 @@ export function rejectReason(
   const td = DIM_BY_UOM[to];
   if (!fd) return `from_unit ${from} is not a known unit`;
   if (!td) return `to_unit ${to} is not a known unit`;
+  // M1 R2 fix 5: narrow from/to vocabulary to what pr_unit_dim knows.
+  // DZ / CT / PC are count tokens the DB does not map on the measure
+  // path; CAN10 is pack-editor-only. Named count units (loaf, slice)
+  // are out of scope per prompt §2.1.
+  if (!MEASURE_FROM_UNITS.has(from)) {
+    const allowed = ["EA", ...VOLUME_UOMS].join(", ");
+    return `from_unit ${from} is not stored in a measure; from_unit must be one of ${allowed}`;
+  }
+  if (!MEASURE_TO_UNITS.has(to)) {
+    const allowed = [...WEIGHT_UOMS, ...VOLUME_UOMS].join(", ");
+    return `to_unit ${to} is not stored in a measure; to_unit must be one of ${allowed}`;
+  }
   if (fd === td) {
     return `${from} and ${to} are both ${fd} units; same-kind conversions are built in and are never stored as a measure`;
   }

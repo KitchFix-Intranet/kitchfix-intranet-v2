@@ -77,6 +77,13 @@ type LinkedItemRow = {
   // N6: per-item each measure override. Null for most rows.
   each_measure_qty: number | null;
   each_measure_uom: string | null;
+  // M1 R2 fix 1: optional on the type so pre-0019 the SELECT omits
+  // these columns; post-0019 the measures-world path derives the
+  // item's eachMeasure from case_weight_lb + the pack shape.
+  case_weight_lb?: number | null;
+  pack_qty?: number | null;
+  pack_size?: number | null;
+  pack_uom?: string | null;
 };
 
 // S3: median-based outlier exclusion for the master blend. Rule:
@@ -235,6 +242,8 @@ const LIVE_STATUSES: readonly string[] = ["active", "resale"];
 // DIM_BY_UOM / normUom still needed below for the item-dim-vs-master-dim
 // mismatch classification (an orthogonal use the item panel does not share).
 import { DIM_BY_UOM, BASE_BY_DIM, normUom, convertPer, canonicalFromBaseUnit } from "@/lib/ingredients/pack";
+import { isMeasuresWorld, readMeasuresFor } from "@/lib/ingredients/measuresRead";
+import { shapeIngredientEachFromMeasures, shapeItemEachFromCaseWeight } from "@/lib/ingredients/measuresShape";
 import { isPriceManualOverride } from "./itemTypes";
 
 // R2: this workbench powers two tabs. `mode="recipe"` is the Ingredients
@@ -260,31 +269,54 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
     .eq("resale", mode === "resale")
     .order("name");
   if (ingErr) throw ingErr;
-  const ingredients = (ingData ?? []) as Ingredient[];
+  const rawIngredients = (ingData ?? []) as Ingredient[];
+
+  // M1 R2 fix 1: detect the migration world once. In measures-world
+  // the item SELECT below also carries case_weight_lb + pack_qty +
+  // pack_size + pack_uom so the per-item eachMeasure shape can be
+  // derived without a second query.
+  const measuresWorld = await isMeasuresWorld(client);
 
   // Confirmed vendor items (paginated at 1000 - PostgREST db-max-rows cap).
+  const LINKED_SELECT = measuresWorld
+    ? "id,vendor_id,ingredient_id,name,usd_12m,price_estimate,pack_override,grade,each_measure_qty,each_measure_uom,case_weight_lb,pack_qty,pack_size,pack_uom"
+    : "id,vendor_id,ingredient_id,name,usd_12m,price_estimate,pack_override,grade,each_measure_qty,each_measure_uom";
   const linked: LinkedItemRow[] = [];
   const page = 1000;
   let from = 0;
   for (;;) {
     const { data, error } = await client
       .from("pr_vendor_items")
-      // N6: each_measure_qty + each_measure_uom. Linked-item lines go
-      // through deriveRecipePrice so the item's own measure shows next
-      // to its per-each. Row header figure still uses the ingredient's
-      // measure only (per go-message adjustment 2).
-      .select("id,vendor_id,ingredient_id,name,usd_12m,price_estimate,pack_override,grade,each_measure_qty,each_measure_uom")
+      .select(LINKED_SELECT)
       .eq("link_status", "confirmed")
       .in("status", LIVE_STATUSES) // B4: archived/not_food/duplicate/one_off never reach the rollup
       .not("ingredient_id", "is", null)
       .order("id", { ascending: true })
       .range(from, from + page - 1);
     if (error) throw error;
-    const chunk = (data ?? []) as LinkedItemRow[];
+    // Cast via unknown: Supabase JS select-string type parser cannot
+    // statically type a template-literal SELECT.
+    const chunk = (data ?? []) as unknown as LinkedItemRow[];
     linked.push(...chunk);
     if (chunk.length < page) break;
     from += page;
   }
+
+  // Reshape ingredients in measures-world: each_measure_* comes from
+  // the count-to-X row, not the legacy columns.
+  const measuresByIngredient = measuresWorld
+    ? await readMeasuresFor(client, rawIngredients.map((i) => i.id))
+    : new Map<string, never>();
+  const ingredients: Ingredient[] = rawIngredients.map((r) => {
+    if (!measuresWorld) return r;
+    const shaped = shapeIngredientEachFromMeasures(measuresByIngredient.get(r.id) ?? []);
+    return {
+      ...r,
+      each_measure_qty: shaped.qty,
+      each_measure_uom: shaped.uom,
+      each_measure_source: shaped.source,
+    };
+  });
 
   // Vendors (small, read once).
   const { data: vData } = await client.from("pr_vendors").select("id,name");
@@ -602,12 +634,19 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
           // Null is standard; see src/lib/ingredients/grade.ts.
           grade: it.grade ?? null,
           usd12m: Number(it.usd_12m ?? 0),
-          // N6: per-item each measure override. Linked-item lines use
-          // this directly via deriveRecipePrice; the row header figure
-          // keeps using only the ingredient's measure.
-          eachMeasure: it.each_measure_qty != null && it.each_measure_uom
-            ? { qty: Number(it.each_measure_qty), uom: it.each_measure_uom }
-            : null,
+          // M1 R2 fix 1: in measures-world derive from case_weight_lb
+          // on a count pack; legacy columns are not read. Pre-0019 the
+          // column is absent and we keep the legacy shape.
+          eachMeasure: measuresWorld
+            ? shapeItemEachFromCaseWeight(
+                it.case_weight_lb ?? null,
+                it.pack_qty ?? null,
+                it.pack_size ?? null,
+                it.pack_uom ?? null,
+              )
+            : it.each_measure_qty != null && it.each_measure_uom
+              ? { qty: Number(it.each_measure_qty), uom: it.each_measure_uom }
+              : null,
         };
       })
       .sort((a, b) => b.usd12m - a.usd12m);

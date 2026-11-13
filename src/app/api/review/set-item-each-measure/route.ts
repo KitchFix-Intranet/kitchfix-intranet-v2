@@ -3,6 +3,7 @@ import { requireOwnerApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
 import { setVendorItemEachMeasure } from "@/lib/reviewWrites";
 import { DIM_BY_UOM, TO_BASE } from "@/lib/ingredients/pack";
+import { isMeasuresWorld } from "@/lib/ingredients/measuresRead";
 
 // M1 amendment 3: count packs with a weight-each measure translate
 // directly into a case weight; migration 0019 populated the 7 existing
@@ -75,10 +76,8 @@ export async function POST(req: NextRequest) {
   try {
     const client = serviceClient();
 
-    // M1 amendment 3: read the item's pack shape now so the case
-    // weight dual-write can compute the right number after the legacy
-    // save lands. pack_qty + pack_size + pack_uom are stable enough
-    // to read once and reuse.
+    // Read the item's pack shape so the case_weight_lb dual-write can
+    // compute count * weight_of_one.
     const { data: pre } = await client
       .from("pr_vendor_items")
       .select("pack_qty,pack_size,pack_uom")
@@ -88,28 +87,17 @@ export async function POST(req: NextRequest) {
     const packSize = Number((pre as { pack_size: number | null } | null)?.pack_size ?? 1) || 1;
     const packUom = String((pre as { pack_uom: string | null } | null)?.pack_uom ?? "").toUpperCase();
 
-    const result = await setVendorItemEachMeasure(client, {
-      itemId,
-      qty,
-      uom,
-      actorEmail: gate.email,
-    });
-    if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
-
-    // Dual-write case_weight_lb on the item. Only fires when the pack
-    // is count-based and the measure is weight-based - the one shape
-    // migration 0019 populates (lines 4b). For every other shape the
-    // case_weight_lb column stays untouched; pricing falls back to the
-    // ingredient's measures (which cover count->volume and volume->
-    // weight bridges).
-    //
-    // Both worlds: pre-0019 the column does not exist and the update
-    // fails with 42703 (undefined_column). We catch that silently so
-    // the legacy write is still authoritative. Post-0019 the update
-    // lands and the number on the panel changes.
+    // M1 R2 fix 4: in measures-world the case_weight_lb write goes
+    // FIRST. If it fails, the legacy columns are not touched. If the
+    // legacy write then fails, the item reads new numbers via the
+    // shaped payload but each_measure_qty/uom are stale. The next
+    // successful save through this route repairs it.
+    const measuresWorld = await isMeasuresWorld(client);
     const dualFires =
+      measuresWorld &&
       COUNT_PACK_UOMS.has(packUom) &&
       (qty == null || (uom != null && WEIGHT_MEASURE_UOMS.has(uom)));
+
     if (dualFires) {
       let caseWeightLb: number | null = null;
       if (qty != null && uom != null) {
@@ -127,25 +115,32 @@ export async function POST(req: NextRequest) {
           case_weight_set_at: caseWeightLb == null ? null : nowIso,
         })
         .eq("id", itemId);
-      if (upErr) {
-        // Pre-0019 column absent: silent. Other errors: surface as a
-        // non-blocking warning so the legacy response stays ok.
-        const m = upErr.message?.toLowerCase() ?? "";
-        const isUndefinedColumn = m.includes("case_weight_lb") && m.includes("does not exist");
-        if (!isUndefinedColumn) {
-          return NextResponse.json({ ok: true, caseWeightWarning: upErr.message });
-        }
-      } else {
-        await client.from("pr_events").insert({
-          entity_type: "vendor_item",
-          entity_id: itemId,
-          kind: "vendor_item_case_weight_set",
-          before: null,
-          after: { case_weight_lb: caseWeightLb, derived_from: "each_measure" },
-          actor: gate.email,
-        });
-      }
+      if (upErr) return NextResponse.json({ error: upErr.message }, { status: 400 });
+
+      const { error: evErr } = await client.from("pr_events").insert({
+        entity_type: "vendor_item",
+        entity_id: itemId,
+        kind: "vendor_item_case_weight_set",
+        before: null,
+        after: { case_weight_lb: caseWeightLb, derived_from: "each_measure" },
+        actor: gate.email,
+      });
+      if (evErr) return NextResponse.json({ error: evErr.message }, { status: 400 });
     }
+    // For a volume measure or a non-count pack the case_weight_lb
+    // column stays untouched; pricing falls back to the ingredient's
+    // measures (volume-to-weight bridge). This is by design, not a
+    // silent omission: a 25-gal cask with a stored "one gal is 7.6 lb"
+    // ingredient-side measure prices through the ingredient path,
+    // which already composes the right number.
+
+    const result = await setVendorItemEachMeasure(client, {
+      itemId,
+      qty,
+      uom,
+      actorEmail: gate.email,
+    });
+    if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
 
     return NextResponse.json({ ok: true });
   } catch (e) {

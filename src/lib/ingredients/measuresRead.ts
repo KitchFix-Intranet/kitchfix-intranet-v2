@@ -26,8 +26,13 @@ function isUndefinedTable(err: { code?: string; message?: string | null } | null
 }
 
 // Does the measures table exist on this database? Single SELECT with
-// head:true + limit 1 so no row is transferred. The boolean is enough;
-// no row shape, no count.
+// head:true + limit 1 so no row is transferred. The boolean is enough.
+//
+// M1 R2 fix 4: only 42P01 (undefined_table) means "legacy world". Any
+// other error - permission, network, PostgREST schema cache miss -
+// throws and the route returns 500. Silent fallback would mean a
+// legitimate read failure gets written back as stale legacy values on
+// the next save; worse than a loud 500.
 export async function isMeasuresWorld(client: SupabaseClient): Promise<boolean> {
   const { error } = await client
     .from("pr_ingredient_measures")
@@ -35,13 +40,13 @@ export async function isMeasuresWorld(client: SupabaseClient): Promise<boolean> 
     .limit(1);
   if (!error) return true;
   if (isUndefinedTable(error)) return false;
-  // Any other error (permission, network) - treat as NOT-the-world so the
-  // route falls back to legacy columns rather than 500. The error itself
-  // is swallowed here; the caller has the data it needs either way.
-  return false;
+  throw new Error(`isMeasuresWorld: ${error.message ?? "unknown error"}`);
 }
 
 // Read the full measures list for one ingredient. Measures-world only.
+// Throws on any error (M1 R2 fix 4): returning [] would let set-each-
+// measure rebuild the ingredient's list from nothing and wipe a
+// volume-to-weight row on the next save.
 export async function readMeasuresForIngredient(
   client: SupabaseClient,
   ingredientId: string,
@@ -52,7 +57,7 @@ export async function readMeasuresForIngredient(
     .eq("ingredient_id", ingredientId)
     .order("from_dim", { ascending: true })
     .order("to_dim", { ascending: true });
-  if (error) return [];
+  if (error) throw new Error(`readMeasuresForIngredient(${ingredientId}): ${error.message}`);
   return (data ?? []).map((r) => ({
     from_unit: String((r as { from_unit: string }).from_unit).toUpperCase(),
     qty: Number((r as { qty: number }).qty),
@@ -62,7 +67,8 @@ export async function readMeasuresForIngredient(
 }
 
 // Batch read: one query across many ingredient ids. Keyed by
-// ingredient_id so callers can look up the subset they need.
+// ingredient_id so callers can look up the subset they need. Throws
+// on error (M1 R2 fix 4).
 export async function readMeasuresFor(
   client: SupabaseClient,
   ingredientIds: readonly string[],
@@ -73,7 +79,7 @@ export async function readMeasuresFor(
     .from("pr_ingredient_measures")
     .select("ingredient_id,from_unit,qty,to_unit,source")
     .in("ingredient_id", ingredientIds as string[]);
-  if (error) return out;
+  if (error) throw new Error(`readMeasuresFor: ${error.message}`);
   for (const row of data ?? []) {
     const r = row as {
       ingredient_id: string;

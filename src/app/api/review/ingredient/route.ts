@@ -22,6 +22,7 @@ import {
   readMeasuresForIngredient,
   legacyEachMeasureToMeasures,
 } from "@/lib/ingredients/measuresRead";
+import { shapeIngredientEachFromMeasures } from "@/lib/ingredients/measuresShape";
 
 export const dynamic = "force-dynamic";
 
@@ -59,21 +60,32 @@ export async function GET(req: NextRequest) {
   if (!ingRes.data) return NextResponse.json({ error: "Ingredient not found" }, { status: 404 });
   if (parentsRes.error) return NextResponse.json({ error: parentsRes.error.message }, { status: 500 });
 
-  const ingredient = ingRes.data as ReviewCardIngredient;
+  const rawIngredient = ingRes.data as ReviewCardIngredient;
   const parents = (parentsRes.data ?? []) as ReviewCardIngredient[];
 
-  // M1 amendment 4: one world per request. If pr_ingredient_measures
-  // exists, the new shape is the only source for every ingredient;
-  // otherwise fall back to the legacy each_measure_* columns on the
-  // ingredient row we already read.
+  // M1 R2 fix 1 + amendment 4: one world per request. In measures-
+  // world rewrite the legacy each_measure_* triple on the ingredient
+  // from the new count-to-X row so deriveRecipePrice sees the new
+  // numbers without a JSX change.
   const newWorld = await isMeasuresWorld(client);
-  const measures = newWorld
-    ? await readMeasuresForIngredient(client, id)
-    : legacyEachMeasureToMeasures(
-        ingredient.each_measure_qty,
-        ingredient.each_measure_uom,
-        ingredient.each_measure_source,
-      );
+  let measures: ReturnType<typeof legacyEachMeasureToMeasures> = [];
+  let ingredient: ReviewCardIngredient = rawIngredient;
+  if (newWorld) {
+    measures = await readMeasuresForIngredient(client, id);
+    const shaped = shapeIngredientEachFromMeasures(measures);
+    ingredient = {
+      ...rawIngredient,
+      each_measure_qty: shaped.qty,
+      each_measure_uom: shaped.uom,
+      each_measure_source: shaped.source,
+    };
+  } else {
+    measures = legacyEachMeasureToMeasures(
+      rawIngredient.each_measure_qty,
+      rawIngredient.each_measure_uom,
+      rawIngredient.each_measure_source,
+    );
+  }
   const yieldPct = (ingredient as { yield_pct?: number | null }).yield_pct ?? null;
   const yieldSource = (ingredient as { yield_source?: string | null }).yield_source ?? null;
 

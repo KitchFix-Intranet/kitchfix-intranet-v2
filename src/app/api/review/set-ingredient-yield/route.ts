@@ -106,7 +106,7 @@ export async function POST(req: NextRequest) {
     .eq("id", ingredientId);
   if (upErr) return NextResponse.json({ error: upErr.message }, { status: 400 });
 
-  await supa.from("pr_events").insert({
+  const { error: evErr } = await supa.from("pr_events").insert({
     entity_type: "ingredient",
     entity_id: ingredientId,
     kind: "ingredient_yield_set",
@@ -114,6 +114,7 @@ export async function POST(req: NextRequest) {
     after: { yield_pct: yieldPct, yield_source: yieldSource },
     actor: actorEmail,
   });
+  if (evErr) return NextResponse.json({ error: evErr.message }, { status: 400 });
 
   return NextResponse.json({ ok: true });
 }
