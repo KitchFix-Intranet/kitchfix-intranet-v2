@@ -147,7 +147,9 @@ const BAND_SUPPRESS_UNITS = new Set<string>(["EA", "DZ"]);
 // link_status='confirmed', which let archived items with a stale
 // confirmed link flow through the mean / min / max / spread; this
 // is the bug fix the "define live once" instruction names.
-const LIVE_STATUSES: readonly string[] = ["active", "resale"];
+// M2.1: shared with the Review queue and the /api/review/* routes so
+// every door into the detail panel reads the same set.
+const LIVE_STATUSES = PIPELINE_LIVE_STATUSES;
 
 // S5: convertPer / canonicalFromBaseUnit live in pack.ts now so the
 // item panel's Result + Read-as can read the same converter the
@@ -160,14 +162,17 @@ import { isMeasuresWorld, readAllMeasures } from "@/lib/ingredients/measuresRead
 // M2 §4B part 2: shape helpers removed (nothing on screen reads
 // each_measure_*). The legacy fields stay on MasterRow /
 // MasterLinkedItem for type-level back-compat.
-import { priceInUnit, reachableUnits, sizesDifferFlags, type Measure } from "@/lib/ingredients/measures";
+import { reachableUnits, type Measure } from "@/lib/ingredients/measures";
 import {
   OUTLIER_RATIO,
   OUTLIER_MIN,
   blendStats,
-  buildLensStats,
-  type BlendItem,
 } from "@/lib/ingredients/blend";
+import {
+  computeIngredientBlend,
+  type BlendInputItem,
+  LIVE_STATUSES as PIPELINE_LIVE_STATUSES,
+} from "@/lib/ingredients/ingredientBlend";
 import { isPriceManualOverride } from "./itemTypes";
 
 // R2: this workbench powers two tabs. `mode="recipe"` is the Ingredients
@@ -266,174 +271,77 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
   const rows: MasterRow[] = ingredients.map((m) => {
     const items = byMaster.get(m.id) ?? [];
     const masterUom = canonicalFromBaseUnit(m.base_unit);
-    // S3: collect {id, v} so blendStats can tag exclusions back to
-    // the item that owns each priced value.
-    // G1: each entry also carries its grade so the same priced set
-    // feeds three subset rollups below (blended / standard /
-    // premium). Null is standard; 'premium' is the only sanctioned
-    // non-null value today - any stray third value is treated as
-    // standard by the UI rule.
-    // G2: each priced entry also carries `usd` for the spend-weighted
-    // blend. Plain `usd` from pr_vendor_items.usd_12m - no re-shape;
-    // the weighting is in blendStats.
-    const priced: Array<{ id: string; v: number; grade: string | null; usd: number }> = [];
-    // B3: per-priced-item vendor map so the band's corroboration
-    // check can count DISTINCT VENDORS on the survivors (rows that
-    // actually contribute to the mean). Using the same filter as
-    // `priced` - the mean's set IS the corroboration set. Important
-    // subtlety: this must count vendors, not vendor items. Two
-    // Sysco rows is one opinion, not two; a master whose only
-    // priced items are Sysco is NOT corroborated.
-    const vendorByPricedItem = new Map<string, string>();
-    // M2: items that cannot reach the ingredient's base_unit through
-    // the measures. Replaces mismatchedItemIds. The pack is fine; what
-    // is missing is a measure on the ingredient. UI copy at
-    // panel/attention.tsx + the per-item status chip.
-    const needsMeasureItemIds = new Set<string>();
-    let usd = 0;
-    // Spend on items that contribute NOTHING to the master's price -
-    // either no usable per_base at all, or no path to base_unit. This
-    // is the money the headline $/unit does not describe. (Outliers do
-    // NOT count as unpriced: their spend IS covered by a confirmed
-    // link; the blend just leaves them out of its own math.)
-    let unpricedUsd = 0;
-    // How many priced items sit in each dimension, regardless of
-    // whether they converted. Used ONLY to suggest a base_unit when the
-    // master's own unit is the odd one out; it never touches the blend.
-    const dimTally = new Map<string, number>();
     // M2: measures for this ingredient, read in one bulk query above.
     const ingMeasures: Measure[] = measuresWorld ? (measuresByIngredient.get(m.id) ?? []) : [];
-    // M2 R2 rule 2: sized packs whose piece sizes disagree within one
-    // kind (max > 1.1 * min) are "sizes_differ" - priced, shown, not
-    // in any lens, spend counted as unpriced. Runs BEFORE the outlier
-    // rule so an "each" that means two things never reaches the
-    // blend math at all. Only fires for count-costed ingredients
-    // (base_unit each / dozen).
-    const sizesDifferIds = sizesDifferFlags(
-      items.map((it) => ({
-        id: it.id,
-        packQty: it.pack_qty ?? null,
-        packSize: it.pack_size ?? null,
-        packUom: it.pack_uom ?? null,
-      })),
-      ingMeasures,
-      m.base_unit,
-    );
-    // Per-item price in the ingredient's base_unit, keyed by item.id.
-    // Null when the item cannot reach base_unit (needs a measure).
-    const perBaseInIngUnitById = new Map<string, number | null>();
+
+    // M2.1: ONE pipeline for blend + per-item status. Called from here,
+    // the Review queue, /api/review/item and /api/review/ingredient.
+    const pipelineItems: BlendInputItem[] = items.map((it) => ({
+      id: it.id,
+      grade: it.grade ?? null,
+      usd12m: Number(it.usd_12m ?? 0),
+      perBase: it.price_estimate?.per_base != null ? Number(it.price_estimate.per_base) : null,
+      perBaseUom: it.price_estimate?.base_uom ?? null,
+      packQty: it.pack_qty ?? null,
+      packSize: it.pack_size ?? null,
+      packUom: it.pack_uom ?? null,
+      caseWeightLb: it.case_weight_lb ?? null,
+    }));
+    const blend = computeIngredientBlend(m, pipelineItems, ingMeasures);
+    const needsMeasureItemIds = blend.needsMeasureIds;
+    const sizesDifferIds = blend.sizesDifferIds;
+    const excludedIds = blend.excludedIds;
+    const perBaseInIngUnitById = blend.perBaseInIngUnit;
+    const blendedLens = blend.blendedLens;
+    const standardLens = blend.standardLens;
+    const premiumLens = blend.premiumLens;
+
+    // The additional rollup math (dimTally for base_unit suggestion,
+    // vendorByPricedItem for the band's corroboration rule, usd +
+    // unpricedUsd tallies, medianBeforeExclusion) stays inline. None
+    // of these feed the per-item status the panel reads.
+    const vendorByPricedItem = new Map<string, string>();
+    const dimTally = new Map<string, number>();
+    let usd = 0;
+    let unpricedUsd = 0;
+    const priced: Array<{ id: string; v: number; grade: string | null; usd: number }> = [];
     for (const it of items) {
       const itUsd = Number(it.usd_12m ?? 0);
       usd += itUsd;
       const rawV = it.price_estimate?.per_base;
       const rawN = rawV != null ? Number(rawV) : NaN;
+      const storedUom = it.price_estimate?.base_uom ?? null;
       if (!Number.isFinite(rawN) || rawN <= 0) {
         unpricedUsd += itUsd;
-        perBaseInIngUnitById.set(it.id, null);
         continue;
       }
-      const storedUom = it.price_estimate?.base_uom ?? null;
       const itemDim = storedUom ? DIM_BY_UOM[normUom(storedUom) ?? ""] : undefined;
       if (itemDim) dimTally.set(itemDim, (dimTally.get(itemDim) ?? 0) + 1);
-      // M2 §2.1: one price function. priceInUnit converts $/baseUom to
-      // $/ingredient.base_unit through the stated-kind-wins rule.
-      // Measures only fill what the case does not state.
-      if (masterUom && storedUom) {
-        const result = priceInUnit(
-          {
-            perBase: rawN,
-            baseUom: storedUom,
-            packQty: it.pack_qty ?? null,
-            packSize: it.pack_size ?? null,
-            packUom: it.pack_uom ?? null,
-            caseWeightLb: it.case_weight_lb ?? null,
-          },
-          masterUom,
-          { measures: ingMeasures },
-        );
-        if (result == null) {
-          needsMeasureItemIds.add(it.id);
-          unpricedUsd += itUsd;
-          perBaseInIngUnitById.set(it.id, null);
-        } else if (sizesDifferIds.has(it.id)) {
-          // M2 R2 rule 2: priced, shown, NOT in the blend. Spend
-          // counted as unpriced. The per-item perBaseInIngUnit is
-          // computed and kept so the item row still shows its number;
-          // it simply does not enter `priced`.
-          unpricedUsd += itUsd;
-          perBaseInIngUnitById.set(it.id, result.per);
-        } else {
-          priced.push({ id: it.id, v: result.per, grade: it.grade ?? null, usd: itUsd });
-          vendorByPricedItem.set(it.id, it.vendor_id);
-          perBaseInIngUnitById.set(it.id, result.per);
-        }
-      } else if (storedUom && !masterUom) {
-        // Master has no canonical uom (unusual base_unit text); fall
-        // back to the stored value as-is so the row still shows a
-        // number.
-        priced.push({ id: it.id, v: rawN, grade: it.grade ?? null, usd: itUsd });
+      if (needsMeasureItemIds.has(it.id)) {
+        unpricedUsd += itUsd;
+        continue;
+      }
+      if (sizesDifferIds.has(it.id)) {
+        // Priced, shown, not in the blend - spend counted as unpriced.
+        unpricedUsd += itUsd;
+        continue;
+      }
+      // Priced + in-blend-eligible: contributes to the band's vendor
+      // corroboration set.
+      const v = perBaseInIngUnitById.get(it.id);
+      if (v != null) {
+        priced.push({ id: it.id, v, grade: it.grade ?? null, usd: itUsd });
         vendorByPricedItem.set(it.id, it.vendor_id);
-        perBaseInIngUnitById.set(it.id, rawN);
-      } else {
-        priced.push({ id: it.id, v: rawN, grade: it.grade ?? null, usd: itUsd });
-        vendorByPricedItem.set(it.id, it.vendor_id);
-        perBaseInIngUnitById.set(it.id, rawN);
       }
     }
-    // S3: median-based outlier exclusion. avg/min/max/spread describe
-    // the survivors only; linkedItems.outlier below tags the excluded
-    // rows so they still appear in the table (visibly dropped from
-    // the blend, not deleted).
-    //
-    // G1: the "blended" stats below run over every priced item and
-    // keep the pre-G1 single-price behaviour unchanged - every
-    // surface that reads avgPerBase / spreadRatio / etc still sees
-    // the same number. The two subset stats come from the SAME
-    // blendStats (one shared code path, per the spec); they just
-    // filter the input. Null is standard: anything not 'premium'
-    // counts in the standard subset.
-    // G2: Kevin's ruling - the lens drives every tile, not just the
-    // price. When the user picks Premium, spread/min-max/pricedCount/
-    // linkedCount/unpricedUsd/12-mo-spend all describe premium-only
-    // items. Compute three COMPLETE stats sets, let the client swap
-    // which one it reads.
-    //
-    // M2 §2.2: buildLensStats lives in blend.ts now and the blended
-    // lens runs the outlier rule PER GRADE (Premium with Premium).
-    // Standard and Premium lenses stay partition-first (byte-identical
-    // to pre-M2).
-    const blendItems: BlendItem[] = priced;
-    const blendedLens = buildLensStats(blendItems, items, "blended");
-    const standardLens = buildLensStats(blendItems, items, "standard");
-    const premiumLens = buildLensStats(blendItems, items, "premium");
-
-    // Union of per-grade exclusions for the blended lens drives the
-    // row-level "outlier" flag below. Pre-M2 this was a single
-    // blendStats call over every priced item; M2 runs it per grade
-    // and unions the exclusion sets so a premium far from the
-    // standard median is not flagged when it is in line with its
-    // own grade's peers.
-    const bucketExcluded = new Set<string>();
-    {
-      const buckets: Record<"premium" | "standard", BlendItem[]> = { premium: [], standard: [] };
-      for (const p of priced) buckets[p.grade === "premium" ? "premium" : "standard"].push(p);
-      for (const g of ["premium", "standard"] as const) {
-        const s = blendStats(buckets[g]);
-        for (const id of s.excluded) bucketExcluded.add(id);
-      }
-    }
-    // M2: the headline numbers come from the BLENDED lens (per-grade
-    // outlier, union of survivors). `excludedIds` for the row-level
-    // "outlier" flag is the union across grades (bucketExcluded above).
-    // `medianBeforeExclusion` keeps its pre-M2 semantics (median over
-    // all priced items, used by the attention copy's "N times" label);
-    // per-grade medians are an M2 refinement deferred to its own patch.
+    // medianBeforeExclusion keeps its pre-M2 semantics (median over
+    // every priced value before the per-grade rule runs). The
+    // attention copy's "N times" label reads it.
     const stats = blendStats(priced);
     const avg = blendedLens.avgPerBase;
     const min = blendedLens.minPerBase;
     const max = blendedLens.maxPerBase;
     const spread = blendedLens.spreadRatio;
-    const excludedIds = bucketExcluded;
     const medianBeforeExclusion = stats.median;
     // G3 §2: Spread flag is now evaluated PER GRADE SUBSET, not across
     // the blend. A master whose only reason for a >3x blended spread

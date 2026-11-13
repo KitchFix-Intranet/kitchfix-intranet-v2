@@ -13,12 +13,18 @@ import { isMeasuresWorld, readAllMeasures } from "@/lib/ingredients/measuresRead
 // on screen reads each_measure_* - the shape helpers were projecting
 // the legacy columns from pr_ingredient_measures for back-compat.
 // Measures ride on the ingredient directly via `measures` now.
-import { priceInUnit, sizesDifferFlags } from "@/lib/ingredients/measures";
+// M2.1: one pipeline per ingredient - the Review queue calls the
+// shared function instead of its own blendStats + sizesDifferFlags.
+// priceInUnit stays for the per-item perBaseInIngUnit the panel strip
+// reads; everything else routes through computeIngredientBlend.
+import { priceInUnit } from "@/lib/ingredients/measures";
+import {
+  computeIngredientBlend,
+  LIVE_STATUSES,
+  type BlendInputItem,
+  type BlendStatus,
+} from "@/lib/ingredients/ingredientBlend";
 import { canonicalFromBaseUnit } from "@/lib/ingredients/pack";
-// Polish round 2 fix 2: blendedAvgPerBase rides on every ingredient
-// the Review queue hands to its DetailPanel. Same code path as
-// IngredientMasters.
-import { blendStats } from "@/lib/ingredients/blend";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { Tabs } from "./Tabs";
 import { IdentBand } from "@/components/ui/IdentBand";
@@ -218,31 +224,31 @@ async function loadReview() {
   const measuresByIngredient = measuresWorld
     ? await readAllMeasures(client)
     : new Map<string, never>();
-  // Polish round 2 fix 2: compute blended $ / base_unit per ingredient
-  // across its confirmed + live linked items (same filter + code path
-  // IngredientMasters uses). Keyed by ingredient_id so the reshape
-  // loop below can attach it without a per-row fetch.
-  const blendedByIngredient = new Map<string, number | null>();
+  // M2.1: one bulk read of the confirmed+live linked items so every
+  // per-ingredient compute below (blend, per-item status) runs against
+  // the same set the Ingredients tab uses. Keyed by ingredient_id.
+  type MateRow = {
+    id: string;
+    ingredient_id: string | null;
+    grade: string | null;
+    pack_qty: number | null;
+    pack_size: number | null;
+    pack_uom: string | null;
+    case_weight_lb: number | null;
+    price_estimate: { per_base?: number | string | null; base_uom?: string | null } | null;
+    usd_12m: number | null;
+  };
+  const confirmedByIngredient = new Map<string, MateRow[]>();
   {
-    type MateRow = {
-      id: string;
-      ingredient_id: string | null;
-      pack_qty: number | null;
-      pack_size: number | null;
-      pack_uom: string | null;
-      case_weight_lb: number | null;
-      price_estimate: { per_base?: number | string | null; base_uom?: string | null } | null;
-      usd_12m: number | null;
-    };
     const mates: MateRow[] = [];
     const page = 1000;
     let from = 0;
     for (;;) {
       const { data, error } = await client
         .from("pr_vendor_items")
-        .select("id,ingredient_id,pack_qty,pack_size,pack_uom,case_weight_lb,price_estimate,usd_12m")
+        .select("id,ingredient_id,grade,pack_qty,pack_size,pack_uom,case_weight_lb,price_estimate,usd_12m")
         .eq("link_status", "confirmed")
-        .eq("status", "active")
+        .in("status", LIVE_STATUSES)
         .not("ingredient_id", "is", null)
         .order("id", { ascending: true })
         .range(from, from + page - 1);
@@ -252,53 +258,43 @@ async function loadReview() {
       if (chunk.length < page) break;
       from += page;
     }
-    const byIng = new Map<string, MateRow[]>();
     for (const m of mates) {
       if (!m.ingredient_id) continue;
-      let list = byIng.get(m.ingredient_id);
+      let list = confirmedByIngredient.get(m.ingredient_id);
       if (!list) {
         list = [];
-        byIng.set(m.ingredient_id, list);
+        confirmedByIngredient.set(m.ingredient_id, list);
       }
       list.push(m);
     }
-    for (const r of ((ingredientsRes.data ?? []) as Ingredient[])) {
-      const list = byIng.get(r.id);
-      if (!list || list.length === 0) {
-        blendedByIngredient.set(r.id, null);
-        continue;
-      }
-      const targetUom = canonicalFromBaseUnit(r.base_unit);
-      if (!targetUom) {
-        blendedByIngredient.set(r.id, null);
-        continue;
-      }
-      const ms = measuresWorld ? (measuresByIngredient.get(r.id) ?? []) : [];
-      const priced: Array<{ id: string; v: number; usd: number }> = [];
-      for (const row of list) {
-        const pe = row.price_estimate ?? null;
-        const matePerBase = pe?.per_base != null ? Number(pe.per_base) : null;
-        const mateBaseUom = pe?.base_uom ?? null;
-        if (matePerBase == null || !Number.isFinite(matePerBase) || matePerBase <= 0 || !mateBaseUom) continue;
-        const priced1 = priceInUnit(
-          {
-            perBase: matePerBase,
-            baseUom: mateBaseUom,
-            packQty: row.pack_qty,
-            packSize: row.pack_size,
-            packUom: row.pack_uom,
-            caseWeightLb: row.case_weight_lb,
-          },
-          targetUom,
-          { measures: ms },
-        );
-        if (priced1?.per != null && Number.isFinite(priced1.per) && priced1.per > 0) {
-          priced.push({ id: row.id, v: priced1.per, usd: Number(row.usd_12m ?? 0) });
-        }
-      }
-      const stats = blendStats(priced);
-      blendedByIngredient.set(r.id, stats.survivorMean);
+  }
+
+  function toPipelineItem(m: MateRow): BlendInputItem {
+    return {
+      id: m.id,
+      grade: m.grade,
+      usd12m: Number(m.usd_12m ?? 0),
+      perBase: m.price_estimate?.per_base != null ? Number(m.price_estimate.per_base) : null,
+      perBaseUom: m.price_estimate?.base_uom ?? null,
+      packQty: m.pack_qty,
+      packSize: m.pack_size,
+      packUom: m.pack_uom,
+      caseWeightLb: m.case_weight_lb,
+    };
+  }
+
+  // M2.1: blended $ / base_unit per ingredient via the shared pipeline.
+  const blendedByIngredient = new Map<string, number | null>();
+  for (const r of ((ingredientsRes.data ?? []) as Ingredient[])) {
+    const list = confirmedByIngredient.get(r.id);
+    if (!list || list.length === 0) {
+      blendedByIngredient.set(r.id, null);
+      continue;
     }
+    const ms = measuresWorld ? (measuresByIngredient.get(r.id) ?? []) : [];
+    const pipelineItems = list.map(toPipelineItem);
+    const blend = computeIngredientBlend(r, pipelineItems, ms);
+    blendedByIngredient.set(r.id, blend.blendedLens.avgPerBase);
   }
 
   const ingredientsReshaped: Ingredient[] = ((ingredientsRes.data ?? []) as Ingredient[]).map((r) => {
@@ -694,30 +690,44 @@ async function loadReview() {
     // reason are malformed - skip silently; a future hotfix can surface them.
   }
 
-  // M2 §4B: post-pass fills perBaseInIngUnit on every item in an
-  // existing-ingredient group via the one price function. ai-new
-  // groups have no confirmed target so perBaseInIngUnit stays null.
-  // Reads measures already batch-loaded above; one priceInUnit call
-  // per item, no new query.
+  // M2.1: post-pass fills perBaseInIngUnit + statusKind on every
+  // proposed item in an existing-ingredient group. statusKind runs
+  // the shared pipeline over (confirmed-set union group proposals),
+  // so a proposal gets the status it would get if it joined -
+  // including check_it when 3+ priced items trigger the outlier rule.
+  // The blend value shown to the user stays the confirmed-only run
+  // (blendedAvgPerBase on the ingredient; attached above).
   const itemsById = new Map(items.map((it) => [it.id, it]));
   for (const g of groups.values()) {
     if (g.kind !== "existing" || !g.ingredient) continue;
     const ing = g.ingredient;
     const target = canonicalFromBaseUnit(ing.base_unit);
     const ms = measuresWorld ? (measuresByIngredient.get(ing.id) ?? []) : [];
-    // M2 §4B part 3: compute sizes_differ per group so each item's
-    // statusKind reflects "sized packs within one kind disagree"
-    // before the per-item loop assigns statuses.
-    const groupPacks = g.items.map((vi) => {
+    const confirmedList = confirmedByIngredient.get(ing.id) ?? [];
+    const confirmedSet = confirmedList.map(toPipelineItem);
+    // Build the pipeline input: confirmed set + every proposal in
+    // this group. Avoid double-listing an item that is both proposed
+    // and already confirmed.
+    const confirmedIds = new Set(confirmedSet.map((x) => x.id));
+    const joiners: BlendInputItem[] = [];
+    for (const vi of g.items) {
+      if (confirmedIds.has(vi.id)) continue;
       const raw = itemsById.get(vi.id);
-      return {
+      if (!raw) continue;
+      const pe = raw.price_estimate ?? null;
+      joiners.push({
         id: vi.id,
-        packQty: raw?.pack_qty ?? null,
-        packSize: raw?.pack_size ?? null,
-        packUom: raw?.pack_uom ?? null,
-      };
-    });
-    const sizesDiffer = sizesDifferFlags(groupPacks, ms, ing.base_unit);
+        grade: raw.grade ?? null,
+        usd12m: Number(raw.usd_12m ?? 0),
+        perBase: pe?.per_base != null ? Number(pe.per_base) : null,
+        perBaseUom: pe?.base_uom ?? null,
+        packQty: raw.pack_qty ?? null,
+        packSize: raw.pack_size ?? null,
+        packUom: raw.pack_uom ?? null,
+        caseWeightLb: raw.case_weight_lb ?? null,
+      });
+    }
+    const blend = computeIngredientBlend(ing, [...confirmedSet, ...joiners], ms);
     for (const vi of g.items) {
       const raw = itemsById.get(vi.id);
       if (!raw) continue;
@@ -740,11 +750,7 @@ async function loadReview() {
               { measures: ms },
             )?.per ?? null
           : null;
-      vi.statusKind = sizesDiffer.has(vi.id)
-        ? "sizes_differ"
-        : vi.perBaseInIngUnit == null
-          ? "needs_measure"
-          : "in_blend";
+      vi.statusKind = (blend.statusKindById.get(vi.id) ?? "in_blend") as BlendStatus;
     }
   }
 

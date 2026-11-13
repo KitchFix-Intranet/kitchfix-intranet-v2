@@ -14,6 +14,19 @@ import type { ReviewCardIngredient } from "../itemTypes";
 
 const CORE_UNITS = ["LB", "OZ", "EA", "FLOZ", "GAL"] as const;
 
+// M2.1 fix 3: pack UOMs the system treats as count rather than a
+// true unit of measure. CT and PC are inventory counters, not
+// "pieces" in a bridge sense - the chip bar should fold them into
+// EA so no "pc" / "ct" chip ever renders. The mapping also drives
+// reach: an item priced in CT is effectively priced in EA.
+const COUNT_UOMS = new Set<string>(["EA", "CT", "PC", "PCS", "DZ", "DOZEN"]);
+function normalizeChipUom(uom: string): string | null {
+  const up = uom.toUpperCase();
+  if (COUNT_UOMS.has(up)) return "EA";
+  if (!DIM_BY_UOM[up]) return null;
+  return up;
+}
+
 export function PanelChipsRow({
   ingredient,
   measures,
@@ -29,25 +42,31 @@ export function PanelChipsRow({
   onAddForUom?: (uom: string) => void;
 }) {
   const baseCanonical = canonicalFromBaseUnit(ingredient.base_unit);
+  // M2.1 fix 3: fold count-flavour pack uoms (CT, PC, PCS, DZ) into
+  // EA before building the reach set and the chip list. Weight and
+  // volume units pass through unchanged.
+  const normalizedItemUnits = itemUnits
+    .map((u) => normalizeChipUom(u))
+    .filter((u): u is string => u != null);
+
   // Starting units for reach: the ingredient's base_unit + every
   // unit the linked items touch. Deduped + upper-cased.
   const startSet = new Set<string>();
   if (baseCanonical) startSet.add(baseCanonical);
-  for (const u of itemUnits) {
-    const up = u.toUpperCase();
-    if (DIM_BY_UOM[up]) startSet.add(up);
-  }
+  for (const u of normalizedItemUnits) startSet.add(u);
   const starts = Array.from(startSet);
 
-  // Chips to display: the core five + any item uoms not in core.
+  // Chips to display: the core five plus any other weight or volume
+  // unit an item is actually priced in. Count-flavour uoms were
+  // already folded into EA above, so "pc" / "ct" never reaches here.
   const seen = new Set<string>();
   const list: string[] = [];
-  for (const u of [...CORE_UNITS, ...itemUnits]) {
-    const up = u.toUpperCase();
-    if (!DIM_BY_UOM[up]) continue;
-    if (seen.has(up)) continue;
-    seen.add(up);
-    list.push(up);
+  for (const u of [...CORE_UNITS, ...normalizedItemUnits]) {
+    const dim = DIM_BY_UOM[u];
+    if (!dim) continue;
+    if (seen.has(u)) continue;
+    seen.add(u);
+    list.push(u);
   }
 
   const m = { measures };
