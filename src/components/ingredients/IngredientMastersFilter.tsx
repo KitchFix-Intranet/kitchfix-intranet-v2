@@ -45,7 +45,7 @@ import "./ingredients-tab.css";
 // IngredientMasters.tsx server rollup). "empty" is "no linked items";
 // kept here for the badge + filter chip, even though the price
 // sub-line already names coverage/spread.
-export type MasterIssue = "spread" | "coverage" | "needs_measure" | "outlier" | "band" | "empty";
+export type MasterIssue = "spread" | "coverage" | "needs_measure" | "sizes_differ" | "outlier" | "band" | "empty";
 
 export type LensStats = {
   avgPerBase: number | null;
@@ -67,7 +67,7 @@ export type MasterLinkedItem = {
   // M2 §2.1/2.6: per-item status + price-in-base-unit + which units
   // the item's price reaches through the ingredient's measures.
   // Replaces unitMismatch.
-  statusKind: "in_blend" | "check_it" | "needs_measure";
+  statusKind: "in_blend" | "check_it" | "needs_measure" | "sizes_differ";
   perBaseInIngUnit: number | null;
   reach: string[];
   outlier: boolean;

@@ -158,7 +158,7 @@ const LIVE_STATUSES: readonly string[] = ["active", "resale"];
 import { DIM_BY_UOM, BASE_BY_DIM, normUom, convertPer, canonicalFromBaseUnit } from "@/lib/ingredients/pack";
 import { isMeasuresWorld, readAllMeasures } from "@/lib/ingredients/measuresRead";
 import { shapeIngredientEachFromMeasures, shapeItemEachFromCaseWeight } from "@/lib/ingredients/measuresShape";
-import { priceInUnit, reachableUnits, type Measure } from "@/lib/ingredients/measures";
+import { priceInUnit, reachableUnits, sizesDifferFlags, type Measure } from "@/lib/ingredients/measures";
 import {
   OUTLIER_RATIO,
   OUTLIER_MIN,
@@ -307,6 +307,22 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
     const dimTally = new Map<string, number>();
     // M2: measures for this ingredient, read in one bulk query above.
     const ingMeasures: Measure[] = measuresWorld ? (measuresByIngredient.get(m.id) ?? []) : [];
+    // M2 R2 rule 2: sized packs whose piece sizes disagree within one
+    // kind (max > 1.1 * min) are "sizes_differ" - priced, shown, not
+    // in any lens, spend counted as unpriced. Runs BEFORE the outlier
+    // rule so an "each" that means two things never reaches the
+    // blend math at all. Only fires for count-costed ingredients
+    // (base_unit each / dozen).
+    const sizesDifferIds = sizesDifferFlags(
+      items.map((it) => ({
+        id: it.id,
+        packQty: it.pack_qty ?? null,
+        packSize: it.pack_size ?? null,
+        packUom: it.pack_uom ?? null,
+      })),
+      ingMeasures,
+      m.base_unit,
+    );
     // Per-item price in the ingredient's base_unit, keyed by item.id.
     // Null when the item cannot reach base_unit (needs a measure).
     const perBaseInIngUnitById = new Map<string, number | null>();
@@ -343,6 +359,13 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
           needsMeasureItemIds.add(it.id);
           unpricedUsd += itUsd;
           perBaseInIngUnitById.set(it.id, null);
+        } else if (sizesDifferIds.has(it.id)) {
+          // M2 R2 rule 2: priced, shown, NOT in the blend. Spend
+          // counted as unpriced. The per-item perBaseInIngUnit is
+          // computed and kept so the item row still shows its number;
+          // it simply does not enter `priced`.
+          unpricedUsd += itUsd;
+          perBaseInIngUnitById.set(it.id, result.per);
         } else {
           priced.push({ id: it.id, v: result.per, grade: it.grade ?? null, usd: itUsd });
           vendorByPricedItem.set(it.id, it.vendor_id);
@@ -522,13 +545,17 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
         // priceInUnit, computed in the main loop above and cached
         // in perBaseInIngUnitById. When null the item needs a measure.
         const inIngUnit = perBaseInIngUnitById.get(it.id) ?? null;
-        // M2 per-item status: three mutually exclusive kinds.
-        const statusKind: "in_blend" | "check_it" | "needs_measure" =
+        // M2 per-item status: four mutually exclusive kinds. R2
+        // rule 2: sizes_differ is applied BEFORE the outlier rule so
+        // an "each" meaning two things never reaches the blend math.
+        const statusKind: "in_blend" | "check_it" | "needs_measure" | "sizes_differ" =
           needsMeasureItemIds.has(it.id)
             ? "needs_measure"
-            : excludedIds.has(it.id)
-              ? "check_it"
-              : "in_blend";
+            : sizesDifferIds.has(it.id)
+              ? "sizes_differ"
+              : excludedIds.has(it.id)
+                ? "check_it"
+                : "in_blend";
         // M2 §2.6 chips data: which units this item's price reaches
         // through the ingredient's measures + built-in same-dim
         // conversions. Included on the row so 4B's chip switch
@@ -636,6 +663,7 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
       ratioFlag ? ("spread" as const) : null,
       pricedCount < items.length ? ("coverage" as const) : null,
       needsMeasureItemIds.size > 0 ? ("needs_measure" as const) : null,
+      sizesDifferIds.size > 0 ? ("sizes_differ" as const) : null,
       linkedItems.some((li) => li.outlier) ? ("outlier" as const) : null,
       bandFlag ? ("band" as const) : null,
       emptyFlag ? ("empty" as const) : null,

@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireOwnerApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
-import { priceInUnit, rejectReason, type Measure, type MeasureSource } from "@/lib/ingredients/measures";
+import {
+  priceInUnit,
+  rejectReason,
+  sizesDifferFlags,
+  type Measure,
+  type MeasureSource,
+} from "@/lib/ingredients/measures";
 import { isMeasuresWorld, readMeasuresForIngredient } from "@/lib/ingredients/measuresRead";
 import { canonicalFromBaseUnit } from "@/lib/ingredients/pack";
 
@@ -54,13 +60,11 @@ function parseMeasure(raw: IncomingMeasure): { ok: true; m: Measure } | { ok: fa
   };
 }
 
-// M2 R1 amendment 3: dry-run now calls priceInUnit, the one price
-// function. For each linked item, compute price-in-base_unit with
-// the old measures and with the proposed ones; count items where
-// the number moves. Items whose case states the target kind (or
-// whose case_weight_lb replaces the weight for them) do not move
-// because priceInUnit does not consult measures when the target's
-// kind is already stated.
+// M2 R2 rule 4: dry-run counts items whose STATUS or PRICE changes
+// under rules 1 and 2. The effective "price in the blend" for an
+// item is null when sizes_differ flags it (rule 2) OR when
+// priceInUnit returns null (needs_measure); otherwise the computed
+// number. A flip in either direction counts as a change.
 async function computeDryRun(
   supa: ReturnType<typeof serviceClient>,
   ingredientId: string,
@@ -81,15 +85,24 @@ async function computeDryRun(
     .select("id,price_estimate,case_weight_lb,pack_qty,pack_size,pack_uom")
     .eq("ingredient_id", ingredientId);
   if (!items || items.length === 0) return { items: 0 };
+  const rows = items as Array<{
+    id: string;
+    price_estimate: { per_base?: number; base_uom?: string } | null;
+    case_weight_lb: number | null;
+    pack_qty: number | null;
+    pack_size: number | null;
+    pack_uom: string | null;
+  }>;
+  const packInputs = rows.map((r) => ({
+    id: r.id,
+    packQty: r.pack_qty,
+    packSize: r.pack_size,
+    packUom: r.pack_uom,
+  }));
+  const flagBefore = sizesDifferFlags(packInputs, beforeMeasures, baseUnit);
+  const flagAfter = sizesDifferFlags(packInputs, afterMeasures, baseUnit);
   let changed = 0;
-  for (const row of items) {
-    const r = row as {
-      price_estimate: { per_base?: number; base_uom?: string } | null;
-      case_weight_lb: number | null;
-      pack_qty: number | null;
-      pack_size: number | null;
-      pack_uom: string | null;
-    };
+  for (const r of rows) {
     const pe = r.price_estimate;
     const perBase = pe?.per_base != null ? Number(pe.per_base) : null;
     const baseUom = pe?.base_uom ?? null;
@@ -102,11 +115,16 @@ async function computeDryRun(
       packUom: r.pack_uom,
       caseWeightLb: r.case_weight_lb,
     };
-    const before = priceInUnit(input, targetUom, { measures: beforeMeasures });
-    const after = priceInUnit(input, targetUom, { measures: afterMeasures });
-    const beforeVal = before?.per ?? null;
-    const afterVal = after?.per ?? null;
-    if (beforeVal !== afterVal) changed += 1;
+    // Effective price-in-the-blend: null if sizes_differ flags, null
+    // if priceInUnit cannot compute (needs_measure); otherwise the
+    // computed number.
+    const beforeEff = flagBefore.has(r.id)
+      ? null
+      : priceInUnit(input, targetUom, { measures: beforeMeasures })?.per ?? null;
+    const afterEff = flagAfter.has(r.id)
+      ? null
+      : priceInUnit(input, targetUom, { measures: afterMeasures })?.per ?? null;
+    if (beforeEff !== afterEff) changed += 1;
   }
   return { items: changed };
 }

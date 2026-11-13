@@ -157,18 +157,53 @@ function factor(from, to, m) {
   }
   return null;
 }
-function statedTotals(pq, ps, pu, cw) {
+function statedTotals(pq, ps, pu, cw, m) {
   const out = {};
   pu = (pu || "").toUpperCase();
   pq = Number(pq); ps = Number(ps);
   const have = pu && Number.isFinite(pq) && Number.isFinite(ps) && pq > 0 && ps > 0;
   if (have) {
     const d = DIM_BY_UOM[pu];
-    if (d === "count") out.count = { qty: pq * ps * (pu === "DZ" ? 12 : 1), uom: "EA" };
-    else if (d === "weight") { out.weight = { qty: pq * ps * TO_BASE[pu], uom: "LB" }; if (pq > 1) out.count = { qty: pq, uom: "EA" }; }
-    else if (d === "volume") { out.volume = { qty: pq * ps * TO_BASE[pu], uom: "FLOZ" }; if (pq > 1) out.count = { qty: pq, uom: "EA" }; }
+    if (d === "count") {
+      out.count = { qty: pq * ps * (pu === "DZ" ? 12 : 1), uom: "EA" };
+    } else if (d === "weight") {
+      out.weight = { qty: pq * ps * TO_BASE[pu], uom: "LB" };
+      // M2 R2 rule 1: sized pack states count only when measures do
+      // not already bridge EA -> pack uom.
+      if (pq > 1 && factor("EA", pu, m) == null) out.count = { qty: pq, uom: "EA" };
+    } else if (d === "volume") {
+      out.volume = { qty: pq * ps * TO_BASE[pu], uom: "FLOZ" };
+      if (pq > 1 && factor("EA", pu, m) == null) out.count = { qty: pq, uom: "EA" };
+    }
   }
   if (cw != null && cw > 0) out.weight = { qty: cw, uom: "LB" };
+  return out;
+}
+
+// M2 R2 rule 2.
+function sizesDifferFlags(items, measures, baseUnit) {
+  const out = new Set();
+  if (!baseUnit) return out;
+  const bu = baseUnit.toLowerCase();
+  if (bu !== "each" && bu !== "dozen") return out;
+  const m = { measures };
+  const byDim = { weight: [], volume: [] };
+  for (const it of items) {
+    const pq = Number(it.pack_qty), ps = Number(it.pack_size), pu = (it.pack_uom || "").toUpperCase();
+    if (!pu || !(pq > 1) || !(ps > 0)) continue;
+    const dim = DIM_BY_UOM[pu];
+    if (dim !== "weight" && dim !== "volume") continue;
+    if (factor("EA", pu, m) != null) continue;
+    const toBase = TO_BASE[pu];
+    byDim[dim].push({ id: it.id, sizeInBase: ps * toBase });
+  }
+  for (const dim of ["weight", "volume"]) {
+    const list = byDim[dim];
+    if (list.length < 2) continue;
+    const sizes = list.map((x) => x.sizeInBase);
+    const min = Math.min(...sizes), max = Math.max(...sizes);
+    if (min > 0 && max > min * 1.1) for (const x of list) out.add(x.id);
+  }
   return out;
 }
 function casePriceFrom(perBase, baseUom, pq, ps, pu) {
@@ -191,7 +226,7 @@ function priceInUnit(item, target, m) {
     if (k == null || !(k > 0)) return null;
     return { per: item.perBase / k };
   }
-  const t = statedTotals(item.packQty, item.packSize, item.packUom, item.caseWeightLb);
+  const t = statedTotals(item.packQty, item.packSize, item.packUom, item.caseWeightLb, m);
   if (t[targetDim]) {
     const total = t[targetDim].qty / TO_BASE[target];
     if (!(total > 0)) return null;
@@ -233,12 +268,15 @@ function newBlendStats(priced) {
   for (const p of priced) if (p.v > high || p.v < low) excluded.add(p.id);
   return { excluded };
 }
-// M2 §2.2: per-grade exclusion; blended survivor = union.
+// M2 §2.2 + R2 rules 1-2: per-grade exclusion; sized packs with
+// disagreeing sizes are flagged OUT before outlier exclusion.
 function newIngredientBlend(ingredient, itemsForIng, measures) {
   const target = canonicalFromBaseUnit(ingredient.base_unit);
   if (!target) return null;
+  const flagged = sizesDifferFlags(itemsForIng, measures, ingredient.base_unit);
   const priced = [];
   for (const it of itemsForIng) {
+    if (flagged.has(it.id)) continue;
     const pe = it.price_estimate;
     const rawN = pe?.per_base != null ? Number(pe.per_base) : NaN;
     if (!Number.isFinite(rawN) || rawN <= 0) continue;
