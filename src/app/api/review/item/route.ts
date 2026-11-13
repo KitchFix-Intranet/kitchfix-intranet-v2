@@ -359,11 +359,15 @@ export async function GET(req: NextRequest) {
     // In measures-world, the item's legacy each_measure columns are
     // NOT read. eachMeasure derives from case_weight_lb when the pack
     // is count-based; null otherwise.
+    // M1 R3 fix 2: the legacy pair decides how to SHOW the derived
+    // override; case_weight_lb decides what it is worth. Pass both.
     itemEachMeasure = shapeItemEachFromCaseWeight(
       caseWeightLb,
       it.pack_qty,
       it.pack_size,
       it.pack_uom,
+      it.each_measure_qty,
+      it.each_measure_uom,
     );
   } else if (rawIngredient) {
     measures = legacyEachMeasureToMeasures(

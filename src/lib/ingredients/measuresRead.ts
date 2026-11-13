@@ -66,36 +66,48 @@ export async function readMeasuresForIngredient(
   }));
 }
 
-// Batch read: one query across many ingredient ids. Keyed by
-// ingredient_id so callers can look up the subset they need. Throws
-// on error (M1 R2 fix 4).
-export async function readMeasuresFor(
+// Bulk read for list pages. Reads EVERY row of pr_ingredient_measures,
+// paginated at 1000 like ReviewQueue's main read, and groups by
+// ingredient_id. No .in(ids) filter: ReviewQueue passes 523 active
+// ingredient ids and IngredientMasters passes 506; an id list that
+// long on a URL trips PostgREST's URL-length limit and the throw-on-
+// error rule (M1 R2 fix 4) would 500 the page. The measures table is
+// tiny (4 rows at production baseline, bounded at 2 per ingredient),
+// so pulling every row is cheaper than threading ids through the
+// request. Throws on error.
+export async function readAllMeasures(
   client: SupabaseClient,
-  ingredientIds: readonly string[],
 ): Promise<Map<string, Measure[]>> {
   const out = new Map<string, Measure[]>();
-  if (ingredientIds.length === 0) return out;
-  const { data, error } = await client
-    .from("pr_ingredient_measures")
-    .select("ingredient_id,from_unit,qty,to_unit,source")
-    .in("ingredient_id", ingredientIds as string[]);
-  if (error) throw new Error(`readMeasuresFor: ${error.message}`);
-  for (const row of data ?? []) {
-    const r = row as {
-      ingredient_id: string;
-      from_unit: string;
-      qty: number;
-      to_unit: string;
-      source: Measure["source"];
-    };
-    const list = out.get(r.ingredient_id) ?? [];
-    list.push({
-      from_unit: String(r.from_unit).toUpperCase(),
-      qty: Number(r.qty),
-      to_unit: String(r.to_unit).toUpperCase(),
-      source: r.source,
-    });
-    out.set(r.ingredient_id, list);
+  const page = 1000;
+  let from = 0;
+  for (;;) {
+    const { data, error } = await client
+      .from("pr_ingredient_measures")
+      .select("ingredient_id,from_unit,qty,to_unit,source")
+      .order("ingredient_id", { ascending: true })
+      .range(from, from + page - 1);
+    if (error) throw new Error(`readAllMeasures: ${error.message}`);
+    const chunk = data ?? [];
+    for (const row of chunk) {
+      const r = row as {
+        ingredient_id: string;
+        from_unit: string;
+        qty: number;
+        to_unit: string;
+        source: Measure["source"];
+      };
+      const list = out.get(r.ingredient_id) ?? [];
+      list.push({
+        from_unit: String(r.from_unit).toUpperCase(),
+        qty: Number(r.qty),
+        to_unit: String(r.to_unit).toUpperCase(),
+        source: r.source,
+      });
+      out.set(r.ingredient_id, list);
+    }
+    if (chunk.length < page) break;
+    from += page;
   }
   return out;
 }

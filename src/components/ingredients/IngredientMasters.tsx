@@ -242,7 +242,7 @@ const LIVE_STATUSES: readonly string[] = ["active", "resale"];
 // DIM_BY_UOM / normUom still needed below for the item-dim-vs-master-dim
 // mismatch classification (an orthogonal use the item panel does not share).
 import { DIM_BY_UOM, BASE_BY_DIM, normUom, convertPer, canonicalFromBaseUnit } from "@/lib/ingredients/pack";
-import { isMeasuresWorld, readMeasuresFor } from "@/lib/ingredients/measuresRead";
+import { isMeasuresWorld, readAllMeasures } from "@/lib/ingredients/measuresRead";
 import { shapeIngredientEachFromMeasures, shapeItemEachFromCaseWeight } from "@/lib/ingredients/measuresShape";
 import { isPriceManualOverride } from "./itemTypes";
 
@@ -302,10 +302,10 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
     from += page;
   }
 
-  // Reshape ingredients in measures-world: each_measure_* comes from
-  // the count-to-X row, not the legacy columns.
+  // M1 R3 fix 1: paginated full-table read; no id filter so 506 active
+  // ingredients in recipe mode do not land on a PostgREST URL.
   const measuresByIngredient = measuresWorld
-    ? await readMeasuresFor(client, rawIngredients.map((i) => i.id))
+    ? await readAllMeasures(client)
     : new Map<string, never>();
   const ingredients: Ingredient[] = rawIngredients.map((r) => {
     if (!measuresWorld) return r;
@@ -634,15 +634,18 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
           // Null is standard; see src/lib/ingredients/grade.ts.
           grade: it.grade ?? null,
           usd12m: Number(it.usd_12m ?? 0),
-          // M1 R2 fix 1: in measures-world derive from case_weight_lb
-          // on a count pack; legacy columns are not read. Pre-0019 the
-          // column is absent and we keep the legacy shape.
+          // M1 R3 fix 2: case_weight_lb is the source of truth for
+          // whether the item has an override; the legacy pair controls
+          // DISPLAY shape when it agrees. Pre-0019 we keep the legacy
+          // shape unchanged.
           eachMeasure: measuresWorld
             ? shapeItemEachFromCaseWeight(
                 it.case_weight_lb ?? null,
                 it.pack_qty ?? null,
                 it.pack_size ?? null,
                 it.pack_uom ?? null,
+                it.each_measure_qty,
+                it.each_measure_uom,
               )
             : it.each_measure_qty != null && it.each_measure_uom
               ? { qty: Number(it.each_measure_qty), uom: it.each_measure_uom }

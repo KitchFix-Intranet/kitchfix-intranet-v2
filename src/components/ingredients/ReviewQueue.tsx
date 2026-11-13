@@ -7,7 +7,7 @@
 import { serviceClient } from "@/lib/supabase/service";
 import { COUNTABLE_OBSERVATIONS_VIEW, applyCountableFilter } from "@/lib/ingredients/countability";
 import { categoryForParent } from "@/lib/ingredients/categories";
-import { isMeasuresWorld, readMeasuresFor } from "@/lib/ingredients/measuresRead";
+import { isMeasuresWorld, readAllMeasures } from "@/lib/ingredients/measuresRead";
 import { shapeIngredientEachFromMeasures, shapeItemEachFromCaseWeight } from "@/lib/ingredients/measuresShape";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { Tabs } from "./Tabs";
@@ -193,16 +193,12 @@ async function loadReview() {
   if (vendorsRes.error) throw vendorsRes.error;
   if (ingredientsRes.error) throw ingredientsRes.error;
 
-  // M1 R2 fix 1: in measures-world, batch-read every ingredient's
-  // measures ONCE and rewrite its legacy each_measure_* triple from
-  // the count-to-X row. The downstream builders at :399 + :528 read
-  // ingredient.each_measure_qty/uom via the ingredients list below;
-  // no per-row query.
+  // M1 R3 fix 1: readAllMeasures pages the whole pr_ingredient_measures
+  // table (tiny, bounded at 2 rows per ingredient) rather than issuing
+  // an .in(523 ids) list that would overrun PostgREST's URL length
+  // limit and 500 the page. No ingredient-id filter.
   const measuresByIngredient = measuresWorld
-    ? await readMeasuresFor(
-        client,
-        ((ingredientsRes.data ?? []) as Ingredient[]).map((r) => r.id),
-      )
+    ? await readAllMeasures(client)
     : new Map<string, never>();
   const ingredientsReshaped: Ingredient[] = ((ingredientsRes.data ?? []) as Ingredient[]).map((r) => {
     if (!measuresWorld) return r;
@@ -433,18 +429,19 @@ async function loadReview() {
           // Q2 §4: pack-note (evidence-strength phrase from the P1/P2
           // backfill). Pass through verbatim; null for most items.
           packNote: it.pack_note ?? null,
-          // M1 R2 fix 1: in measures-world, the item's eachMeasure is
-          // derived from case_weight_lb when the pack is a count pack
-          // (count * weight_of_one = case_weight_lb). The item's own
-          // legacy each_measure columns are not read. Pre-0019 the
-          // column is absent and we fall back to the legacy columns
-          // unchanged.
+          // M1 R2 fix 1 + R3 fix 2: in measures-world, case_weight_lb
+          // decides whether the item has an override and what it is
+          // worth. The legacy pair (when consistent with the case
+          // weight within 1 percent) decides how to SHOW it. Pre-0019
+          // we fall back to the legacy pair unchanged.
           eachMeasure: measuresWorld
             ? shapeItemEachFromCaseWeight(
                 it.case_weight_lb ?? null,
                 it.pack_qty,
                 it.pack_size,
                 it.pack_uom,
+                it.each_measure_qty,
+                it.each_measure_uom,
               )
             : it.each_measure_qty != null && it.each_measure_uom
               ? { qty: Number(it.each_measure_qty), uom: it.each_measure_uom }
@@ -572,18 +569,19 @@ async function loadReview() {
           // Q2 §4: pack-note (evidence-strength phrase from the P1/P2
           // backfill). Pass through verbatim; null for most items.
           packNote: it.pack_note ?? null,
-          // M1 R2 fix 1: in measures-world, the item's eachMeasure is
-          // derived from case_weight_lb when the pack is a count pack
-          // (count * weight_of_one = case_weight_lb). The item's own
-          // legacy each_measure columns are not read. Pre-0019 the
-          // column is absent and we fall back to the legacy columns
-          // unchanged.
+          // M1 R2 fix 1 + R3 fix 2: in measures-world, case_weight_lb
+          // decides whether the item has an override and what it is
+          // worth. The legacy pair (when consistent with the case
+          // weight within 1 percent) decides how to SHOW it. Pre-0019
+          // we fall back to the legacy pair unchanged.
           eachMeasure: measuresWorld
             ? shapeItemEachFromCaseWeight(
                 it.case_weight_lb ?? null,
                 it.pack_qty,
                 it.pack_size,
                 it.pack_uom,
+                it.each_measure_qty,
+                it.each_measure_uom,
               )
             : it.each_measure_qty != null && it.each_measure_uom
               ? { qty: Number(it.each_measure_qty), uom: it.each_measure_uom }
