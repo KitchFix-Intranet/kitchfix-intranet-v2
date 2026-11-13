@@ -11,8 +11,7 @@
 // Pack and price row at rest, not here.
 
 import { fmtCount, fmtDate, fmtPackNumbersInText, fmtUsd, fmtUsdLong } from "@/lib/fmt";
-import { uomLabel } from "@/lib/ingredients/pack";
-import { deriveRecipePrice } from "@/lib/ingredients/measures";
+import { canonicalFromBaseUnit, uomLabel } from "@/lib/ingredients/pack";
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 
 export function PanelStrip({
@@ -40,23 +39,26 @@ export function PanelStrip({
       : item.perBaseUom === "EA" ? "each"
       : item.perBaseUom.toLowerCase()
     : null;
-  const ingredientMeasure =
-    ingredient?.each_measure_qty != null && ingredient?.each_measure_uom
-      ? { qty: Number(ingredient.each_measure_qty), uom: ingredient.each_measure_uom }
-      : null;
-  const derived = deriveRecipePrice({
-    perBase: item.perBase,
-    perBaseUom: item.perBaseUom,
-    itemMeasure: item.eachMeasure,
-    ingredientMeasure,
-  });
+  // M2 §2.7 + §4B: the strip's unit price shows the price in the
+  // ingredient's base_unit when the item reaches it, with the stored
+  // price as the sub-line; today's stored price alone when it does
+  // not. perBaseInIngUnit is computed server-side via priceInUnit.
+  const ingUnitLabel = ingredient ? uomLabel(canonicalFromBaseUnit(ingredient.base_unit) ?? "") : "";
+  const primaryPer = item.perBaseInIngUnit ?? null;
+  const showIngUnitAsPrimary =
+    primaryPer != null && Number.isFinite(primaryPer) && primaryPer > 0 && ingUnitLabel;
 
   return (
     <div className="kf-ipanel__strip" aria-label="Item summary">
       <div className="kf-ipanel__strip-cell">
         <span className="kf-ipanel__strip-label">Unit price</span>
         <span className="kf-ipanel__strip-value kf-ipanel__strip-value--accent">
-          {item.perBase != null && perBaseUomLower ? (
+          {showIngUnitAsPrimary ? (
+            <>
+              {fmtUsd(primaryPer)}{" "}
+              <span className="kf-ipanel__strip-value-unit">/ {ingUnitLabel}</span>
+            </>
+          ) : item.perBase != null && perBaseUomLower ? (
             <>
               {fmtUsd(item.perBase)}{" "}
               <span className="kf-ipanel__strip-value-unit">/ {perBaseUomLower}</span>
@@ -67,10 +69,10 @@ export function PanelStrip({
         </span>
         <span className="kf-ipanel__strip-sub kf-ipanel__strip-sub--accent">
           <span>{confidenceWord}</span>
-          {derived ? (
+          {showIngUnitAsPrimary && item.perBase != null && perBaseUomLower ? (
             <>
               <span>·</span>
-              <strong>{fmtUsd(derived.per)} / {uomLabel(derived.uom)}</strong>
+              <span>{fmtUsd(item.perBase)} / {perBaseUomLower}</span>
             </>
           ) : null}
         </span>

@@ -23,8 +23,15 @@ import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 import { ItemGradeBlock } from "./ItemGradeBlock";
 import { PackOverrideBlock } from "./PackOverrideBlock";
 import { PriceOverrideBlock } from "./PriceOverrideBlock";
-import { ItemEachMeasureBlock } from "./ItemEachMeasureBlock";
+// M2 §4B §2.7: ItemEachMeasureBlock is no longer mounted. The item-
+// side override is now CaseWeightBlock (case_weight_lb); the "One
+// each is" sentence lives on the ingredient zone's Measures block.
+import { CaseWeightBlock } from "./CaseWeightBlock";
+import { canonicalFromBaseUnit, uomLabel } from "@/lib/ingredients/pack";
 import { parsePackNormalized, type PackHint } from "./packHelpers";
+// M2 §4B part 3 fix 7: HowWeGotTherePhrase composes the sentence from
+// priceInUnit's returned route data. No price arithmetic in the view.
+import { priceInUnit, type Measure } from "@/lib/ingredients/measures";
 
 // Plain-English pack provenance. One phrase per source. §1b: this is
 // the muted micro line under the summary, not the label column.
@@ -44,6 +51,81 @@ function reviewChipTitle(item: ReviewGroupItem): string {
   return item.matchSource === "catalog_name" && item.matchScore != null
     ? `matched to a catalog row by name (trigram similarity ${item.matchScore.toFixed(2)}); verify this pack is right`
     : "pack needs human verification";
+}
+
+// M2 §4B part 3 fix 7: "How we got there" calls priceInUnit and
+// formats from its returned route data. Lower-case units; no price
+// arithmetic in the view.
+function HowWeGotTherePhrase({
+  item,
+  ingredient,
+}: {
+  item: ReviewGroupItem;
+  ingredient: ReviewCardIngredient;
+}) {
+  const target = canonicalFromBaseUnit(ingredient.base_unit);
+  if (!target || item.perBase == null || item.perBaseUom == null) return null;
+  const result = priceInUnit(
+    {
+      perBase: item.perBase,
+      baseUom: item.perBaseUom,
+      packQty: item.packQty ?? null,
+      packSize: item.packSize ?? null,
+      packUom: item.packUom ?? null,
+      caseWeightLb: item.caseWeightLb ?? null,
+    },
+    target,
+    { measures: (ingredient.measures ?? []) as Measure[] },
+  );
+  if (!result) return null;
+  const targetLabel = uomLabel(target).toLowerCase();
+  const perStr = fmtUsd(result.per);
+  const totalRounded = Math.round(result.total * 1000) / 1000;
+  const totalUomLabel = uomLabel(result.totalUom).toLowerCase();
+  if (result.route.kind === "fallback") {
+    return (
+      <span className="kf-ipanel__math">
+        Prices out at {perStr} / {targetLabel} via the ingredient's measures.
+      </span>
+    );
+  }
+  const casePriceStr = result.casePrice != null ? fmtUsd(result.casePrice) : null;
+  if (result.route.kind === "stated") {
+    const viaCw = result.route.viaCaseWeight;
+    const fromQty = Math.round(result.route.fromQty * 1000) / 1000;
+    const fromLabel = uomLabel(result.route.fromUom).toLowerCase();
+    const prefix = viaCw
+      ? `This case weighs ${fromQty} lb`
+      : `${fromQty} ${fromLabel} in the case`;
+    if (casePriceStr) {
+      return (
+        <span className="kf-ipanel__math">
+          {prefix}, so {casePriceStr} / {totalRounded} = {perStr} / {targetLabel}
+        </span>
+      );
+    }
+    return (
+      <span className="kf-ipanel__math">
+        {prefix}. Prices out at {perStr} / {targetLabel}.
+      </span>
+    );
+  }
+  // route.kind === "measure"
+  const fromQty = Math.round(result.route.fromQty * 1000) / 1000;
+  const fromLabel = uomLabel(result.route.fromUom).toLowerCase();
+  const prefix = `${fromQty} ${fromLabel} in the case, ${totalRounded} ${totalUomLabel} via the measures`;
+  if (casePriceStr) {
+    return (
+      <span className="kf-ipanel__math">
+        {prefix}, so {casePriceStr} / {totalRounded} = {perStr} / {targetLabel}
+      </span>
+    );
+  }
+  return (
+    <span className="kf-ipanel__math">
+      {prefix}. Prices out at {perStr} / {targetLabel}.
+    </span>
+  );
 }
 
 // Lowercase display of a stored UOM (LB → lb, FLOZ → fl oz, EA → each).
@@ -184,15 +266,32 @@ export function PanelItemZone({
               hint={packHint}
               onDone={() => { onDone(); setPackOpen(false); }}
               onCancel={() => setPackOpen(false)}
+              measures={ingredient?.measures as Parameters<typeof PackOverrideBlock>[0]["measures"]}
             />
           </div>
         ) : null}
       </div>
 
-      {/* Row 2: One each is - item-side override (N11 §2 R4: component
-          owns the row so Save sits in the shared action column). */}
-      {item.perBaseUom === "EA" ? (
-        <ItemEachMeasureBlock item={item} ingredient={ingredient} onDone={onDone} />
+      {/* M2 §4B §2.7: item-side override moves to Case weight. The
+          block is hidden for a weight case (CaseWeightBlock no-ops),
+          behind a link for a count case at rest, open when a value
+          is stored or when the item is left out as an outlier. */}
+      <CaseWeightBlock
+        item={item}
+        forceOpen={item.caseWeightLb != null || item.statusKind === "check_it"}
+        onDone={onDone}
+      />
+
+      {/* M2 §4B §2.7: How we got there - the route to the price in
+          the ingredient's unit, plain words and lower-case units. */}
+      {item.perBase != null && item.perBaseInIngUnit != null && ingredient ? (
+        <div className="kf-ipanel__row kf-ipanel__row--howwegot">
+          <div className="kf-ipanel__row-label">How we got there</div>
+          <div className="kf-ipanel__row-value">
+            <HowWeGotTherePhrase item={item} ingredient={ingredient} />
+          </div>
+          <div className="kf-ipanel__row-action" />
+        </div>
       ) : null}
 
       {/* Row 3: Grade -------------------------------------------- */}

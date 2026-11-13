@@ -22,7 +22,14 @@ import {
   readMeasuresForIngredient,
   legacyEachMeasureToMeasures,
 } from "@/lib/ingredients/measuresRead";
-import { shapeIngredientEachFromMeasures } from "@/lib/ingredients/measuresShape";
+// M2 §4B part 2: shape helper no longer called here. Nothing on
+// screen reads each_measure_*.
+// Polish round 2 fix 2: ingredient payload carries blendedAvgPerBase
+// so attention's outlier head reads the same figure as the Ingredients
+// tab. Same code path (blendStats + priceInUnit).
+import { priceInUnit } from "@/lib/ingredients/measures";
+import { blendStats } from "@/lib/ingredients/blend";
+import { canonicalFromBaseUnit } from "@/lib/ingredients/pack";
 
 export const dynamic = "force-dynamic";
 
@@ -72,13 +79,10 @@ export async function GET(req: NextRequest) {
   let ingredient: ReviewCardIngredient = rawIngredient;
   if (newWorld) {
     measures = await readMeasuresForIngredient(client, id);
-    const shaped = shapeIngredientEachFromMeasures(measures);
-    ingredient = {
-      ...rawIngredient,
-      each_measure_qty: shaped.qty,
-      each_measure_uom: shaped.uom,
-      each_measure_source: shaped.source,
-    };
+    // M2 §4B part 2: no legacy-triple reshape. Nothing on screen
+    // reads each_measure_*; the authoritative shape is `measures`
+    // which rides on the response below.
+    ingredient = rawIngredient;
   } else {
     measures = legacyEachMeasureToMeasures(
       rawIngredient.each_measure_qty,
@@ -89,8 +93,63 @@ export async function GET(req: NextRequest) {
   const yieldPct = (ingredient as { yield_pct?: number | null }).yield_pct ?? null;
   const yieldSource = (ingredient as { yield_source?: string | null }).yield_source ?? null;
 
+  // Polish round 2 fix 2: compute blended lens $ / base_unit across
+  // THIS ingredient's linked items. Same code path IngredientMasters
+  // + /api/review/item use; attention's outlier head reads this.
+  let blendedAvgPerBase: number | null = null;
+  const targetUom = canonicalFromBaseUnit(ingredient.base_unit);
+  if (targetUom) {
+    const { data: mates } = await client
+      .from("pr_vendor_items")
+      .select("id,pack_qty,pack_size,pack_uom,case_weight_lb,price_estimate,usd_12m")
+      .eq("ingredient_id", id);
+    const priced: Array<{ id: string; v: number; usd: number }> = [];
+    for (const row of (mates ?? []) as Array<{
+      id: string;
+      pack_qty: number | null;
+      pack_size: number | null;
+      pack_uom: string | null;
+      case_weight_lb: number | null;
+      price_estimate: { per_base?: number | string | null; base_uom?: string | null } | null;
+      usd_12m: number | null;
+    }>) {
+      const pe = row.price_estimate ?? null;
+      const matePerBase = pe?.per_base != null ? Number(pe.per_base) : null;
+      const mateBaseUom = pe?.base_uom ?? null;
+      if (matePerBase == null || !Number.isFinite(matePerBase) || matePerBase <= 0 || !mateBaseUom) continue;
+      const r = priceInUnit(
+        {
+          perBase: matePerBase,
+          baseUom: mateBaseUom,
+          packQty: row.pack_qty,
+          packSize: row.pack_size,
+          packUom: row.pack_uom,
+          caseWeightLb: row.case_weight_lb,
+        },
+        targetUom,
+        { measures },
+      );
+      if (r?.per != null && Number.isFinite(r.per) && r.per > 0) {
+        priced.push({ id: row.id, v: r.per, usd: Number(row.usd_12m ?? 0) });
+      }
+    }
+    const stats = blendStats(priced);
+    blendedAvgPerBase = stats.survivorMean;
+  }
+
+  // M2 §4B part 2: project measures + yield onto the ingredient
+  // object itself so PanelIngredientZone's new Measures + Yield rows
+  // read from one place. The top-level sibling fields stay for any
+  // reader still using them.
+  const ingredientOut = {
+    ...ingredient,
+    measures,
+    yieldPct,
+    yieldSource,
+    blendedAvgPerBase,
+  };
   return NextResponse.json({
-    ingredient,
+    ingredient: ingredientOut,
     parents,
     measures,
     yieldPct,

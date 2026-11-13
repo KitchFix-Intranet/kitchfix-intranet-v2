@@ -28,6 +28,12 @@ export type ReviewGroupItem = {
   // the New-ingredient panel's "Costed per" preview. Already selected
   // at ReviewQueue:145; one row-object field add, no SELECT change.
   packUom: string | null;
+  // M2 §4B part 2: raw pack_qty / pack_size drive the suggestions
+  // rule (prompt 2.4: pack_qty > 1 with pack_size in weight/volume
+  // suggests "1 each = pack_size pack_uom"). Optional for builders
+  // that have not updated.
+  packQty?: number | null;
+  packSize?: number | null;
   packState: string;
   // P1 correction 2c: 'catalog_sibling' names a pack that came from
   // a proven same-vendor expansion (invoice pack_text matches >=2
@@ -115,6 +121,21 @@ export type ReviewGroupItem = {
   // Supersedes N5's eachWeightLb; qty + uom replace the pounds-only
   // field, which the DB column each_weight_lb has been emptied of.
   eachMeasure: { qty: number; uom: string } | null;
+  // M2 §4B: per-unit price expressed in the ingredient's base_unit,
+  // computed server-side via priceInUnit (the one M2 price function).
+  // Null when the item cannot reach base_unit or has no price yet.
+  // Keyed by the item here so every screen - panel strip, review
+  // card, master list - reads one number. Optional on the type so
+  // builders that have not updated yet compile.
+  perBaseInIngUnit?: number | null;
+  // M2 §4B: case weight set by hand (item-level override). Null
+  // when the ingredient's measures provide the weight.
+  caseWeightLb?: number | null;
+  // M2 §4B part 3: per-item status key - server-computed and shared
+  // by every panel + attention + outlier surface. Mirrors
+  // MasterLinkedItem.statusKind. Optional so pre-M2 builders
+  // compile; readers default to "in_blend" when absent.
+  statusKind?: "in_blend" | "check_it" | "needs_measure" | "sizes_differ";
   // N13 R3: five fields so the item-panel surfaces (strip, attention,
   // head pills) carry what VendorItemDrawer displayed. Present on
   // every /api/review/item response; optional at the type level so
@@ -192,4 +213,19 @@ export type ReviewCardIngredient = {
   each_measure_qty: number | null;
   each_measure_uom: string | null;
   each_measure_source: string | null;
+  // M2 §4B part 2: measures + yield ride on the ingredient so every
+  // panel mount (review queue, vendor items, Ingredients tab) reads
+  // the same data without a second fetch. Populated server-side by
+  // /api/review/item, /api/review/ingredient, ReviewQueue, and
+  // IngredientMasters. Optional on the type for builders that have
+  // not updated yet.
+  measures?: Array<{ from_unit: string; qty: number; to_unit: string; source: string }>;
+  yieldPct?: number | null;
+  yieldSource?: string | null;
+  // Polish round 2 fix 2: blended lens $ / base_unit, computed
+  // server-side via blend.ts/buildLensStats or blendStats across
+  // THIS ingredient's linked items (not a Review-queue group).
+  // Attention surfaces read this for the outlier head comparison;
+  // null when the server cannot supply one.
+  blendedAvgPerBase?: number | null;
 };

@@ -21,7 +21,9 @@ import { toast } from "@/components/ui/Toaster";
 import { fmtUsd } from "@/lib/fmt";
 import { SUPER_CATEGORIES, type SuperCategory } from "@/lib/ingredients/categories";
 import { DIM_BY_UOM, WEIGHT_UOMS, VOLUME_UOMS, uomLabel } from "@/lib/ingredients/pack";
-import { deriveRecipePrice } from "@/lib/ingredients/measures";
+// M2 §4B amendment 4: no screen imports deriveRecipePrice. The
+// measureFoot sentence below reads item.perBaseInIngUnit (set by
+// the server via priceInUnit) instead of re-deriving in the client.
 import {
   IngredientAllergens,
   allergenStatus,
@@ -32,6 +34,9 @@ import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 import { SaveFlash } from "./SaveFlash";
 import { postJson, errMsg } from "./common";
 import { BaseUnitControl } from "./BaseUnitControl";
+import { PanelMeasuresBlock, type SuggestionCandidate } from "./PanelMeasuresBlock";
+import { PanelYieldRow } from "./PanelYieldRow";
+import { PanelChipsRow } from "./PanelChipsRow";
 
 export function PanelIngredientZone({
   ingredient,
@@ -40,11 +45,25 @@ export function PanelIngredientZone({
   item,
   parentOptions,
   onDone,
+  measureOpen,
+  costedPerFocusNonce,
+  suggestionCandidates: suggestionCandidatesProp,
+  itemsReachBase: itemsReachBaseProp,
 }: {
   ingredient: ReviewCardIngredient;
   item: ReviewGroupItem | null;
   parentOptions: string[];
   onDone: () => void;
+  // M2 §4B part 3 fix 6: DetailPanel threads these so attention
+  // buttons can open the measures block prefilled + focus the
+  // Costed per control. Polish round 2 fix 1: pickUnit=true means
+  // the user has NOT chosen a to-unit yet (needs_measure path);
+  // the Measures block leaves the to-unit blank and limits the
+  // options to the uom's dim.
+  measureOpen?: { uom: string; qty: number | null; pickUnit: boolean; nonce: number } | null;
+  costedPerFocusNonce?: number;
+  suggestionCandidates?: Array<{ id: string; packQty: number | null; packSize: number | null; packUom: string | null; usd12m: number }>;
+  itemsReachBase?: boolean;
 }) {
   // --- Rename ----------------------------------------------------
   const [renameDraft, setRenameDraft] = useState(ingredient.name);
@@ -61,31 +80,58 @@ export function PanelIngredientZone({
   const [catSavedAt, setCatSavedAt] = useState<number | null>(null);
   const [catError, setCatError] = useState<string | null>(null);
 
-  // --- One each ---------------------------------------------------
-  // N11 §2 R2: measure keeps its own baseline state and own sync
-  // effect, split out of the shared rename/category sync below. A
-  // refresh updates the baseline but never wipes a dirty draft on
-  // the same ingredient.
-  type MeasureShape = { qty: string; uom: string; source: string };
-  const makeMeasure = (): MeasureShape => ({
-    qty: ingredient.each_measure_qty == null ? "" : String(ingredient.each_measure_qty),
-    uom: (ingredient.each_measure_uom ?? "").toUpperCase(),
-    source: ingredient.each_measure_source ?? "house_test",
-  });
-  const equalMeasure = (a: MeasureShape, b: MeasureShape) =>
-    a.qty === b.qty && a.uom === b.uom && a.source === b.source;
+  // M2 §4B: wiring the new Measures + Chips + Yield blocks.
+  //   - measuresForBlock: ingredient's measures list (M1 payload adds
+  //     it onto ReviewCardIngredient; falls back to the one-row legacy
+  //     shape if a caller is still on the pre-M2 type).
+  //   - addForUom: a dashed chip click signals the measures Add row
+  //     to open prefilled.
+  //   - suggestionCandidates: not wired from PanelIngredientZone yet;
+  //     IngredientMasters tab can pass linked items' pack shapes once
+  //     the prop lands. Empty here means no suggestion row renders.
+  //   - itemsReachBase: suggestion-rule gate (§2.4 rule 5). Safe
+  //     default is true (do not surface a suggestion when we have no
+  //     signal). The item panel's parent knows the linked items'
+  //     reach; it can pass this prop in a follow-up.
+  const [addForUom, setAddForUom] = useState<string | null>(null);
+  const [addPrefillQty, setAddPrefillQty] = useState<number | null>(null);
+  // Polish round 2 fix 1: pickUnit=true means the Measures block
+  // leaves the to-unit blank and limits the options to addForUom's dim.
+  const [addPickUnit, setAddPickUnit] = useState<boolean>(false);
+  // Watch DetailPanel's bus: when attention fires "Add a measure",
+  // open the measures block's add row with the bridge uom + prefill.
+  useEffect(() => {
+    if (!measureOpen) return;
+    setAddForUom(measureOpen.uom);
+    setAddPrefillQty(measureOpen.qty ?? null);
+    setAddPickUnit(measureOpen.pickUnit);
+  }, [measureOpen?.nonce, measureOpen?.uom, measureOpen?.qty, measureOpen?.pickUnit, measureOpen]);
+  const measuresForBlock =
+    (ingredient.measures as
+      | Array<{ from_unit: string; qty: number; to_unit: string; source: string }>
+      | undefined) ?? [];
+  const suggestionCandidates: SuggestionCandidate[] = suggestionCandidatesProp ?? [];
+  const itemsReachBase = itemsReachBaseProp ?? true;
 
-  const [measureBaseline, setMeasureBaseline] = useState<MeasureShape>(() => makeMeasure());
-  const [measureDraft, setMeasureDraft] = useState<MeasureShape>(measureBaseline);
-  const [measureBusy, setMeasureBusy] = useState(false);
-  const [measureSavedAt, setMeasureSavedAt] = useState<number | null>(null);
-  const [measureError, setMeasureError] = useState<string | null>(null);
-  const measurePrevIdRef = useRef(ingredient.id);
-  const measurePriorStoredRef = useRef<MeasureShape>(measureBaseline);
+  // M2 §4B part 3 fix 6: focus the Costed per control when the
+  // "Change Costed per" attention button fires.
+  const costedPerRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!costedPerFocusNonce) return;
+    const el = costedPerRef.current;
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const first = el.querySelector("select, input, button") as HTMLElement | null;
+    first?.focus();
+  }, [costedPerFocusNonce]);
+
+  // M2 §4B part 2: the N6 measure state (measureBaseline/measureDraft/
+  // doMeasureSave/doMeasureClear) is gone. The new PanelMeasuresBlock
+  // owns all measure editing via /api/review/set-ingredient-measures;
+  // no screen reads ingredient.each_measure_* any more.
 
   // Keep rename/category drafts in sync when the ingredient reloads
-  // underneath. Measure fields are deliberately absent from this
-  // effect per R2 (own effect below).
+  // underneath.
   useEffect(() => {
     setRenameDraft(ingredient.name);
     setSuperDraft(ingredient.category ?? "");
@@ -95,27 +141,6 @@ export function PanelIngredientZone({
     ingredient.name,
     ingredient.category,
     ingredient.parent,
-  ]);
-
-  useEffect(() => {
-    const next: MeasureShape = {
-      qty: ingredient.each_measure_qty == null ? "" : String(ingredient.each_measure_qty),
-      uom: (ingredient.each_measure_uom ?? "").toUpperCase(),
-      source: ingredient.each_measure_source ?? "house_test",
-    };
-    const idChanged = measurePrevIdRef.current !== ingredient.id;
-    const priorStored = measurePriorStoredRef.current;
-    measurePrevIdRef.current = ingredient.id;
-    measurePriorStoredRef.current = next;
-    setMeasureBaseline(next);
-    setMeasureDraft((cur) =>
-      idChanged || equalMeasure(cur, priorStored) ? next : cur
-    );
-  }, [
-    ingredient.id,
-    ingredient.each_measure_qty,
-    ingredient.each_measure_uom,
-    ingredient.each_measure_source,
   ]);
 
   async function doRename() {
@@ -178,101 +203,6 @@ export function PanelIngredientZone({
     onDone();
   }
 
-  // N11 §2: measure save goes through an explicit press now. The
-  // qty-blur / unit-change auto-save and the blank-blur-clears
-  // behaviour are both gone. Emptying the number is invalid (R3);
-  // the Clear link below the row is the only way to remove.
-  const measureDirty = !equalMeasure(measureDraft, measureBaseline);
-  const measureQtyTrimmed = measureDraft.qty.trim();
-  const measureQtyNum = Number(measureQtyTrimmed);
-  const measureQtyValid =
-    measureQtyTrimmed !== "" &&
-    Number.isFinite(measureQtyNum) &&
-    measureQtyNum > 0 &&
-    measureQtyNum <= 100000;
-  const measureUomDim = DIM_BY_UOM[measureDraft.uom];
-  const measureUomValid = measureUomDim === "weight" || measureUomDim === "volume";
-  const measureSaveEnabled =
-    !measureBusy && measureDirty && measureQtyValid && measureUomValid;
-  const measureHint =
-    measureQtyTrimmed === "" ? "Enter a number"
-    : measureQtyValid && !measureUomValid ? "Pick a unit"
-    : null;
-
-  async function doMeasureSave() {
-    if (!measureSaveEnabled) return;
-    setMeasureBusy(true);
-    setMeasureError(null);
-    const u = measureDraft.uom;
-    const r = await postJson("/api/review/set-each-measure", {
-      ingredientId: ingredient.id,
-      qty: measureQtyNum,
-      uom: u,
-      source: measureDraft.source,
-    });
-    if (!r.ok) {
-      const msg = errMsg(r.data, `Save failed (${r.status})`);
-      setMeasureError(msg);
-      toast(msg, { tone: "block" });
-      setMeasureBusy(false);
-      return;
-    }
-    toast(`Saved: one each is ${Math.round(measureQtyNum * 10000) / 10000} ${uomLabel(u)}`);
-    const saved: MeasureShape = {
-      qty: String(measureQtyNum),
-      uom: u,
-      source: measureDraft.source,
-    };
-    measurePriorStoredRef.current = saved;
-    setMeasureBaseline(saved);
-    setMeasureDraft(saved);
-    setMeasureSavedAt(Date.now());
-    setMeasureBusy(false);
-    onDone();
-  }
-
-  async function doMeasureClear() {
-    if (measureBusy) return;
-    if (ingredient.each_measure_qty == null) return;
-    setMeasureBusy(true);
-    setMeasureError(null);
-    const r = await postJson("/api/review/set-each-measure", {
-      ingredientId: ingredient.id,
-      qty: null,
-    });
-    if (!r.ok) {
-      const msg = errMsg(r.data, `Clear failed (${r.status})`);
-      setMeasureError(msg);
-      toast(msg, { tone: "block" });
-      setMeasureBusy(false);
-      return;
-    }
-    toast("Measure cleared");
-    const cleared: MeasureShape = { qty: "", uom: "", source: measureDraft.source };
-    measurePriorStoredRef.current = cleared;
-    setMeasureBaseline(cleared);
-    setMeasureDraft(cleared);
-    setMeasureSavedAt(Date.now());
-    setMeasureBusy(false);
-    onDone();
-  }
-
-  function onMeasureDiscard() {
-    if (measureBusy) return;
-    setMeasureDraft(measureBaseline);
-    setMeasureError(null);
-  }
-
-  function onMeasureKey(e: React.KeyboardEvent<HTMLElement>) {
-    if (e.key === "Enter" && measureSaveEnabled) {
-      e.preventDefault();
-      void doMeasureSave();
-    } else if (e.key === "Escape" && measureDirty) {
-      e.preventDefault();
-      onMeasureDiscard();
-    }
-  }
-
   const renameDirty =
     renameDraft.trim().length >= 2 &&
     renameDraft.trim() !== ingredient.name;
@@ -292,49 +222,8 @@ export function PanelIngredientZone({
   });
   const onAllergenState = useCallback((s: AllergensState) => setAllergenCtl(s), []);
 
-  // N8 round 3 fix 1: the ingredient's One each row describes the
-  // INGREDIENT's own measure, so call deriveRecipePrice with
-  // itemMeasure: null. The item's own measure (when it has one) wins
-  // in the strip; here we append a short "This item uses its own
-  // measure." clause so it is clear which number the engine will use.
-  const measureFoot = (() => {
-    const stored = ingredient.each_measure_qty;
-    const draftN = Number(measureDraft.qty);
-    const n = Number.isFinite(draftN) && draftN > 0 ? draftN : (stored != null ? Number(stored) : null);
-    if (n == null) {
-      return {
-        tone: "warn" as const,
-        label: "not set yet",
-        body: "Enter what one each is, by weight or by volume, and recipes can cost it that way. The stored price stays per each.",
-      };
-    }
-    const u = measureDraft.uom || (ingredient.each_measure_uom ?? "LB").toUpperCase();
-    if (item && item.perBaseUom === "EA" && item.perBase != null) {
-      const derivedFromIngredient = deriveRecipePrice({
-        perBase: item.perBase,
-        perBaseUom: item.perBaseUom,
-        itemMeasure: null,
-        ingredientMeasure: { qty: n, uom: u },
-      });
-      if (derivedFromIngredient) {
-        const itemHasOwnMeasure = item.eachMeasure != null;
-        const suffix = itemHasOwnMeasure ? " This item uses its own measure." : "";
-        return {
-          tone: "good" as const,
-          label: "Saved",
-          body:
-            `Recipes will use ${fmtUsd(derivedFromIngredient.per)} / ${uomLabel(derivedFromIngredient.uom)} ` +
-            `(${fmtUsd(item.perBase)} each ÷ ${derivedFromIngredient.qty} ${uomLabel(derivedFromIngredient.measureUom)}).` +
-            ` The stored price stays per each.${suffix}`,
-        };
-      }
-    }
-    return {
-      tone: "good" as const,
-      label: "Saved",
-      body: `Recipes will use this measure to cost in ${uomLabel(u)}. The stored price stays per each.`,
-    };
-  })();
+  // M2 §4B part 2: measureFoot removed. PanelMeasuresBlock owns the
+  // saved-state copy below its own list rows.
 
   return (
     <section className="kf-ipanel__zone kf-ipanel__zone--ing" aria-label="Ingredient">
@@ -472,7 +361,7 @@ export function PanelIngredientZone({
       </div>
 
       {/* Row 3: Costed per --------------------------------------- */}
-      <div className="kf-ipanel__row kf-ipanel__row--split">
+      <div className="kf-ipanel__row kf-ipanel__row--split kf-ipanel__row--costed" ref={costedPerRef}>
         <div className="kf-ipanel__row-label">Costed per</div>
         <BaseUnitControl
           row={{ id: ingredient.id, name: ingredient.name, baseUnit: ingredient.base_unit }}
@@ -481,151 +370,44 @@ export function PanelIngredientZone({
         <div className="kf-ipanel__row-hint">How recipes count this ingredient.</div>
       </div>
 
-      {/* Row 4: One each is - N11 §2 R4: standard row shape (label /
-          value / action). Value cell holds qty + unit + source; Save
-          lives in the action column; the note row below carries
-          saved-state, dirty "Not saved yet · Discard", and the
-          immediate Clear link when a measure is stored. */}
-      {ingredient.base_unit === "each" ? (
-        <div className="kf-ipanel__row kf-ipanel__row--measure">
-          <label className="kf-ipanel__row-label" htmlFor={`ing-m-qty-${ingredient.id}`}>
-            One each is
-          </label>
-          <div className="kf-ipanel__row-value">
-            <div className="kf-ipanel__row-value-flex">
-              <input
-                id={`ing-m-qty-${ingredient.id}`}
-                type="number"
-                inputMode="decimal"
-                step="0.0001"
-                min="0"
-                className="kf-ipanel__ctl kf-ipanel__ctl--qty"
-                value={measureDraft.qty}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setMeasureDraft((m) => ({ ...m, qty: v }));
-                }}
-                onKeyDown={onMeasureKey}
-                placeholder=""
-                aria-label="One each, quantity"
-                disabled={measureBusy}
-              />
-              <select
-                className="kf-ipanel__ctl kf-ipanel__ctl--uom"
-                value={measureDraft.uom}
-                onChange={(e) => {
-                  const v = e.target.value.toUpperCase();
-                  setMeasureDraft((m) => ({ ...m, uom: v }));
-                }}
-                onKeyDown={onMeasureKey}
-                disabled={measureBusy}
-                aria-label="One each, unit"
-              >
-                <option value="" disabled>Unit</option>
-                <optgroup label="Weight">
-                  {WEIGHT_UOMS.map((u) => (
-                    <option key={u} value={u}>{uomLabel(u)}</option>
-                  ))}
-                </optgroup>
-                <optgroup label="Volume">
-                  {VOLUME_UOMS.map((u) => (
-                    <option key={u} value={u}>{uomLabel(u)}</option>
-                  ))}
-                </optgroup>
-              </select>
-              <select
-                className="kf-ipanel__ctl kf-ipanel__ctl--source"
-                value={measureDraft.source}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setMeasureDraft((m) => ({ ...m, source: v }));
-                }}
-                onKeyDown={onMeasureKey}
-                disabled={measureBusy}
-                aria-label="Where the measure came from"
-              >
-                <option value="house_test">Measured in house</option>
-                <option value="book">Book value</option>
-                <option value="vendor_spec">Vendor spec</option>
-                <option value="estimate">Estimate</option>
-              </select>
-            </div>
-            <div className="kf-ipanel__measure-note" aria-live="polite">
-              {measureDirty ? (
-                measureHint ? (
-                  <>
-                    <span>{measureHint}</span>
-                    {ingredient.each_measure_qty != null ? (
-                      <button
-                        type="button"
-                        className="kf-ipanel__measure-clear"
-                        onClick={doMeasureClear}
-                        disabled={measureBusy}
-                      >
-                        Clear
-                      </button>
-                    ) : null}
-                  </>
-                ) : (
-                  <>
-                    <span>Not saved yet</span>
-                    <span aria-hidden>&middot;</span>
-                    <button
-                      type="button"
-                      className="kf-ipanel__measure-discard"
-                      onClick={onMeasureDiscard}
-                      disabled={measureBusy}
-                    >
-                      Discard
-                    </button>
-                    {ingredient.each_measure_qty != null ? (
-                      <button
-                        type="button"
-                        className="kf-ipanel__measure-clear"
-                        onClick={doMeasureClear}
-                        disabled={measureBusy}
-                      >
-                        Clear
-                      </button>
-                    ) : null}
-                  </>
-                )
-              ) : (
-                <>
-                  {measureFoot.tone === "good" ? (
-                    <span className="kf-pill kf-pill--good">Saved</span>
-                  ) : (
-                    <span className="kf-pill kf-pill--warn">not set yet</span>
-                  )}
-                  {ingredient.each_measure_qty != null ? (
-                    <button
-                      type="button"
-                      className="kf-ipanel__measure-clear"
-                      onClick={doMeasureClear}
-                      disabled={measureBusy}
-                    >
-                      Clear
-                    </button>
-                  ) : null}
-                  <span className="kf-ipanel__measure-body">{measureFoot.body}</span>
-                </>
-              )}
-              <SaveFlash savedAt={measureSavedAt} error={measureError} />
-            </div>
-          </div>
-          <div className="kf-ipanel__row-action">
-            <button
-              type="button"
-              className={`kf-btn ${measureSaveEnabled ? "kf-btn--primary" : "kf-btn--line"} kf-btn--sm${measureBusy ? " is-busy" : ""}`}
-              disabled={!measureSaveEnabled}
-              onClick={doMeasureSave}
-              onKeyDown={onMeasureKey}
-            >
-              {measureBusy ? "Saving..." : "Save"}
-            </button>
-          </div>
-        </div>
-      ) : null}
+      {/* M2 §4B §2.3: Measures block, shown for every ingredient
+          whatever base_unit is. Replaces the N6 "One each is" row.
+          Writes through /api/review/set-ingredient-measures (RPC-
+          backed; one Save for the whole list). */}
+      <PanelMeasuresBlock
+        ingredient={ingredient}
+        measures={measuresForBlock}
+        suggestionCandidates={suggestionCandidates}
+        itemsReachBase={itemsReachBase}
+        openAddForUom={addForUom}
+        openAddPrefillQty={addPrefillQty}
+        openAddPickUnit={addPickUnit}
+        onAfterAdd={() => { setAddForUom(null); setAddPrefillQty(null); setAddPickUnit(false); }}
+        onDone={onDone}
+      />
+
+      {/* M2 §4B §2.5: Yield row. Writes through
+          /api/review/set-ingredient-yield. Yield changes NO price
+          anywhere in M2 - stored and returned only. */}
+      <PanelYieldRow
+        ingredient={ingredient}
+        yieldPct={ingredient.yieldPct ?? null}
+        yieldSource={ingredient.yieldSource ?? null}
+        onDone={onDone}
+      />
+
+      {/* M2 §4B §2.6: "Recipes can use" chips. Clicking a dashed
+          chip opens the measures Add form prefilled for that uom.
+          itemUnits is derived from the suggestion candidates passed
+          down from DetailPanel - those carry each linked item's
+          pack uom so the reach starts from real data, not from
+          core five unconditionally. */}
+      <PanelChipsRow
+        ingredient={ingredient}
+        measures={measuresForBlock as Array<{ from_unit: string; qty: number; to_unit: string; source: "house_test" | "book" | "vendor_spec" | "estimate" | "pack" }>}
+        itemUnits={Array.from(new Set(suggestionCandidates.map((c) => (c.packUom ?? "").toUpperCase()).filter(Boolean)))}
+        onAddForUom={(u) => { setAddForUom(u); setAddPrefillQty(null); setAddPickUnit(false); }}
+      />
 
       {/* Row 5: Allergens ---------------------------------------- */}
       <div className="kf-ipanel__row kf-ipanel__row--allergens">

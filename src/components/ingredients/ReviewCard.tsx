@@ -15,7 +15,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check, Pencil, Scale } from "lucide-react";
 import { fmtCount, fmtDate, fmtPackNumbersInText, fmtUsd, fmtUsdLong, monthsAgo } from "@/lib/fmt";
-import { deriveRecipePrice } from "@/lib/ingredients/measures";
+import { canonicalFromBaseUnit } from "@/lib/ingredients/pack";
 import { uomLabel } from "@/lib/ingredients/pack";
 import { ReviewActions } from "./ReviewActions";
 import { DetailPanel, type DetailPanelOpen } from "./DetailPanel";
@@ -476,16 +476,15 @@ function UnitPriceCell({
   ingredient: ReviewCardIngredient | null;
   rowTag: "lowest" | "highest" | null;
 }) {
-  const ingredientMeasure =
-    ingredient?.each_measure_qty != null && ingredient?.each_measure_uom
-      ? { qty: Number(ingredient.each_measure_qty), uom: ingredient.each_measure_uom }
-      : null;
-  const derived = deriveRecipePrice({
-    perBase: item.perBase,
-    perBaseUom: item.perBaseUom,
-    itemMeasure: item.eachMeasure,
-    ingredientMeasure,
-  });
+  // M2 §4B: the derived "in recipes" price comes from priceInUnit
+  // via the server (ReviewQueue sets perBaseInIngUnit per item).
+  // One price path on screen: no deriveRecipePrice or shape helpers
+  // in this component (prompt amendment 4).
+  const derivedPer = item.perBaseInIngUnit ?? null;
+  const ingBaseUomCanonical = ingredient
+    ? canonicalFromBaseUnit(ingredient.base_unit)
+    : null;
+  const ownMeasure = (item.caseWeightLb ?? null) != null && (item.caseWeightLb ?? 0) > 0;
   const perUnitAvailable =
     item.perBase != null && item.perBaseUom != null && item.perBaseConfidence != null;
   const uomLower = item.perBaseUom
@@ -518,11 +517,8 @@ function UnitPriceCell({
           : item.perBaseConfidence === "high"
             ? "Per-unit estimate from pack size + case price"
             : "Low-confidence estimate (range / catch-weight / soft parse)") +
-      (item.perBaseNote ? ` - ${item.perBaseNote}` : "") +
-      (derived ? ` · ${fmtUsd(item.perBase as number)} each ÷ ${derived.qty} ${uomLabel(derived.measureUom)}` : "")
+      (item.perBaseNote ? ` - ${item.perBaseNote}` : "")
     : "Per-unit needs pack normalization - edit the pack in the detail panel";
-
-  const ownMeasure = derived && derived.from === "item";
   return (
     <div className="kf-rvc__price" title={title}>
       <div className="kf-rvc__price-main">
@@ -531,9 +527,9 @@ function UnitPriceCell({
           <>
             <strong>{fmtUsd(item.perBase as number)}</strong>
             <span className="kf-muted"> / {uomLower}</span>
-            {derived ? (
+            {derivedPer != null && ingBaseUomCanonical ? (
               <span className="kf-rvc__price-derived">
-                {fmtUsd(derived.per)} / {uomLabel(derived.uom)}
+                {fmtUsd(derivedPer)} / {uomLabel(ingBaseUomCanonical)}
               </span>
             ) : null}
           </>

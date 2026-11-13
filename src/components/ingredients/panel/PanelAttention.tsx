@@ -25,9 +25,11 @@ export type PanelAttentionCounts = {
 
 export function computeAttentionCounts(
   item: ReviewGroupItem,
-  ingredient: ReviewCardIngredient | null
+  ingredient: ReviewCardIngredient | null,
+  siblingPacks: readonly import("./attention").SiblingPack[] = [],
+  blendPerBase: number | null = null,
 ): PanelAttentionCounts {
-  const issues = deriveAttention(item, ingredient);
+  const issues = deriveAttention(item, ingredient, siblingPacks, blendPerBase);
   let packHandSet = false;
   let priceHandSet = false;
   let hasNoIngredient = false;
@@ -50,17 +52,38 @@ export function PanelAttention({
   item,
   ingredient,
   onFixPack,
+  onAddMeasure,
+  onChangeCostedPer,
+  siblingPacks = [],
+  blendPerBase = null,
 }: {
   item: ReviewGroupItem;
   ingredient: ReviewCardIngredient | null;
   onFixPack: (uom: string) => void;
+  // M2 §4B part 3 fix 6: "Add a measure" callback replaces
+  // document.querySelector scrolling. needs_measure passes the
+  // bridge that reaches base_unit; sizes_differ passes the
+  // largest-spend size qty + pack_uom.
+  onAddMeasure?: (uom: string, prefillQty?: number) => void;
+  onChangeCostedPer?: () => void;
+  // M2 §4B part 3 fix 4: sibling items' pack shapes drive the
+  // sizes_differ banner body.
+  siblingPacks?: readonly import("./attention").SiblingPack[];
+  // Polish fix 4: blended $/base-unit across sibling in-blend items;
+  // the outlier head needs this to say "$X is N.N times the blend ($Y)".
+  blendPerBase?: number | null;
 }) {
-  const issues = deriveAttention(item, ingredient);
+  const issues = deriveAttention(item, ingredient, siblingPacks, blendPerBase);
+  // M2 §4B §2.8: render no_price, pack_unreadable (both keep Fix the
+  // pack) and the three M2 kinds (needs_measure, check_it_outlier,
+  // sizes_differ). The old unit_mismatch kind is gone.
   const rendered = issues.filter(
     (i) =>
       i.kind === "no_price" ||
       i.kind === "pack_unreadable" ||
-      i.kind === "unit_mismatch"
+      i.kind === "needs_measure" ||
+      i.kind === "check_it_outlier" ||
+      i.kind === "sizes_differ",
   );
   // N13 R4: "{n} of {lines} invoice lines were flagged when read"
   // is a warn attention line whenever needsReviewLines > 0. One line,
@@ -111,16 +134,44 @@ export function PanelAttention({
               <button
                 type="button"
                 className="kf-btn kf-btn--line kf-btn--sm"
-                onClick={() =>
-                  onFixPack(
-                    "targetUom" in issue
-                      ? (issue as { targetUom: string }).targetUom
-                      : ingredientBaseUom(ingredient) ?? "LB"
-                  )
-                }
+                onClick={() => onFixPack(ingredientBaseUom(ingredient) ?? "LB")}
               >
                 Fix the pack
               </button>
+            ) : null}
+            {/* M2 §4B §2.8: needs_measure gets "Add a measure" only
+                - never "Fix the pack". Wired through the shared
+                bus so the measures block's add row opens prefilled
+                for the bridge that reaches base_unit. */}
+            {issue.kind === "needs_measure" ? (
+              <button
+                type="button"
+                className="kf-btn kf-btn--line kf-btn--sm"
+                onClick={() => onAddMeasure?.(issue.targetUom)}
+              >
+                Add a measure
+              </button>
+            ) : null}
+            {/* M2 §4B §2.8: sizes_differ gets two buttons - Add a
+                measure (prefill 1 EA = largest-spend size) + Change
+                Costed per (focus the BaseUnitControl). */}
+            {issue.kind === "sizes_differ" ? (
+              <>
+                <button
+                  type="button"
+                  className="kf-btn kf-btn--line kf-btn--sm"
+                  onClick={() => onAddMeasure?.(issue.prefillUom, issue.prefillQty)}
+                >
+                  Add a measure
+                </button>
+                <button
+                  type="button"
+                  className="kf-btn kf-btn--line kf-btn--sm"
+                  onClick={() => onChangeCostedPer?.()}
+                >
+                  Change Costed per
+                </button>
+              </>
             ) : null}
           </div>
         );

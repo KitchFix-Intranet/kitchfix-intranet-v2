@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireOwnerApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
-import { factor, rejectReason, type Measure, type MeasureSource } from "@/lib/ingredients/measures";
+import {
+  priceInUnit,
+  rejectReason,
+  sizesDifferFlags,
+  type Measure,
+  type MeasureSource,
+} from "@/lib/ingredients/measures";
 import { isMeasuresWorld, readMeasuresForIngredient } from "@/lib/ingredients/measuresRead";
+import { canonicalFromBaseUnit } from "@/lib/ingredients/pack";
 
 export const dynamic = "force-dynamic";
 
@@ -53,15 +60,11 @@ function parseMeasure(raw: IncomingMeasure): { ok: true; m: Measure } | { ok: fa
   };
 }
 
-// M1 R2 fix 3: how many items' price-in-the-INGREDIENT's-base-unit
-// moves between the current measures and the proposed set. Items
-// whose base_uom is same-kind as the ingredient's base_unit use the
-// built-in same-dim path and never move; items with their own
-// case_weight_lb bypass the ingredient measure and never move. Only
-// cross-dim items without a case weight move when the measures graph
-// changes. For Tomatoes, Roma (per-lb ingredient) with a count-to-
-// weight measure: the measure moves count cases without case_weight_lb
-// and leaves weight cases + case-weighted items alone.
+// M2 R2 rule 4: dry-run counts items whose STATUS or PRICE changes
+// under rules 1 and 2. The effective "price in the blend" for an
+// item is null when sizes_differ flags it (rule 2) OR when
+// priceInUnit returns null (needs_measure); otherwise the computed
+// number. A flip in either direction counts as a change.
 async function computeDryRun(
   supa: ReturnType<typeof serviceClient>,
   ingredientId: string,
@@ -75,29 +78,53 @@ async function computeDryRun(
     .maybeSingle();
   const baseUnit = (ing as { base_unit: string | null } | null)?.base_unit ?? null;
   if (!baseUnit) return { items: 0 };
-  const targetUom = baseUnit.toUpperCase() === "EACH" ? "EA" : baseUnit.toUpperCase();
+  const targetUom = canonicalFromBaseUnit(baseUnit);
+  if (!targetUom) return { items: 0 };
   const { data: items } = await supa
     .from("pr_vendor_items")
-    .select("id,price_estimate,case_weight_lb")
+    .select("id,price_estimate,case_weight_lb,pack_qty,pack_size,pack_uom")
     .eq("ingredient_id", ingredientId);
   if (!items || items.length === 0) return { items: 0 };
+  const rows = items as Array<{
+    id: string;
+    price_estimate: { per_base?: number; base_uom?: string } | null;
+    case_weight_lb: number | null;
+    pack_qty: number | null;
+    pack_size: number | null;
+    pack_uom: string | null;
+  }>;
+  const packInputs = rows.map((r) => ({
+    id: r.id,
+    packQty: r.pack_qty,
+    packSize: r.pack_size,
+    packUom: r.pack_uom,
+  }));
+  const flagBefore = sizesDifferFlags(packInputs, beforeMeasures, baseUnit);
+  const flagAfter = sizesDifferFlags(packInputs, afterMeasures, baseUnit);
   let changed = 0;
-  for (const row of items) {
-    const r = row as {
-      price_estimate: { per_base?: number; base_uom?: string } | null;
-      case_weight_lb: number | null;
-    };
-    // case_weight_lb bypasses the ingredient measure.
-    if (r.case_weight_lb != null && Number(r.case_weight_lb) > 0) continue;
+  for (const r of rows) {
     const pe = r.price_estimate;
     const perBase = pe?.per_base != null ? Number(pe.per_base) : null;
     const baseUom = pe?.base_uom ?? null;
     if (perBase == null || !baseUom) continue;
-    const before = factor(baseUom, targetUom, { measures: beforeMeasures });
-    const after = factor(baseUom, targetUom, { measures: afterMeasures });
-    const beforeVal = before != null ? perBase / before : null;
-    const afterVal = after != null ? perBase / after : null;
-    if (beforeVal !== afterVal) changed += 1;
+    const input = {
+      perBase,
+      baseUom,
+      packQty: r.pack_qty,
+      packSize: r.pack_size,
+      packUom: r.pack_uom,
+      caseWeightLb: r.case_weight_lb,
+    };
+    // Effective price-in-the-blend: null if sizes_differ flags, null
+    // if priceInUnit cannot compute (needs_measure); otherwise the
+    // computed number.
+    const beforeEff = flagBefore.has(r.id)
+      ? null
+      : priceInUnit(input, targetUom, { measures: beforeMeasures })?.per ?? null;
+    const afterEff = flagAfter.has(r.id)
+      ? null
+      : priceInUnit(input, targetUom, { measures: afterMeasures })?.per ?? null;
+    if (beforeEff !== afterEff) changed += 1;
   }
   return { items: changed };
 }

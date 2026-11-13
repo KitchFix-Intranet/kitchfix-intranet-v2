@@ -583,6 +583,10 @@
   font-size: var(--sp-t-micro);
   color: var(--sp-body);
   line-height: 1.6;
+  /* Polish fix 6: the hint renders inside .kf-ipanel__row-label on
+   * the measures / yield rows, which carries font-weight 800. Force
+   * normal weight here so the hint reads as a hint. */
+  font-weight: 400;
 }
 .kf-ipanel__row-hint strong { font-weight: 800; color: var(--sp-ink); }
 .kf-ipanel__row-action {
@@ -1196,4 +1200,242 @@
   color: var(--sp-muted);
   font-family: var(--sp-ui);
   font-size: var(--sp-t-micro);
+}
+
+/* M2 §4B part 3 fix 1: Measures block, Yield row, chips row, Case
+ * weight row, How we got there, inline link primitive. Added in one
+ * patch so every class rendered by PanelMeasuresBlock / PanelYieldRow
+ * / PanelChipsRow / CaseWeightBlock / HowWeGotTherePhrase has a rule.
+ */
+
+/* Inline link primitive - a button that reads as a text link. Used
+ * by the CaseWeightBlock's "This case is a different size" trigger
+ * (closed state) and anywhere else a bordered button would be too
+ * heavy for a quiet entry. */
+.kf-ipanel__link {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  color: var(--sp-link);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.kf-ipanel__link:hover { color: var(--sp-navy); }
+.kf-ipanel__link:disabled { color: var(--sp-muted); cursor: not-allowed; }
+
+/* Math echo span inside "How we got there". Monospace feel without
+ * switching families; muted ink with slight contrast on the numbers. */
+.kf-ipanel__math {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  color: var(--sp-body);
+  line-height: 1.45;
+}
+
+/* --- Measures block ----------------------------------------------- */
+
+.kf-ipanel__row--measures .kf-ipanel__row-value {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+}
+
+.kf-measures__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+}
+.kf-measures__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-sp-2);
+}
+.kf-measures__one {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  color: var(--sp-ink);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.kf-measures__echo {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  font-style: italic;
+  flex: 1 1 160px;
+  min-width: 120px;
+}
+.kf-measures__refusal {
+  flex: 1 1 100%;
+  color: var(--sp-block);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+}
+/* Polish fix 6: Remove sits inside the measure row as a text link;
+ * scale the font to the row's micro size so it reads as action, not
+ * label. */
+.kf-measures__remove {
+  font-size: var(--sp-t-micro);
+}
+
+.kf-measures__add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-sp-2);
+}
+.kf-measures__add--open {
+  padding: var(--sp-sp-2);
+  border: 1px dashed var(--sp-line);
+  border-radius: var(--sp-r-ctl);
+  background: var(--sp-raise);
+}
+
+.kf-measures__suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+}
+.kf-measures__suggestion {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  padding: var(--sp-sp-2) var(--sp-sp-3);
+  border: 1px solid var(--sp-sky-line);
+  border-radius: var(--sp-r-ctl);
+  background: var(--sp-sky-soft);
+}
+.kf-measures__suggestion-lab {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-link);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+}
+.kf-measures__suggestion-via {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  flex: 1 1 160px;
+}
+
+.kf-measures__savebar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-sp-3);
+  padding: var(--sp-sp-3);
+  border: 1px solid var(--sp-warn-strong);
+  border-radius: var(--sp-r-ctl);
+  background: var(--sp-warn-bg);
+  color: var(--sp-ink);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+}
+.kf-measures__savebar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+}
+.kf-measures__saved-echo {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  font-style: italic;
+}
+
+/* --- Yield row ---------------------------------------------------- */
+
+.kf-ipanel__row--yield .kf-ipanel__row-value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-sp-2);
+}
+
+/* --- Chips row ("Recipes can use") ------------------------------- */
+
+.kf-ipanel__row--chips .kf-ipanel__row-value {
+  display: flex;
+  flex-wrap: wrap;
+}
+.kf-chips--reach {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-sp-2);
+  align-items: center;
+}
+/* The three solid / dashed / dead chip states live on top of the
+ * shared .kf-chip primitive (chips.css). --solid is the "reachable"
+ * ground, --dashed is "add a measure to reach this", --dead is
+ * "no bridge available". --line is for an opt-in group where an
+ * unactive choice still reads as a button. */
+.kf-chip--solid {
+  background: var(--sp-navy);
+  border-color: var(--sp-navy);
+  color: var(--sp-card);
+}
+.kf-chip--solid span { color: var(--sp-sky-line); }
+.kf-chip--line {
+  background: var(--sp-card);
+  border-color: var(--sp-line);
+  color: var(--sp-ink);
+}
+.kf-chip--line:hover { border-color: var(--sp-navy-line); }
+.kf-chip--dashed {
+  background: var(--sp-card);
+  border: 1px dashed var(--sp-sky-line);
+  color: var(--sp-link);
+}
+.kf-chip--dashed:hover { border-color: var(--sp-link); }
+.kf-chip--dead {
+  background: var(--sp-ground);
+  border-color: var(--sp-line);
+  color: var(--sp-muted);
+  cursor: not-allowed;
+}
+
+/* --- Costed per row (ref-focus target) --------------------------- */
+
+.kf-ipanel__row--costed .kf-ipanel__row-value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-sp-2);
+}
+
+/* --- Case weight rows (open + closed) ---------------------------- */
+
+.kf-ipanel__row--case-weight .kf-ipanel__row-value {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+}
+.kf-ipanel__row--case-weight-closed {
+  /* Closed state is a single text link, no label. Use less vertical
+   * space than a full row. */
+  padding-top: var(--sp-sp-2);
+  padding-bottom: var(--sp-sp-2);
+}
+
+/* --- How we got there row ---------------------------------------- */
+
+.kf-ipanel__row--howwegot .kf-ipanel__row-value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-sp-2);
 }

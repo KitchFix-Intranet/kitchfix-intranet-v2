@@ -239,7 +239,7 @@
   white-space: nowrap;
 }
 
-/* Inline chip for Outlier / Mixed units / Out of band / No items.
+/* Inline chip for Outlier / Needs a measure / Out of band / No items.
  * Lives on the row's sub-line beside the item count. */
 .kf-ingp__row-badge {
   display: inline-flex;
@@ -382,6 +382,16 @@
 }
 .kf-ingp__dzone--attn-wrap { padding: var(--sp-sp-3) var(--sp-sp-5) 0; }
 .kf-ingp__dzone--closed { padding: var(--sp-sp-3) var(--sp-sp-5) var(--sp-sp-5); margin-top: var(--sp-sp-3); border-top: 1px solid var(--sp-line); }
+
+/* M2 §4B part 3 fix 9: expand chip view switch. Lives above the
+ * strip; reprices every row of the drill-down in the browser. */
+.kf-ingp__dzone-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-sp-2);
+  padding: var(--sp-sp-3) var(--sp-sp-5) 0;
+  align-items: center;
+}
 
 /* Fix 4: strip stretches the full pane width - its first/last cells
  * carry 24 of padding internally, so no outer wrapper is needed. */

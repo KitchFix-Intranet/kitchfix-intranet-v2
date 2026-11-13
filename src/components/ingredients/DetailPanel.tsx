@@ -86,6 +86,17 @@ export function DetailPanel({
   // Pack-hint from PanelAttention's "Fix the pack" button; threaded
   // into PanelItemZone which forces the Pack and price row open.
   const [packHint, setPackHint] = useState<PackHint | null>(null);
+  // M2 §4B part 3 fix 6: shared bus from PanelAttention's buttons to
+  // PanelIngredientZone's measures block. "Add a measure" sets an
+  // open-with-uom + prefill bump; "Change Costed per" bumps a nonce
+  // that PanelIngredientZone watches to scroll + focus the control.
+  // Polish round 2 fix 1: `pickUnit` means "limit the to-unit options
+  // to this uom's dim and leave the choice blank" - the needs_measure
+  // path. sizes_differ ships qty + uom (pickUnit=false), so its unit
+  // sticks. Chips also ship uom only; see onAddMeasure below for the
+  // qty-null -> pickUnit inference.
+  const [measureOpen, setMeasureOpen] = useState<{ uom: string; qty: number | null; pickUnit: boolean; nonce: number } | null>(null);
+  const [costedPerFocusNonce, setCostedPerFocusNonce] = useState(0);
 
   const parentOptions = useMemo(() => {
     const set = new Set<string>();
@@ -142,8 +153,17 @@ export function DetailPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Polish round 2 fix 2: blendedAvgPerBase is computed server-side
+  // on the ingredient payload (Review queue, /api/review/item,
+  // /api/review/ingredient, IngredientMasters all project it onto the
+  // ingredient). The DetailPanel just reads; no client math. Null
+  // when the server could not supply one (new ingredient, no priced
+  // mates, etc.) - attention falls back to the "outside the blend"
+  // head.
+  const blendPerBase: number | null = ingredient?.blendedAvgPerBase ?? null;
+
   const attentionCounts = open.kind === "item" && item
-    ? computeAttentionCounts(item, ingredient)
+    ? computeAttentionCounts(item, ingredient, [], blendPerBase)
     : { total: 0, hasNoIngredient: false, provenance: { packHandSet: false, priceHandSet: false } };
 
   return (
@@ -180,6 +200,16 @@ export function DetailPanel({
             item={item}
             ingredient={ingredient}
             onFixPack={(uom) => setPackHint({ uom, nonce: Date.now() })}
+            onAddMeasure={(uom, qty) => setMeasureOpen({ uom, qty: qty ?? null, pickUnit: qty == null, nonce: Date.now() })}
+            onChangeCostedPer={() => setCostedPerFocusNonce((n) => n + 1)}
+            siblingPacks={items.map((i) => ({
+              id: i.id,
+              packQty: i.packQty ?? null,
+              packSize: i.packSize ?? null,
+              packUom: i.packUom ?? null,
+              usd12m: i.usd12m,
+            }))}
+            blendPerBase={blendPerBase}
           />
         ) : null}
 
@@ -198,6 +228,18 @@ export function DetailPanel({
             item={item}
             parentOptions={parentOptions}
             onDone={onDone}
+            measureOpen={measureOpen}
+            costedPerFocusNonce={costedPerFocusNonce}
+            suggestionCandidates={items
+              .filter((i) => i.packQty != null && i.packSize != null && i.packUom != null)
+              .map((i) => ({
+                id: i.id,
+                packQty: i.packQty ?? null,
+                packSize: i.packSize ?? null,
+                packUom: i.packUom ?? null,
+                usd12m: i.usd12m,
+              }))}
+            itemsReachBase={items.every((i) => (i.statusKind ?? "in_blend") !== "needs_measure")}
           />
         ) : (
           <PanelIngredientZonePending

@@ -8,7 +8,17 @@ import { serviceClient } from "@/lib/supabase/service";
 import { COUNTABLE_OBSERVATIONS_VIEW, applyCountableFilter } from "@/lib/ingredients/countability";
 import { categoryForParent } from "@/lib/ingredients/categories";
 import { isMeasuresWorld, readAllMeasures } from "@/lib/ingredients/measuresRead";
-import { shapeIngredientEachFromMeasures, shapeItemEachFromCaseWeight } from "@/lib/ingredients/measuresShape";
+// M2 §4B part 2: the each-measure shape helpers are no longer
+// imported by client or server components in the render tree. Nothing
+// on screen reads each_measure_* - the shape helpers were projecting
+// the legacy columns from pr_ingredient_measures for back-compat.
+// Measures ride on the ingredient directly via `measures` now.
+import { priceInUnit, sizesDifferFlags } from "@/lib/ingredients/measures";
+import { canonicalFromBaseUnit } from "@/lib/ingredients/pack";
+// Polish round 2 fix 2: blendedAvgPerBase rides on every ingredient
+// the Review queue hands to its DetailPanel. Same code path as
+// IngredientMasters.
+import { blendStats } from "@/lib/ingredients/blend";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { Tabs } from "./Tabs";
 import { IdentBand } from "@/components/ui/IdentBand";
@@ -95,6 +105,14 @@ type Ingredient = {
   each_measure_qty: number | null;
   each_measure_uom: string | null;
   each_measure_source: string | null;
+  // M2 §4B part 2: yield fields carried through so PanelIngredientZone
+  // (opened from the Review queue) can render the Yield row without
+  // a second fetch.
+  yield_pct: number | null;
+  yield_source: string | null;
+  // Polish round 2 fix 2: attached by the ingredient reshape below so
+  // the DetailPanel reads blendedAvgPerBase without a client compute.
+  blendedAvgPerBase?: number | null;
 };
 type Vendor = { id: string; name: string };
 
@@ -181,7 +199,7 @@ async function loadReview() {
       // replace N5's avg_weight_lb + avg_weight_source on the ingredient
       // SELECT. Additive against pre-N5; 439 rows, read once, no new
       // query.
-      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source")
+      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source,yield_pct,yield_source")
       .eq("status", "active")
       .order("name"),
     client
@@ -200,14 +218,102 @@ async function loadReview() {
   const measuresByIngredient = measuresWorld
     ? await readAllMeasures(client)
     : new Map<string, never>();
+  // Polish round 2 fix 2: compute blended $ / base_unit per ingredient
+  // across its confirmed + live linked items (same filter + code path
+  // IngredientMasters uses). Keyed by ingredient_id so the reshape
+  // loop below can attach it without a per-row fetch.
+  const blendedByIngredient = new Map<string, number | null>();
+  {
+    type MateRow = {
+      id: string;
+      ingredient_id: string | null;
+      pack_qty: number | null;
+      pack_size: number | null;
+      pack_uom: string | null;
+      case_weight_lb: number | null;
+      price_estimate: { per_base?: number | string | null; base_uom?: string | null } | null;
+      usd_12m: number | null;
+    };
+    const mates: MateRow[] = [];
+    const page = 1000;
+    let from = 0;
+    for (;;) {
+      const { data, error } = await client
+        .from("pr_vendor_items")
+        .select("id,ingredient_id,pack_qty,pack_size,pack_uom,case_weight_lb,price_estimate,usd_12m")
+        .eq("link_status", "confirmed")
+        .eq("status", "active")
+        .not("ingredient_id", "is", null)
+        .order("id", { ascending: true })
+        .range(from, from + page - 1);
+      if (error) throw error;
+      const chunk = (data ?? []) as MateRow[];
+      mates.push(...chunk);
+      if (chunk.length < page) break;
+      from += page;
+    }
+    const byIng = new Map<string, MateRow[]>();
+    for (const m of mates) {
+      if (!m.ingredient_id) continue;
+      let list = byIng.get(m.ingredient_id);
+      if (!list) {
+        list = [];
+        byIng.set(m.ingredient_id, list);
+      }
+      list.push(m);
+    }
+    for (const r of ((ingredientsRes.data ?? []) as Ingredient[])) {
+      const list = byIng.get(r.id);
+      if (!list || list.length === 0) {
+        blendedByIngredient.set(r.id, null);
+        continue;
+      }
+      const targetUom = canonicalFromBaseUnit(r.base_unit);
+      if (!targetUom) {
+        blendedByIngredient.set(r.id, null);
+        continue;
+      }
+      const ms = measuresWorld ? (measuresByIngredient.get(r.id) ?? []) : [];
+      const priced: Array<{ id: string; v: number; usd: number }> = [];
+      for (const row of list) {
+        const pe = row.price_estimate ?? null;
+        const matePerBase = pe?.per_base != null ? Number(pe.per_base) : null;
+        const mateBaseUom = pe?.base_uom ?? null;
+        if (matePerBase == null || !Number.isFinite(matePerBase) || matePerBase <= 0 || !mateBaseUom) continue;
+        const priced1 = priceInUnit(
+          {
+            perBase: matePerBase,
+            baseUom: mateBaseUom,
+            packQty: row.pack_qty,
+            packSize: row.pack_size,
+            packUom: row.pack_uom,
+            caseWeightLb: row.case_weight_lb,
+          },
+          targetUom,
+          { measures: ms },
+        );
+        if (priced1?.per != null && Number.isFinite(priced1.per) && priced1.per > 0) {
+          priced.push({ id: row.id, v: priced1.per, usd: Number(row.usd_12m ?? 0) });
+        }
+      }
+      const stats = blendStats(priced);
+      blendedByIngredient.set(r.id, stats.survivorMean);
+    }
+  }
+
   const ingredientsReshaped: Ingredient[] = ((ingredientsRes.data ?? []) as Ingredient[]).map((r) => {
-    if (!measuresWorld) return r;
-    const shaped = shapeIngredientEachFromMeasures(measuresByIngredient.get(r.id) ?? []);
+    const ms = measuresWorld ? (measuresByIngredient.get(r.id) ?? []) : [];
+    // M2 §4B part 2: measures / yieldPct / yieldSource ride on the
+    // ingredient so PanelIngredientZone's new Measures + Yield rows
+    // read without a second fetch. The legacy each_measure_* triple
+    // is kept on the row for type-level back-compat (no screen reads
+    // it); shape helpers removed.
     return {
       ...r,
-      each_measure_qty: shaped.qty,
-      each_measure_uom: shaped.uom,
-      each_measure_source: shaped.source,
+      measures: ms,
+      yieldPct: r.yield_pct,
+      yieldSource: r.yield_source,
+      blendedAvgPerBase: blendedByIngredient.get(r.id) ?? null,
     };
   });
 
@@ -312,7 +418,7 @@ async function loadReview() {
       const ing = ingredientById.get(it.ingredient_id);
       if (!ing) continue; // orphan - matcher wrote an id that got merged; skip silently
       const key = `ex:${it.ingredient_id}`;
-      const g = groups.get(key) ?? {
+      const g: ReviewCardGroup = groups.get(key) ?? {
         key,
         kind: "existing" as const,
         ingredient: ing,
@@ -388,6 +494,8 @@ async function loadReview() {
           pack: packDisplay,
           packNormalized: normalizedPack,
           packUom: it.pack_uom,
+          packQty: it.pack_qty,
+          packSize: it.pack_size,
           packState: it.pack_state,
           packSource,
           packManualOverride: hasManualOverride,
@@ -434,16 +542,11 @@ async function loadReview() {
           // worth. The legacy pair (when consistent with the case
           // weight within 1 percent) decides how to SHOW it. Pre-0019
           // we fall back to the legacy pair unchanged.
-          eachMeasure: measuresWorld
-            ? shapeItemEachFromCaseWeight(
-                it.case_weight_lb ?? null,
-                it.pack_qty,
-                it.pack_size,
-                it.pack_uom,
-                it.each_measure_qty,
-                it.each_measure_uom,
-              )
-            : it.each_measure_qty != null && it.each_measure_uom
+          // M2 §4B part 2: item.eachMeasure is unread on screen; keep
+          // the field present on the type for back-compat but no
+          // shape-helper projection.
+          eachMeasure:
+            it.each_measure_qty != null && it.each_measure_uom
               ? { qty: Number(it.each_measure_qty), uom: it.each_measure_uom }
               : null,
         });
@@ -528,6 +631,8 @@ async function loadReview() {
           pack: packDisplay,
           packNormalized: normalizedPack,
           packUom: it.pack_uom,
+          packQty: it.pack_qty,
+          packSize: it.pack_size,
           packState: it.pack_state,
           packSource,
           packManualOverride: hasManualOverride,
@@ -574,16 +679,11 @@ async function loadReview() {
           // worth. The legacy pair (when consistent with the case
           // weight within 1 percent) decides how to SHOW it. Pre-0019
           // we fall back to the legacy pair unchanged.
-          eachMeasure: measuresWorld
-            ? shapeItemEachFromCaseWeight(
-                it.case_weight_lb ?? null,
-                it.pack_qty,
-                it.pack_size,
-                it.pack_uom,
-                it.each_measure_qty,
-                it.each_measure_uom,
-              )
-            : it.each_measure_qty != null && it.each_measure_uom
+          // M2 §4B part 2: item.eachMeasure is unread on screen; keep
+          // the field present on the type for back-compat but no
+          // shape-helper projection.
+          eachMeasure:
+            it.each_measure_qty != null && it.each_measure_uom
               ? { qty: Number(it.each_measure_qty), uom: it.each_measure_uom }
               : null,
         });
@@ -592,6 +692,60 @@ async function loadReview() {
     }
     // Items with link_status='proposed' but no ingredient_id and no ai-new
     // reason are malformed - skip silently; a future hotfix can surface them.
+  }
+
+  // M2 §4B: post-pass fills perBaseInIngUnit on every item in an
+  // existing-ingredient group via the one price function. ai-new
+  // groups have no confirmed target so perBaseInIngUnit stays null.
+  // Reads measures already batch-loaded above; one priceInUnit call
+  // per item, no new query.
+  const itemsById = new Map(items.map((it) => [it.id, it]));
+  for (const g of groups.values()) {
+    if (g.kind !== "existing" || !g.ingredient) continue;
+    const ing = g.ingredient;
+    const target = canonicalFromBaseUnit(ing.base_unit);
+    const ms = measuresWorld ? (measuresByIngredient.get(ing.id) ?? []) : [];
+    // M2 §4B part 3: compute sizes_differ per group so each item's
+    // statusKind reflects "sized packs within one kind disagree"
+    // before the per-item loop assigns statuses.
+    const groupPacks = g.items.map((vi) => {
+      const raw = itemsById.get(vi.id);
+      return {
+        id: vi.id,
+        packQty: raw?.pack_qty ?? null,
+        packSize: raw?.pack_size ?? null,
+        packUom: raw?.pack_uom ?? null,
+      };
+    });
+    const sizesDiffer = sizesDifferFlags(groupPacks, ms, ing.base_unit);
+    for (const vi of g.items) {
+      const raw = itemsById.get(vi.id);
+      if (!raw) continue;
+      const pe = raw.price_estimate ?? null;
+      const perBase = pe?.per_base != null ? Number(pe.per_base) : null;
+      const baseUom = pe?.base_uom ?? null;
+      vi.caseWeightLb = raw.case_weight_lb ?? null;
+      vi.perBaseInIngUnit =
+        perBase != null && baseUom && target
+          ? priceInUnit(
+              {
+                perBase,
+                baseUom,
+                packQty: raw.pack_qty ?? null,
+                packSize: raw.pack_size ?? null,
+                packUom: raw.pack_uom ?? null,
+                caseWeightLb: raw.case_weight_lb ?? null,
+              },
+              target,
+              { measures: ms },
+            )?.per ?? null
+          : null;
+      vi.statusKind = sizesDiffer.has(vi.id)
+        ? "sizes_differ"
+        : vi.perBaseInIngUnit == null
+          ? "needs_measure"
+          : "in_blend";
+    }
   }
 
   // Sort member items inside each group dollar-desc; sort groups dollar-desc.

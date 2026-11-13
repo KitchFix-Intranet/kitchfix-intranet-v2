@@ -14,6 +14,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtPackNumbersInText, fmtUsd } from "@/lib/fmt";
 import { convertPer, uomLabel } from "@/lib/ingredients/pack";
+import { priceInUnit } from "@/lib/ingredients/measures";
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 import { SaveFlash } from "./SaveFlash";
 import { postJson, errMsg } from "./common";
@@ -46,6 +47,7 @@ export function PackOverrideBlock({
   hint,
   onCancel,
   onDone,
+  measures: measuresProp,
 }: {
   item: ReviewGroupItem;
   ingredient: ReviewCardIngredient | null;
@@ -53,7 +55,17 @@ export function PackOverrideBlock({
   onDone: () => void;
   // N8 §1f: Cancel closes the row when the caller is a panel row.
   onCancel?: () => void;
+  // M2 §4B amendment 6: ingredient's measures so the verdict can
+  // call priceInUnit instead of the same-dim check. When measures
+  // are not passed, fall back to the same-dim gate (callers that
+  // have not updated see the same behaviour as part 1).
+  measures?: readonly { from_unit: string; qty: number; to_unit: string; source: string }[];
 }) {
+  // M2 §4B amendment 6: use the ingredient's measures to determine
+  // whether the typed pack reaches the ingredient's base_unit. When
+  // priceInUnit returns null for the typed pack, show the "needs a
+  // measure" verdict; otherwise suppress it.
+  const measuresForReach = measuresProp ?? (ingredient?.measures as typeof measuresProp) ?? [];
   // S2: pre-fill qty/size/uom from the item's own stored pack so
   // correcting one field is one keystroke, not a retype. When
   // packNormalized does not parse, fields stay blank.
@@ -540,13 +552,38 @@ export function PackOverrideBlock({
         text: `Matches ${ingredient.name} - this item joins the blend.`,
       };
     } else {
-      const baseWord =
-        enteredBase === "LB" ? "lb" : enteredBase === "FLOZ" ? "fl oz" : "each";
-      const ingBaseWord = ingredient.base_unit?.toLowerCase() ?? "its unit";
-      verdict = {
-        tone: "block",
-        text: `${ingredient.name} is costed per ${ingBaseWord}. In ${baseWord} it still will not blend.`,
-      };
+      // M2 §4B amendment 6: show the "needs a measure" verdict only
+      // when priceInUnit returns null for the typed pack. The typed
+      // pack's base_uom is `enteredBase`; the ingredient's unit is
+      // `ingredientBase`. A minimal item shape covers the
+      // factor-only fallback path (no pack fields, so priceInUnit
+      // takes the fallback that divides perBase by factor).
+      const reachable = enteredBase && ingredientBase
+        ? priceInUnit(
+            {
+              perBase: 1,
+              baseUom: enteredBase,
+              packQty: null,
+              packSize: null,
+              packUom: null,
+              caseWeightLb: null,
+            },
+            ingredientBase,
+            { measures: (measuresForReach ?? []) as Parameters<typeof priceInUnit>[2]["measures"] },
+          ) != null
+        : false;
+      if (!reachable) {
+        const ingBaseWord = ingredient.base_unit?.toLowerCase() ?? "its unit";
+        verdict = {
+          tone: "block",
+          text: `${ingredient.name} is costed per ${ingBaseWord}. This pack needs a measure on the ingredient to reach it.`,
+        };
+      } else {
+        verdict = {
+          tone: "good",
+          text: `Matches ${ingredient.name} - this item reaches the blend through the measure.`,
+        };
+      }
     }
   }
 
