@@ -150,6 +150,8 @@ const SORT_LABEL: Record<SortMode, string> = {
 // M2: "mismatch" renamed "needs_measure", badge "Needs a measure".
 const ISSUE_BADGE: Partial<Record<MasterIssue, string>> = {
   needs_measure: "Needs a measure",
+  // M2.1 fix 2: sizes_differ had no badge; row rendered with no tag.
+  sizes_differ: "Sizes differ",
   outlier: "Outlier",
   band: "Out of band",
   empty: "No items",
@@ -1000,6 +1002,23 @@ function IngredientAttention({ row, onDone }: { row: MasterRow; onDone: () => vo
           {fmtUsd(row.usd12m)} sits outside the blend - either no per-unit price at all, or a
           price in a different unit. The figure above describes {fmtCount(row.pricedCount)} item
           {row.pricedCount === 1 ? "" : "s"}, not {fmtCount(row.linkedCount)}.
+        </>
+      ),
+    });
+  }
+  if (row.issues.includes("sizes_differ")) {
+    // M2.1 fix 2: sizes_differ had no explanation block. The lead
+    // counts the items the pipeline tagged; the body mirrors the
+    // detail panel's attention banner so both surfaces say the same
+    // sentence.
+    const n = row.linkedItems.filter((li) => li.statusKind === "sizes_differ").length;
+    issues.push({
+      lead: `${fmtCount(n)} case${n === 1 ? "" : "s"} come in different sizes.`,
+      body: (
+        <>
+          {" "}This ingredient is costed per <strong>{uom}</strong>, but its cases hold different
+          piece sizes within one kind. Say what one each is, or cost this ingredient by weight or
+          volume - whichever kind the cases are in.
         </>
       ),
     });

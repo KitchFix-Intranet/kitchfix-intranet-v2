@@ -35,13 +35,18 @@ import {
 // screen reads each_measure_*; the GET returns the raw legacy
 // values when present (type-level back-compat) and the real
 // authority lives in the `measures` field.
-import { priceInUnit, sizesDifferFlags } from "@/lib/ingredients/measures";
+// M2.1: /api/review/item's blend + status come from the shared
+// pipeline (same code path as the Ingredients tab). priceInUnit stays
+// imported for the item's own perBaseInIngUnit; the mate-sized
+// sizesDifferFlags and the hand-rolled blendStats call that used to
+// live here are gone.
+import { priceInUnit } from "@/lib/ingredients/measures";
 import { canonicalFromBaseUnit } from "@/lib/ingredients/pack";
-// Polish round 2 fix 2: the ingredient payload carries the blended
-// lens's $ / base_unit so attention's outlier head can read one
-// number across every door. blendStats is the same code path the
-// Ingredients tab uses, so the figure matches.
-import { blendStats } from "@/lib/ingredients/blend";
+import {
+  computeIngredientBlend,
+  LIVE_STATUSES,
+  type BlendInputItem,
+} from "@/lib/ingredients/ingredientBlend";
 
 export const dynamic = "force-dynamic";
 
@@ -373,10 +378,10 @@ export async function GET(req: NextRequest) {
       : null;
   const yieldSource = ingWithYield?.yield_source ?? null;
 
-  // M2 R1 amendment 3: item API calls priceInUnit so the panel strip
-  // + "How we got there" can read $ in the ingredient's base_unit
-  // from the one price function. Null when no ingredient, no price,
-  // or no reachable path.
+  // M2.1: perBaseInIngUnit stays a direct priceInUnit call (no need
+  // for the pipeline just to answer "what is this item's price in the
+  // ingredient's base unit"). The statusKind + blendedAvgPerBase come
+  // from the shared pipeline below, so every door reads one shape.
   let perBaseInIngUnit: number | null = null;
   let statusKind: "in_blend" | "check_it" | "needs_measure" | "sizes_differ" = "in_blend";
   const pe2 = it.price_estimate ?? null;
@@ -398,31 +403,79 @@ export async function GET(req: NextRequest) {
         { measures },
       );
       perBaseInIngUnit = r?.per ?? null;
-      if (perBaseInIngUnit == null) {
-        statusKind = "needs_measure";
-      } else {
-        // M2 §4B part 3: compute sizes_differ for this single item
-        // by loading its ingredient-mates' pack shapes. We skip for
-        // non-count-costed ingredients (helper returns an empty
-        // set for those).
-        const { data: mates } = await client
-          .from("pr_vendor_items")
-          .select("id,pack_qty,pack_size,pack_uom")
-          .eq("ingredient_id", ingredient.id);
-        const packs = (mates ?? []).map((row) => {
-          const r = row as { id: string; pack_qty: number | null; pack_size: number | null; pack_uom: string | null };
-          return { id: r.id, packQty: r.pack_qty, packSize: r.pack_size, packUom: r.pack_uom };
-        });
-        const flagged = sizesDifferFlags(packs, measures, ingredient.base_unit);
-        if (flagged.has(it.id)) statusKind = "sizes_differ";
-        // check_it is per-blend classification; the server doesn't
-        // know it for a single item without the full priced set,
-        // and the attention surface only needs it when known.
-        // (MasterLinkedItem carries it from IngredientMasters.)
-      }
-    } else {
-      statusKind = "needs_measure";
     }
+  }
+
+  // M2.1: single pipeline for blend + status. The blend set is always
+  // the ingredient's confirmed + LIVE_STATUSES items (same filter the
+  // Ingredients tab uses). If the viewed item is NOT in that set
+  // (proposed, archived, non-live), its status is "what it would be
+  // if it joined": run the pipeline on confirmed + {viewed} and read
+  // the viewed item's statusKind from that second run. The blend
+  // value shown to the user stays the confirmed-only run.
+  let blendedAvgPerBase: number | null = null;
+  if (ingredient) {
+    const { data: matesRaw } = await client
+      .from("pr_vendor_items")
+      .select("id,vendor_id,status,link_status,grade,pack_qty,pack_size,pack_uom,case_weight_lb,price_estimate,usd_12m")
+      .eq("link_status", "confirmed")
+      .in("status", LIVE_STATUSES)
+      .eq("ingredient_id", ingredient.id);
+    type MateRow = {
+      id: string;
+      vendor_id: string | null;
+      status: string | null;
+      link_status: string | null;
+      grade: string | null;
+      pack_qty: number | null;
+      pack_size: number | null;
+      pack_uom: string | null;
+      case_weight_lb: number | null;
+      price_estimate: { per_base?: number | string | null; base_uom?: string | null } | null;
+      usd_12m: number | null;
+    };
+    const mates = (matesRaw ?? []) as MateRow[];
+    const confirmedSet: BlendInputItem[] = mates.map((row) => ({
+      id: row.id,
+      grade: row.grade,
+      usd12m: Number(row.usd_12m ?? 0),
+      perBase: row.price_estimate?.per_base != null ? Number(row.price_estimate.per_base) : null,
+      perBaseUom: row.price_estimate?.base_uom ?? null,
+      packQty: row.pack_qty,
+      packSize: row.pack_size,
+      packUom: row.pack_uom,
+      caseWeightLb: row.case_weight_lb,
+    }));
+    const confirmedRun = computeIngredientBlend(ingredient, confirmedSet, measures);
+    blendedAvgPerBase = confirmedRun.blendedLens.avgPerBase;
+
+    // The viewed item's statusKind. If it is already in the confirmed
+    // set, read directly; else re-run the pipeline over confirmed +
+    // {viewed} and read the viewed item's status.
+    const inConfirmed = mates.some((m) => m.id === id);
+    if (inConfirmed) {
+      statusKind = confirmedRun.statusKindById.get(id) ?? statusKind;
+    } else {
+      const joiner: BlendInputItem = {
+        id,
+        grade: it.grade ?? null,
+        usd12m: Number(it.usd_12m ?? 0),
+        perBase: rawPerBase,
+        perBaseUom: rawBaseUom,
+        packQty: it.pack_qty ?? null,
+        packSize: it.pack_size ?? null,
+        packUom: it.pack_uom ?? null,
+        caseWeightLb,
+      };
+      const joinedRun = computeIngredientBlend(
+        ingredient,
+        [...confirmedSet, joiner],
+        measures,
+      );
+      statusKind = joinedRun.statusKindById.get(id) ?? statusKind;
+    }
+  } else if (perBaseInIngUnit == null && ingredient) {
+    statusKind = "needs_measure";
   }
 
   const itemOut = {
@@ -432,55 +485,6 @@ export async function GET(req: NextRequest) {
     perBaseInIngUnit,
     statusKind,
   } as ReviewGroupItem & { caseWeightLb: number | null; perBaseInIngUnit: number | null };
-
-  // Polish round 2 fix 2: blended lens $ / base_unit across THIS
-  // ingredient's linked items (not the Review-queue group). Each
-  // mate's per-base is routed through priceInUnit so weight items
-  // and count items both land in the ingredient's dim before the
-  // outlier rule runs. blendStats is the same code path that
-  // IngredientMasters uses for the blended lens; the number matches.
-  let blendedAvgPerBase: number | null = null;
-  if (ingredient) {
-    const targetUom = canonicalFromBaseUnit(ingredient.base_unit);
-    if (targetUom) {
-      const { data: mates } = await client
-        .from("pr_vendor_items")
-        .select("id,pack_qty,pack_size,pack_uom,case_weight_lb,price_estimate,usd_12m")
-        .eq("ingredient_id", ingredient.id);
-      const priced: Array<{ id: string; v: number; usd: number }> = [];
-      for (const row of (mates ?? []) as Array<{
-        id: string;
-        pack_qty: number | null;
-        pack_size: number | null;
-        pack_uom: string | null;
-        case_weight_lb: number | null;
-        price_estimate: { per_base?: number | string | null; base_uom?: string | null } | null;
-        usd_12m: number | null;
-      }>) {
-        const pe = row.price_estimate ?? null;
-        const matePerBase = pe?.per_base != null ? Number(pe.per_base) : null;
-        const mateBaseUom = pe?.base_uom ?? null;
-        if (matePerBase == null || !Number.isFinite(matePerBase) || matePerBase <= 0 || !mateBaseUom) continue;
-        const r = priceInUnit(
-          {
-            perBase: matePerBase,
-            baseUom: mateBaseUom,
-            packQty: row.pack_qty,
-            packSize: row.pack_size,
-            packUom: row.pack_uom,
-            caseWeightLb: row.case_weight_lb,
-          },
-          targetUom,
-          { measures },
-        );
-        if (r?.per != null && Number.isFinite(r.per) && r.per > 0) {
-          priced.push({ id: row.id, v: r.per, usd: Number(row.usd_12m ?? 0) });
-        }
-      }
-      const stats = blendStats(priced);
-      blendedAvgPerBase = stats.survivorMean;
-    }
-  }
 
   // M2 §4B part 2: project measures + yield onto the ingredient
   // object itself so panel readers see one shape.
