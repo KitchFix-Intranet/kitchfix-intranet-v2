@@ -157,7 +157,9 @@ const LIVE_STATUSES: readonly string[] = ["active", "resale"];
 // mismatch classification (an orthogonal use the item panel does not share).
 import { DIM_BY_UOM, BASE_BY_DIM, normUom, convertPer, canonicalFromBaseUnit } from "@/lib/ingredients/pack";
 import { isMeasuresWorld, readAllMeasures } from "@/lib/ingredients/measuresRead";
-import { shapeIngredientEachFromMeasures, shapeItemEachFromCaseWeight } from "@/lib/ingredients/measuresShape";
+// M2 §4B part 2: shape helpers removed (nothing on screen reads
+// each_measure_*). The legacy fields stay on MasterRow /
+// MasterLinkedItem for type-level back-compat.
 import { priceInUnit, reachableUnits, sizesDifferFlags, type Measure } from "@/lib/ingredients/measures";
 import {
   OUTLIER_RATIO,
@@ -229,16 +231,10 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
   const measuresByIngredient = measuresWorld
     ? await readAllMeasures(client)
     : new Map<string, never>();
-  const ingredients: Ingredient[] = rawIngredients.map((r) => {
-    if (!measuresWorld) return r;
-    const shaped = shapeIngredientEachFromMeasures(measuresByIngredient.get(r.id) ?? []);
-    return {
-      ...r,
-      each_measure_qty: shaped.qty,
-      each_measure_uom: shaped.uom,
-      each_measure_source: shaped.source,
-    };
-  });
+  // M2 §4B part 2: no legacy-triple reshape. Nothing on screen reads
+  // each_measure_*; the measures ride on the ingredient directly
+  // through MasterRow.measures below.
+  const ingredients: Ingredient[] = rawIngredients;
 
   // Vendors (small, read once).
   const { data: vData } = await client.from("pr_vendors").select("id,name");
@@ -599,16 +595,10 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
           // whether the item has an override; the legacy pair controls
           // DISPLAY shape when it agrees. Pre-0019 we keep the legacy
           // shape unchanged.
-          eachMeasure: measuresWorld
-            ? shapeItemEachFromCaseWeight(
-                it.case_weight_lb ?? null,
-                it.pack_qty ?? null,
-                it.pack_size ?? null,
-                it.pack_uom ?? null,
-                it.each_measure_qty,
-                it.each_measure_uom,
-              )
-            : it.each_measure_qty != null && it.each_measure_uom
+          // M2 §4B part 2: item.eachMeasure is unread on screen;
+          // kept on the type for back-compat with the legacy columns.
+          eachMeasure:
+            it.each_measure_qty != null && it.each_measure_uom
               ? { qty: Number(it.each_measure_qty), uom: it.each_measure_uom }
               : null,
         };

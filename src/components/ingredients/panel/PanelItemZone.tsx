@@ -23,7 +23,11 @@ import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 import { ItemGradeBlock } from "./ItemGradeBlock";
 import { PackOverrideBlock } from "./PackOverrideBlock";
 import { PriceOverrideBlock } from "./PriceOverrideBlock";
-import { ItemEachMeasureBlock } from "./ItemEachMeasureBlock";
+// M2 §4B §2.7: ItemEachMeasureBlock is no longer mounted. The item-
+// side override is now CaseWeightBlock (case_weight_lb); the "One
+// each is" sentence lives on the ingredient zone's Measures block.
+import { CaseWeightBlock } from "./CaseWeightBlock";
+import { canonicalFromBaseUnit, uomLabel } from "@/lib/ingredients/pack";
 import { parsePackNormalized, type PackHint } from "./packHelpers";
 
 // Plain-English pack provenance. One phrase per source. §1b: this is
@@ -44,6 +48,46 @@ function reviewChipTitle(item: ReviewGroupItem): string {
   return item.matchSource === "catalog_name" && item.matchScore != null
     ? `matched to a catalog row by name (trigram similarity ${item.matchScore.toFixed(2)}); verify this pack is right`
     : "pack needs human verification";
+}
+
+// M2 §4B §2.7: "How we got there" phrase. Reads the same signals
+// priceInUnit uses to compose a natural-language sentence. Lower-case
+// units; example shape: "N each in the case, Q oz each = T lb, so
+// case price / T = per-lb".
+function HowWeGotTherePhrase({
+  item,
+  ingredient,
+}: {
+  item: ReviewGroupItem;
+  ingredient: ReviewCardIngredient;
+}) {
+  const target = canonicalFromBaseUnit(ingredient.base_unit);
+  if (!target || item.perBase == null || item.perBaseInIngUnit == null) return null;
+  const casePriceGuess =
+    item.perBase != null && item.packQty && item.packSize
+      ? item.perBase * item.packQty * item.packSize
+      : null;
+  const targetLabel = uomLabel(target).toLowerCase();
+  if (item.caseWeightLb && item.caseWeightLb > 0) {
+    const cw = Math.round(item.caseWeightLb * 1000) / 1000;
+    if (casePriceGuess) {
+      return (
+        <span className="kf-ipanel__math">
+          This case weighs {cw} lb, so ${casePriceGuess.toFixed(2)} / {cw} = ${item.perBaseInIngUnit.toFixed(2)} / {targetLabel}
+        </span>
+      );
+    }
+    return (
+      <span className="kf-ipanel__math">
+        This case weighs {cw} lb. Prices out at ${item.perBaseInIngUnit.toFixed(2)} / {targetLabel}.
+      </span>
+    );
+  }
+  return (
+    <span className="kf-ipanel__math">
+      Prices out at ${item.perBaseInIngUnit.toFixed(2)} / {targetLabel} via the ingredient's measures.
+    </span>
+  );
 }
 
 // Lowercase display of a stored UOM (LB → lb, FLOZ → fl oz, EA → each).
@@ -184,15 +228,32 @@ export function PanelItemZone({
               hint={packHint}
               onDone={() => { onDone(); setPackOpen(false); }}
               onCancel={() => setPackOpen(false)}
+              measures={ingredient?.measures as Parameters<typeof PackOverrideBlock>[0]["measures"]}
             />
           </div>
         ) : null}
       </div>
 
-      {/* Row 2: One each is - item-side override (N11 §2 R4: component
-          owns the row so Save sits in the shared action column). */}
-      {item.perBaseUom === "EA" ? (
-        <ItemEachMeasureBlock item={item} ingredient={ingredient} onDone={onDone} />
+      {/* M2 §4B §2.7: item-side override moves to Case weight. The
+          block is hidden for a weight case (CaseWeightBlock no-ops),
+          behind a link for a count case at rest, open when a value
+          is stored or when the item is left out as an outlier. */}
+      <CaseWeightBlock
+        item={item}
+        forceOpen={item.caseWeightLb != null}
+        onDone={onDone}
+      />
+
+      {/* M2 §4B §2.7: How we got there - the route to the price in
+          the ingredient's unit, plain words and lower-case units. */}
+      {item.perBase != null && item.perBaseInIngUnit != null && ingredient ? (
+        <div className="kf-ipanel__row kf-ipanel__row--howwegot">
+          <div className="kf-ipanel__row-label">How we got there</div>
+          <div className="kf-ipanel__row-value">
+            <HowWeGotTherePhrase item={item} ingredient={ingredient} />
+          </div>
+          <div className="kf-ipanel__row-action" />
+        </div>
       ) : null}
 
       {/* Row 3: Grade -------------------------------------------- */}

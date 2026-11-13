@@ -309,6 +309,11 @@ export function IngredientMastersFilter({
       each_measure_qty: selected.eachMeasureQty,
       each_measure_uom: selected.eachMeasureUom,
       each_measure_source: selected.eachMeasureSource,
+      // M2 §4B part 2: measures + yield ride on the ingredient
+      // (MasterRow already carries them via IngredientMasters).
+      measures: selected.measures,
+      yieldPct: selected.yieldPct,
+      yieldSource: selected.yieldSource,
     };
   }, [selected]);
 

@@ -56,11 +56,16 @@ export function PanelAttention({
   onFixPack: (uom: string) => void;
 }) {
   const issues = deriveAttention(item, ingredient);
+  // M2 §4B §2.8: render no_price, pack_unreadable (both keep Fix the
+  // pack) and the three M2 kinds (needs_measure, check_it_outlier,
+  // sizes_differ). The old unit_mismatch kind is gone.
   const rendered = issues.filter(
     (i) =>
       i.kind === "no_price" ||
       i.kind === "pack_unreadable" ||
-      i.kind === "unit_mismatch"
+      i.kind === "needs_measure" ||
+      i.kind === "check_it_outlier" ||
+      i.kind === "sizes_differ",
   );
   // N13 R4: "{n} of {lines} invoice lines were flagged when read"
   // is a warn attention line whenever needsReviewLines > 0. One line,
@@ -111,16 +116,54 @@ export function PanelAttention({
               <button
                 type="button"
                 className="kf-btn kf-btn--line kf-btn--sm"
-                onClick={() =>
-                  onFixPack(
-                    "targetUom" in issue
-                      ? (issue as { targetUom: string }).targetUom
-                      : ingredientBaseUom(ingredient) ?? "LB"
-                  )
-                }
+                onClick={() => onFixPack(ingredientBaseUom(ingredient) ?? "LB")}
               >
                 Fix the pack
               </button>
+            ) : null}
+            {/* M2 §4B §2.8: needs_measure gets "Add a measure" only
+                - never "Fix the pack". The button signals the panel
+                to scroll to the Measures block (opening the add row
+                is left to future wiring; the body copy already names
+                the action). */}
+            {issue.kind === "needs_measure" ? (
+              <button
+                type="button"
+                className="kf-btn kf-btn--line kf-btn--sm"
+                onClick={() => {
+                  const el = document.querySelector(".kf-ipanel__row--measures");
+                  if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+                }}
+              >
+                Add a measure
+              </button>
+            ) : null}
+            {/* M2 §4B §2.8: sizes_differ gets two buttons - Add a
+                measure (prefill 1 EA = largest-spend size) + Change
+                Costed per (scroll to BaseUnitControl). */}
+            {issue.kind === "sizes_differ" ? (
+              <>
+                <button
+                  type="button"
+                  className="kf-btn kf-btn--line kf-btn--sm"
+                  onClick={() => {
+                    const el = document.querySelector(".kf-ipanel__row--measures");
+                    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+                  }}
+                >
+                  Add a measure
+                </button>
+                <button
+                  type="button"
+                  className="kf-btn kf-btn--line kf-btn--sm"
+                  onClick={() => {
+                    const el = document.querySelector(".kf-ipanel__row--costed");
+                    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+                  }}
+                >
+                  Change Costed per
+                </button>
+              </>
             ) : null}
           </div>
         );

@@ -28,6 +28,12 @@ export type ReviewGroupItem = {
   // the New-ingredient panel's "Costed per" preview. Already selected
   // at ReviewQueue:145; one row-object field add, no SELECT change.
   packUom: string | null;
+  // M2 §4B part 2: raw pack_qty / pack_size drive the suggestions
+  // rule (prompt 2.4: pack_qty > 1 with pack_size in weight/volume
+  // suggests "1 each = pack_size pack_uom"). Optional for builders
+  // that have not updated.
+  packQty?: number | null;
+  packSize?: number | null;
   packState: string;
   // P1 correction 2c: 'catalog_sibling' names a pack that came from
   // a proven same-vendor expansion (invoice pack_text matches >=2
@@ -202,4 +208,13 @@ export type ReviewCardIngredient = {
   each_measure_qty: number | null;
   each_measure_uom: string | null;
   each_measure_source: string | null;
+  // M2 §4B part 2: measures + yield ride on the ingredient so every
+  // panel mount (review queue, vendor items, Ingredients tab) reads
+  // the same data without a second fetch. Populated server-side by
+  // /api/review/item, /api/review/ingredient, ReviewQueue, and
+  // IngredientMasters. Optional on the type for builders that have
+  // not updated yet.
+  measures?: Array<{ from_unit: string; qty: number; to_unit: string; source: string }>;
+  yieldPct?: number | null;
+  yieldSource?: string | null;
 };

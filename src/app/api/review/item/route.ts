@@ -31,10 +31,10 @@ import {
   readMeasuresForIngredient,
   legacyEachMeasureToMeasures,
 } from "@/lib/ingredients/measuresRead";
-import {
-  shapeIngredientEachFromMeasures,
-  shapeItemEachFromCaseWeight,
-} from "@/lib/ingredients/measuresShape";
+// M2 §4B part 2: shape helpers no longer called here. Nothing on
+// screen reads each_measure_*; the GET returns the raw legacy
+// values when present (type-level back-compat) and the real
+// authority lives in the `measures` field.
 import { priceInUnit } from "@/lib/ingredients/measures";
 import { canonicalFromBaseUnit } from "@/lib/ingredients/pack";
 
@@ -339,18 +339,12 @@ export async function GET(req: NextRequest) {
   if (newWorld) {
     if (rawIngredient) {
       measures = await readMeasuresForIngredient(client, rawIngredient.id);
-      // Overwrite the legacy triple so deriveRecipePrice reads the
-      // new world's count-to-X row even though its input shape is
-      // unchanged.
-      const shaped = shapeIngredientEachFromMeasures(measures);
-      ingredient = {
-        ...rawIngredient,
-        each_measure_qty: shaped.qty,
-        each_measure_uom: shaped.uom,
-        each_measure_source: shaped.source,
-      };
+      // M2 §4B part 2: screens don't read each_measure_* any more.
+      // The ingredient passes through with its legacy columns intact
+      // (type-level back-compat); the authoritative shape is
+      // `measures` which rides on the response below.
+      ingredient = rawIngredient;
     }
-    // case_weight_lb + the item's eachMeasure derivation from it.
     const { data: cwRow } = await client
       .from("pr_vendor_items")
       .select("case_weight_lb")
@@ -358,19 +352,8 @@ export async function GET(req: NextRequest) {
       .maybeSingle();
     const raw = (cwRow as { case_weight_lb: number | null } | null)?.case_weight_lb ?? null;
     caseWeightLb = raw == null ? null : Number(raw);
-    // In measures-world, the item's legacy each_measure columns are
-    // NOT read. eachMeasure derives from case_weight_lb when the pack
-    // is count-based; null otherwise.
-    // M1 R3 fix 2: the legacy pair decides how to SHOW the derived
-    // override; case_weight_lb decides what it is worth. Pass both.
-    itemEachMeasure = shapeItemEachFromCaseWeight(
-      caseWeightLb,
-      it.pack_qty,
-      it.pack_size,
-      it.pack_uom,
-      it.each_measure_qty,
-      it.each_measure_uom,
-    );
+    // item.eachMeasure is unread on screen; kept as-is.
+    itemEachMeasure = item.eachMeasure;
   } else if (rawIngredient) {
     measures = legacyEachMeasureToMeasures(
       rawIngredient.each_measure_qty,
@@ -418,9 +401,14 @@ export async function GET(req: NextRequest) {
     caseWeightLb,
     perBaseInIngUnit,
   } as ReviewGroupItem & { caseWeightLb: number | null; perBaseInIngUnit: number | null };
+  // M2 §4B part 2: project measures + yield onto the ingredient
+  // object itself so panel readers see one shape.
+  const ingredientOut = ingredient
+    ? { ...ingredient, measures, yieldPct, yieldSource }
+    : null;
   return NextResponse.json({
     item: itemOut,
-    ingredient,
+    ingredient: ingredientOut,
     parents,
     measures,
     yieldPct,

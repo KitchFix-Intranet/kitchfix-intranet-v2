@@ -22,7 +22,8 @@ import {
   readMeasuresForIngredient,
   legacyEachMeasureToMeasures,
 } from "@/lib/ingredients/measuresRead";
-import { shapeIngredientEachFromMeasures } from "@/lib/ingredients/measuresShape";
+// M2 §4B part 2: shape helper no longer called here. Nothing on
+// screen reads each_measure_*.
 
 export const dynamic = "force-dynamic";
 
@@ -72,13 +73,10 @@ export async function GET(req: NextRequest) {
   let ingredient: ReviewCardIngredient = rawIngredient;
   if (newWorld) {
     measures = await readMeasuresForIngredient(client, id);
-    const shaped = shapeIngredientEachFromMeasures(measures);
-    ingredient = {
-      ...rawIngredient,
-      each_measure_qty: shaped.qty,
-      each_measure_uom: shaped.uom,
-      each_measure_source: shaped.source,
-    };
+    // M2 §4B part 2: no legacy-triple reshape. Nothing on screen
+    // reads each_measure_*; the authoritative shape is `measures`
+    // which rides on the response below.
+    ingredient = rawIngredient;
   } else {
     measures = legacyEachMeasureToMeasures(
       rawIngredient.each_measure_qty,
@@ -89,8 +87,18 @@ export async function GET(req: NextRequest) {
   const yieldPct = (ingredient as { yield_pct?: number | null }).yield_pct ?? null;
   const yieldSource = (ingredient as { yield_source?: string | null }).yield_source ?? null;
 
+  // M2 §4B part 2: project measures + yield onto the ingredient
+  // object itself so PanelIngredientZone's new Measures + Yield rows
+  // read from one place. The top-level sibling fields stay for any
+  // reader still using them.
+  const ingredientOut = {
+    ...ingredient,
+    measures,
+    yieldPct,
+    yieldSource,
+  };
   return NextResponse.json({
-    ingredient,
+    ingredient: ingredientOut,
     parents,
     measures,
     yieldPct,

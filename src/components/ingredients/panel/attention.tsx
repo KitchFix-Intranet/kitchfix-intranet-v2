@@ -1,25 +1,64 @@
 "use client";
 
-// deriveAttention + AttentionIssue type. The attention surface itself
-// is rendered by PanelAttention (N7 §3c). AttentionIcon lives inline in
-// that component. The old AttentionSection + fixPackDefaultUom are
-// gone - PanelAttention owns the icon pick + the fix-button fallback.
+// M2 §4B §2.8: attention surface. deriveAttention produces typed
+// AttentionIssue[]; PanelAttention renders them.
+//
+// Three M2 kinds replace / augment the old unit_mismatch:
+//   needs_measure   - item can't reach ingredient's base_unit; the
+//                     pack is fine, the ingredient needs a measure.
+//                     Button: "Add a measure" (no "Fix the pack").
+//   check_it_outlier - item is priced but ±3× median; left out of
+//                     the blend. Warn tone; no action button.
+//   sizes_differ    - count-costed ingredient whose sized packs
+//                     disagree. Buttons: "Add a measure" (prefill
+//                     1 EA = largest-spend size) + "Change Costed per".
 
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
-import { DIM_BY_UOM } from "@/lib/ingredients/pack";
-import { ingredientBaseUom, ingredientBaseDim } from "./packHelpers";
+import { DIM_BY_UOM, canonicalFromBaseUnit, uomLabel } from "@/lib/ingredients/pack";
+import { factor, priceInUnit, sizesDifferFlags } from "@/lib/ingredients/measures";
 
 export type AttentionIssue =
   | { kind: "no_price"; tone: "bad"; head: string; body: string; fix?: "pack" }
   | { kind: "pack_unreadable"; tone: "info"; head: string; body: string; fix: "pack" }
-  | { kind: "unit_mismatch"; tone: "bad"; head: string; body: string; fix: "pack"; targetUom: string }
+  | {
+      kind: "needs_measure";
+      tone: "bad";
+      head: string;
+      body: string;
+      action: "add_measure";
+      targetUom: string;
+    }
+  | {
+      kind: "check_it_outlier";
+      tone: "warn";
+      head: string;
+      body: string;
+    }
+  | {
+      kind: "sizes_differ";
+      tone: "warn";
+      head: string;
+      body: string;
+      action: "sizes_differ";
+      // Prefill for the "Add a measure" button: 1 EA = {qty} {uom}
+      prefillQty: number;
+      prefillUom: string;
+    }
   | { kind: "pack_hand_set"; tone: "warn"; head: string; body: string }
   | { kind: "price_hand_set"; tone: "warn"; head: string; body: string }
   | { kind: "no_ingredient"; tone: "info"; head: string; body: string };
 
+// Low-case plain phrasing for the unit list: "{8 fl oz} and {14 fl oz}".
+function joinSizes(labels: string[]): string {
+  if (labels.length === 0) return "";
+  if (labels.length === 1) return labels[0];
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  return labels.slice(0, -1).join(", ") + ", and " + labels[labels.length - 1];
+}
+
 export function deriveAttention(
   item: ReviewGroupItem,
-  ingredient: ReviewCardIngredient | null
+  ingredient: ReviewCardIngredient | null,
 ): AttentionIssue[] {
   const issues: AttentionIssue[] = [];
 
@@ -49,27 +88,130 @@ export function deriveAttention(
     });
   }
 
-  const ingBase = ingredientBaseDim(ingredient);
-  const itemBase = item.perBaseUom ? (DIM_BY_UOM[item.perBaseUom] ?? null) : null;
-  if (ingBase && itemBase && itemBase !== ingBase && ingredient) {
-    const targetUom = ingredientBaseUom(ingredient) ?? "EA";
-    // N8 §1h: head reads like a sentence.
-    const itemPhrase =
-      itemBase === "weight" ? "by weight"
-      : itemBase === "volume" ? "by volume"
-      : "by count";
-    const ingPhrase =
-      ingBase === "weight" ? "weighed"
-      : ingBase === "volume" ? "measured by volume"
-      : "counted";
-    issues.push({
-      kind: "unit_mismatch",
-      tone: "bad",
-      head: `Priced ${itemPhrase}, ingredient is ${ingPhrase}`,
-      body: `${ingredient.name} has no measure that reaches ${ingredient.base_unit}. Add a measure on the ingredient and this item will price.`,
-      fix: "pack",
-      targetUom,
-    });
+  // M2 §4B §2.8: needs_measure fires when the item cannot reach the
+  // ingredient's base_unit via priceInUnit. The pack is fine; the
+  // ingredient needs a measure. This replaces unit_mismatch.
+  if (ingredient && item.perBase != null && item.perBaseUom) {
+    const target = canonicalFromBaseUnit(ingredient.base_unit);
+    const measures = (ingredient.measures ?? []) as Array<{
+      from_unit: string;
+      qty: number;
+      to_unit: string;
+      source: "house_test" | "book" | "vendor_spec" | "estimate" | "pack";
+    }>;
+    if (target) {
+      const result = priceInUnit(
+        {
+          perBase: item.perBase,
+          baseUom: item.perBaseUom,
+          packQty: item.packQty ?? null,
+          packSize: item.packSize ?? null,
+          packUom: item.packUom ?? null,
+          caseWeightLb: item.caseWeightLb ?? null,
+        },
+        target,
+        { measures },
+      );
+      if (result == null) {
+        const packLabel = (item.packUom ?? "").toLowerCase() || "unknown unit";
+        issues.push({
+          kind: "needs_measure",
+          tone: "bad",
+          head: `${ingredient.name} has no measure that reaches ${ingredient.base_unit}`,
+          body: `This case comes in ${packLabel}. Add one measure on the ingredient and this item will price.`,
+          action: "add_measure",
+          targetUom: target,
+        });
+      }
+    }
+  }
+
+  // M2 §4B §2.8: sizes_differ fires for a count-costed ingredient
+  // whose sized packs disagree within one kind. Priced, shown, not
+  // in any lens. Requires the ingredient to carry its full linked-
+  // item pack shapes - threaded via an optional field on the item
+  // when the queue/master builder populates it; otherwise skipped
+  // (the Ingredients tab panel gets it from MasterRow).
+  const maybeLinked = (ingredient as unknown as { linkedPacks?: Array<{
+    id: string;
+    packQty: number | null;
+    packSize: number | null;
+    packUom: string | null;
+    usd12m?: number;
+  }> } | null)?.linkedPacks;
+  if (ingredient && maybeLinked) {
+    const packs = maybeLinked;
+    const measures = (ingredient.measures ?? []) as Array<{
+      from_unit: string;
+      qty: number;
+      to_unit: string;
+      source: "house_test" | "book" | "vendor_spec" | "estimate" | "pack";
+    }>;
+    const flagged = sizesDifferFlags(packs, measures, ingredient.base_unit);
+    if (flagged.has(item.id)) {
+      // Build the size list from the same partition rule as
+      // sizesDifferFlags. Only candidates that STILL state count
+      // (factor EA -> packUom is null) show up.
+      const sizesByKind: Record<"weight" | "volume", Array<{ ps: number; uom: string; usd: number }>> = {
+        weight: [],
+        volume: [],
+      };
+      for (const p of packs) {
+        const pu = (p.packUom ?? "").toUpperCase();
+        const dim = DIM_BY_UOM[pu];
+        const pq = Number(p.packQty ?? NaN);
+        const ps = Number(p.packSize ?? NaN);
+        if ((dim !== "weight" && dim !== "volume") || !(pq > 1) || !(ps > 0)) continue;
+        if (factor("EA", pu, { measures }) != null) continue;
+        sizesByKind[dim].push({ ps, uom: pu, usd: Number(p.usd12m ?? 0) });
+      }
+      // Pick the kind this item belongs to.
+      const itemPu = (item.packUom ?? "").toUpperCase();
+      const itemDim = DIM_BY_UOM[itemPu];
+      const group =
+        itemDim === "weight"
+          ? sizesByKind.weight
+          : itemDim === "volume"
+            ? sizesByKind.volume
+            : null;
+      const sizeLabels = group
+        ? Array.from(new Set(group.map((g) => `${g.ps} ${uomLabel(g.uom)}`)))
+        : [];
+      const biggestSpend = group ? [...group].sort((a, b) => b.usd - a.usd)[0] : null;
+      const altBase =
+        itemDim === "weight" ? "lb" : itemDim === "volume" ? "gal" : "lb";
+      issues.push({
+        kind: "sizes_differ",
+        tone: "warn",
+        head: "These cases come in different sizes",
+        body:
+          `${ingredient.name} is costed per ${ingredient.base_unit}, but its cases hold ` +
+          `${joinSizes(sizeLabels)} pieces. Say what one each is, or cost this ingredient per ${altBase}.`,
+        action: "sizes_differ",
+        prefillQty: biggestSpend ? biggestSpend.ps : 0,
+        prefillUom: biggestSpend ? biggestSpend.uom : (itemPu || "OZ"),
+      });
+    }
+  }
+
+  // M2 §4B §2.8: check_it_outlier - item is priced but left out of
+  // the blend. Warn tone; no action button.
+  if (
+    ingredient &&
+    (item as { statusKind?: string }).statusKind === "check_it" &&
+    item.perBaseInIngUnit != null
+  ) {
+    const target = canonicalFromBaseUnit(ingredient.base_unit);
+    if (target) {
+      issues.push({
+        kind: "check_it_outlier",
+        tone: "warn",
+        head: `${item.perBaseInIngUnit.toFixed(2)} / ${uomLabel(target).toLowerCase()} is outside the ${ingredient.name} blend`,
+        body:
+          `The math is right for what was entered, so one of the inputs does not describe the real case. ` +
+          `Check the measure, or enter what this case weighs. It stays out of the blend until then.`,
+      });
+    }
   }
 
   if (item.perBase == null && item.perBaseNote) {
