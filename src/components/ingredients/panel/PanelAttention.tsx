@@ -25,9 +25,10 @@ export type PanelAttentionCounts = {
 
 export function computeAttentionCounts(
   item: ReviewGroupItem,
-  ingredient: ReviewCardIngredient | null
+  ingredient: ReviewCardIngredient | null,
+  siblingPacks: readonly import("./attention").SiblingPack[] = [],
 ): PanelAttentionCounts {
-  const issues = deriveAttention(item, ingredient);
+  const issues = deriveAttention(item, ingredient, siblingPacks);
   let packHandSet = false;
   let priceHandSet = false;
   let hasNoIngredient = false;
@@ -50,12 +51,24 @@ export function PanelAttention({
   item,
   ingredient,
   onFixPack,
+  onAddMeasure,
+  onChangeCostedPer,
+  siblingPacks = [],
 }: {
   item: ReviewGroupItem;
   ingredient: ReviewCardIngredient | null;
   onFixPack: (uom: string) => void;
+  // M2 §4B part 3 fix 6: "Add a measure" callback replaces
+  // document.querySelector scrolling. needs_measure passes the
+  // bridge that reaches base_unit; sizes_differ passes the
+  // largest-spend size qty + pack_uom.
+  onAddMeasure?: (uom: string, prefillQty?: number) => void;
+  onChangeCostedPer?: () => void;
+  // M2 §4B part 3 fix 4: sibling items' pack shapes drive the
+  // sizes_differ banner body.
+  siblingPacks?: readonly import("./attention").SiblingPack[];
 }) {
-  const issues = deriveAttention(item, ingredient);
+  const issues = deriveAttention(item, ingredient, siblingPacks);
   // M2 §4B §2.8: render no_price, pack_unreadable (both keep Fix the
   // pack) and the three M2 kinds (needs_measure, check_it_outlier,
   // sizes_differ). The old unit_mismatch kind is gone.
@@ -122,44 +135,34 @@ export function PanelAttention({
               </button>
             ) : null}
             {/* M2 §4B §2.8: needs_measure gets "Add a measure" only
-                - never "Fix the pack". The button signals the panel
-                to scroll to the Measures block (opening the add row
-                is left to future wiring; the body copy already names
-                the action). */}
+                - never "Fix the pack". Wired through the shared
+                bus so the measures block's add row opens prefilled
+                for the bridge that reaches base_unit. */}
             {issue.kind === "needs_measure" ? (
               <button
                 type="button"
                 className="kf-btn kf-btn--line kf-btn--sm"
-                onClick={() => {
-                  const el = document.querySelector(".kf-ipanel__row--measures");
-                  if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-                }}
+                onClick={() => onAddMeasure?.(issue.targetUom)}
               >
                 Add a measure
               </button>
             ) : null}
             {/* M2 §4B §2.8: sizes_differ gets two buttons - Add a
                 measure (prefill 1 EA = largest-spend size) + Change
-                Costed per (scroll to BaseUnitControl). */}
+                Costed per (focus the BaseUnitControl). */}
             {issue.kind === "sizes_differ" ? (
               <>
                 <button
                   type="button"
                   className="kf-btn kf-btn--line kf-btn--sm"
-                  onClick={() => {
-                    const el = document.querySelector(".kf-ipanel__row--measures");
-                    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-                  }}
+                  onClick={() => onAddMeasure?.(issue.prefillUom, issue.prefillQty)}
                 >
                   Add a measure
                 </button>
                 <button
                   type="button"
                   className="kf-btn kf-btn--line kf-btn--sm"
-                  onClick={() => {
-                    const el = document.querySelector(".kf-ipanel__row--costed");
-                    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-                  }}
+                  onClick={() => onChangeCostedPer?.()}
                 >
                   Change Costed per
                 </button>

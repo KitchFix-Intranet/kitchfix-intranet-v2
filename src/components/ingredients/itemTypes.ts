@@ -131,6 +131,11 @@ export type ReviewGroupItem = {
   // M2 §4B: case weight set by hand (item-level override). Null
   // when the ingredient's measures provide the weight.
   caseWeightLb?: number | null;
+  // M2 §4B part 3: per-item status key - server-computed and shared
+  // by every panel + attention + outlier surface. Mirrors
+  // MasterLinkedItem.statusKind. Optional so pre-M2 builders
+  // compile; readers default to "in_blend" when absent.
+  statusKind?: "in_blend" | "check_it" | "needs_measure" | "sizes_differ";
   // N13 R3: five fields so the item-panel surfaces (strip, attention,
   // head pills) carry what VendorItemDrawer displayed. Present on
   // every /api/review/item response; optional at the type level so

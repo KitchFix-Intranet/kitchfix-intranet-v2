@@ -15,7 +15,7 @@
 
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 import { DIM_BY_UOM, canonicalFromBaseUnit, uomLabel } from "@/lib/ingredients/pack";
-import { factor, priceInUnit, sizesDifferFlags } from "@/lib/ingredients/measures";
+import { factor, priceInUnit } from "@/lib/ingredients/measures";
 
 export type AttentionIssue =
   | { kind: "no_price"; tone: "bad"; head: string; body: string; fix?: "pack" }
@@ -56,9 +56,23 @@ function joinSizes(labels: string[]): string {
   return labels.slice(0, -1).join(", ") + ", and " + labels[labels.length - 1];
 }
 
+// M2 §4B part 3 fix 4+5: DetailPanel passes the sibling-item pack
+// shapes down so attention can build the sizes_differ banner body
+// from the same linked-item data the Measures block uses for
+// suggestions. `item.statusKind` is the source of truth for whether
+// to fire; this list only supplies the piece-size facts.
+export type SiblingPack = {
+  id: string;
+  packQty: number | null;
+  packSize: number | null;
+  packUom: string | null;
+  usd12m?: number;
+};
+
 export function deriveAttention(
   item: ReviewGroupItem,
   ingredient: ReviewCardIngredient | null,
+  siblingPacks: readonly SiblingPack[] = [],
 ): AttentionIssue[] {
   const issues: AttentionIssue[] = [];
 
@@ -132,23 +146,18 @@ export function deriveAttention(
   // item pack shapes - threaded via an optional field on the item
   // when the queue/master builder populates it; otherwise skipped
   // (the Ingredients tab panel gets it from MasterRow).
-  const maybeLinked = (ingredient as unknown as { linkedPacks?: Array<{
-    id: string;
-    packQty: number | null;
-    packSize: number | null;
-    packUom: string | null;
-    usd12m?: number;
-  }> } | null)?.linkedPacks;
-  if (ingredient && maybeLinked) {
-    const packs = maybeLinked;
+  // M2 §4B part 3 fix 5: trust the server-computed statusKind rather
+  // than re-running sizesDifferFlags in the client. The siblingPacks
+  // list supplies the piece sizes for the banner body.
+  if (ingredient && (item as { statusKind?: string }).statusKind === "sizes_differ") {
+    const packs = siblingPacks;
     const measures = (ingredient.measures ?? []) as Array<{
       from_unit: string;
       qty: number;
       to_unit: string;
       source: "house_test" | "book" | "vendor_spec" | "estimate" | "pack";
     }>;
-    const flagged = sizesDifferFlags(packs, measures, ingredient.base_unit);
-    if (flagged.has(item.id)) {
+    {
       // Build the size list from the same partition rule as
       // sizesDifferFlags. Only candidates that STILL state count
       // (factor EA -> packUom is null) show up.

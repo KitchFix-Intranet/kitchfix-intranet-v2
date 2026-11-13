@@ -17,7 +17,7 @@
 // does NOT dual-write; the legacy each_measure_* columns are kept
 // in sync by the M1 shaper on the read side for one more patch.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import {
@@ -160,6 +160,7 @@ export function PanelMeasuresBlock({
   itemsReachBase = true,
   onDone,
   openAddForUom,
+  openAddPrefillQty,
   onAfterAdd,
 }: {
   ingredient: ReviewCardIngredient;
@@ -167,9 +168,11 @@ export function PanelMeasuresBlock({
   suggestionCandidates?: readonly SuggestionCandidate[];
   itemsReachBase?: boolean;
   onDone: () => void;
-  // External trigger from the chip row: open the add form with
-  // this to_unit prefilled. Resets after consumption.
+  // External trigger from the chip row or attention: open the add
+  // form with this to_unit prefilled. Resets after consumption.
   openAddForUom?: string | null;
+  // Optional qty prefill (sizes_differ fires with "largest-spend size").
+  openAddPrefillQty?: number | null;
   onAfterAdd?: () => void;
 }) {
   const baseline = useMemo<UiMeasure[]>(() => measures.map(normalizeStored), [measures]);
@@ -183,22 +186,39 @@ export function PanelMeasuresBlock({
   const [dryRunSentence, setDryRunSentence] = useState<string | null>(null);
   const dryRunTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // External add-for-uom trigger from the chips row.
+  // External add-for-uom trigger from the chips row or attention.
+  // Pick the bridge that would REACH the target: for a weight/volume
+  // target, from = EA (count-to-X); for an EA target, from = the
+  // first volume uom (volume-to-weight is the only cross-dim path
+  // that reaches EA via a second row - rare). Never prefill EA to EA.
   useEffect(() => {
     if (!openAddForUom) return;
     const tu = openAddForUom.toUpperCase();
-    // Default from to EA for weight/volume targets (count->X).
-    setAddingFrom("EA");
+    const tDim = DIM_BY_UOM[tu];
+    const fromPick =
+      tDim === "weight" || tDim === "volume"
+        ? "EA"
+        : "EA"; // count target: user picks the volume from themselves
+    setAddingFrom(fromPick === tu ? "" : fromPick);
     setAddUom(tu);
-    setAddQty("");
+    setAddQty(openAddPrefillQty != null && openAddPrefillQty > 0 ? String(openAddPrefillQty) : "");
     setAddSource("estimate");
     setAddError(null);
-  }, [openAddForUom]);
+  }, [openAddForUom, openAddPrefillQty]);
 
-  // Keep the draft in sync when stored data updates (after a save).
+  // M2 §4B part 3 fix 3 (N11 R2 rule): re-seed only when the
+  // ingredient id changes OR the draft equalled the prior stored
+  // list. Never wipe a dirty draft on a refresh of the same
+  // ingredient.
+  const prevIdRef = useRef(ingredient.id);
+  const priorStoredRef = useRef<UiMeasure[]>(baseline);
   useEffect(() => {
-    setDraft(baseline);
-  }, [baseline]);
+    const idChanged = prevIdRef.current !== ingredient.id;
+    const priorStored = priorStoredRef.current;
+    prevIdRef.current = ingredient.id;
+    priorStoredRef.current = baseline;
+    setDraft((cur) => (idChanged || sameList(cur, priorStored) ? baseline : cur));
+  }, [baseline, ingredient.id]);
 
   const dirty = !sameList(draft, baseline);
 

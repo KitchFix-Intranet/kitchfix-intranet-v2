@@ -43,7 +43,7 @@ export function CaseWeightBlock({
         <div className="kf-ipanel__row-value">
           <button
             type="button"
-            className="kf-btn kf-btn--line kf-btn--sm"
+            className="kf-ipanel__link"
             onClick={() => setOpen(true)}
           >
             This case is a different size

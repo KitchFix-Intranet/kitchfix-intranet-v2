@@ -601,6 +601,14 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
             it.each_measure_qty != null && it.each_measure_uom
               ? { qty: Number(it.each_measure_qty), uom: it.each_measure_uom }
               : null,
+          // M2 §4B part 3 fix 4+9: carry pack shape + case weight on
+          // the row so the Ingredients-tab PanelIngredientZone mount
+          // can seed Measures-block suggestions and the expand's chip
+          // view switch can reprice per row via priceInUnit.
+          packQty: it.pack_qty != null ? Number(it.pack_qty) : null,
+          packSize: it.pack_size != null ? Number(it.pack_size) : null,
+          packUom: it.pack_uom ?? null,
+          caseWeightLb: it.case_weight_lb != null ? Number(it.case_weight_lb) : null,
         };
       })
       .sort((a, b) => b.usd12m - a.usd12m);

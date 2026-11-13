@@ -29,6 +29,9 @@ import { PriceOverrideBlock } from "./PriceOverrideBlock";
 import { CaseWeightBlock } from "./CaseWeightBlock";
 import { canonicalFromBaseUnit, uomLabel } from "@/lib/ingredients/pack";
 import { parsePackNormalized, type PackHint } from "./packHelpers";
+// M2 §4B part 3 fix 7: HowWeGotTherePhrase composes the sentence from
+// priceInUnit's returned route data. No price arithmetic in the view.
+import { priceInUnit, type Measure } from "@/lib/ingredients/measures";
 
 // Plain-English pack provenance. One phrase per source. §1b: this is
 // the muted micro line under the summary, not the label column.
@@ -50,10 +53,9 @@ function reviewChipTitle(item: ReviewGroupItem): string {
     : "pack needs human verification";
 }
 
-// M2 §4B §2.7: "How we got there" phrase. Reads the same signals
-// priceInUnit uses to compose a natural-language sentence. Lower-case
-// units; example shape: "N each in the case, Q oz each = T lb, so
-// case price / T = per-lb".
+// M2 §4B part 3 fix 7: "How we got there" calls priceInUnit and
+// formats from its returned route data. Lower-case units; no price
+// arithmetic in the view.
 function HowWeGotTherePhrase({
   item,
   ingredient,
@@ -62,30 +64,66 @@ function HowWeGotTherePhrase({
   ingredient: ReviewCardIngredient;
 }) {
   const target = canonicalFromBaseUnit(ingredient.base_unit);
-  if (!target || item.perBase == null || item.perBaseInIngUnit == null) return null;
-  const casePriceGuess =
-    item.perBase != null && item.packQty && item.packSize
-      ? item.perBase * item.packQty * item.packSize
-      : null;
+  if (!target || item.perBase == null || item.perBaseUom == null) return null;
+  const result = priceInUnit(
+    {
+      perBase: item.perBase,
+      baseUom: item.perBaseUom,
+      packQty: item.packQty ?? null,
+      packSize: item.packSize ?? null,
+      packUom: item.packUom ?? null,
+      caseWeightLb: item.caseWeightLb ?? null,
+    },
+    target,
+    { measures: (ingredient.measures ?? []) as Measure[] },
+  );
+  if (!result) return null;
   const targetLabel = uomLabel(target).toLowerCase();
-  if (item.caseWeightLb && item.caseWeightLb > 0) {
-    const cw = Math.round(item.caseWeightLb * 1000) / 1000;
-    if (casePriceGuess) {
+  const perStr = fmtUsd(result.per);
+  const totalRounded = Math.round(result.total * 1000) / 1000;
+  const totalUomLabel = uomLabel(result.totalUom).toLowerCase();
+  if (result.route.kind === "fallback") {
+    return (
+      <span className="kf-ipanel__math">
+        Prices out at {perStr} / {targetLabel} via the ingredient's measures.
+      </span>
+    );
+  }
+  const casePriceStr = result.casePrice != null ? fmtUsd(result.casePrice) : null;
+  if (result.route.kind === "stated") {
+    const viaCw = result.route.viaCaseWeight;
+    const fromQty = Math.round(result.route.fromQty * 1000) / 1000;
+    const fromLabel = uomLabel(result.route.fromUom).toLowerCase();
+    const prefix = viaCw
+      ? `This case weighs ${fromQty} lb`
+      : `${fromQty} ${fromLabel} in the case`;
+    if (casePriceStr) {
       return (
         <span className="kf-ipanel__math">
-          This case weighs {cw} lb, so ${casePriceGuess.toFixed(2)} / {cw} = ${item.perBaseInIngUnit.toFixed(2)} / {targetLabel}
+          {prefix}, so {casePriceStr} / {totalRounded} = {perStr} / {targetLabel}
         </span>
       );
     }
     return (
       <span className="kf-ipanel__math">
-        This case weighs {cw} lb. Prices out at ${item.perBaseInIngUnit.toFixed(2)} / {targetLabel}.
+        {prefix}. Prices out at {perStr} / {targetLabel}.
+      </span>
+    );
+  }
+  // route.kind === "measure"
+  const fromQty = Math.round(result.route.fromQty * 1000) / 1000;
+  const fromLabel = uomLabel(result.route.fromUom).toLowerCase();
+  const prefix = `${fromQty} ${fromLabel} in the case, ${totalRounded} ${totalUomLabel} via the measures`;
+  if (casePriceStr) {
+    return (
+      <span className="kf-ipanel__math">
+        {prefix}, so {casePriceStr} / {totalRounded} = {perStr} / {targetLabel}
       </span>
     );
   }
   return (
     <span className="kf-ipanel__math">
-      Prices out at ${item.perBaseInIngUnit.toFixed(2)} / {targetLabel} via the ingredient's measures.
+      {prefix}. Prices out at {perStr} / {targetLabel}.
     </span>
   );
 }
@@ -240,7 +278,7 @@ export function PanelItemZone({
           is stored or when the item is left out as an outlier. */}
       <CaseWeightBlock
         item={item}
-        forceOpen={item.caseWeightLb != null}
+        forceOpen={item.caseWeightLb != null || item.statusKind === "check_it"}
         onDone={onDone}
       />
 

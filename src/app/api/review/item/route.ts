@@ -35,7 +35,7 @@ import {
 // screen reads each_measure_*; the GET returns the raw legacy
 // values when present (type-level back-compat) and the real
 // authority lives in the `measures` field.
-import { priceInUnit } from "@/lib/ingredients/measures";
+import { priceInUnit, sizesDifferFlags } from "@/lib/ingredients/measures";
 import { canonicalFromBaseUnit } from "@/lib/ingredients/pack";
 
 export const dynamic = "force-dynamic";
@@ -373,6 +373,7 @@ export async function GET(req: NextRequest) {
   // from the one price function. Null when no ingredient, no price,
   // or no reachable path.
   let perBaseInIngUnit: number | null = null;
+  let statusKind: "in_blend" | "check_it" | "needs_measure" | "sizes_differ" = "in_blend";
   const pe2 = it.price_estimate ?? null;
   const rawPerBase = pe2?.per_base != null ? Number(pe2.per_base) : null;
   const rawBaseUom = pe2?.base_uom ?? null;
@@ -392,6 +393,30 @@ export async function GET(req: NextRequest) {
         { measures },
       );
       perBaseInIngUnit = r?.per ?? null;
+      if (perBaseInIngUnit == null) {
+        statusKind = "needs_measure";
+      } else {
+        // M2 §4B part 3: compute sizes_differ for this single item
+        // by loading its ingredient-mates' pack shapes. We skip for
+        // non-count-costed ingredients (helper returns an empty
+        // set for those).
+        const { data: mates } = await client
+          .from("pr_vendor_items")
+          .select("id,pack_qty,pack_size,pack_uom")
+          .eq("ingredient_id", ingredient.id);
+        const packs = (mates ?? []).map((row) => {
+          const r = row as { id: string; pack_qty: number | null; pack_size: number | null; pack_uom: string | null };
+          return { id: r.id, packQty: r.pack_qty, packSize: r.pack_size, packUom: r.pack_uom };
+        });
+        const flagged = sizesDifferFlags(packs, measures, ingredient.base_unit);
+        if (flagged.has(it.id)) statusKind = "sizes_differ";
+        // check_it is per-blend classification; the server doesn't
+        // know it for a single item without the full priced set,
+        // and the attention surface only needs it when known.
+        // (MasterLinkedItem carries it from IngredientMasters.)
+      }
+    } else {
+      statusKind = "needs_measure";
     }
   }
 
@@ -400,6 +425,7 @@ export async function GET(req: NextRequest) {
     eachMeasure: itemEachMeasure,
     caseWeightLb,
     perBaseInIngUnit,
+    statusKind,
   } as ReviewGroupItem & { caseWeightLb: number | null; perBaseInIngUnit: number | null };
   // M2 §4B part 2: project measures + yield onto the ingredient
   // object itself so panel readers see one shape.

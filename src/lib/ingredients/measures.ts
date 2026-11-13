@@ -230,6 +230,19 @@ function casePriceFromPerBase(
   return perBase * caseInBase;
 }
 
+// M2 R3 fix 7: expose casePrice, total and route as data. Callers
+// format the sentence; no price arithmetic outside this library.
+export type PriceInUnitResult = {
+  per: number;              // $ per targetUom
+  casePrice: number | null; // whole-case dollars (null on fallback path)
+  total: number;            // case's total in targetUom
+  totalUom: string;         // the uom `total` is measured in (upper-case)
+  route:
+    | { kind: "stated"; from: StatedKind; fromQty: number; fromUom: string; viaCaseWeight: boolean }
+    | { kind: "measure"; from: StatedKind; fromQty: number; fromUom: string }
+    | { kind: "fallback"; baseUom: string };
+};
+
 export function priceInUnit(
   item: {
     perBase: number;
@@ -241,7 +254,7 @@ export function priceInUnit(
   },
   targetUom: string,
   m: MeasuresInput,
-): { per: number; via: string; stated: StatedKind | null } | null {
+): PriceInUnitResult | null {
   if (!Number.isFinite(item.perBase) || item.perBase <= 0) return null;
   const target = String(targetUom || "").toUpperCase();
   const targetDim = DIM_BY_UOM[target];
@@ -260,7 +273,13 @@ export function priceInUnit(
   if (casePrice == null) {
     const k = factor(item.baseUom, target, m);
     if (k == null || !Number.isFinite(k) || k <= 0) return null;
-    return { per: item.perBase / k, via: `${item.baseUom} to ${target}`, stated: null };
+    return {
+      per: item.perBase / k,
+      casePrice: null,
+      total: 1 / k,
+      totalUom: target,
+      route: { kind: "fallback", baseUom: item.baseUom.toUpperCase() },
+    };
   }
 
   const totals = statedTotals(item.packQty, item.packSize, item.packUom, item.caseWeightLb, m);
@@ -272,8 +291,17 @@ export function priceInUnit(
     if (!(totalInTarget > 0)) return null;
     return {
       per: casePrice / totalInTarget,
-      via: viaSentence(targetDim as StatedKind, t.qty, item.caseWeightLb != null && targetDim === "weight"),
-      stated: targetDim as StatedKind,
+      casePrice,
+      total: totalInTarget,
+      totalUom: target,
+      route: {
+        kind: "stated",
+        from: targetDim as StatedKind,
+        fromQty: t.qty,
+        fromUom: t.uom,
+        viaCaseWeight:
+          item.caseWeightLb != null && item.caseWeightLb > 0 && targetDim === "weight",
+      },
     };
   }
 
@@ -288,8 +316,15 @@ export function priceInUnit(
     if (!(totalInTarget > 0)) continue;
     return {
       per: casePrice / totalInTarget,
-      via: `${s.qty} ${s.uom.toLowerCase()} in the case, through a measure to ${target.toLowerCase()}`,
-      stated: kind,
+      casePrice,
+      total: totalInTarget,
+      totalUom: target,
+      route: {
+        kind: "measure",
+        from: kind,
+        fromQty: s.qty,
+        fromUom: s.uom,
+      },
     };
   }
 

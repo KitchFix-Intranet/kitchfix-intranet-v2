@@ -32,11 +32,16 @@ import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtUsd, fmtUsdLong } from "@/lib/fmt";
 import { ItemPanelById } from "./ItemPanelById";
 import { SUPER_CATEGORIES } from "@/lib/ingredients/categories";
-import { uomLabel } from "@/lib/ingredients/pack";
-// M2 §4B amendment 4: no screen imports deriveRecipePrice or the
-// each-measure shapers. The alternate-unit view that the derived
-// sub-line used to carry is handled by the expand's chip view
-// switch (§2.6) which computes in the browser via priceInUnit.
+import { DIM_BY_UOM, canonicalFromBaseUnit, uomLabel } from "@/lib/ingredients/pack";
+// M2 §4B amendment 4 + part 3 fix 9: no screen imports deriveRecipePrice
+// or the each-measure shapers. The alternate-unit view that the derived
+// sub-line used to carry is handled by the expand's chip view switch
+// (§2.6) which computes in the browser via priceInUnit.
+import {
+  priceInUnit,
+  reachableUnits,
+  type Measure,
+} from "@/lib/ingredients/measures";
 import { RowSendBackButton } from "./RowSendBackButton";
 import { RowGradeToggle } from "./RowGradeToggle";
 import { PanelIngredientZone } from "./panel/PanelIngredientZone";
@@ -78,6 +83,14 @@ export type MasterLinkedItem = {
   grade: string | null;
   usd12m: number;
   eachMeasure: { qty: number; uom: string } | null;
+  // M2 §4B part 3 fix 4+9: pack shape rides on the linked item so the
+  // Ingredients-tab panel (same mount) can seed the Measures-block
+  // suggestions and the expand's chip view switch can re-price per
+  // row via priceInUnit.
+  packQty: number | null;
+  packSize: number | null;
+  packUom: string | null;
+  caseWeightLb: number | null;
 };
 
 export type MasterRow = {
@@ -648,7 +661,77 @@ function DetailView({
   const effectiveLens: "blended" | "standard" | "premium" = showLens ? lens : "blended";
   const active = row.statsByLens[effectiveLens];
 
-  const uom = uomOrUnit(row.baseUom);
+  // M2 §4B part 3 fix 9: chip view switch. viewUom defaults to the
+  // ingredient's base unit; chips name the reachable units (built-in
+  // same-dim + measures-bridged). Switching reprices strip tiles +
+  // every linked-item row via priceInUnit in the browser. State
+  // resets whenever the expand re-mounts (per row.id, never shared).
+  const baseCanonical = canonicalFromBaseUnit(row.baseUnit);
+  const [viewUom, setViewUom] = useState<string>(baseCanonical ?? "LB");
+  const reachList = useMemo<string[]>(() => {
+    if (!baseCanonical) return [];
+    const set = reachableUnits([baseCanonical], { measures: row.measures as Measure[] });
+    // Order chips: same-dim first (in the row's dim), then cross-dim.
+    const dim = DIM_BY_UOM[baseCanonical];
+    const list = Array.from(set);
+    list.sort((a, b) => {
+      const da = DIM_BY_UOM[a] === dim ? 0 : 1;
+      const db = DIM_BY_UOM[b] === dim ? 0 : 1;
+      if (da !== db) return da - db;
+      return a.localeCompare(b);
+    });
+    return list;
+  }, [baseCanonical, row.measures]);
+
+  const uom = viewUom && viewUom !== baseCanonical ? uomLabel(viewUom) : uomOrUnit(row.baseUom);
+
+  // M2 §4B part 3 fix 9: reprice each linked item in viewUom. Skip
+  // items that don't yet reach the viewUom (statusKind stays what the
+  // server said; price displays as "-" with the view's unit).
+  const repricedLinkedItems = useMemo(() => {
+    return row.linkedItems.map((li) => {
+      if (li.perBase == null || li.perBaseUom == null) {
+        return { ...li, viewPrice: null as number | null };
+      }
+      if (baseCanonical && viewUom === baseCanonical) {
+        // Same as row baseline - keep the server perBase when it is
+        // already in-ingredient-unit; otherwise null.
+        return {
+          ...li,
+          viewPrice: li.perBaseUom === row.baseUom ? li.perBase : null,
+        };
+      }
+      const result = priceInUnit(
+        {
+          perBase: li.perBase,
+          baseUom: li.perBaseUom,
+          packQty: li.packQty ?? null,
+          packSize: li.packSize ?? null,
+          packUom: li.packUom ?? null,
+          caseWeightLb: li.caseWeightLb ?? null,
+        },
+        viewUom,
+        { measures: row.measures as Measure[] },
+      );
+      return { ...li, viewPrice: result?.per ?? null };
+    });
+  }, [row.linkedItems, row.baseUom, row.measures, viewUom, baseCanonical]);
+
+  // Strip tile reprices from the in-view prices (same math as the row
+  // baseline but through viewUom). When viewUom === baseCanonical the
+  // server's active.avgPerBase stays authoritative.
+  const stripPrice: number | null = useMemo(() => {
+    if (baseCanonical && viewUom === baseCanonical) return active.avgPerBase;
+    const priced = repricedLinkedItems
+      .filter((li) => li.statusKind === "in_blend" && li.viewPrice != null)
+      .map((li) => ({ p: li.viewPrice as number, w: li.usd12m }));
+    if (priced.length === 0) return null;
+    const totW = priced.reduce((a, b) => a + b.w, 0);
+    if (totW <= 0) {
+      return priced.reduce((a, b) => a + b.p, 0) / priced.length;
+    }
+    return priced.reduce((a, b) => a + b.p * b.w, 0) / totW;
+  }, [repricedLinkedItems, active.avgPerBase, baseCanonical, viewUom]);
 
   const partial = active.linkedCount > 0 && active.pricedCount < active.linkedCount;
   const spreadBad = active.spreadRatio != null && active.spreadRatio > 3;
@@ -674,6 +757,29 @@ function DetailView({
         </div>
       </div>
 
+      {/* M2 §4B part 3 fix 9: chip view switch. Picks which unit
+          every row in the expand is priced in. Browser-only reprice
+          via priceInUnit; status (in blend / needs measure / etc.)
+          is unchanged. Resets when the expand remounts (per row.id). */}
+      {reachList.length > 1 ? (
+        <div className="kf-ingp__dzone-chips" aria-label="Show prices in">
+          {reachList.map((u) => {
+            const isActive = u === viewUom;
+            return (
+              <button
+                key={u}
+                type="button"
+                className={`kf-chip${isActive ? " kf-chip--solid" : " kf-chip--line"}`}
+                onClick={() => setViewUom(u)}
+                aria-pressed={isActive}
+              >
+                per {uomLabel(u).toLowerCase()}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+
       {/* Strip - round 2 fix 9: value + unit on one line, no wrap;
           lens select below Price is the compact chrome, never
           clipped, with a 44 px click target. */}
@@ -683,7 +789,7 @@ function DetailView({
             {effectiveLens === "blended" ? "Price" : effectiveLens === "standard" ? "Standard price" : "Premium price"}
           </span>
           <span className="kf-ipanel__strip-value kf-ipanel__strip-value--accent">
-            {active.avgPerBase != null ? fmtUsd(active.avgPerBase) : "-"}{" "}
+            {stripPrice != null ? fmtUsd(stripPrice) : "-"}{" "}
             <span className="kf-ipanel__strip-value-unit">/ {uom}</span>
           </span>
           <span className="kf-ipanel__strip-sub">
@@ -764,6 +870,16 @@ function DetailView({
           item={null}
           parentOptions={parentOptions}
           onDone={onDone}
+          suggestionCandidates={row.linkedItems
+            .filter((li) => li.packQty != null && li.packSize != null && li.packUom != null)
+            .map((li) => ({
+              id: li.id,
+              packQty: li.packQty ?? null,
+              packSize: li.packSize ?? null,
+              packUom: li.packUom ?? null,
+              usd12m: li.usd12m,
+            }))}
+          itemsReachBase={row.linkedItems.every((li) => li.statusKind !== "needs_measure")}
         />
       </div>
 
@@ -782,7 +898,13 @@ function DetailView({
             </div>
           </div>
         ) : (
-          <LinkedItems row={row} onOpenItem={onOpenItem} />
+          <LinkedItems
+            row={row}
+            onOpenItem={onOpenItem}
+            viewUom={viewUom}
+            viewUnitLabel={uom}
+            repricedItems={repricedLinkedItems}
+          />
         )}
       </div>
 
@@ -1016,27 +1138,36 @@ function SuggestBaseUnitLink({
 function LinkedItems({
   row,
   onOpenItem,
+  viewUom,
+  viewUnitLabel,
+  repricedItems,
 }: {
   row: MasterRow;
   onOpenItem: (id: string) => void;
+  viewUom: string;
+  viewUnitLabel: string;
+  repricedItems: Array<MasterLinkedItem & { viewPrice: number | null }>;
 }) {
   // N12 §R1 echo: lowest / highest tag among items IN THE BLEND
   // (priced in the ingredient's dimension through M2's priceInUnit).
-  // Need 2+; ties tag the first; no tag when min === max.
+  // Need 2+; ties tag the first; no tag when min === max. Tags run
+  // off the repriced view, not the server baseline.
   const tagMap = useMemo(() => {
     const m = new Map<string, "lowest" | "highest">();
-    const inDim = row.linkedItems.filter(
-      (li) => li.perBase != null && li.statusKind !== "needs_measure" && li.perBaseUom === row.baseUom
+    const inBlend = repricedItems.filter(
+      (li) => li.statusKind === "in_blend" && li.viewPrice != null
     );
-    if (inDim.length < 2) return m;
-    const sorted = [...inDim].sort((a, b) => (a.perBase ?? 0) - (b.perBase ?? 0));
-    const min = sorted[0].perBase;
-    const max = sorted[sorted.length - 1].perBase;
+    if (inBlend.length < 2) return m;
+    const sorted = [...inBlend].sort(
+      (a, b) => (a.viewPrice ?? 0) - (b.viewPrice ?? 0)
+    );
+    const min = sorted[0].viewPrice;
+    const max = sorted[sorted.length - 1].viewPrice;
     if (min === max) return m;
     m.set(sorted[0].id, "lowest");
     m.set(sorted[sorted.length - 1].id, "highest");
     return m;
-  }, [row.linkedItems, row.baseUom]);
+  }, [repricedItems]);
 
   const base = uomOrUnit(row.baseUom);
 
@@ -1059,9 +1190,8 @@ function LinkedItems({
         </tr>
       </thead>
       <tbody>
-        {row.linkedItems.map((li) => {
+        {repricedItems.map((li) => {
           const tag = tagMap.get(li.id);
-          const liUom = uomLabel(li.perBaseUom);
           return (
             <tr key={li.id}>
               <td>
@@ -1078,7 +1208,7 @@ function LinkedItems({
                     <>
                       {" · "}
                       <span className="kf-ingp__item-sub-warn">
-                        priced per {liUom || "?"}, not per {base}
+                        priced per {uomLabel(li.perBaseUom) || "?"}, not per {base}
                       </span>
                     </>
                   ) : null}
@@ -1099,12 +1229,12 @@ function LinkedItems({
               <td className="kf-ingp__items-num">
                 <div className="kf-ingp__items-price">
                   <span>
-                    {li.perBase != null ? (
+                    {li.viewPrice != null ? (
                       <>
-                        <b>{fmtUsd(li.perBase)}</b> / {liUom}
+                        <b>{fmtUsd(li.viewPrice)}</b> / {viewUnitLabel}
                       </>
                     ) : (
-                      <b>- / {base}</b>
+                      <b>- / {viewUnitLabel}</b>
                     )}
                   </span>
                   {tag ? <span className="kf-ipanel__tag">{tag}</span> : null}

@@ -13,7 +13,7 @@ import { isMeasuresWorld, readAllMeasures } from "@/lib/ingredients/measuresRead
 // on screen reads each_measure_* - the shape helpers were projecting
 // the legacy columns from pr_ingredient_measures for back-compat.
 // Measures ride on the ingredient directly via `measures` now.
-import { priceInUnit } from "@/lib/ingredients/measures";
+import { priceInUnit, sizesDifferFlags } from "@/lib/ingredients/measures";
 import { canonicalFromBaseUnit } from "@/lib/ingredients/pack";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { Tabs } from "./Tabs";
@@ -614,6 +614,19 @@ async function loadReview() {
     const ing = g.ingredient;
     const target = canonicalFromBaseUnit(ing.base_unit);
     const ms = measuresWorld ? (measuresByIngredient.get(ing.id) ?? []) : [];
+    // M2 §4B part 3: compute sizes_differ per group so each item's
+    // statusKind reflects "sized packs within one kind disagree"
+    // before the per-item loop assigns statuses.
+    const groupPacks = g.items.map((vi) => {
+      const raw = itemsById.get(vi.id);
+      return {
+        id: vi.id,
+        packQty: raw?.pack_qty ?? null,
+        packSize: raw?.pack_size ?? null,
+        packUom: raw?.pack_uom ?? null,
+      };
+    });
+    const sizesDiffer = sizesDifferFlags(groupPacks, ms, ing.base_unit);
     for (const vi of g.items) {
       const raw = itemsById.get(vi.id);
       if (!raw) continue;
@@ -636,6 +649,11 @@ async function loadReview() {
               { measures: ms },
             )?.per ?? null
           : null;
+      vi.statusKind = sizesDiffer.has(vi.id)
+        ? "sizes_differ"
+        : vi.perBaseInIngUnit == null
+          ? "needs_measure"
+          : "in_blend";
     }
   }
 

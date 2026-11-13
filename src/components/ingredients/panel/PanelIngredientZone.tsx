@@ -45,11 +45,22 @@ export function PanelIngredientZone({
   item,
   parentOptions,
   onDone,
+  measureOpen,
+  costedPerFocusNonce,
+  suggestionCandidates: suggestionCandidatesProp,
+  itemsReachBase: itemsReachBaseProp,
 }: {
   ingredient: ReviewCardIngredient;
   item: ReviewGroupItem | null;
   parentOptions: string[];
   onDone: () => void;
+  // M2 §4B part 3 fix 6: DetailPanel threads these so attention
+  // buttons can open the measures block prefilled + focus the
+  // Costed per control.
+  measureOpen?: { uom: string; qty: number | null; nonce: number } | null;
+  costedPerFocusNonce?: number;
+  suggestionCandidates?: Array<{ id: string; packQty: number | null; packSize: number | null; packUom: string | null; usd12m: number }>;
+  itemsReachBase?: boolean;
 }) {
   // --- Rename ----------------------------------------------------
   const [renameDraft, setRenameDraft] = useState(ingredient.name);
@@ -80,12 +91,32 @@ export function PanelIngredientZone({
   //     signal). The item panel's parent knows the linked items'
   //     reach; it can pass this prop in a follow-up.
   const [addForUom, setAddForUom] = useState<string | null>(null);
+  const [addPrefillQty, setAddPrefillQty] = useState<number | null>(null);
+  // Watch DetailPanel's bus: when attention fires "Add a measure",
+  // open the measures block's add row with the bridge uom + prefill.
+  useEffect(() => {
+    if (!measureOpen) return;
+    setAddForUom(measureOpen.uom);
+    setAddPrefillQty(measureOpen.qty ?? null);
+  }, [measureOpen?.nonce, measureOpen?.uom, measureOpen?.qty, measureOpen]);
   const measuresForBlock =
     (ingredient.measures as
       | Array<{ from_unit: string; qty: number; to_unit: string; source: string }>
       | undefined) ?? [];
-  const suggestionCandidates: SuggestionCandidate[] = [];
-  const itemsReachBase = true;
+  const suggestionCandidates: SuggestionCandidate[] = suggestionCandidatesProp ?? [];
+  const itemsReachBase = itemsReachBaseProp ?? true;
+
+  // M2 §4B part 3 fix 6: focus the Costed per control when the
+  // "Change Costed per" attention button fires.
+  const costedPerRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!costedPerFocusNonce) return;
+    const el = costedPerRef.current;
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const first = el.querySelector("select, input, button") as HTMLElement | null;
+    first?.focus();
+  }, [costedPerFocusNonce]);
 
   // M2 §4B part 2: the N6 measure state (measureBaseline/measureDraft/
   // doMeasureSave/doMeasureClear) is gone. The new PanelMeasuresBlock
@@ -323,7 +354,7 @@ export function PanelIngredientZone({
       </div>
 
       {/* Row 3: Costed per --------------------------------------- */}
-      <div className="kf-ipanel__row kf-ipanel__row--split">
+      <div className="kf-ipanel__row kf-ipanel__row--split kf-ipanel__row--costed" ref={costedPerRef}>
         <div className="kf-ipanel__row-label">Costed per</div>
         <BaseUnitControl
           row={{ id: ingredient.id, name: ingredient.name, baseUnit: ingredient.base_unit }}
@@ -342,7 +373,8 @@ export function PanelIngredientZone({
         suggestionCandidates={suggestionCandidates}
         itemsReachBase={itemsReachBase}
         openAddForUom={addForUom}
-        onAfterAdd={() => setAddForUom(null)}
+        openAddPrefillQty={addPrefillQty}
+        onAfterAdd={() => { setAddForUom(null); setAddPrefillQty(null); }}
         onDone={onDone}
       />
 
@@ -357,11 +389,16 @@ export function PanelIngredientZone({
       />
 
       {/* M2 §4B §2.6: "Recipes can use" chips. Clicking a dashed
-          chip opens the measures Add form prefilled for that uom. */}
+          chip opens the measures Add form prefilled for that uom.
+          itemUnits is derived from the suggestion candidates passed
+          down from DetailPanel - those carry each linked item's
+          pack uom so the reach starts from real data, not from
+          core five unconditionally. */}
       <PanelChipsRow
         ingredient={ingredient}
         measures={measuresForBlock as Array<{ from_unit: string; qty: number; to_unit: string; source: "house_test" | "book" | "vendor_spec" | "estimate" | "pack" }>}
-        onAddForUom={(u) => setAddForUom(u)}
+        itemUnits={Array.from(new Set(suggestionCandidates.map((c) => (c.packUom ?? "").toUpperCase()).filter(Boolean)))}
+        onAddForUom={(u) => { setAddForUom(u); setAddPrefillQty(null); }}
       />
 
       {/* Row 5: Allergens ---------------------------------------- */}
