@@ -115,6 +115,16 @@ export type ReviewGroupItem = {
   // Supersedes N5's eachWeightLb; qty + uom replace the pounds-only
   // field, which the DB column each_weight_lb has been emptied of.
   eachMeasure: { qty: number; uom: string } | null;
+  // M2 §4B: per-unit price expressed in the ingredient's base_unit,
+  // computed server-side via priceInUnit (the one M2 price function).
+  // Null when the item cannot reach base_unit or has no price yet.
+  // Keyed by the item here so every screen - panel strip, review
+  // card, master list - reads one number. Optional on the type so
+  // builders that have not updated yet compile.
+  perBaseInIngUnit?: number | null;
+  // M2 §4B: case weight set by hand (item-level override). Null
+  // when the ingredient's measures provide the weight.
+  caseWeightLb?: number | null;
   // N13 R3: five fields so the item-panel surfaces (strip, attention,
   // head pills) carry what VendorItemDrawer displayed. Present on
   // every /api/review/item response; optional at the type level so

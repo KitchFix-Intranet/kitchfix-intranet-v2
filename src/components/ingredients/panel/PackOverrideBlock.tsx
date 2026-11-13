@@ -543,9 +543,15 @@ export function PackOverrideBlock({
       const baseWord =
         enteredBase === "LB" ? "lb" : enteredBase === "FLOZ" ? "fl oz" : "each";
       const ingBaseWord = ingredient.base_unit?.toLowerCase() ?? "its unit";
+      // M2 §4B amd 6: copy swap (remove "will not blend" per the
+      // §4B copy sweep). The condition for showing this verdict is
+      // still "the typed pack's dim differs from the ingredient's";
+      // tightening it to "priceInUnit returns null for the typed
+      // pack" requires wiring measures into this component - deferred
+      // to a round 2 patch.
       verdict = {
         tone: "block",
-        text: `${ingredient.name} is costed per ${ingBaseWord}. In ${baseWord} it still will not blend.`,
+        text: `${ingredient.name} is costed per ${ingBaseWord}. This pack needs a measure on the ingredient to reach it.`,
       };
     }
   }

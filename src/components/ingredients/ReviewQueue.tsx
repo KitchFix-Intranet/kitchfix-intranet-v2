@@ -9,6 +9,8 @@ import { COUNTABLE_OBSERVATIONS_VIEW, applyCountableFilter } from "@/lib/ingredi
 import { categoryForParent } from "@/lib/ingredients/categories";
 import { isMeasuresWorld, readAllMeasures } from "@/lib/ingredients/measuresRead";
 import { shapeIngredientEachFromMeasures, shapeItemEachFromCaseWeight } from "@/lib/ingredients/measuresShape";
+import { priceInUnit } from "@/lib/ingredients/measures";
+import { canonicalFromBaseUnit } from "@/lib/ingredients/pack";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { Tabs } from "./Tabs";
 import { IdentBand } from "@/components/ui/IdentBand";
@@ -592,6 +594,42 @@ async function loadReview() {
     }
     // Items with link_status='proposed' but no ingredient_id and no ai-new
     // reason are malformed - skip silently; a future hotfix can surface them.
+  }
+
+  // M2 §4B: post-pass fills perBaseInIngUnit on every item in an
+  // existing-ingredient group via the one price function. ai-new
+  // groups have no confirmed target so perBaseInIngUnit stays null.
+  // Reads measures already batch-loaded above; one priceInUnit call
+  // per item, no new query.
+  const itemsById = new Map(items.map((it) => [it.id, it]));
+  for (const g of groups.values()) {
+    if (g.kind !== "existing" || !g.ingredient) continue;
+    const ing = g.ingredient;
+    const target = canonicalFromBaseUnit(ing.base_unit);
+    const ms = measuresWorld ? (measuresByIngredient.get(ing.id) ?? []) : [];
+    for (const vi of g.items) {
+      const raw = itemsById.get(vi.id);
+      if (!raw) continue;
+      const pe = raw.price_estimate ?? null;
+      const perBase = pe?.per_base != null ? Number(pe.per_base) : null;
+      const baseUom = pe?.base_uom ?? null;
+      vi.caseWeightLb = raw.case_weight_lb ?? null;
+      vi.perBaseInIngUnit =
+        perBase != null && baseUom && target
+          ? priceInUnit(
+              {
+                perBase,
+                baseUom,
+                packQty: raw.pack_qty ?? null,
+                packSize: raw.pack_size ?? null,
+                packUom: raw.pack_uom ?? null,
+                caseWeightLb: raw.case_weight_lb ?? null,
+              },
+              target,
+              { measures: ms },
+            )?.per ?? null
+          : null;
+    }
   }
 
   // Sort member items inside each group dollar-desc; sort groups dollar-desc.

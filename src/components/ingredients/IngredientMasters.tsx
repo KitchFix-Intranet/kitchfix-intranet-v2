@@ -6,7 +6,7 @@
 //   - avg / min / max per-base from price_estimate.per_base
 //   - base_uom (most common across the linked set)
 //   - bad-pack flags (max/min spread > 3x, or avg outside a sane
-//     band for the base_uom, or unit mismatch when the stored
+//     band for the base_uom, or needs-a-measure when the stored
 //     per_base dimension differs from the master's base_unit)
 // All per-row rollups computed on read; there's no stored master
 // price column. Masters with 0 linked items still render.
@@ -262,7 +262,7 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
   // the client renders in the <details> expand. All linked per-base
   // values are converted to the MASTER's base_unit before averaging
   // and band-checking; items whose stored base_uom belongs to a
-  // different dimension are flagged as a unit mismatch (strong bad-
+  // different dimension are flagged as needs-a-measure (strong bad-
   // pack signal; e.g. Bottled water's per_base stored under LB when
   // its master is 'each', or Milk's per_base stored under FLOZ when
   // its master is 'gal' - the FLOZ -> GAL case converts cleanly; the

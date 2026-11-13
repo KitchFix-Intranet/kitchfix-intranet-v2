@@ -66,7 +66,7 @@ export function deriveAttention(
       kind: "unit_mismatch",
       tone: "bad",
       head: `Priced ${itemPhrase}, ingredient is ${ingPhrase}`,
-      body: `${ingredient.name} is costed per ${ingredient.base_unit}. This item will not blend until the pack is corrected to match.`,
+      body: `${ingredient.name} has no measure that reaches ${ingredient.base_unit}. Add a measure on the ingredient and this item will price.`,
       fix: "pack",
       targetUom,
     });

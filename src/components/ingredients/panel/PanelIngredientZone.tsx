@@ -21,7 +21,9 @@ import { toast } from "@/components/ui/Toaster";
 import { fmtUsd } from "@/lib/fmt";
 import { SUPER_CATEGORIES, type SuperCategory } from "@/lib/ingredients/categories";
 import { DIM_BY_UOM, WEIGHT_UOMS, VOLUME_UOMS, uomLabel } from "@/lib/ingredients/pack";
-import { deriveRecipePrice } from "@/lib/ingredients/measures";
+// M2 §4B amendment 4: no screen imports deriveRecipePrice. The
+// measureFoot sentence below reads item.perBaseInIngUnit (set by
+// the server via priceInUnit) instead of re-deriving in the client.
 import {
   IngredientAllergens,
   allergenStatus,
@@ -292,42 +294,32 @@ export function PanelIngredientZone({
   });
   const onAllergenState = useCallback((s: AllergensState) => setAllergenCtl(s), []);
 
-  // N8 round 3 fix 1: the ingredient's One each row describes the
-  // INGREDIENT's own measure, so call deriveRecipePrice with
-  // itemMeasure: null. The item's own measure (when it has one) wins
-  // in the strip; here we append a short "This item uses its own
-  // measure." clause so it is clear which number the engine will use.
+  // M2 §4B: the measureFoot sentence reads item.perBaseInIngUnit
+  // (computed server-side via priceInUnit - the one price function)
+  // instead of re-deriving on the client. The draft-measure preview
+  // lands in the new PanelMeasuresBlock's save bar in a follow-up;
+  // this block keeps the saved-state copy minimal so no stale
+  // derivation surface remains.
   const measureFoot = (() => {
     const stored = ingredient.each_measure_qty;
-    const draftN = Number(measureDraft.qty);
-    const n = Number.isFinite(draftN) && draftN > 0 ? draftN : (stored != null ? Number(stored) : null);
-    if (n == null) {
+    if (stored == null) {
       return {
         tone: "warn" as const,
         label: "not set yet",
         body: "Enter what one each is, by weight or by volume, and recipes can cost it that way. The stored price stays per each.",
       };
     }
-    const u = measureDraft.uom || (ingredient.each_measure_uom ?? "LB").toUpperCase();
-    if (item && item.perBaseUom === "EA" && item.perBase != null) {
-      const derivedFromIngredient = deriveRecipePrice({
-        perBase: item.perBase,
-        perBaseUom: item.perBaseUom,
-        itemMeasure: null,
-        ingredientMeasure: { qty: n, uom: u },
-      });
-      if (derivedFromIngredient) {
-        const itemHasOwnMeasure = item.eachMeasure != null;
-        const suffix = itemHasOwnMeasure ? " This item uses its own measure." : "";
-        return {
-          tone: "good" as const,
-          label: "Saved",
-          body:
-            `Recipes will use ${fmtUsd(derivedFromIngredient.per)} / ${uomLabel(derivedFromIngredient.uom)} ` +
-            `(${fmtUsd(item.perBase)} each ÷ ${derivedFromIngredient.qty} ${uomLabel(derivedFromIngredient.measureUom)}).` +
-            ` The stored price stays per each.${suffix}`,
-        };
-      }
+    const u = (ingredient.each_measure_uom ?? "LB").toUpperCase();
+    if (item && item.perBaseInIngUnit != null && item.perBaseUom === "EA" && item.perBase != null) {
+      const itemHasOwnMeasure = item.eachMeasure != null;
+      const suffix = itemHasOwnMeasure ? " This item uses its own measure." : "";
+      return {
+        tone: "good" as const,
+        label: "Saved",
+        body:
+          `Recipes will use ${fmtUsd(item.perBaseInIngUnit)} / ${uomLabel(ingredient.base_unit)}. ` +
+          `The stored price stays per each.${suffix}`,
+      };
     }
     return {
       tone: "good" as const,

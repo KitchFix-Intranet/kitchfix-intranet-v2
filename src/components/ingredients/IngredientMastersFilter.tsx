@@ -33,7 +33,10 @@ import { fmtCount, fmtUsd, fmtUsdLong } from "@/lib/fmt";
 import { ItemPanelById } from "./ItemPanelById";
 import { SUPER_CATEGORIES } from "@/lib/ingredients/categories";
 import { uomLabel } from "@/lib/ingredients/pack";
-import { deriveRecipePrice } from "@/lib/ingredients/measures";
+// M2 §4B amendment 4: no screen imports deriveRecipePrice or the
+// each-measure shapers. The alternate-unit view that the derived
+// sub-line used to carry is handled by the expand's chip view
+// switch (§2.6) which computes in the browser via priceInUnit.
 import { RowSendBackButton } from "./RowSendBackButton";
 import { RowGradeToggle } from "./RowGradeToggle";
 import { PanelIngredientZone } from "./panel/PanelIngredientZone";
@@ -176,36 +179,20 @@ function rowPriceSub(row: MasterRow): { text: string; warn: boolean } | null {
   if (row.spreadRatio != null && row.spreadRatio > 3) {
     return { text: `${row.spreadRatio.toFixed(1)}x spread`, warn: true };
   }
-  if (row.baseUnit === "each" && row.eachMeasureQty != null && row.avgPerBase != null) {
-    const derived = deriveRecipePrice({
-      perBase: row.avgPerBase,
-      perBaseUom: "EA",
-      itemMeasure: null,
-      ingredientMeasure: { qty: row.eachMeasureQty, uom: (row.eachMeasureUom ?? "").toUpperCase() },
-    });
-    if (derived) {
-      return { text: `${fmtUsd(derived.per)} / ${uomLabel(derived.uom)} in recipes`, warn: false };
-    }
-  }
+  // M2 §4B amendment 4: the "in recipes" derived sub-line moved to
+  // the expand's chip view switch. Row header shows the base_unit
+  // price only; alternate units via chip.
   if (row.spreadRatio != null) {
     return { text: `${row.spreadRatio.toFixed(1)}x spread`, warn: false };
   }
   return null;
 }
 
-// Strip Price sub-line on each-costed ingredients: same derived
-// figure as rowPriceSub rule 4, phrased as the render does.
-function stripDerivedSub(row: MasterRow, active: LensStats): string | null {
-  if (row.baseUnit !== "each" || row.eachMeasureQty == null || active.avgPerBase == null) {
-    return null;
-  }
-  const derived = deriveRecipePrice({
-    perBase: active.avgPerBase,
-    perBaseUom: "EA",
-    itemMeasure: null,
-    ingredientMeasure: { qty: row.eachMeasureQty, uom: (row.eachMeasureUom ?? "").toUpperCase() },
-  });
-  return derived ? `${fmtUsd(derived.per)} / ${uomLabel(derived.uom)} in recipes` : null;
+// M2 §4B amendment 4: stripDerivedSub removed. The chip view switch
+// in the expand (§2.6) replaces the "in recipes" sub-line with a
+// first-class alternate-unit view computed via priceInUnit.
+function stripDerivedSub(_row: MasterRow, _active: LensStats): string | null {
+  return null;
 }
 
 export function IngredientMastersFilter({

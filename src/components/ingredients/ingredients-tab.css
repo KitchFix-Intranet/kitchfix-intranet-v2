@@ -239,7 +239,7 @@
   white-space: nowrap;
 }
 
-/* Inline chip for Outlier / Mixed units / Out of band / No items.
+/* Inline chip for Outlier / Needs a measure / Out of band / No items.
  * Lives on the row's sub-line beside the item count. */
 .kf-ingp__row-badge {
   display: inline-flex;
