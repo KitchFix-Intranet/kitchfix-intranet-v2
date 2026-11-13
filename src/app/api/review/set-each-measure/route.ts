@@ -3,6 +3,8 @@ import { requireOwnerApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
 import { setIngredientEachMeasure } from "@/lib/reviewWrites";
 import { DIM_BY_UOM, TO_BASE } from "@/lib/ingredients/pack";
+import { isMeasuresWorld, readMeasuresForIngredient } from "@/lib/ingredients/measuresRead";
+import type { Measure, MeasureSource } from "@/lib/ingredients/measures";
 
 export const dynamic = "force-dynamic";
 
@@ -84,6 +86,30 @@ export async function POST(req: NextRequest) {
 
   try {
     const client = serviceClient();
+
+    // M1 amendment 3: before the write, remember which count-to-X row
+    // we'll be replacing/removing in the measures table (if 0019 is
+    // applied). The dim comes from the OLD uom when clearing, the NEW
+    // uom when setting.
+    let dualTargetDim: "weight" | "volume" | null = null;
+    if (qty != null && uom) {
+      const d = DIM_BY_UOM[uom];
+      if (d === "weight" || d === "volume") dualTargetDim = d;
+    } else {
+      // Clearing. Read the current stored uom so we know which row to
+      // remove from pr_ingredient_measures. Null if there was none.
+      const { data: pre } = await client
+        .from("pr_ingredients")
+        .select("each_measure_uom")
+        .eq("id", ingredientId)
+        .maybeSingle();
+      const preUom = (pre as { each_measure_uom: string | null } | null)?.each_measure_uom ?? null;
+      if (preUom) {
+        const d = DIM_BY_UOM[preUom.toUpperCase()];
+        if (d === "weight" || d === "volume") dualTargetDim = d;
+      }
+    }
+
     const result = await setIngredientEachMeasure(client, {
       ingredientId,
       qty,
@@ -92,6 +118,61 @@ export async function POST(req: NextRequest) {
       actorEmail: gate.email,
     });
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
+
+    // Dual-write to pr_ingredient_measures when the table exists
+    // (amendment 3). Before 0019 the table is absent and nothing more
+    // happens: the route behaves exactly as today. After 0019 the
+    // ingredient's count-to-weight or count-to-volume row is replaced
+    // (set) or removed (clear), with any volume-to-weight row left
+    // alone.
+    if (await isMeasuresWorld(client)) {
+      const existing = await readMeasuresForIngredient(client, ingredientId);
+      // Keep every row EXCEPT the one count-to-<target> row we're
+      // governing. When dualTargetDim is null (clearing with no prior
+      // dim stored), leave the measures list alone.
+      const kept: Measure[] = dualTargetDim
+        ? existing.filter((m) => {
+            const fd = DIM_BY_UOM[m.from_unit.toUpperCase()];
+            const td = DIM_BY_UOM[m.to_unit.toUpperCase()];
+            return !(fd === "count" && td === dualTargetDim);
+          })
+        : existing;
+      const nextMeasures: Measure[] = [...kept];
+      if (qty != null && uom && dualTargetDim) {
+        nextMeasures.push({
+          from_unit: "EA",
+          qty: Number(qty),
+          to_unit: uom,
+          source: ((source ?? "estimate") as MeasureSource),
+        });
+      }
+      // No-op guard: if the list is byte-identical to existing, skip.
+      const sameList =
+        existing.length === nextMeasures.length &&
+        existing.every((e, i) => {
+          const n = nextMeasures[i];
+          return (
+            e.from_unit === n.from_unit &&
+            e.to_unit === n.to_unit &&
+            Number(e.qty) === Number(n.qty) &&
+            e.source === n.source
+          );
+        });
+      if (!sameList) {
+        const { error: rpcErr } = await client.rpc("pr_set_ingredient_measures", {
+          p_ingredient: ingredientId,
+          p_measures: nextMeasures,
+          p_actor: gate.email,
+        });
+        if (rpcErr) {
+          // Legacy write already landed; surface the measures-side
+          // failure without a rollback (the legacy columns remain the
+          // backstop while 0019 is still in flight).
+          return NextResponse.json({ ok: true, measuresWarning: rpcErr.message });
+        }
+      }
+    }
+
     return NextResponse.json({ ok: true });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

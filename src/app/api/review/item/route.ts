@@ -26,6 +26,11 @@ import {
   type ReviewGroupItem,
 } from "@/components/ingredients/itemTypes";
 import { readPerBase } from "@/lib/ingredients/priceEstimate";
+import {
+  isMeasuresWorld,
+  readMeasuresForIngredient,
+  legacyEachMeasureToMeasures,
+} from "@/lib/ingredients/measuresRead";
 
 export const dynamic = "force-dynamic";
 
@@ -156,14 +161,14 @@ export async function GET(req: NextRequest) {
           .from("pr_ingredients")
           // N5: avg_weight_lb + avg_weight_source added to the two
           // ingredient SELECTs so the panel reads what is stored.
-          .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source")
+          .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source,yield_pct,yield_source")
           .eq("id", it.ingredient_id)
           .maybeSingle()
       : Promise.resolve({ data: null as unknown, error: null }),
     client
       .from("pr_ingredients")
       // N5: avg_weight_lb + avg_weight_source on the parents list too.
-      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source")
+      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source,yield_pct,yield_source")
       .eq("status", "active")
       .order("name"),
   ]);
@@ -316,5 +321,52 @@ export async function GET(req: NextRequest) {
   const ingredient = (ingredientRes.data as ReviewCardIngredient | null) ?? null;
   const parents = (parentsRes.data ?? []) as ReviewCardIngredient[];
 
-  return NextResponse.json({ item, ingredient, parents });
+  // M1 amendment 4: one world per request. If pr_ingredient_measures
+  // is available, the measures column is the sole source of the
+  // ingredient's bridge list AND pr_vendor_items.case_weight_lb is the
+  // only item-level override. If not, fall back to the legacy
+  // each_measure_* columns on the ingredient row.
+  const newWorld = await isMeasuresWorld(client);
+  let measures: ReturnType<typeof legacyEachMeasureToMeasures> = [];
+  let caseWeightLb: number | null = null;
+  if (newWorld) {
+    if (ingredient) {
+      measures = await readMeasuresForIngredient(client, ingredient.id);
+    }
+    // case_weight_lb column lands in the same migration as the
+    // measures table; one SELECT at this point is safe.
+    const { data: cwRow } = await client
+      .from("pr_vendor_items")
+      .select("case_weight_lb")
+      .eq("id", id)
+      .maybeSingle();
+    const raw = (cwRow as { case_weight_lb: number | null } | null)?.case_weight_lb ?? null;
+    caseWeightLb = raw == null ? null : Number(raw);
+  } else if (ingredient) {
+    measures = legacyEachMeasureToMeasures(
+      ingredient.each_measure_qty,
+      ingredient.each_measure_uom,
+      ingredient.each_measure_source,
+    );
+  }
+  const ingWithYield = ingredient as (ReviewCardIngredient & { yield_pct?: number | null; yield_source?: string | null }) | null;
+  const yieldPct =
+    ingWithYield && ingWithYield.yield_pct != null
+      ? Number(ingWithYield.yield_pct)
+      : null;
+  const yieldSource = ingWithYield?.yield_source ?? null;
+
+  // The item payload gains caseWeightLb; the embedded ingredient's
+  // measures + yield ride at the top of the response so a reader does
+  // not have to merge two shapes. Legacy fields stay for every panel
+  // that still reads them.
+  const itemOut = { ...item, caseWeightLb } as ReviewGroupItem & { caseWeightLb: number | null };
+  return NextResponse.json({
+    item: itemOut,
+    ingredient,
+    parents,
+    measures,
+    yieldPct,
+    yieldSource,
+  });
 }
