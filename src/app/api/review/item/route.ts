@@ -37,6 +37,11 @@ import {
 // authority lives in the `measures` field.
 import { priceInUnit, sizesDifferFlags } from "@/lib/ingredients/measures";
 import { canonicalFromBaseUnit } from "@/lib/ingredients/pack";
+// Polish round 2 fix 2: the ingredient payload carries the blended
+// lens's $ / base_unit so attention's outlier head can read one
+// number across every door. blendStats is the same code path the
+// Ingredients tab uses, so the figure matches.
+import { blendStats } from "@/lib/ingredients/blend";
 
 export const dynamic = "force-dynamic";
 
@@ -427,10 +432,60 @@ export async function GET(req: NextRequest) {
     perBaseInIngUnit,
     statusKind,
   } as ReviewGroupItem & { caseWeightLb: number | null; perBaseInIngUnit: number | null };
+
+  // Polish round 2 fix 2: blended lens $ / base_unit across THIS
+  // ingredient's linked items (not the Review-queue group). Each
+  // mate's per-base is routed through priceInUnit so weight items
+  // and count items both land in the ingredient's dim before the
+  // outlier rule runs. blendStats is the same code path that
+  // IngredientMasters uses for the blended lens; the number matches.
+  let blendedAvgPerBase: number | null = null;
+  if (ingredient) {
+    const targetUom = canonicalFromBaseUnit(ingredient.base_unit);
+    if (targetUom) {
+      const { data: mates } = await client
+        .from("pr_vendor_items")
+        .select("id,pack_qty,pack_size,pack_uom,case_weight_lb,price_estimate,usd_12m")
+        .eq("ingredient_id", ingredient.id);
+      const priced: Array<{ id: string; v: number; usd: number }> = [];
+      for (const row of (mates ?? []) as Array<{
+        id: string;
+        pack_qty: number | null;
+        pack_size: number | null;
+        pack_uom: string | null;
+        case_weight_lb: number | null;
+        price_estimate: { per_base?: number | string | null; base_uom?: string | null } | null;
+        usd_12m: number | null;
+      }>) {
+        const pe = row.price_estimate ?? null;
+        const matePerBase = pe?.per_base != null ? Number(pe.per_base) : null;
+        const mateBaseUom = pe?.base_uom ?? null;
+        if (matePerBase == null || !Number.isFinite(matePerBase) || matePerBase <= 0 || !mateBaseUom) continue;
+        const r = priceInUnit(
+          {
+            perBase: matePerBase,
+            baseUom: mateBaseUom,
+            packQty: row.pack_qty,
+            packSize: row.pack_size,
+            packUom: row.pack_uom,
+            caseWeightLb: row.case_weight_lb,
+          },
+          targetUom,
+          { measures },
+        );
+        if (r?.per != null && Number.isFinite(r.per) && r.per > 0) {
+          priced.push({ id: row.id, v: r.per, usd: Number(row.usd_12m ?? 0) });
+        }
+      }
+      const stats = blendStats(priced);
+      blendedAvgPerBase = stats.survivorMean;
+    }
+  }
+
   // M2 §4B part 2: project measures + yield onto the ingredient
   // object itself so panel readers see one shape.
   const ingredientOut = ingredient
-    ? { ...ingredient, measures, yieldPct, yieldSource }
+    ? { ...ingredient, measures, yieldPct, yieldSource, blendedAvgPerBase }
     : null;
   return NextResponse.json({
     item: itemOut,

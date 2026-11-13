@@ -327,6 +327,10 @@ export function IngredientMastersFilter({
       measures: selected.measures,
       yieldPct: selected.yieldPct,
       yieldSource: selected.yieldSource,
+      // Polish round 2 fix 2: the blended lens's $ / base_unit comes
+      // straight off the MasterRow (buildLensStats already computed
+      // it). Attention's outlier head reads this.
+      blendedAvgPerBase: selected.statsByLens.blended.avgPerBase,
     };
   }, [selected]);
 

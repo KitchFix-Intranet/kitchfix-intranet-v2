@@ -222,4 +222,10 @@ export type ReviewCardIngredient = {
   measures?: Array<{ from_unit: string; qty: number; to_unit: string; source: string }>;
   yieldPct?: number | null;
   yieldSource?: string | null;
+  // Polish round 2 fix 2: blended lens $ / base_unit, computed
+  // server-side via blend.ts/buildLensStats or blendStats across
+  // THIS ingredient's linked items (not a Review-queue group).
+  // Attention surfaces read this for the outlier head comparison;
+  // null when the server cannot supply one.
+  blendedAvgPerBase?: number | null;
 };

@@ -56,8 +56,11 @@ export function PanelIngredientZone({
   onDone: () => void;
   // M2 §4B part 3 fix 6: DetailPanel threads these so attention
   // buttons can open the measures block prefilled + focus the
-  // Costed per control.
-  measureOpen?: { uom: string; qty: number | null; nonce: number } | null;
+  // Costed per control. Polish round 2 fix 1: pickUnit=true means
+  // the user has NOT chosen a to-unit yet (needs_measure path);
+  // the Measures block leaves the to-unit blank and limits the
+  // options to the uom's dim.
+  measureOpen?: { uom: string; qty: number | null; pickUnit: boolean; nonce: number } | null;
   costedPerFocusNonce?: number;
   suggestionCandidates?: Array<{ id: string; packQty: number | null; packSize: number | null; packUom: string | null; usd12m: number }>;
   itemsReachBase?: boolean;
@@ -92,13 +95,17 @@ export function PanelIngredientZone({
   //     reach; it can pass this prop in a follow-up.
   const [addForUom, setAddForUom] = useState<string | null>(null);
   const [addPrefillQty, setAddPrefillQty] = useState<number | null>(null);
+  // Polish round 2 fix 1: pickUnit=true means the Measures block
+  // leaves the to-unit blank and limits the options to addForUom's dim.
+  const [addPickUnit, setAddPickUnit] = useState<boolean>(false);
   // Watch DetailPanel's bus: when attention fires "Add a measure",
   // open the measures block's add row with the bridge uom + prefill.
   useEffect(() => {
     if (!measureOpen) return;
     setAddForUom(measureOpen.uom);
     setAddPrefillQty(measureOpen.qty ?? null);
-  }, [measureOpen?.nonce, measureOpen?.uom, measureOpen?.qty, measureOpen]);
+    setAddPickUnit(measureOpen.pickUnit);
+  }, [measureOpen?.nonce, measureOpen?.uom, measureOpen?.qty, measureOpen?.pickUnit, measureOpen]);
   const measuresForBlock =
     (ingredient.measures as
       | Array<{ from_unit: string; qty: number; to_unit: string; source: string }>
@@ -374,7 +381,8 @@ export function PanelIngredientZone({
         itemsReachBase={itemsReachBase}
         openAddForUom={addForUom}
         openAddPrefillQty={addPrefillQty}
-        onAfterAdd={() => { setAddForUom(null); setAddPrefillQty(null); }}
+        openAddPickUnit={addPickUnit}
+        onAfterAdd={() => { setAddForUom(null); setAddPrefillQty(null); setAddPickUnit(false); }}
         onDone={onDone}
       />
 
@@ -398,7 +406,7 @@ export function PanelIngredientZone({
         ingredient={ingredient}
         measures={measuresForBlock as Array<{ from_unit: string; qty: number; to_unit: string; source: "house_test" | "book" | "vendor_spec" | "estimate" | "pack" }>}
         itemUnits={Array.from(new Set(suggestionCandidates.map((c) => (c.packUom ?? "").toUpperCase()).filter(Boolean)))}
-        onAddForUom={(u) => { setAddForUom(u); setAddPrefillQty(null); }}
+        onAddForUom={(u) => { setAddForUom(u); setAddPrefillQty(null); setAddPickUnit(false); }}
       />
 
       {/* Row 5: Allergens ---------------------------------------- */}

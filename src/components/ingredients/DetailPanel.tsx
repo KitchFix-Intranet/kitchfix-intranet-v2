@@ -90,7 +90,12 @@ export function DetailPanel({
   // PanelIngredientZone's measures block. "Add a measure" sets an
   // open-with-uom + prefill bump; "Change Costed per" bumps a nonce
   // that PanelIngredientZone watches to scroll + focus the control.
-  const [measureOpen, setMeasureOpen] = useState<{ uom: string; qty: number | null; nonce: number } | null>(null);
+  // Polish round 2 fix 1: `pickUnit` means "limit the to-unit options
+  // to this uom's dim and leave the choice blank" - the needs_measure
+  // path. sizes_differ ships qty + uom (pickUnit=false), so its unit
+  // sticks. Chips also ship uom only; see onAddMeasure below for the
+  // qty-null -> pickUnit inference.
+  const [measureOpen, setMeasureOpen] = useState<{ uom: string; qty: number | null; pickUnit: boolean; nonce: number } | null>(null);
   const [costedPerFocusNonce, setCostedPerFocusNonce] = useState(0);
 
   const parentOptions = useMemo(() => {
@@ -148,27 +153,14 @@ export function DetailPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Polish fix 4: blended per-base-unit across sibling items that
-  // the server flagged as "in_blend" and that carry a perBaseInIngUnit.
-  // Weighted by usd12m when the total weight is positive; otherwise
-  // the plain mean. Null when no in-blend sibling has a usable number.
-  const blendPerBase: number | null = useMemo(() => {
-    const inBlend = items
-      .filter(
-        (i) =>
-          (i.statusKind ?? "in_blend") === "in_blend" &&
-          i.perBaseInIngUnit != null &&
-          Number.isFinite(i.perBaseInIngUnit) &&
-          (i.perBaseInIngUnit ?? 0) > 0,
-      )
-      .map((i) => ({ p: i.perBaseInIngUnit as number, w: i.usd12m ?? 0 }));
-    if (inBlend.length === 0) return null;
-    const totW = inBlend.reduce((a, b) => a + b.w, 0);
-    if (totW > 0) {
-      return inBlend.reduce((a, b) => a + b.p * b.w, 0) / totW;
-    }
-    return inBlend.reduce((a, b) => a + b.p, 0) / inBlend.length;
-  }, [items]);
+  // Polish round 2 fix 2: blendedAvgPerBase is computed server-side
+  // on the ingredient payload (Review queue, /api/review/item,
+  // /api/review/ingredient, IngredientMasters all project it onto the
+  // ingredient). The DetailPanel just reads; no client math. Null
+  // when the server could not supply one (new ingredient, no priced
+  // mates, etc.) - attention falls back to the "outside the blend"
+  // head.
+  const blendPerBase: number | null = ingredient?.blendedAvgPerBase ?? null;
 
   const attentionCounts = open.kind === "item" && item
     ? computeAttentionCounts(item, ingredient, [], blendPerBase)
@@ -208,7 +200,7 @@ export function DetailPanel({
             item={item}
             ingredient={ingredient}
             onFixPack={(uom) => setPackHint({ uom, nonce: Date.now() })}
-            onAddMeasure={(uom, qty) => setMeasureOpen({ uom, qty: qty ?? null, nonce: Date.now() })}
+            onAddMeasure={(uom, qty) => setMeasureOpen({ uom, qty: qty ?? null, pickUnit: qty == null, nonce: Date.now() })}
             onChangeCostedPer={() => setCostedPerFocusNonce((n) => n + 1)}
             siblingPacks={items.map((i) => ({
               id: i.id,

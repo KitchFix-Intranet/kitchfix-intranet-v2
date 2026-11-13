@@ -15,6 +15,10 @@ import { isMeasuresWorld, readAllMeasures } from "@/lib/ingredients/measuresRead
 // Measures ride on the ingredient directly via `measures` now.
 import { priceInUnit, sizesDifferFlags } from "@/lib/ingredients/measures";
 import { canonicalFromBaseUnit } from "@/lib/ingredients/pack";
+// Polish round 2 fix 2: blendedAvgPerBase rides on every ingredient
+// the Review queue hands to its DetailPanel. Same code path as
+// IngredientMasters.
+import { blendStats } from "@/lib/ingredients/blend";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { Tabs } from "./Tabs";
 import { IdentBand } from "@/components/ui/IdentBand";
@@ -106,6 +110,9 @@ type Ingredient = {
   // a second fetch.
   yield_pct: number | null;
   yield_source: string | null;
+  // Polish round 2 fix 2: attached by the ingredient reshape below so
+  // the DetailPanel reads blendedAvgPerBase without a client compute.
+  blendedAvgPerBase?: number | null;
 };
 type Vendor = { id: string; name: string };
 
@@ -211,6 +218,89 @@ async function loadReview() {
   const measuresByIngredient = measuresWorld
     ? await readAllMeasures(client)
     : new Map<string, never>();
+  // Polish round 2 fix 2: compute blended $ / base_unit per ingredient
+  // across its confirmed + live linked items (same filter + code path
+  // IngredientMasters uses). Keyed by ingredient_id so the reshape
+  // loop below can attach it without a per-row fetch.
+  const blendedByIngredient = new Map<string, number | null>();
+  {
+    type MateRow = {
+      id: string;
+      ingredient_id: string | null;
+      pack_qty: number | null;
+      pack_size: number | null;
+      pack_uom: string | null;
+      case_weight_lb: number | null;
+      price_estimate: { per_base?: number | string | null; base_uom?: string | null } | null;
+      usd_12m: number | null;
+    };
+    const mates: MateRow[] = [];
+    const page = 1000;
+    let from = 0;
+    for (;;) {
+      const { data, error } = await client
+        .from("pr_vendor_items")
+        .select("id,ingredient_id,pack_qty,pack_size,pack_uom,case_weight_lb,price_estimate,usd_12m")
+        .eq("link_status", "confirmed")
+        .eq("status", "active")
+        .not("ingredient_id", "is", null)
+        .order("id", { ascending: true })
+        .range(from, from + page - 1);
+      if (error) throw error;
+      const chunk = (data ?? []) as MateRow[];
+      mates.push(...chunk);
+      if (chunk.length < page) break;
+      from += page;
+    }
+    const byIng = new Map<string, MateRow[]>();
+    for (const m of mates) {
+      if (!m.ingredient_id) continue;
+      let list = byIng.get(m.ingredient_id);
+      if (!list) {
+        list = [];
+        byIng.set(m.ingredient_id, list);
+      }
+      list.push(m);
+    }
+    for (const r of ((ingredientsRes.data ?? []) as Ingredient[])) {
+      const list = byIng.get(r.id);
+      if (!list || list.length === 0) {
+        blendedByIngredient.set(r.id, null);
+        continue;
+      }
+      const targetUom = canonicalFromBaseUnit(r.base_unit);
+      if (!targetUom) {
+        blendedByIngredient.set(r.id, null);
+        continue;
+      }
+      const ms = measuresWorld ? (measuresByIngredient.get(r.id) ?? []) : [];
+      const priced: Array<{ id: string; v: number; usd: number }> = [];
+      for (const row of list) {
+        const pe = row.price_estimate ?? null;
+        const matePerBase = pe?.per_base != null ? Number(pe.per_base) : null;
+        const mateBaseUom = pe?.base_uom ?? null;
+        if (matePerBase == null || !Number.isFinite(matePerBase) || matePerBase <= 0 || !mateBaseUom) continue;
+        const priced1 = priceInUnit(
+          {
+            perBase: matePerBase,
+            baseUom: mateBaseUom,
+            packQty: row.pack_qty,
+            packSize: row.pack_size,
+            packUom: row.pack_uom,
+            caseWeightLb: row.case_weight_lb,
+          },
+          targetUom,
+          { measures: ms },
+        );
+        if (priced1?.per != null && Number.isFinite(priced1.per) && priced1.per > 0) {
+          priced.push({ id: row.id, v: priced1.per, usd: Number(row.usd_12m ?? 0) });
+        }
+      }
+      const stats = blendStats(priced);
+      blendedByIngredient.set(r.id, stats.survivorMean);
+    }
+  }
+
   const ingredientsReshaped: Ingredient[] = ((ingredientsRes.data ?? []) as Ingredient[]).map((r) => {
     const ms = measuresWorld ? (measuresByIngredient.get(r.id) ?? []) : [];
     // M2 §4B part 2: measures / yieldPct / yieldSource ride on the
@@ -223,6 +313,7 @@ async function loadReview() {
       measures: ms,
       yieldPct: r.yield_pct,
       yieldSource: r.yield_source,
+      blendedAvgPerBase: blendedByIngredient.get(r.id) ?? null,
     };
   });
 

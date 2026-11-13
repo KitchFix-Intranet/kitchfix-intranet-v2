@@ -164,6 +164,7 @@ export function PanelMeasuresBlock({
   onDone,
   openAddForUom,
   openAddPrefillQty,
+  openAddPickUnit = false,
   onAfterAdd,
 }: {
   ingredient: ReviewCardIngredient;
@@ -176,6 +177,11 @@ export function PanelMeasuresBlock({
   openAddForUom?: string | null;
   // Optional qty prefill (sizes_differ fires with "largest-spend size").
   openAddPrefillQty?: number | null;
+  // Polish round 2 fix 1: when true, the to-unit stays BLANK and the
+  // to-unit options are limited to openAddForUom's dim. The user has
+  // not chosen a unit yet (needs_measure path); only a suggestion's
+  // Add or sizes_differ arrives with a unit and a qty.
+  openAddPickUnit?: boolean;
   onAfterAdd?: () => void;
 }) {
   const baseline = useMemo<UiMeasure[]>(() => measures.map(normalizeStored), [measures]);
@@ -183,6 +189,11 @@ export function PanelMeasuresBlock({
   const [addingFrom, setAddingFrom] = useState<string | null>(null);
   const [addQty, setAddQty] = useState("");
   const [addUom, setAddUom] = useState("");
+  // Polish round 2 fix 1: when the add form is opened via needs_measure
+  // we limit the to-unit options to this dim so the user only sees the
+  // kind that reaches the ingredient's base_unit (weight for per-lb).
+  // Null means no filter (user picked "+ Add a measure" directly).
+  const [addToDim, setAddToDim] = useState<"weight" | "volume" | "count" | null>(null);
   const [addSource, setAddSource] = useState<MeasureSource>("estimate");
   const [addError, setAddError] = useState<string | null>(null);
   const [saveBusy, setSaveBusy] = useState(false);
@@ -190,24 +201,27 @@ export function PanelMeasuresBlock({
   const dryRunTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // External add-for-uom trigger from the chips row or attention.
-  // Pick the bridge that would REACH the target: for a weight/volume
-  // target, from = EA (count-to-X); for an EA target, from = the
-  // first volume uom (volume-to-weight is the only cross-dim path
-  // that reaches EA via a second row - rare). Never prefill EA to EA.
+  // From-unit is always EA (count-to-X is the common bridge; the user
+  // can flip if needed). Polish round 2 fix 1: when openAddPickUnit is
+  // true the to-unit stays blank and the toOptions filter to the
+  // target's dim - the needs_measure path. Otherwise (sizes_differ or
+  // chip click) the to-unit is set to the target.
   useEffect(() => {
     if (!openAddForUom) return;
     const tu = openAddForUom.toUpperCase();
-    const tDim = DIM_BY_UOM[tu];
-    const fromPick =
-      tDim === "weight" || tDim === "volume"
-        ? "EA"
-        : "EA"; // count target: user picks the volume from themselves
-    setAddingFrom(fromPick === tu ? "" : fromPick);
-    setAddUom(tu);
+    const tDim = DIM_BY_UOM[tu] ?? null;
+    setAddingFrom("EA");
+    if (openAddPickUnit) {
+      setAddUom("");
+      setAddToDim(tDim);
+    } else {
+      setAddUom(tu);
+      setAddToDim(null);
+    }
     setAddQty(openAddPrefillQty != null && openAddPrefillQty > 0 ? String(openAddPrefillQty) : "");
     setAddSource("estimate");
     setAddError(null);
-  }, [openAddForUom, openAddPrefillQty]);
+  }, [openAddForUom, openAddPrefillQty, openAddPickUnit]);
 
   // M2 §4B part 3 fix 3 (N11 R2 rule): re-seed only when the
   // ingredient id changes OR the draft equalled the prior stored
@@ -256,6 +270,7 @@ export function PanelMeasuresBlock({
     // picks anyway.
     setAddingFrom(bu === "each" ? "EA" : "EA");
     setAddUom("");
+    setAddToDim(null);
     setAddQty("");
     setAddSource("estimate");
     setAddError(null);
@@ -264,6 +279,7 @@ export function PanelMeasuresBlock({
     setAddingFrom(null);
     setAddQty("");
     setAddUom("");
+    setAddToDim(null);
     setAddError(null);
   }
   function commitAdd() {
@@ -276,6 +292,7 @@ export function PanelMeasuresBlock({
     setAddingFrom(null);
     setAddQty("");
     setAddUom("");
+    setAddToDim(null);
     setAddError(null);
     onAfterAdd?.();
   }
@@ -379,8 +396,13 @@ export function PanelMeasuresBlock({
     // to_unit allowed set: weight OR volume (EA-from excludes the
     // same-dim same-kind case; the rejectReason gates it with a
     // sentence).
-    return [...WEIGHT_UOMS, ...VOLUME_UOMS];
-  }, []);
+    // Polish round 2 fix 1: when the add form was opened via a
+    // needs_measure banner (addToDim set) narrow the list so the user
+    // only sees the kind that reaches the ingredient's base_unit.
+    const all = [...WEIGHT_UOMS, ...VOLUME_UOMS];
+    if (!addToDim) return all;
+    return all.filter((u) => DIM_BY_UOM[u] === addToDim);
+  }, [addToDim]);
 
   const bu = (ingredient.base_unit ?? "").toLowerCase();
   const baseCanonical = canonicalFromBaseUnit(bu);
