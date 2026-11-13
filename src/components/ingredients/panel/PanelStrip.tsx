@@ -12,7 +12,7 @@
 
 import { fmtCount, fmtDate, fmtPackNumbersInText, fmtUsd, fmtUsdLong } from "@/lib/fmt";
 import { uomLabel } from "@/lib/ingredients/pack";
-import { deriveRecipePrice } from "@/lib/ingredients/eachMeasure";
+import { deriveRecipePrice } from "@/lib/ingredients/measures";
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 
 export function PanelStrip({

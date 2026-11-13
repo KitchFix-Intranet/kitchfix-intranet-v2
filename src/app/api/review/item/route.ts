@@ -26,6 +26,15 @@ import {
   type ReviewGroupItem,
 } from "@/components/ingredients/itemTypes";
 import { readPerBase } from "@/lib/ingredients/priceEstimate";
+import {
+  isMeasuresWorld,
+  readMeasuresForIngredient,
+  legacyEachMeasureToMeasures,
+} from "@/lib/ingredients/measuresRead";
+import {
+  shapeIngredientEachFromMeasures,
+  shapeItemEachFromCaseWeight,
+} from "@/lib/ingredients/measuresShape";
 
 export const dynamic = "force-dynamic";
 
@@ -156,14 +165,14 @@ export async function GET(req: NextRequest) {
           .from("pr_ingredients")
           // N5: avg_weight_lb + avg_weight_source added to the two
           // ingredient SELECTs so the panel reads what is stored.
-          .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source")
+          .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source,yield_pct,yield_source")
           .eq("id", it.ingredient_id)
           .maybeSingle()
       : Promise.resolve({ data: null as unknown, error: null }),
     client
       .from("pr_ingredients")
       // N5: avg_weight_lb + avg_weight_source on the parents list too.
-      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source")
+      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source,yield_pct,yield_source")
       .eq("status", "active")
       .order("name"),
   ]);
@@ -313,8 +322,78 @@ export async function GET(req: NextRequest) {
     foodReason: it.food_reason,
   };
 
-  const ingredient = (ingredientRes.data as ReviewCardIngredient | null) ?? null;
+  const rawIngredient = (ingredientRes.data as ReviewCardIngredient | null) ?? null;
   const parents = (parentsRes.data ?? []) as ReviewCardIngredient[];
 
-  return NextResponse.json({ item, ingredient, parents });
+  // M1 R2 fix 1 + amendment 4: one world per request. In measures-
+  // world, rewrite the LEGACY-SHAPED FIELDS downstream readers feed
+  // into deriveRecipePrice (ingredient.each_measure_* and
+  // item.eachMeasure) so the display pipeline sees the new numbers.
+  const newWorld = await isMeasuresWorld(client);
+  let measures: ReturnType<typeof legacyEachMeasureToMeasures> = [];
+  let caseWeightLb: number | null = null;
+  let ingredient: ReviewCardIngredient | null = rawIngredient;
+  let itemEachMeasure: { qty: number; uom: string } | null = item.eachMeasure;
+  if (newWorld) {
+    if (rawIngredient) {
+      measures = await readMeasuresForIngredient(client, rawIngredient.id);
+      // Overwrite the legacy triple so deriveRecipePrice reads the
+      // new world's count-to-X row even though its input shape is
+      // unchanged.
+      const shaped = shapeIngredientEachFromMeasures(measures);
+      ingredient = {
+        ...rawIngredient,
+        each_measure_qty: shaped.qty,
+        each_measure_uom: shaped.uom,
+        each_measure_source: shaped.source,
+      };
+    }
+    // case_weight_lb + the item's eachMeasure derivation from it.
+    const { data: cwRow } = await client
+      .from("pr_vendor_items")
+      .select("case_weight_lb")
+      .eq("id", id)
+      .maybeSingle();
+    const raw = (cwRow as { case_weight_lb: number | null } | null)?.case_weight_lb ?? null;
+    caseWeightLb = raw == null ? null : Number(raw);
+    // In measures-world, the item's legacy each_measure columns are
+    // NOT read. eachMeasure derives from case_weight_lb when the pack
+    // is count-based; null otherwise.
+    // M1 R3 fix 2: the legacy pair decides how to SHOW the derived
+    // override; case_weight_lb decides what it is worth. Pass both.
+    itemEachMeasure = shapeItemEachFromCaseWeight(
+      caseWeightLb,
+      it.pack_qty,
+      it.pack_size,
+      it.pack_uom,
+      it.each_measure_qty,
+      it.each_measure_uom,
+    );
+  } else if (rawIngredient) {
+    measures = legacyEachMeasureToMeasures(
+      rawIngredient.each_measure_qty,
+      rawIngredient.each_measure_uom,
+      rawIngredient.each_measure_source,
+    );
+  }
+  const ingWithYield = ingredient as (ReviewCardIngredient & { yield_pct?: number | null; yield_source?: string | null }) | null;
+  const yieldPct =
+    ingWithYield && ingWithYield.yield_pct != null
+      ? Number(ingWithYield.yield_pct)
+      : null;
+  const yieldSource = ingWithYield?.yield_source ?? null;
+
+  const itemOut = {
+    ...item,
+    eachMeasure: itemEachMeasure,
+    caseWeightLb,
+  } as ReviewGroupItem & { caseWeightLb: number | null };
+  return NextResponse.json({
+    item: itemOut,
+    ingredient,
+    parents,
+    measures,
+    yieldPct,
+    yieldSource,
+  });
 }

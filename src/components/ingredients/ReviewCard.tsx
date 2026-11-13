@@ -15,7 +15,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check, Pencil, Scale } from "lucide-react";
 import { fmtCount, fmtDate, fmtPackNumbersInText, fmtUsd, fmtUsdLong, monthsAgo } from "@/lib/fmt";
-import { deriveRecipePrice } from "@/lib/ingredients/eachMeasure";
+import { deriveRecipePrice } from "@/lib/ingredients/measures";
 import { uomLabel } from "@/lib/ingredients/pack";
 import { ReviewActions } from "./ReviewActions";
 import { DetailPanel, type DetailPanelOpen } from "./DetailPanel";

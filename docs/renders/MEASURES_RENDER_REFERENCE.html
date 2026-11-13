@@ -1,0 +1,308 @@
+<title>Count, Weight, Case</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Mulish:wght@400;600;700;800&display=swap">
+<style>
+/* Layout: ingredient picker on top; left = the ingredient (its measures, what recipes can use, its linked items); right = the selected item, then a recipe line to prove the measures work. One light look, matching the Stockpot app. */
+:root{
+  --navy:#153968; --navy-deep:#0E2A4E; --sky:#C4E3E8; --sky-tint:#E7F1F4; --red:#E53530;
+  --ground:#F3F6F9; --card:#FFFFFF; --ink:#1B2637; --body:#48556A; --muted:#5C6778;
+  --line:#DCE4EB; --line-soft:#EAEFF3; --field:#C9DBE6; --head:#F8FAFC;
+  --warn:#8A5A0E; --warn-bg:#FBF1DC; --warn-line:#E6C88A;
+  --bad:#B3261E; --bad-bg:#F8E7E6; --bad-line:#EDBDB9;
+  --good:#1B7A55; --good-bg:#E3F1EA; --good-line:#BFE0CF;
+  --display:'Barlow Condensed','Arial Narrow',Arial,sans-serif; --text:Mulish,Verdana,sans-serif;
+}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);font-family:var(--text);font-size:14px;line-height:1.45}
+.wrap{max-width:1320px;margin:0 auto;padding-block:20px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:16px}
+h1,h2,h3{font-family:var(--display);text-transform:uppercase;color:var(--navy);margin:0;letter-spacing:.3px;text-wrap:balance}
+h1{font-size:30px;font-weight:800;line-height:1} h2{font-size:20px;font-weight:800;line-height:1} h3{font-size:18px;font-weight:800;line-height:1}
+.eyebrow{font-family:var(--display);font-weight:700;font-size:12px;letter-spacing:1.5px;text-transform:uppercase;color:var(--red)}
+.lab{font-family:var(--display);font-weight:700;font-size:12px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted)}
+.sub,.note{font-size:12px;color:var(--muted)}
+.top{display:flex;flex-direction:column;gap:6px} .top p{margin:0;color:var(--body);max-width:80ch}
+.scen{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.chip{min-height:40px;padding:0 14px;border-radius:999px;border:1px solid var(--field);background:var(--card);font:700 13px var(--text);color:var(--ink);cursor:pointer}
+.chip[aria-pressed=true]{background:var(--navy);border-color:var(--navy);color:#fff}
+.chip:focus-visible,.btn:focus-visible,input:focus-visible,select:focus-visible,tr:focus-visible,.seg button:focus-visible{outline:3px solid var(--sky);outline-offset:2px}
+.grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:16px;align-items:start}
+.col{display:flex;flex-direction:column;gap:16px;min-width:0}
+@media (max-width:980px){.grid{grid-template-columns:minmax(0,1fr)}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 1px 2px rgba(14,42,78,.06),0 4px 14px rgba(14,42,78,.06);min-width:0;overflow:hidden}
+.chead{padding:16px 24px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap}
+.zone{padding:4px 24px 8px}
+.zt{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;padding:16px 0 8px;border-bottom:2px solid var(--navy);flex-wrap:wrap}
+.row{display:grid;grid-template-columns:132px minmax(0,1fr);gap:16px;align-items:center;padding:14px 0;border-bottom:1px solid var(--line-soft)}
+.row:last-child{border-bottom:0} .row>b{font-weight:800}
+@media (max-width:520px){.row{grid-template-columns:minmax(0,1fr);gap:8px}}
+.ctl{display:flex;flex-wrap:wrap;gap:8px;align-items:center;min-width:0}
+input[type=number],select{height:44px;border:1px solid var(--field);border-radius:10px;background:#fff;color:var(--ink);font:400 15px var(--text);padding:0 12px}
+input[type=number]{width:88px;font-variant-numeric:tabular-nums}
+.seg{display:inline-flex;border:1px solid var(--field);border-radius:10px;overflow:hidden;flex-wrap:wrap}
+.seg button{height:44px;padding:0 14px;border:0;background:#fff;font:700 14px var(--text);color:var(--body);cursor:pointer}
+.seg button[aria-pressed=true]{background:var(--navy);color:#fff}
+.btn{height:44px;padding:0 16px;border-radius:10px;border:1px solid var(--navy);background:#fff;color:var(--navy);font:800 14px var(--text);cursor:pointer}
+.btn.pri{background:var(--navy);color:#fff}
+.btn.txt{border-color:transparent;background:transparent;text-decoration:underline;padding:0 6px}
+.echo{font-weight:800;color:var(--navy)} .echo.w{color:var(--bad)}
+.ms{display:flex;flex-direction:column}
+.m1{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line-soft)}
+.m1 .one{font-weight:800;min-width:70px}
+.m1.sg{background:var(--sky-tint);border:1px dashed var(--field);border-radius:10px;padding:10px 12px;margin-top:8px}
+.m1.sg .from{font-size:12px;color:var(--muted)}
+.add{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:12px 0 4px}
+.empty{padding:14px 0;color:var(--body)}
+.can{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.u{display:inline-flex;align-items:center;height:28px;padding:0 10px;border-radius:999px;font:700 12px var(--text);background:var(--good-bg);color:var(--good)}
+.u{border:1px solid transparent;cursor:pointer;min-height:36px;height:36px;padding:0 14px;font-size:13px}
+.u[aria-pressed=true]{background:var(--navy);color:#fff}
+.u.off{background:transparent;border:1px dashed var(--field);color:var(--muted);font-weight:600}
+.u:focus-visible{outline:3px solid var(--sky);outline-offset:2px}
+.save{margin:12px 0 4px;padding:12px 14px;border-radius:12px;background:var(--warn-bg);border:1px solid var(--warn-line);display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
+.save b{color:var(--warn);font-weight:800}
+.err{color:var(--bad);font-weight:700;font-size:13px;flex-basis:100%}
+.blend{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-end;padding:16px 24px;background:var(--head);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.big{font:800 34px/1 var(--display);color:var(--navy);font-variant-numeric:tabular-nums}
+.big small{font:700 16px var(--display);color:var(--body);text-transform:none}
+.tw{overflow-x:auto}
+table{width:100%;border-collapse:collapse;min-width:500px}
+th{font:700 12px var(--display);letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);text-align:left;background:var(--head);height:40px;padding:0 12px;border-bottom:1px solid var(--line)}
+td{padding:10px 12px;height:64px;vertical-align:middle;border-bottom:1px solid var(--line-soft)}
+th:first-child,td:first-child{padding-left:21px} th:last-child,td:last-child{padding-right:24px}
+td:first-child{border-left:3px solid transparent}
+tr.att td:first-child{border-left-color:#C98A1A} tr.bad td:first-child{border-left-color:var(--bad)}
+tbody tr{cursor:pointer} tbody tr:hover{background:var(--head)} tbody tr.sel{background:var(--sky-tint)}
+tbody tr:last-child td{border-bottom:0}
+.r{text-align:right} .n{font-weight:800;font-variant-numeric:tabular-nums} .m{font-weight:700}
+.s{display:block;font-size:12px;color:var(--muted);font-weight:400} .s.b{color:var(--bad);font-weight:800}
+.pill{display:inline-flex;align-items:center;height:24px;padding:0 10px;border-radius:999px;font:700 12px var(--text);white-space:nowrap}
+.pill.ok{background:var(--good-bg);color:var(--good)} .pill.w{background:var(--warn-bg);color:var(--warn)} .pill.b{background:var(--bad-bg);color:var(--bad)}
+.phead{padding:20px 24px 16px;border-bottom:1px solid var(--line)} .phead .eyebrow{margin-bottom:6px} .phead p{margin:6px 0 0;color:var(--body)}
+.strip{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));background:var(--head);border-bottom:1px solid var(--line)}
+.strip>div{padding:14px 16px 14px 24px;border-right:1px solid var(--line);min-width:0} .strip>div:last-child{border-right:0}
+.strip .v{font:800 26px/1.1 var(--display);color:var(--navy);overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.strip .v small{font:700 14px var(--display);color:var(--body)}
+.ban{margin:16px 24px 0;padding:14px 16px;border-radius:12px;display:flex;flex-direction:column;gap:10px}
+.ban.b{background:var(--bad-bg);border:1px solid var(--bad-line)} .ban.w{background:var(--warn-bg);border:1px solid var(--warn-line)} .ban.ok{background:var(--good-bg);border:1px solid var(--good-line)} .ban.i{background:var(--sky-tint);border:1px solid var(--field)}
+.ban b{font-weight:800} .ban.b b{color:var(--bad)} .ban.w b{color:var(--warn)} .ban.ok b{color:var(--good)} .ban.i b{color:var(--navy)}
+.ban p{margin:0;color:var(--ink)}
+.math{font-variant-numeric:tabular-nums;color:var(--body)} .math b{color:var(--ink);font-weight:800}
+.foot{padding:12px 24px;border-top:1px solid var(--line);background:var(--head);font-size:12px;color:var(--muted)}
+.rec{padding:16px 24px;display:flex;flex-direction:column;gap:12px}
+.rec .line{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:15px}
+.rec .out{font:800 30px/1 var(--display);color:var(--navy);font-variant-numeric:tabular-nums}
+</style>
+
+<div class="wrap">
+  <div class="top">
+    <span class="eyebrow">Stockpot · proposed behaviour · interactive render</span>
+    <h1>Count, weight, case</h1>
+    <p>The item describes the case. The ingredient holds a short list of measures, each a plain sentence. The system converts, and a recipe can use any unit those measures reach. Tomatoes and the olive pomace case use your real items; the other items, the yields and the recipe counts are sample numbers. Nothing here saves.</p>
+  </div>
+  <div class="scen" role="group" aria-label="Ingredient"><span class="lab">Ingredient</span><span id="pick" class="scen"></span>
+    <button class="btn txt" id="reset">Reset this one</button></div>
+
+  <div class="grid">
+    <section class="card" aria-label="Ingredient">
+      <div class="chead"><div><span class="eyebrow">Ingredient</span><h2 id="iname"></h2></div><span class="sub">Company-wide. Changes here apply to every item linked to it.</span></div>
+      <div class="zone">
+        <div class="zt"><h3>Measures</h3><span class="sub">Only the facts the system cannot know. oz to lb, fl oz to gallons, litres and kilos are built in.</span></div>
+        <div class="ms" id="ms"></div>
+        <div class="ms" id="sug"></div>
+        <div class="add" id="add"></div>
+        <div class="zt"><h3>Yield</h3><span class="sub">What is left after trimming and prep. It never changes what you paid.</span></div>
+        <div class="row"><b>Usable after prep</b><div class="ctl"><input type="number" id="yQ" min="1" max="100" step="1" aria-label="Usable percent after prep"><span>%</span><span class="echo" id="yEcho"></span></div></div>
+        <div id="savebar"></div>
+        <div class="row" style="border-top:1px solid var(--line-soft)"><b>Recipes can use</b><div class="ctl"><div class="can" id="can"></div><span class="note" id="canNote"></span></div></div>
+      </div>
+      <div class="blend"><div><div class="lab">Blended price</div><div class="big" id="blend">-</div></div><div class="sub" id="blendNote"></div></div>
+      <div class="tw"><table><thead><tr><th>Item</th><th>In the case</th><th class="r">Price</th><th>Status</th></tr></thead><tbody id="rows"></tbody></table></div>
+      <div class="foot">Click a row to open that item on the right.</div>
+    </section>
+
+    <div class="col">
+      <section class="card" aria-label="Item panel" id="panel"></section>
+      <section class="card" aria-label="Recipe line">
+        <div class="chead"><div><span class="eyebrow">Later, in a recipe</span><h2>A chef writes a line</h2></div><span class="sub">Any unit the measures reach</span></div>
+        <div class="rec" id="rec"></div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script>
+const W={oz:1/16,lb:1,g:1/453.592,kg:2.20462}, V={'fl oz':1/16,cup:.5,pt:1,qt:2,gal:8,L:2.11338};
+const dim=u=>u in W?'W':u in V?'V':u, tb=u=>W[u]??V[u]??1;
+const fmt=n=>n==null?'-':'$'+(n<1?n.toFixed(3).replace(/0$/,''):n.toFixed(2));
+const num=n=>String(Math.round(n*100)/100);
+const pl=(u,n)=>(u in W||u in V||u==='each'||n===1)?u:(u==='loaf'?'loaves':u+'s');
+
+const DATA=()=>({
+ tom:{name:'Tomatoes, Roma',counts:['each'],show:'lb',rq:6,ru:'lb',sel:'a',recipes:14,yield:90,measures:[{f:'each',q:2.5,t:'oz'}],items:[
+  {id:'a',name:'TOMATO 5X5',vendor:"Peddler's Son",num:'#V110300',pack:'1 x 25 EA',amt:25,unit:'each',price:67.50,annual:398},
+  {id:'b',name:'TOMATO 5X6',vendor:"Peddler's Son",num:'#V110100',pack:'1 x 30 CT',amt:30,unit:'each',price:66.50,annual:201},
+  {id:'c',name:'PACKER TOMATO ROMA #2',vendor:'Sysco',num:'#8523573',pack:'1 x 25 LB',amt:25,unit:'lb',price:42.99,annual:1840},
+  {id:'d',name:'Tomato 5x6 1 Layer',vendor:'Ben E Keith',num:'#210025',pack:'1 x 10 LB',amt:10,unit:'lb',price:22.30,annual:111}]},
+ pot:{name:'Potstickers, pork',counts:['each'],show:'each',rq:6,ru:'each',sel:'a',recipes:6,yield:100,measures:[],items:[
+  {id:'a',name:'POTSTICKER PORK 100/1.5 OZ',vendor:'Sysco',num:'#sample',pack:'100 x 1.5 OZ',amt:100,unit:'each',price:32.50,annual:2600,says:{f:'each',q:1.5,t:'oz'}},
+  {id:'b',name:'Pork Potsticker Bulk',vendor:'Shamrock Foods',num:'#sample',pack:'1 x 10 LB',amt:10,unit:'lb',price:34.00,annual:900}]},
+ bread:{name:'Bread, sourdough sliced',counts:['loaf','slice'],show:'loaf',rq:2,ru:'slice',sel:'a',recipes:9,yield:100,measures:[{f:'loaf',q:16,t:'slice'},{f:'loaf',q:2.5,t:'lb'}],items:[
+  {id:'a',name:'SOURDOUGH SLICED 4 CT',vendor:'What Chefs Want',num:'#sample',pack:'1 x 4 EA',amt:4,unit:'loaf',price:18.00,annual:1400},
+  {id:'b',name:'Sourdough Sandwich Loaf',vendor:'Sysco',num:'#sample',pack:'1 x 10 LB',amt:10,unit:'lb',price:21.00,annual:600}]},
+ blue:{name:'Blueberries',vol:['cup','pt'],counts:[],show:'pt',rq:3,ru:'oz',sel:'a',recipes:11,yield:95,measures:[{f:'pt',q:12,t:'oz'}],items:[
+  {id:'a',name:'BLUEBERRY 12/1 PT',vendor:'Fresh Point',num:'#sample',pack:'12 x 1 PT',amt:12,unit:'pt',price:42.00,annual:3100},
+  {id:'b',name:'Blueberries 12/6 OZ',vendor:'Cheney Brothers',num:'#sample',pack:'12 x 6 OZ',amt:4.5,unit:'lb',price:27.00,annual:800}]},
+ oil:{name:'Olive oil, pomace',vol:['fl oz','cup','gal'],counts:[],show:'gal',rq:2,ru:'fl oz',sel:'a',recipes:31,yield:100,suggest:[{f:'gal',q:7.6,t:'lb',src:'book value, not confirmed'}],measures:[],items:[
+  {id:'a',name:'AREZCLS OIL OLIVE POMACE PET',vendor:'Sysco',num:'#7064339',pack:'4 x 3 L',amt:12,unit:'L',price:75.78,annual:2704},
+  {id:'b',name:'Olive Pomace Oil Jug',vendor:'Cheney Brothers',num:'#sample',pack:'6 x 1 GAL',amt:6,unit:'gal',price:138.00,annual:600}]}
+});
+let D=DATA(), cur='tom';
+const I=()=>D[cur];
+let MS=null;                      // measures in force for a calculation (saved by default)
+const ms=()=>MS||I().measures;
+
+function factor(a,b){
+  const A=dim(a), B=dim(b);
+  if(A===B) return tb(a)/tb(b);
+  const edges=[]; ms().forEach(m=>{ if(m.q>0){ const k=m.q*tb(m.t)/tb(m.f); edges.push([dim(m.f),dim(m.t),k],[dim(m.t),dim(m.f),1/k]); }});
+  const seen={[A]:1}, q=[A];
+  while(q.length){ const x=q.shift(); if(x===B) return tb(a)*seen[x]/tb(b); edges.forEach(([f,t,k])=>{ if(f===x && !(t in seen)){ seen[t]=seen[x]*k; q.push(t); } }); }
+  return null;
+}
+function units(){ const g=I(); return ['lb','oz',...g.counts,...(g.vol||[])]; }
+function refUnit(){ return [...I().items].sort((a,b)=>b.annual-a.annual)[0].unit; }
+function priceIn(it,u){
+  let total=null, via='';
+  if(it.caseLb>0){ const k=factor('lb',u); if(k!=null){ total=it.caseLb*k; via=`This case weighs ${num(it.caseLb)} lb`; } }
+  else { const k=factor(it.unit,u); if(k!=null){ total=it.amt*k; via=`${num(it.amt)} ${pl(it.unit,it.amt)} in the case`; } }
+  if(total==null) return null;
+  const src = it.caseLb>0?'lb':it.unit, conv = !(it.caseLb>0) && dim(src)!==dim(u);
+  return {per:it.price/total,total,via:via+(src===u?'':` = ${num(total)} ${pl(u,total)}`),conv};
+}
+function table(u){               // in or out of the blend is decided once, in the unit most spend arrives in; Premium is compared with Premium
+  const ref=refUnit(), R=I().items.map(it=>({it,p:priceIn(it,ref)}));
+  R.forEach(r=>{ if(!r.p) return; const same=x=>x!==r&&x.p&&(x.it.grade||'std')===(r.it.grade||'std'); let o=R.filter(x=>same(x)&&!x.p.conv); if(!o.length) o=R.filter(same); o=o.map(x=>x.p.per).sort((a,b)=>a-b); if(!o.length) return; const med=o[Math.floor(o.length/2)], ra=r.p.per/med; if(ra>2.5||ra<0.4) r.flag={ra}; });
+  let ok=R.filter(r=>r.p&&!r.flag); const agree=ok.length>0; if(!agree) ok=R.filter(r=>r.p); const tot=ok.reduce((a,r)=>a+r.it.annual,0);
+  const bref=tot?ok.reduce((a,r)=>a+r.p.per*r.it.annual,0)/tot:null, k=factor(u,ref);
+  const blend=(bref!=null&&k!=null)?bref*k:null;
+  const rows=R.map(r=>({it:r.it,p:priceIn(r.it,u),flag:r.flag?{ra:r.flag.ra,med:blend}:null}));
+  return {rows,ok:rows.filter(r=>r.p&&!r.flag),blend,agree};
+}
+function echo(m){
+  if(!(m.q>0)) return ['',''];
+  if(dim(m.t)==='W'){ const lb=m.q*W[m.t];
+    if(dim(m.f)==='V') return [`${num(lb*16/(V[m.f]/.5))} oz to the cup`,''];
+    if(lb>=1) return [`One ${m.f} is ${num(lb)} lb${m.f==='each'?'. Is that right?':''}`, m.f==='each'?'w':''];
+    return [`About ${num(1/lb)} to the lb`,'']; }
+  return [`${num(m.q)} ${pl(m.t,m.q)} in one ${m.f}`,''];
+}
+const toOpts=f=>{ const g=I(); return ['oz','lb','g','kg',...g.counts.filter(c=>c!==f)]; };
+const fromOpts=()=>{ const g=I(); return [...g.counts,...(g.vol||[])]; };
+const view=()=>I().draft||I().measures;
+const edit=()=>{ const g=I(); if(!g.draft) g.draft=g.measures.map(m=>({...m})); return g.draft; };
+const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+
+function render(){
+  const g=I(); if(g.draft && same(g.draft,g.measures)) g.draft=null;
+  document.getElementById('pick').innerHTML=Object.entries(D).map(([k,v])=>`<button class="chip" data-k="${k}" aria-pressed="${k===cur}">${v.name}</button>`).join('');
+  document.getElementById('iname').textContent=g.name;
+  const list=view();
+  document.getElementById('ms').innerHTML = list.length ? list.map((m,i)=>{ const [e,c]=echo(m); return `<div class="m1"><span class="one">1 ${m.f} =</span><input type="number" data-mi="${i}" value="${m.q}" min="0" step="0.1" aria-label="Amount in one ${m.f}"><select data-mu="${i}" aria-label="Unit">${toOpts(m.f).map(o=>`<option ${o===m.t?'selected':''}>${o}</option>`).join('')}</select><span class="echo ${c}">${e}</span><button class="btn txt" data-mx="${i}" style="margin-left:auto">Remove</button></div>`; }).join('') : `<div class="empty">No measures yet. Items can only be priced in the unit their case comes in.</div>`;
+  document.querySelectorAll('[data-mi]').forEach(e=>e.onchange=()=>{ edit()[+e.dataset.mi].q=+e.value||0; render(); });
+  document.querySelectorAll('[data-mu]').forEach(e=>e.onchange=()=>{ edit()[+e.dataset.mu].t=e.value; render(); });
+  document.querySelectorAll('[data-mx]').forEach(e=>e.onclick=()=>{ edit().splice(+e.dataset.mx,1); render(); });
+  // suggestions: from the ingredient's own cases, and book values
+  MS=list; const sg=[...g.items.filter(it=>it.says).map(it=>({...it.says,src:`printed on the case: ${it.pack}`})),...(g.suggest||[])].filter(x=>factor(x.f,x.t)==null); MS=null;
+  document.getElementById('sug').innerHTML=sg.map((x,i)=>`<div class="m1 sg"><span class="lab">Suggested</span><b>1 ${x.f} = ${num(x.q)} ${x.t}</b><span class="from">${x.src}</span><button class="btn" data-sg="${i}" style="margin-left:auto">Add</button></div>`).join('');
+  document.querySelectorAll('[data-sg]').forEach(e=>e.onclick=()=>{ const x=sg[+e.dataset.sg]; edit().push({f:x.f,q:x.q,t:x.t}); render(); });
+  // yield
+  const yq=document.getElementById('yQ'), yv=g.yDraft??g.yield;
+  if(document.activeElement!==yq) yq.value=yv;
+  yq.onchange=()=>{ const v=Math.min(100,Math.max(1,+yq.value||100)); g.yDraft = v===g.yield?null:v; render(); };
+  document.getElementById('yEcho').textContent = yv>=100 ? 'Nothing is lost in prep' : `1 lb bought gives ${num(yv/100)} lb prepped`;
+  // add row: closed until asked for
+  const A=g.adding, add=document.getElementById('add');
+  if(!A) add.innerHTML = fromOpts().length ? `<button class="btn txt" id="aOpen">+ Add a measure</button>` : '';
+  else add.innerHTML=`<span>1</span><select id="aF" aria-label="One of">${fromOpts().map(f=>`<option ${f===A.f?'selected':''}>${f}</option>`).join('')}</select><span>=</span><input type="number" id="aQ" min="0" step="0.1" placeholder="-" aria-label="Amount" value="${A.q??''}"><select id="aT" aria-label="Unit">${toOpts(A.f).map(o=>`<option ${o===A.t?'selected':''}>${o}</option>`).join('')}</select><button class="btn" id="aGo">Add</button><button class="btn txt" id="aNo">Cancel</button>${A.err?`<span class="err">${A.err}</span>`:''}`;
+  const q=id=>document.getElementById(id);
+  if(q('aOpen')) q('aOpen').onclick=()=>{ g.adding={f:g.vol?g.vol[g.vol.length-1]:fromOpts()[0],t:g.vol?'lb':'oz'}; render(); };
+  if(A){
+    q('aF').onchange=e=>{ g.adding={f:e.target.value,t:'oz'}; render(); };
+    q('aT').onchange=e=>{ A.t=e.target.value; A.err=null; };
+    q('aQ').oninput=e=>{ A.q=e.target.value; };
+    q('aNo').onclick=()=>{ g.adding=null; render(); };
+    q('aGo').onclick=()=>{ const qty=+q('aQ').value; if(!(qty>0)){ A.err='Enter an amount.'; return render(); }
+      MS=view(); const k=factor(A.f,A.t); MS=null;
+      if(k!=null){ A.err=`Already covered. Your other measures make 1 ${A.f} = ${num(k)} ${A.t}. Edit one of those so there is only one answer.`; return render(); }
+      edit().push({f:A.f,q:qty,t:A.t}); g.adding=null; render(); };
+  }
+  // what a save would change
+  const sb=q('savebar');
+  if(g.draft||g.yDraft!=null){
+    let n=0; if(g.draft){ const before=g.items.map(it=>priceIn(it,refUnit())?.per??null); MS=g.draft; const after=g.items.map(it=>priceIn(it,refUnit())?.per??null); MS=null; n=before.filter((b,i)=>b!==after[i]).length; }
+    const msg = g.draft ? `Saving changes the price of ${n} item${n===1?'':'s'} and ${g.recipes} recipes (sample count) that use ${g.name}.` : `Saving changes the cost of prepped ${g.name} in ${g.recipes} recipes (sample count). Item prices do not change.`;
+    sb.innerHTML=`<div class="save"><span><b>Not saved yet.</b> ${msg}</span><span class="ctl"><button class="btn pri" id="mSave">Save</button><button class="btn txt" id="mDrop">Discard</button></span></div>`;
+    q('mSave').onclick=()=>{ if(g.draft){ g.measures=g.draft; g.draft=null; } if(g.yDraft!=null){ g.yield=g.yDraft; g.yDraft=null; } render(); };
+    q('mDrop').onclick=()=>{ g.draft=null; g.yDraft=null; render(); };
+  } else sb.innerHTML='';
+  // chips are the selector
+  const us=units(), reach=us.filter(u=>table(u).blend!=null);
+  if(!reach.includes(g.show)) g.show=reach[0]||g.show;
+  q('can').innerHTML=us.map(u=>reach.includes(u)?`<button class="u" data-u="${u}" aria-pressed="${u===g.show}">${u}</button>`:`<button class="u off" data-need="${u}">${u}: add a measure</button>`).join('');
+  q('canNote').textContent='Click one to see the price in it.';
+  document.querySelectorAll('.u[data-u]').forEach(b=>b.onclick=()=>{ g.show=b.dataset.u; render(); });
+  document.querySelectorAll('.u[data-need]').forEach(b=>b.onclick=()=>{ const u=b.dataset.need, fo=fromOpts(); g.adding = fo.includes(u) ? {f:u,t:'oz'} : {f:g.vol?g.vol[g.vol.length-1]:fo[0],t:dim(u)==='W'?(g.vol?'lb':'oz'):u}; render(); });
+  const T=table(g.show), out=T.rows.length-T.ok.length;
+  q('blend').innerHTML=(T.blend==null||!T.agree)?'-':`${fmt(T.blend)} <small>/ ${g.show}</small>`;
+  q('blendNote').textContent=!T.agree&&T.rows.some(r=>r.p)?'These items disagree with each other, so there is no blend until one is checked.':`${T.ok.length} of ${T.rows.length} items in the blend, weighted by spend.`+(out?` ${out} left out until ${out>1?'they are':'it is'} sorted.`:'');
+  q('rows').innerHTML=T.rows.map(({it,p,flag})=>`<tr class="${!p?'bad ':''}${flag?'att ':''}${it.id===g.sel?'sel':''}" data-id="${it.id}" tabindex="0"><td><span class="m">${it.name}</span><span class="s">${it.vendor} · ${it.num}</span></td><td>${it.pack}<span class="s">${fmt(it.price)} case</span></td><td class="r">${p?`<span class="n">${fmt(p.per)}</span><span class="s">per ${g.show}</span>`:`<span class="n">-</span><span class="s b">cannot price yet</span>`}</td><td>${!p?`<span class="pill b">Needs a measure</span>`:flag?`<span class="pill w">Check it</span>`:`<span class="pill ok">In the blend</span>`}</td></tr>`).join('');
+  panel(T.rows.find(r=>r.it.id===g.sel)||T.rows[0], T);
+  recipe(reach);
+}
+
+function panel({it,p,flag},T){
+  const g=I(), u=g.show, need=T.rows.filter(r=>!r.p).length;
+  let ban='';
+  if(!p) ban+=`<div class="ban b"><b>${g.name} has no measure that reaches ${u}</b><p>This case comes in ${pl(it.unit,2)}. Add one measure on the ingredient and ${need>1?`all ${need} items like this`:'this item'} will price.</p></div>`;
+  else if(flag) ban+=`<div class="ban w"><b>${fmt(p.per)} / ${u} is ${flag.ra>1?num(flag.ra)+' times':'well under'} the ${g.name} blend (${fmt(flag.med)})</b><p>The math is right for what was entered, so one of the inputs does not describe the real case. Check the measure, or enter what this case weighs. It stays out of the blend until then.</p></div>`;
+  else ban+=`<div class="ban ok"><b>Priced and in the blend</b></div>`;
+  const isCount=g.counts.includes(it.unit), canWeigh=dim(it.unit)!=='W', open=flag||it.caseLb>0||it.openCase;
+  document.getElementById('panel').innerHTML=`
+    <div class="phead"><div class="eyebrow">Vendor item · ${it.vendor} · ${it.num}</div><h2>${it.name}</h2><p>Linked to <b>${g.name}</b></p></div>
+    <div class="strip"><div><div class="lab">Unit price</div><div class="v">${p?fmt(p.per):'-'} <small>/ ${u}</small></div></div>
+      <div><div class="lab">In the case</div><div class="v">${it.pack}</div><div class="sub">${fmt(it.price)} a case</div></div></div>
+    ${ban}
+    <div class="zone">
+      <div class="zt"><h3>This item</h3><span class="sub">The pack is what the invoice says. It does not have to match the ingredient.</span></div>
+      ${isCount&&g.counts.length>1?`<div class="row"><b>Counted in</b><div class="ctl"><span>The invoice says ${num(it.amt)}. Each one is a</span><div class="seg">${g.counts.map(c=>`<button data-cu="${c}" aria-pressed="${c===it.unit}">${c}</button>`).join('')}</div></div></div>`:''}
+      ${canWeigh&&open?`<div class="row"><b>Case weighs</b><div class="ctl"><input type="number" id="cLb" value="${it.caseLb??''}" min="0" step="0.5" placeholder="-" aria-label="Case weight in pounds"> <span>lb</span><button class="btn txt" id="cClear">Clear</button><span class="note">${it.caseLb>0?'This case uses its own weight.':"Leave empty to use the ingredient's measures."}</span></div></div>`:''}
+      ${p?`<div class="row"><b>How we got there</b><div class="math">${p.via}, so ${fmt(it.price)} / ${num(p.total)} = <b>${fmt(p.per)} / ${u}</b></div></div>`:''}
+      ${canWeigh&&!open?`<div class="row"><b></b><div><button class="btn txt" id="cOpen" style="padding:0">This case is a different size</button></div></div>`:''}
+    </div>
+    <div class="foot">In the real build the item fields save with a Save button, as today. Here they apply as you type.</div>`;
+  const q=id=>document.getElementById(id);
+  if(q('cLb')){ q('cLb').onchange=()=>{ it.caseLb=+q('cLb').value||null; render(); }; q('cClear').onclick=()=>{ it.caseLb=null; it.openCase=false; render(); }; }
+  if(q('cOpen')) q('cOpen').onclick=()=>{ it.openCase=true; render(); };
+  document.querySelectorAll('[data-cu]').forEach(b=>b.onclick=()=>{ it.unit=b.dataset.cu; render(); });
+}
+
+function recipe(reach){
+  const g=I(); if(!reach.includes(g.ru)) g.ru=reach[0]; if(g.prep==null) g.prep=true;
+  const T=g.ru?table(g.ru):null, y=g.yield/100, base=T&&T.blend!=null&&T.agree?T.blend:null;
+  const per=base==null?null:(g.prep?base/y:base), cost=per==null?null:per*g.rq;
+  const why = cost==null?'' : (g.prep && y<1 ? `${num(g.rq)} ${pl(g.ru,g.rq)} prepped takes ${num(g.rq/y)} ${pl(g.ru,g.rq/y)} bought, at ${fmt(base)} / ${g.ru}.` : `${num(g.rq)} ${pl(g.ru,g.rq)} at ${fmt(base)} / ${g.ru}.${g.prep?' Nothing is lost in prep, so prepped and as bought cost the same.':''}`);
+  document.getElementById('rec').innerHTML=`<div class="line"><input type="number" id="rQ" value="${g.rq}" min="0" step="0.5" aria-label="Quantity"><select id="rU" aria-label="Unit">${units().map(u=>`<option value="${u}" ${u===g.ru?'selected':''} ${reach.includes(u)?'':'disabled'}>${u}${reach.includes(u)?'':' (add a measure)'}</option>`).join('')}</select><span>of <b>${g.name}</b>,</span><div class="seg"><button data-pr="1" aria-pressed="${g.prep}">prepped</button><button data-pr="0" aria-pressed="${!g.prep}">as bought</button></div></div>
+    <div class="out">${cost==null?'-':fmt(cost)}</div>
+    <div class="sub">${why}${cost==null?'':' Switching the unit never changes the cost of the same amount of food.'}</div>`;
+  document.getElementById('rQ').onchange=e=>{ g.rq=+e.target.value||0; render(); };
+  document.getElementById('rU').onchange=e=>{ const k=factor(g.ru,e.target.value); if(k!=null) g.rq=Math.round(g.rq*k*100)/100; g.ru=e.target.value; render(); };
+  document.querySelectorAll('[data-pr]').forEach(b=>b.onclick=()=>{ g.prep=b.dataset.pr==='1'; render(); });
+}
+
+document.getElementById('pick').addEventListener('click',e=>{ const b=e.target.closest('[data-k]'); if(b){ cur=b.dataset.k; render(); } });
+document.getElementById('reset').onclick=()=>{ D[cur]=DATA()[cur]; render(); };
+const pickRow=e=>{ const tr=e.target.closest('tr[data-id]'); if(tr){ I().sel=tr.dataset.id; render(); } };
+document.getElementById('rows').addEventListener('click',pickRow);
+document.getElementById('rows').addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); pickRow(e); } });
+render();
+</script>

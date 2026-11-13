@@ -17,6 +17,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireOwnerApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
 import type { ReviewCardIngredient } from "@/components/ingredients/itemTypes";
+import {
+  isMeasuresWorld,
+  readMeasuresForIngredient,
+  legacyEachMeasureToMeasures,
+} from "@/lib/ingredients/measuresRead";
+import { shapeIngredientEachFromMeasures } from "@/lib/ingredients/measuresShape";
 
 export const dynamic = "force-dynamic";
 
@@ -38,18 +44,15 @@ export async function GET(req: NextRequest) {
   const [ingRes, parentsRes] = await Promise.all([
     client
       .from("pr_ingredients")
-      // N6: each_measure_* trio replaces N5's avg_weight_lb/source on
-      // the two SELECTs so the panel's Edit-ingredient block reads the
-      // measure shape.
-      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source")
+      // N6 + M1: each_measure_* trio stays (read path §2.6 fallback);
+      // yield_pct/yield_source added for the panel's Yield row (M1
+      // amendment 7).
+      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source,yield_pct,yield_source")
       .eq("id", id)
       .maybeSingle(),
     client
       .from("pr_ingredients")
-      // N6: each_measure_* trio replaces N5's avg_weight_lb/source on
-      // the two SELECTs so the panel's Edit-ingredient block reads the
-      // measure shape.
-      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source")
+      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source,yield_pct,yield_source")
       .eq("status", "active")
       .order("name"),
   ]);
@@ -57,8 +60,40 @@ export async function GET(req: NextRequest) {
   if (!ingRes.data) return NextResponse.json({ error: "Ingredient not found" }, { status: 404 });
   if (parentsRes.error) return NextResponse.json({ error: parentsRes.error.message }, { status: 500 });
 
-  const ingredient = ingRes.data as ReviewCardIngredient;
+  const rawIngredient = ingRes.data as ReviewCardIngredient;
   const parents = (parentsRes.data ?? []) as ReviewCardIngredient[];
 
-  return NextResponse.json({ ingredient, parents });
+  // M1 R2 fix 1 + amendment 4: one world per request. In measures-
+  // world rewrite the legacy each_measure_* triple on the ingredient
+  // from the new count-to-X row so deriveRecipePrice sees the new
+  // numbers without a JSX change.
+  const newWorld = await isMeasuresWorld(client);
+  let measures: ReturnType<typeof legacyEachMeasureToMeasures> = [];
+  let ingredient: ReviewCardIngredient = rawIngredient;
+  if (newWorld) {
+    measures = await readMeasuresForIngredient(client, id);
+    const shaped = shapeIngredientEachFromMeasures(measures);
+    ingredient = {
+      ...rawIngredient,
+      each_measure_qty: shaped.qty,
+      each_measure_uom: shaped.uom,
+      each_measure_source: shaped.source,
+    };
+  } else {
+    measures = legacyEachMeasureToMeasures(
+      rawIngredient.each_measure_qty,
+      rawIngredient.each_measure_uom,
+      rawIngredient.each_measure_source,
+    );
+  }
+  const yieldPct = (ingredient as { yield_pct?: number | null }).yield_pct ?? null;
+  const yieldSource = (ingredient as { yield_source?: string | null }).yield_source ?? null;
+
+  return NextResponse.json({
+    ingredient,
+    parents,
+    measures,
+    yieldPct,
+    yieldSource,
+  });
 }

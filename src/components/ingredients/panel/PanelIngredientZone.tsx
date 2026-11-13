@@ -21,7 +21,7 @@ import { toast } from "@/components/ui/Toaster";
 import { fmtUsd } from "@/lib/fmt";
 import { SUPER_CATEGORIES, type SuperCategory } from "@/lib/ingredients/categories";
 import { DIM_BY_UOM, WEIGHT_UOMS, VOLUME_UOMS, uomLabel } from "@/lib/ingredients/pack";
-import { deriveRecipePrice } from "@/lib/ingredients/eachMeasure";
+import { deriveRecipePrice } from "@/lib/ingredients/measures";
 import {
   IngredientAllergens,
   allergenStatus,
