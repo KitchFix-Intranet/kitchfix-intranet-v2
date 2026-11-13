@@ -583,6 +583,10 @@
   font-size: var(--sp-t-micro);
   color: var(--sp-body);
   line-height: 1.6;
+  /* Polish fix 6: the hint renders inside .kf-ipanel__row-label on
+   * the measures / yield rows, which carries font-weight 800. Force
+   * normal weight here so the hint reads as a hint. */
+  font-weight: 400;
 }
 .kf-ipanel__row-hint strong { font-weight: 800; color: var(--sp-ink); }
 .kf-ipanel__row-action {
@@ -1275,6 +1279,12 @@
   flex: 1 1 100%;
   color: var(--sp-block);
   font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+}
+/* Polish fix 6: Remove sits inside the measure row as a text link;
+ * scale the font to the row's micro size so it reads as action, not
+ * label. */
+.kf-measures__remove {
   font-size: var(--sp-t-micro);
 }
 

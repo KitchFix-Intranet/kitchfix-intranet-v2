@@ -49,6 +49,8 @@ const SOURCE_LABEL: Record<MeasureSource, string> = {
 
 // "1 EA" + weight = 2.5 oz -> "About 6.4 to the lb" / "One each is N
 // lb"; "1 GAL" + weight = "1 gal is 7.6 lb". Keep plain and lower-case.
+// Polish fix 2: every unit label routes through uomLabel so EA reads
+// as "each", never "ea".
 function echoText(m: UiMeasure): string {
   const q = Number(m.qty);
   if (!Number.isFinite(q) || q <= 0) return "";
@@ -58,15 +60,16 @@ function echoText(m: UiMeasure): string {
   if (!fd || !td || !(toBase > 0)) return "";
   const asBase = q * toBase; // in LB / FLOZ / EA base
   const r2 = (n: number) => (Math.round(n * 100) / 100).toString();
+  const fromLabel = uomLabel(m.from_unit);
   if (td === "weight") {
-    if (asBase >= 1) return `One ${m.from_unit.toLowerCase()} is ${r2(asBase)} lb`;
+    if (asBase >= 1) return `One ${fromLabel} is ${r2(asBase)} lb`;
     return `About ${r2(1 / asBase)} to the lb`;
   }
   if (td === "volume") {
-    if (asBase >= 32) return `One ${m.from_unit.toLowerCase()} is ${r2(asBase / 128)} gal`;
-    return `${r2(asBase)} fl oz in one ${m.from_unit.toLowerCase()}`;
+    if (asBase >= 32) return `One ${fromLabel} is ${r2(asBase / 128)} gal`;
+    return `${r2(asBase)} fl oz in one ${fromLabel}`;
   }
-  return `${r2(q)} ${m.to_unit.toLowerCase()} in one ${m.from_unit.toLowerCase()}`;
+  return `${r2(q)} ${uomLabel(m.to_unit)} in one ${fromLabel}`;
 }
 
 function normalizeStored(m: { from_unit: string; qty: number; to_unit: string; source: string }): UiMeasure {
@@ -403,7 +406,7 @@ export function PanelMeasuresBlock({
             {draft.map((row, i) => (
               <li key={i} className="kf-measures__row">
                 <span className="kf-measures__one">
-                  1 {row.from_unit.toLowerCase()} =
+                  1 {uomLabel(row.from_unit)} =
                 </span>
                 <input
                   type="number"
@@ -412,7 +415,7 @@ export function PanelMeasuresBlock({
                   min="0"
                   step="0.0001"
                   onChange={(e) => updateRow(i, { qty: e.currentTarget.value })}
-                  aria-label={`Amount in one ${row.from_unit.toLowerCase()}`}
+                  aria-label={`Amount in one ${uomLabel(row.from_unit)}`}
                 />
                 <select
                   className="kf-ipanel__ctl kf-ipanel__ctl--uom"
@@ -445,9 +448,13 @@ export function PanelMeasuresBlock({
                   ))}
                 </select>
                 <span className="kf-measures__echo">{echoText(row)}</span>
+                {/* Polish fix 6: Remove is a quiet text link, kept
+                    on the measure's own line. The bordered button
+                    was wrapping to a second line on narrow panel
+                    widths. */}
                 <button
                   type="button"
-                  className="kf-btn kf-btn--line kf-btn--sm"
+                  className="kf-ipanel__link kf-measures__remove"
                   onClick={() => removeRow(i)}
                   aria-label={`Remove measure ${i + 1}`}
                 >
@@ -498,6 +505,12 @@ export function PanelMeasuresBlock({
               onChange={(e) => setAddUom(e.currentTarget.value.toUpperCase())}
               aria-label="Unit"
             >
+              {/* Polish fix 1: placeholder option matches the initial
+                  addUom="" so the select renders "unit" by default,
+                  never "lb". Add stays disabled until a real unit
+                  is picked (candidateForRejection requires addUom);
+                  a prefill from a suggestion or sizes_differ sets
+                  addUom explicitly, which keeps its unit. */}
               <option value="">unit</option>
               {toOptions.map((u) => (
                 <option key={u} value={u}>
@@ -548,7 +561,7 @@ export function PanelMeasuresBlock({
               <div key={i} className="kf-measures__suggestion">
                 <span className="kf-measures__suggestion-lab">Suggested</span>
                 <strong>
-                  1 {s.from_unit.toLowerCase()} = {s.qty} {uomLabel(s.to_unit)}
+                  1 {uomLabel(s.from_unit)} = {s.qty} {uomLabel(s.to_unit)}
                 </strong>
                 <span className="kf-measures__suggestion-via">printed on the case: {s.via}</span>
                 <button
@@ -593,15 +606,9 @@ export function PanelMeasuresBlock({
           </div>
         ) : null}
 
-        {/* M2 §4B item panel: "Recipes will use" echo moved here so
-            the saved state shows the derived figure (driven by an
-            opened item's perBaseInIngUnit, if present). */}
-        {ingredient.measures != null && ingredient.measures.length > 0 && !dirty ? (
-          <div className="kf-measures__saved-echo">
-            Recipes can now use {ingredient.name}{" "}
-            in {ingredient.measures.length === 1 ? "one measure" : `${ingredient.measures.length} measures`}.
-          </div>
-        ) : null}
+        {/* Polish fix 5: the "Recipes can now use {name}..." echo is
+            deleted. The chip row already names the reachable units;
+            the dup sentence read as filler. */}
 
         {/* Stat helper for consumers like attention.tsx: expose how
             many usd fmtUsd() calls would have landed - unused today,

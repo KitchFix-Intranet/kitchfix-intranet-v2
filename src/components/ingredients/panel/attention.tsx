@@ -16,6 +16,7 @@
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 import { DIM_BY_UOM, canonicalFromBaseUnit, uomLabel } from "@/lib/ingredients/pack";
 import { factor, priceInUnit } from "@/lib/ingredients/measures";
+import { fmtUsd } from "@/lib/fmt";
 
 export type AttentionIssue =
   | { kind: "no_price"; tone: "bad"; head: string; body: string; fix?: "pack" }
@@ -73,6 +74,12 @@ export function deriveAttention(
   item: ReviewGroupItem,
   ingredient: ReviewCardIngredient | null,
   siblingPacks: readonly SiblingPack[] = [],
+  // Polish fix 4: the blend value drives the outlier head sentence
+  // ("$X / lb is N.N times the <Ingredient> blend ($Y)"). DetailPanel
+  // computes it from sibling items with statusKind="in_blend" and a
+  // perBaseInIngUnit. Null when the panel cannot supply one; the head
+  // falls back to the relative word without a dollar figure.
+  blendPerBase: number | null = null,
 ): AttentionIssue[] {
   const issues: AttentionIssue[] = [];
 
@@ -127,12 +134,21 @@ export function deriveAttention(
         { measures },
       );
       if (result == null) {
-        const packLabel = (item.packUom ?? "").toLowerCase() || "unknown unit";
+        // Polish fix 2: the body says HOW the case is priced, not
+        // what unit it names. Three phrasings, keyed off the pack
+        // dim; "by the each" (count), "by weight", "by volume".
+        const packDim = DIM_BY_UOM[(item.packUom ?? "").toUpperCase()] ?? null;
+        const countedBy =
+          packDim === "weight"
+            ? "This case is counted by weight"
+            : packDim === "volume"
+              ? "This case is counted by volume"
+              : "This case is counted by the each";
         issues.push({
           kind: "needs_measure",
           tone: "bad",
           head: `${ingredient.name} has no measure that reaches ${ingredient.base_unit}`,
-          body: `This case comes in ${packLabel}. Add one measure on the ingredient and this item will price.`,
+          body: `${countedBy}. Add one measure on the ingredient and this item will price.`,
           action: "add_measure",
           targetUom: target,
         });
@@ -205,6 +221,10 @@ export function deriveAttention(
 
   // M2 §4B §2.8: check_it_outlier - item is priced but left out of
   // the blend. Warn tone; no action button.
+  // Polish fix 4: head reads "$X / lb is N.N times the <Ingredient>
+  // blend ($Y)" when the item is above median, "well under" when
+  // below. The blend value is passed in; missing drops the dollar
+  // figure but keeps the comparison word.
   if (
     ingredient &&
     (item as { statusKind?: string }).statusKind === "check_it" &&
@@ -212,10 +232,29 @@ export function deriveAttention(
   ) {
     const target = canonicalFromBaseUnit(ingredient.base_unit);
     if (target) {
+      const unitLabel = uomLabel(target).toLowerCase();
+      const itemStr = `${fmtUsd(item.perBaseInIngUnit)} / ${unitLabel}`;
+      let relative: string;
+      if (blendPerBase != null && blendPerBase > 0) {
+        if (item.perBaseInIngUnit >= blendPerBase) {
+          const ratio = item.perBaseInIngUnit / blendPerBase;
+          relative = `${ratio.toFixed(1)} times`;
+        } else {
+          relative = "well under";
+        }
+      } else {
+        // Blend unknown at this mount - keep the comparison word but
+        // drop the dollar figure of the blend.
+        relative = "outside";
+      }
+      const blendStr =
+        blendPerBase != null && blendPerBase > 0
+          ? ` (${fmtUsd(blendPerBase)})`
+          : "";
       issues.push({
         kind: "check_it_outlier",
         tone: "warn",
-        head: `${item.perBaseInIngUnit.toFixed(2)} / ${uomLabel(target).toLowerCase()} is outside the ${ingredient.name} blend`,
+        head: `${itemStr} is ${relative} the ${ingredient.name} blend${blendStr}`,
         body:
           `The math is right for what was entered, so one of the inputs does not describe the real case. ` +
           `Check the measure, or enter what this case weighs. It stays out of the blend until then.`,

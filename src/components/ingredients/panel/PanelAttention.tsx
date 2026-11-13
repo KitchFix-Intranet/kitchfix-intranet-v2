@@ -27,8 +27,9 @@ export function computeAttentionCounts(
   item: ReviewGroupItem,
   ingredient: ReviewCardIngredient | null,
   siblingPacks: readonly import("./attention").SiblingPack[] = [],
+  blendPerBase: number | null = null,
 ): PanelAttentionCounts {
-  const issues = deriveAttention(item, ingredient, siblingPacks);
+  const issues = deriveAttention(item, ingredient, siblingPacks, blendPerBase);
   let packHandSet = false;
   let priceHandSet = false;
   let hasNoIngredient = false;
@@ -54,6 +55,7 @@ export function PanelAttention({
   onAddMeasure,
   onChangeCostedPer,
   siblingPacks = [],
+  blendPerBase = null,
 }: {
   item: ReviewGroupItem;
   ingredient: ReviewCardIngredient | null;
@@ -67,8 +69,11 @@ export function PanelAttention({
   // M2 §4B part 3 fix 4: sibling items' pack shapes drive the
   // sizes_differ banner body.
   siblingPacks?: readonly import("./attention").SiblingPack[];
+  // Polish fix 4: blended $/base-unit across sibling in-blend items;
+  // the outlier head needs this to say "$X is N.N times the blend ($Y)".
+  blendPerBase?: number | null;
 }) {
-  const issues = deriveAttention(item, ingredient, siblingPacks);
+  const issues = deriveAttention(item, ingredient, siblingPacks, blendPerBase);
   // M2 §4B §2.8: render no_price, pack_unreadable (both keep Fix the
   // pack) and the three M2 kinds (needs_measure, check_it_outlier,
   // sizes_differ). The old unit_mismatch kind is gone.

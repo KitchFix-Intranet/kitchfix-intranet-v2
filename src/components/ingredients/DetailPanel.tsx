@@ -148,8 +148,30 @@ export function DetailPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Polish fix 4: blended per-base-unit across sibling items that
+  // the server flagged as "in_blend" and that carry a perBaseInIngUnit.
+  // Weighted by usd12m when the total weight is positive; otherwise
+  // the plain mean. Null when no in-blend sibling has a usable number.
+  const blendPerBase: number | null = useMemo(() => {
+    const inBlend = items
+      .filter(
+        (i) =>
+          (i.statusKind ?? "in_blend") === "in_blend" &&
+          i.perBaseInIngUnit != null &&
+          Number.isFinite(i.perBaseInIngUnit) &&
+          (i.perBaseInIngUnit ?? 0) > 0,
+      )
+      .map((i) => ({ p: i.perBaseInIngUnit as number, w: i.usd12m ?? 0 }));
+    if (inBlend.length === 0) return null;
+    const totW = inBlend.reduce((a, b) => a + b.w, 0);
+    if (totW > 0) {
+      return inBlend.reduce((a, b) => a + b.p * b.w, 0) / totW;
+    }
+    return inBlend.reduce((a, b) => a + b.p, 0) / inBlend.length;
+  }, [items]);
+
   const attentionCounts = open.kind === "item" && item
-    ? computeAttentionCounts(item, ingredient)
+    ? computeAttentionCounts(item, ingredient, [], blendPerBase)
     : { total: 0, hasNoIngredient: false, provenance: { packHandSet: false, priceHandSet: false } };
 
   return (
@@ -195,6 +217,7 @@ export function DetailPanel({
               packUom: i.packUom ?? null,
               usd12m: i.usd12m,
             }))}
+            blendPerBase={blendPerBase}
           />
         ) : null}
 

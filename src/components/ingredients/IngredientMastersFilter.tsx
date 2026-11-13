@@ -32,7 +32,7 @@ import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtUsd, fmtUsdLong } from "@/lib/fmt";
 import { ItemPanelById } from "./ItemPanelById";
 import { SUPER_CATEGORIES } from "@/lib/ingredients/categories";
-import { DIM_BY_UOM, canonicalFromBaseUnit, uomLabel } from "@/lib/ingredients/pack";
+import { canonicalFromBaseUnit, uomLabel } from "@/lib/ingredients/pack";
 // M2 §4B amendment 4 + part 3 fix 9: no screen imports deriveRecipePrice
 // or the each-measure shapers. The alternate-unit view that the derived
 // sub-line used to carry is handled by the expand's chip view switch
@@ -661,26 +661,18 @@ function DetailView({
   const effectiveLens: "blended" | "standard" | "premium" = showLens ? lens : "blended";
   const active = row.statsByLens[effectiveLens];
 
-  // M2 §4B part 3 fix 9: chip view switch. viewUom defaults to the
-  // ingredient's base unit; chips name the reachable units (built-in
-  // same-dim + measures-bridged). Switching reprices strip tiles +
-  // every linked-item row via priceInUnit in the browser. State
-  // resets whenever the expand re-mounts (per row.id, never shared).
+  // M2 §4B part 3 fix 9 + polish fix 3: chip view switch. Chips are
+  // the five intent units (lb, oz, each, fl oz, gal) in that order;
+  // only those reachable from the ingredient's base unit (built-in
+  // same-dim + measures-bridged) render. No #10 can / g / kg / ct /
+  // dozen / pc. State resets per row.id (expand remount).
   const baseCanonical = canonicalFromBaseUnit(row.baseUnit);
   const [viewUom, setViewUom] = useState<string>(baseCanonical ?? "LB");
   const reachList = useMemo<string[]>(() => {
     if (!baseCanonical) return [];
     const set = reachableUnits([baseCanonical], { measures: row.measures as Measure[] });
-    // Order chips: same-dim first (in the row's dim), then cross-dim.
-    const dim = DIM_BY_UOM[baseCanonical];
-    const list = Array.from(set);
-    list.sort((a, b) => {
-      const da = DIM_BY_UOM[a] === dim ? 0 : 1;
-      const db = DIM_BY_UOM[b] === dim ? 0 : 1;
-      if (da !== db) return da - db;
-      return a.localeCompare(b);
-    });
-    return list;
+    const order: readonly string[] = ["LB", "OZ", "EA", "FLOZ", "GAL"];
+    return order.filter((u) => set.has(u));
   }, [baseCanonical, row.measures]);
 
   const uom = viewUom && viewUom !== baseCanonical ? uomLabel(viewUom) : uomOrUnit(row.baseUom);
@@ -733,6 +725,28 @@ function DetailView({
     return priced.reduce((a, b) => a + b.p * b.w, 0) / totW;
   }, [repricedLinkedItems, active.avgPerBase, baseCanonical, viewUom]);
 
+  // Polish fix 3: min/max for the Spread tile reprices alongside the
+  // selected unit. Same filter as the strip price - in-blend items
+  // with a viewPrice.
+  const stripMinMax: { min: number; max: number } | null = useMemo(() => {
+    if (baseCanonical && viewUom === baseCanonical) {
+      return active.minPerBase != null && active.maxPerBase != null
+        ? { min: active.minPerBase, max: active.maxPerBase }
+        : null;
+    }
+    const priced = repricedLinkedItems
+      .filter((li) => li.statusKind === "in_blend" && li.viewPrice != null)
+      .map((li) => li.viewPrice as number);
+    if (priced.length === 0) return null;
+    return { min: Math.min(...priced), max: Math.max(...priced) };
+  }, [
+    repricedLinkedItems,
+    active.minPerBase,
+    active.maxPerBase,
+    baseCanonical,
+    viewUom,
+  ]);
+
   const partial = active.linkedCount > 0 && active.pricedCount < active.linkedCount;
   const spreadBad = active.spreadRatio != null && active.spreadRatio > 3;
 
@@ -773,7 +787,10 @@ function DetailView({
                 onClick={() => setViewUom(u)}
                 aria-pressed={isActive}
               >
-                per {uomLabel(u).toLowerCase()}
+                {/* Polish fix 3: chip label is the plain unit ("lb"),
+                    not "per lb" - the strip's "/ lb" already supplies
+                    the preposition. */}
+                {uomLabel(u)}
               </button>
             );
           })}
@@ -822,8 +839,8 @@ function DetailView({
             {active.spreadRatio != null ? `${active.spreadRatio.toFixed(1)}x` : "-"}
           </span>
           <span className="kf-ipanel__strip-sub">
-            {active.minPerBase != null && active.maxPerBase != null
-              ? `${fmtUsd(active.minPerBase)} to ${fmtUsd(active.maxPerBase)}`
+            {stripMinMax
+              ? `${fmtUsd(stripMinMax.min)} to ${fmtUsd(stripMinMax.max)}`
               : active.pricedCount < 2
                 ? "needs 2 priced items"
                 : "-"}
