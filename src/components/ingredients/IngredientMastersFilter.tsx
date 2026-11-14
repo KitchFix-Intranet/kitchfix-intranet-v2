@@ -38,6 +38,7 @@ import { canonicalFromBaseUnit, uomLabel } from "@/lib/ingredients/pack";
 // sub-line used to carry is handled by the expand's chip view switch
 // (§2.6) which computes in the browser via priceInUnit.
 import {
+  factor,
   priceInUnit,
   reachableUnits,
   type Measure,
@@ -715,43 +716,33 @@ function DetailView({
     });
   }, [row.linkedItems, row.baseUom, row.measures, viewUom, baseCanonical]);
 
-  // Strip tile reprices from the in-view prices (same math as the row
-  // baseline but through viewUom). When viewUom === baseCanonical the
-  // server's active.avgPerBase stays authoritative.
+  // T1 fix 2: the unit chip must never change which items are in the
+  // number. In any lens, the price and the low / high shown in unit X
+  // are the LENS's own price and low / high converted to X - one
+  // definition of the mean, in blend.ts (via `active.avgPerBase`).
+  //
+  // factor(from, to, m) returns "how many `to` units in 1 `from`
+  // unit", so a price in /from becomes /to by DIVIDING by that
+  // factor. Example: base LB, view OZ, factor(LB, OZ) = 16; a per-lb
+  // lens price divided by 16 is the per-oz view price.
+  const viewConvFactor: number | null = useMemo(() => {
+    if (!baseCanonical) return null;
+    if (viewUom === baseCanonical) return 1;
+    return factor(baseCanonical, viewUom, { measures: row.measures as Measure[] });
+  }, [baseCanonical, viewUom, row.measures]);
   const stripPrice: number | null = useMemo(() => {
-    if (baseCanonical && viewUom === baseCanonical) return active.avgPerBase;
-    const priced = repricedLinkedItems
-      .filter((li) => li.statusKind === "in_blend" && li.viewPrice != null)
-      .map((li) => ({ p: li.viewPrice as number, w: li.usd12m }));
-    if (priced.length === 0) return null;
-    const totW = priced.reduce((a, b) => a + b.w, 0);
-    if (totW <= 0) {
-      return priced.reduce((a, b) => a + b.p, 0) / priced.length;
-    }
-    return priced.reduce((a, b) => a + b.p * b.w, 0) / totW;
-  }, [repricedLinkedItems, active.avgPerBase, baseCanonical, viewUom]);
+    if (viewConvFactor == null || viewConvFactor <= 0) return null;
+    return active.avgPerBase != null ? active.avgPerBase / viewConvFactor : null;
+  }, [active.avgPerBase, viewConvFactor]);
 
-  // Polish fix 3: min/max for the Spread tile reprices alongside the
-  // selected unit. Same filter as the strip price - in-blend items
-  // with a viewPrice.
   const stripMinMax: { min: number; max: number } | null = useMemo(() => {
-    if (baseCanonical && viewUom === baseCanonical) {
-      return active.minPerBase != null && active.maxPerBase != null
-        ? { min: active.minPerBase, max: active.maxPerBase }
-        : null;
-    }
-    const priced = repricedLinkedItems
-      .filter((li) => li.statusKind === "in_blend" && li.viewPrice != null)
-      .map((li) => li.viewPrice as number);
-    if (priced.length === 0) return null;
-    return { min: Math.min(...priced), max: Math.max(...priced) };
-  }, [
-    repricedLinkedItems,
-    active.minPerBase,
-    active.maxPerBase,
-    baseCanonical,
-    viewUom,
-  ]);
+    if (viewConvFactor == null || viewConvFactor <= 0) return null;
+    if (active.minPerBase == null || active.maxPerBase == null) return null;
+    return {
+      min: active.minPerBase / viewConvFactor,
+      max: active.maxPerBase / viewConvFactor,
+    };
+  }, [active.minPerBase, active.maxPerBase, viewConvFactor]);
 
   const partial = active.linkedCount > 0 && active.pricedCount < active.linkedCount;
   const spreadBad = active.spreadRatio != null && active.spreadRatio > 3;

@@ -28,12 +28,13 @@ export type ReviewGroupItem = {
   // the New-ingredient panel's "Costed per" preview. Already selected
   // at ReviewQueue:145; one row-object field add, no SELECT change.
   packUom: string | null;
-  // M2 §4B part 2: raw pack_qty / pack_size drive the suggestions
-  // rule (prompt 2.4: pack_qty > 1 with pack_size in weight/volume
-  // suggests "1 each = pack_size pack_uom"). Optional for builders
-  // that have not updated.
-  packQty?: number | null;
-  packSize?: number | null;
+  // T1 R2-1: priceInUnit routes through these two fields, so every
+  // builder MUST send them. Required (number | null, no `?`). The
+  // M2 §4B part 2 "optional for builders that have not updated"
+  // shape was what let /api/review/item ship without them and
+  // collapsed every by-id panel to the measure-fallback price.
+  packQty: number | null;
+  packSize: number | null;
   packState: string;
   // P1 correction 2c: 'catalog_sibling' names a pack that came from
   // a proven same-vendor expansion (invoice pack_text matches >=2

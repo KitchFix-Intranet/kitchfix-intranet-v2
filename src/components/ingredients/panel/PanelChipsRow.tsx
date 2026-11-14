@@ -43,18 +43,11 @@ export function PanelChipsRow({
 }) {
   const baseCanonical = canonicalFromBaseUnit(ingredient.base_unit);
   // M2.1 fix 3: fold count-flavour pack uoms (CT, PC, PCS, DZ) into
-  // EA before building the reach set and the chip list. Weight and
-  // volume units pass through unchanged.
+  // EA before the chip list is built. Weight and volume units pass
+  // through unchanged.
   const normalizedItemUnits = itemUnits
     .map((u) => normalizeChipUom(u))
     .filter((u): u is string => u != null);
-
-  // Starting units for reach: the ingredient's base_unit + every
-  // unit the linked items touch. Deduped + upper-cased.
-  const startSet = new Set<string>();
-  if (baseCanonical) startSet.add(baseCanonical);
-  for (const u of normalizedItemUnits) startSet.add(u);
-  const starts = Array.from(startSet);
 
   // Chips to display: the core five plus any other weight or volume
   // unit an item is actually priced in. Count-flavour uoms were
@@ -71,40 +64,35 @@ export function PanelChipsRow({
 
   const m = { measures };
 
-  // Reach: ANY path from one of the starting units to the target
-  // yields a non-null factor. Same-dim is always reachable (built-in
-  // TO_BASE), so a per-lb ingredient with LB items always reaches OZ
-  // / G / KG without a measure. A cross-dim chip only solidifies
-  // when a measure bridges it.
+  // T1 fix 4: a unit chip is lit only when the ingredient's blended
+  // price can be expressed in that unit. Same kind as the ingredient's
+  // own unit (lb / oz / g / kg, gal / qt / pt / floz / l / ml, each /
+  // dozen) reaches via built-in TO_BASE; cross-kind reaches only when
+  // the ingredient's own measures bridge it. Linked items' pack units
+  // play no part - one count-packed item no longer makes `each` look
+  // usable on a per-lb ingredient with no measure.
   function isReachable(target: string): boolean {
-    if (starts.length === 0) return false;
-    for (const s of starts) {
-      if (factor(s, target, m) != null) return true;
-    }
-    return false;
+    if (!baseCanonical) return false;
+    return factor(baseCanonical, target, m) != null;
   }
 
-  // Dashed prefill: the bridge that would REACH the target from one
-  // of the starting dims. Weight / volume target with a count start
-  // -> count-to-weight / count-to-volume, i.e. from EA. Weight
-  // target with a volume start -> volume-to-weight from a volume
-  // uom (pick FLOZ as the sensible default). Count target with a
-  // weight start -> volume-to-weight is not count-reaching; refuse.
+  // Dashed prefill: the bridge that would REACH the target from the
+  // ingredient's own base unit. Weight / volume target with a count
+  // base -> count-to-weight / count-to-volume from EA. Weight target
+  // with a volume base -> volume-to-weight from FLOZ (the typical
+  // volume uom). Count target with a weight / volume base -> prefill
+  // EA; the user picks the right from-unit.
   function prefillFromFor(target: string): string {
+    const bd = baseCanonical ? DIM_BY_UOM[baseCanonical] : undefined;
     const td = DIM_BY_UOM[target];
-    const startDims = new Set(starts.map((s) => DIM_BY_UOM[s]));
     if (td === "weight" || td === "volume") {
-      if (startDims.has("count")) return "EA";
-      if (td === "weight" && startDims.has("volume")) return "FLOZ";
-      if (td === "volume" && startDims.has("weight")) return "FLOZ"; // volume start absent; FLOZ falls through to cover + rejectReason will guide
+      if (bd === "count") return "EA";
+      if (td === "weight" && bd === "volume") return "FLOZ";
+      if (td === "volume" && bd === "weight") return "FLOZ";
       return "EA";
     }
-    // Count target - needs count start somewhere, or volume-to-weight
-    // + inverse. Prefill the first volume start the ingredient has;
-    // if none, EA (the user will edit).
-    for (const s of starts) {
-      if (DIM_BY_UOM[s] === "volume") return s;
-    }
+    // Count target - prefill the base when it is a volume uom, else EA.
+    if (bd === "volume" && baseCanonical) return baseCanonical;
     return "EA";
   }
 
@@ -122,6 +110,27 @@ export function PanelChipsRow({
                 <span key={u} className="kf-chip kf-chip--solid" aria-label={`Reaches ${u}`}>
                   {uomLabel(u)}
                 </span>
+              );
+            }
+            // T1 R2-3: for a count target on a weight / volume base
+            // the add row is an inverted bridge: "1 each = [blank]
+            // <base>". The chip's TARGET is EA but the measure writes
+            // from EA and reads to the ingredient's own unit. Passing
+            // baseCanonical to onAddForUom opens the existing add row
+            // correctly; the chip renders dashed, not dead.
+            const td = DIM_BY_UOM[u];
+            const bd = baseCanonical ? DIM_BY_UOM[baseCanonical] : undefined;
+            if (td === "count" && (bd === "weight" || bd === "volume") && baseCanonical) {
+              return (
+                <button
+                  key={u}
+                  type="button"
+                  className="kf-chip kf-chip--dashed"
+                  onClick={() => onAddForUom?.(baseCanonical)}
+                  aria-label={`Add a measure to reach ${u}`}
+                >
+                  {uomLabel(u)}: add a measure
+                </button>
               );
             }
             const from = prefillFromFor(u);
