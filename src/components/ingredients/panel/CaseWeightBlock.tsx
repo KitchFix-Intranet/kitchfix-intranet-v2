@@ -106,9 +106,19 @@ export function CaseWeightBlock({
     storedCw != null && Number.isFinite(storedCw)
       ? "This case uses its own weight."
       : "Leave empty to use the ingredient's measures.";
+  // T1 fix 3: the number on this line is always the same number as
+  // the panel header's per-lb price. priceInUnit is already called
+  // server-side and the result lands on item.perBaseInIngUnit, so
+  // read that directly. The old line multiplied packQty * packSize *
+  // perBase outside the library, which M2 R3 fix 7 ruled out, and
+  // had no DZ handling.
   const casePriceHint =
-    storedCw != null && Number.isFinite(storedCw) && item.perBase != null && n && n > 0
-      ? `${fmtUsd((item.perBase * (item.packQty ?? 1) * (item.packSize ?? 1)) / n)} / lb at ${n} lb`
+    storedCw != null &&
+    Number.isFinite(storedCw) &&
+    item.perBaseInIngUnit != null &&
+    Number.isFinite(item.perBaseInIngUnit) &&
+    item.perBaseInIngUnit > 0
+      ? `${fmtUsd(item.perBaseInIngUnit)} / lb at ${storedCw} lb`
       : null;
 
   return (
