@@ -9,15 +9,14 @@
 //
 // Lifted verbatim from DetailPanel.tsx in N7 commit 0.
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import { toast } from "@/components/ui/Toaster";
+import { useEffect, useRef, useState } from "react";
 import { fmtCount, fmtPackNumbersInText, fmtUsd } from "@/lib/fmt";
-import { convertPer, uomLabel } from "@/lib/ingredients/pack";
+import { uomLabel } from "@/lib/ingredients/pack";
 import { priceInUnit } from "@/lib/ingredients/measures";
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 import { SaveFlash } from "./SaveFlash";
-import { postJson, errMsg } from "./common";
+import { postJson } from "./common";
+import { useSaveWithRefresh } from "./useSaveWithRefresh";
 import {
   UOM_GROUPS,
   BILLED_UNIT_GROUPS,
@@ -29,6 +28,16 @@ import {
   parsePackNormalized,
   type PackHint,
 } from "./packHelpers";
+
+// T4 §3: both save branches read a `twins` count off the response body.
+// Bodies without a twins field read 0 which is the same answer the
+// pre-T4 inline code produced ("no matching items").
+function readTwins(d: unknown): number {
+  if (d == null || typeof d !== "object") return 0;
+  const rec = d as { twins?: unknown };
+  if (typeof rec.twins === "number" && Number.isFinite(rec.twins)) return rec.twins;
+  return 0;
+}
 
 // N8 §1f + DESIGN.md 11: plain phrase for every item.caseSource value.
 function caseSourcePhrase(src: string | null): string {
@@ -117,9 +126,11 @@ export function PackOverrideBlock({
   const [perLbStr, setPerLbStr] = useState<string>(initialPerLbStr);
   const [billedUnit, setBilledUnit] = useState<string>(initialBilledUnit);
   const [note, setNote] = useState<string>("");
-  const [busy, setBusy] = useState(false);
-  const [savedAt, setSavedAt] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // T4 §3: busy + savedAt + error from the shared hook. busy stays true
+  // through POST + refresh so the Save primary reads "Saving..." while
+  // the new number is still mid-flight; the success toast + release
+  // fire together.
+  const { save: runSave, busy, savedAt, error, clearError } = useSaveWithRefresh();
   const [lastTwins, setLastTwins] = useState<number | null>(null);
 
   // S4: case-price source. Three options now (catalog, billed, avg)
@@ -172,7 +183,7 @@ export function PackOverrideBlock({
     setBilledUnit(initialBilledUnit);
     setNote("");
     setCaseSrc(initialCaseSrc);
-    setError(null);
+    clearError();
     setLastTwins(null);
   }
   const dirty =
@@ -395,8 +406,6 @@ export function PackOverrideBlock({
 
   async function save() {
     if (busy || !readyToSave) return;
-    setBusy(true);
-    setError(null);
     setLastTwins(null);
 
     // S6: pack pristine + ONLY the case-price source moved -> write a
@@ -420,30 +429,27 @@ export function PackOverrideBlock({
       const userNote = note.trim();
       const auto = `Costed from ${srcLabel} case price ${fmtUsd(previewCasePrice.v)} instead of the default`;
       const reason = userNote ? `${auto}. ${userNote}` : auto;
-      const r = await postJson("/api/review/set-price-override", {
-        itemId: item.id,
-        perBase: perBaseInDim,
-        baseUom: b.base,
-        reason,
+      await runSave({
+        op: () =>
+          postJson("/api/review/set-price-override", {
+            itemId: item.id,
+            perBase: perBaseInDim,
+            baseUom: b.base,
+            reason,
+          }),
+        // T4 §3: success message closes over the server's twins count
+        // so the "applied to N matching items" wording stays. The
+        // response shape is the same the old inline save read; the
+        // narrow cast stays here, not inside the hook.
+        successMessage: (d) => {
+          const twins = readTwins(d);
+          setLastTwins(twins);
+          return twins > 0
+            ? `Saved: price override (applied to ${fmtCount(twins + 1)} matching items)`
+            : "Saved: price override";
+        },
+        onDone,
       });
-      if (!r.ok) {
-        const msg = errMsg(r.data, `Save failed (${r.status})`);
-        setError(msg);
-        toast(msg, { tone: "block" });
-        setBusy(false);
-        return;
-      }
-      const d = (r.data ?? {}) as { twins?: number };
-      const twins = d.twins ?? 0;
-      setLastTwins(twins);
-      toast(
-        twins > 0
-          ? `Saved: price override (applied to ${fmtCount(twins + 1)} matching items)`
-          : "Saved: price override"
-      );
-      setSavedAt(Date.now());
-      setBusy(false);
-      onDone();
       return;
     }
 
@@ -460,25 +466,17 @@ export function PackOverrideBlock({
       body.size = size;
       body.uom = uom;
     }
-    const r = await postJson("/api/review/set-pack-override", body);
-    if (!r.ok) {
-      const msg = errMsg(r.data, `Save failed (${r.status})`);
-      setError(msg);
-      toast(msg, { tone: "block" });
-      setBusy(false);
-      return;
-    }
-    const d = (r.data ?? {}) as { twins?: number; perBase?: number | null };
-    const twins = d.twins ?? 0;
-    setLastTwins(twins);
-    toast(
-      twins > 0
-        ? `Saved: pack override (applied to ${fmtCount(twins + 1)} matching items)`
-        : "Saved: pack override"
-    );
-    setSavedAt(Date.now());
-    setBusy(false);
-    onDone();
+    await runSave({
+      op: () => postJson("/api/review/set-pack-override", body),
+      successMessage: (d) => {
+        const twins = readTwins(d);
+        setLastTwins(twins);
+        return twins > 0
+          ? `Saved: pack override (applied to ${fmtCount(twins + 1)} matching items)`
+          : "Saved: pack override";
+      },
+      onDone,
+    });
   }
 
   // "Read as" row: dynamic label + body.

@@ -20,6 +20,8 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
+import { postJson } from "./common";
+import { useSaveWithRefresh } from "./useSaveWithRefresh";
 import {
   rejectReason,
   factor,
@@ -196,7 +198,9 @@ export function PanelMeasuresBlock({
   const [addToDim, setAddToDim] = useState<"weight" | "volume" | "count" | null>(null);
   const [addSource, setAddSource] = useState<MeasureSource>("estimate");
   const [addError, setAddError] = useState<string | null>(null);
-  const [saveBusy, setSaveBusy] = useState(false);
+  // T4 §3: Save bar stays busy through POST + refresh so the measures
+  // list reads the new row(s) before the chrome releases.
+  const { save: runSave, busy: saveBusy } = useSaveWithRefresh();
   const [dryRunSentence, setDryRunSentence] = useState<string | null>(null);
   const dryRunTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -355,29 +359,16 @@ export function PanelMeasuresBlock({
   }, [dirty, draft, ingredient.id, ingredient.name]);
 
   async function saveAll() {
-    setSaveBusy(true);
-    try {
-      const res = await fetch("/api/review/set-ingredient-measures", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
+    await runSave({
+      op: () =>
+        postJson("/api/review/set-ingredient-measures", {
           ingredientId: ingredient.id,
           measures: draft.map(toPersisted),
         }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-        toast(body.error ?? "Save failed");
-        return;
-      }
-      toast("Measures saved");
-      onDone();
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      toast(msg);
-    } finally {
-      setSaveBusy(false);
-    }
+      successMessage: "Measures saved",
+      errorFallback: "Save failed",
+      onDone,
+    });
   }
 
   const suggestions = useMemo(

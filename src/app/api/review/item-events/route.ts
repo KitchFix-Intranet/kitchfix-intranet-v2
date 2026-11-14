@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireOwnerApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
+import { startTimer, mark, endTimer } from "@/lib/timing";
 
 export const dynamic = "force-dynamic";
 
@@ -11,13 +12,16 @@ export const dynamic = "force-dynamic";
 // at least one is required. Server builds the two-sided OR query and
 // returns the rows merged + newest-first.
 export async function GET(req: NextRequest) {
+  const timer = startTimer("/api/review/item-events");
   const gate = await requireOwnerApi();
-  if (gate instanceof Response) return gate;
+  mark(timer, "gate");
+  if (gate instanceof Response) { endTimer(timer, { ok: false, stage: "gate" }); return gate; }
 
   const url = new URL(req.url);
   const ingredientId = url.searchParams.get("ingredientId");
   const itemId = url.searchParams.get("itemId");
   if (!ingredientId && !itemId) {
+    endTimer(timer, { ok: false, stage: "id" });
     return NextResponse.json({ error: "ingredientId or itemId required" }, { status: 400 });
   }
 
@@ -35,7 +39,9 @@ export async function GET(req: NextRequest) {
     .or(legs.join(","))
     .order("at", { ascending: false })
     .limit(20);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) { endTimer(timer, { ok: false, stage: "events" }); return NextResponse.json({ error: error.message }, { status: 500 }); }
+  mark(timer, "events");
+  endTimer(timer);
 
   return NextResponse.json({ events: data ?? [] });
 }

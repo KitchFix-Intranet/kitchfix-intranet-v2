@@ -56,6 +56,8 @@ export function DetailPanel({
   ingredient,
   items,
   parents,
+  parentOptions: parentOptionsProp,
+  onLoadParents,
   proposedName,
   proposedParent,
   onInvalidate,
@@ -67,6 +69,17 @@ export function DetailPanel({
   ingredient: ReviewCardIngredient | null;
   items: ReviewGroupItem[];
   parents: ReviewCardIngredient[];
+  // T4 §2a: distinct sub-category names. When the caller hands these
+  // in (Ingredients tab's ItemPanelById), the panel reads them
+  // directly and never computes from `parents` (which is empty on
+  // that path). Review queue path still passes the full ingredients
+  // list as `parents` and leaves this undefined; the memo below
+  // derives parentOptions the way it always has.
+  parentOptions?: string[];
+  // T4 §2a: lazy loader for the full active-ingredient list, used by
+  // the Merge row only. Undefined on the review queue path (where
+  // `parents` already carries the full list).
+  onLoadParents?: () => Promise<ReviewCardIngredient[]>;
   proposedName?: string | null;
   proposedParent?: string | null;
   // N7 B6: callers that fetch panel data themselves (ItemPanelById)
@@ -98,18 +111,29 @@ export function DetailPanel({
   const [measureOpen, setMeasureOpen] = useState<{ uom: string; qty: number | null; pickUnit: boolean; nonce: number } | null>(null);
   const [costedPerFocusNonce, setCostedPerFocusNonce] = useState(0);
 
+  // T4 §2a: when the caller passed parentOptions explicitly, use it;
+  // otherwise derive from `parents` the way we always have. Review
+  // queue callers still pass the full ingredients list as `parents`
+  // and leave parentOptions undefined.
   const parentOptions = useMemo(() => {
+    if (parentOptionsProp) return parentOptionsProp;
     const set = new Set<string>();
     for (const p of parents) {
       if (p.parent && p.parent.trim().length > 0) set.add(p.parent);
     }
     return Array.from(set).sort();
-  }, [parents]);
+  }, [parents, parentOptionsProp]);
 
   const item = open.kind === "item" ? items.find((i) => i.id === open.itemId) ?? null : null;
 
+  // T4 §3: the panel's descendants route their saves through
+  // useSaveWithRefresh, which fires router.refresh() inside a
+  // transition and keeps the control busy until the refresh has
+  // rendered. All onDone needs to do here is invalidate the wrapper
+  // fetch (ItemPanelById) when one is attached - the refresh itself
+  // is the hook's job. Leaving router.refresh() here would be a
+  // double refresh.
   const onDone = () => {
-    router.refresh();
     if (onInvalidate) onInvalidate();
   };
 
@@ -252,6 +276,7 @@ export function DetailPanel({
           item={item}
           ingredient={ingredient}
           parents={parents}
+          onLoadParents={onLoadParents}
           onDone={onDone}
         />
 

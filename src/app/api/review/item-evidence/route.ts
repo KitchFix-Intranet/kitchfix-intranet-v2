@@ -24,6 +24,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireOwnerApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
 import { COUNTABLE_OBSERVATIONS_VIEW, applyCountableFilter } from "@/lib/ingredients/countability";
+import { startTimer, mark, endTimer } from "@/lib/timing";
 
 export const dynamic = "force-dynamic";
 
@@ -40,12 +41,14 @@ type Obs = {
 };
 
 export async function GET(req: NextRequest) {
+  const timer = startTimer("/api/review/item-evidence");
   const gate = await requireOwnerApi();
-  if (gate instanceof Response) return gate;
+  mark(timer, "gate");
+  if (gate instanceof Response) { endTimer(timer, { ok: false, stage: "gate" }); return gate; }
 
   const id = req.nextUrl.searchParams.get("id");
-  if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
-  if (!UUID_RE.test(id)) return NextResponse.json({ error: "id must be a uuid" }, { status: 400 });
+  if (!id) { endTimer(timer, { ok: false, stage: "id" }); return NextResponse.json({ error: "id required" }, { status: 400 }); }
+  if (!UUID_RE.test(id)) { endTimer(timer, { ok: false, stage: "id" }); return NextResponse.json({ error: "id must be a uuid" }, { status: 400 }); }
 
   const client = serviceClient();
 
@@ -56,8 +59,9 @@ export async function GET(req: NextRequest) {
     .select("id,vendor_id,item_number_norm,ingredient_id,catch_weight")
     .eq("id", id)
     .maybeSingle();
-  if (itErr) return NextResponse.json({ error: itErr.message }, { status: 500 });
-  if (!itRow) return NextResponse.json({ error: "Item not found" }, { status: 404 });
+  if (itErr) { endTimer(timer, { ok: false, stage: "item" }); return NextResponse.json({ error: itErr.message }, { status: 500 }); }
+  if (!itRow) { endTimer(timer, { ok: false, stage: "item" }); return NextResponse.json({ error: "Item not found" }, { status: 404 }); }
+  mark(timer, "item");
 
   const it = itRow as {
     id: string;
@@ -85,7 +89,7 @@ export async function GET(req: NextRequest) {
         .order("invoice_date", { ascending: false, nullsFirst: false })
         .range(from, from + PAGE - 1);
       const { data, error } = await applyCountableFilter(q);
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      if (error) { endTimer(timer, { ok: false, stage: "observations" }); return NextResponse.json({ error: error.message }, { status: 500 }); }
       const rows = (data ?? []) as Obs[];
       observations.push(...rows);
       if (rows.length < PAGE) break;
@@ -150,7 +154,7 @@ export async function GET(req: NextRequest) {
       .neq("id", it.id)
       .order("usd_12m", { ascending: false, nullsFirst: false })
       .limit(50);
-    if (sibErr) return NextResponse.json({ error: sibErr.message }, { status: 500 });
+    if (sibErr) { endTimer(timer, { ok: false, stage: "siblings" }); return NextResponse.json({ error: sibErr.message }, { status: 500 }); }
 
     const sibRows = (sibRaw ?? []) as Array<{
       id: string;
@@ -208,7 +212,7 @@ export async function GET(req: NextRequest) {
       .eq("vendor_id", it.vendor_id)
       .eq("item_number_norm", it.item_number_norm)
       .neq("id", it.id);
-    if (twinErr) return NextResponse.json({ error: twinErr.message }, { status: 500 });
+    if (twinErr) { endTimer(timer, { ok: false, stage: "variants" }); return NextResponse.json({ error: twinErr.message }, { status: 500 }); }
     const byName = new Map<string, number>();
     for (const t of (twinRows ?? []) as Array<{ name: string; lines_12m: number | null }>) {
       const n = String(t.name ?? "").trim();
@@ -220,6 +224,8 @@ export async function GET(req: NextRequest) {
       .sort((a, b) => b.count - a.count);
   }
 
+  mark(timer, "enrich");
+  endTimer(timer);
   return NextResponse.json({
     catchWeight: it.catch_weight,
     invoiceLines,

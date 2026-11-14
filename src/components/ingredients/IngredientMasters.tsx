@@ -20,6 +20,7 @@
 
 import { serviceClient } from "@/lib/supabase/service";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
+import { startTimer, mark, endTimer } from "@/lib/timing";
 import { Tabs } from "./Tabs";
 import { IdentBand } from "@/components/ui/IdentBand";
 import {
@@ -185,6 +186,7 @@ import { isPriceManualOverride } from "./itemTypes";
 // DetailPanel's IngredientBlock + the existing /api/review/resale
 // cascade).
 export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" | "resale" } = {}) {
+  const timer = startTimer(mode === "resale" ? "page:retail" : "page:ingredients");
   const client = serviceClient();
 
   // Masters. Server-side split on `resale` - one list per tab; the
@@ -199,12 +201,14 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
     .order("name");
   if (ingErr) throw ingErr;
   const rawIngredients = (ingData ?? []) as Ingredient[];
+  mark(timer, "ingredients");
 
   // M1 R2 fix 1: detect the migration world once. In measures-world
   // the item SELECT below also carries case_weight_lb + pack_qty +
   // pack_size + pack_uom so the per-item eachMeasure shape can be
   // derived without a second query.
   const measuresWorld = await isMeasuresWorld(client);
+  mark(timer, "world");
 
   // Confirmed vendor items (paginated at 1000 - PostgREST db-max-rows cap).
   const LINKED_SELECT = measuresWorld
@@ -230,12 +234,14 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
     if (chunk.length < page) break;
     from += page;
   }
+  mark(timer, "items");
 
   // M1 R3 fix 1: paginated full-table read; no id filter so 506 active
   // ingredients in recipe mode do not land on a PostgREST URL.
   const measuresByIngredient = measuresWorld
     ? await readAllMeasures(client)
     : new Map<string, never>();
+  mark(timer, "measures");
   // M2 §4B part 2: no legacy-triple reshape. Nothing on screen reads
   // each_measure_*; the measures ride on the ingredient directly
   // through MasterRow.measures below.
@@ -667,6 +673,9 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
           { label: "Linked spend", value: fmtUsd(totalUsd), note: "12 months" },
           { label: "Needs attention", value: fmtCount(totalFlagged), note: "spread, unit or outlier" },
         ];
+
+  mark(timer, "shape");
+  endTimer(timer, { mode });
 
   return (
     <div className="kf-ing">
