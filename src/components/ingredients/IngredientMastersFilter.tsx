@@ -261,10 +261,27 @@ export function IngredientMastersFilter({
     return out;
   }, [rows, trimmed, superCat, onlyFlagged, onlyUnreviewed, onlyEmpty, sort]);
 
-  const selected = useMemo(
-    () => filtered.find((r) => r.id === selId) ?? filtered[0] ?? null,
-    [filtered, selId]
-  );
+  // T3 §2: selection stickiness. The detail pane keeps the ingredient
+  // the user is working on even when a save makes its row leave the
+  // active filter (e.g. "Needs attention" on, user fixes the issue,
+  // the row drops out of `filtered`). While selId is in `rows` but
+  // not in `filtered`, the list has no highlighted row and the
+  // detail pane holds the worked-on ingredient. The highlight
+  // reappears the moment the row rejoins `filtered` (or when the
+  // ingredient disappears from `rows` altogether, falling through to
+  // filtered[0] ?? null).
+  // Release events: picking another row (onSelectRow), changing
+  // search / category / a Show-only chip / sort - all of those flip
+  // selId to the new row (or clear it to realign with the filter).
+  const selected = useMemo(() => {
+    if (selId) {
+      const inFiltered = filtered.find((r) => r.id === selId);
+      if (inFiltered) return inFiltered;
+      const inRows = rows.find((r) => r.id === selId);
+      if (inRows) return inRows;
+    }
+    return filtered[0] ?? null;
+  }, [filtered, rows, selId]);
   const matchedUsd = useMemo(() => filtered.reduce((s, r) => s + r.usd12m, 0), [filtered]);
   const needsCount = useMemo(() => rows.filter((r) => r.issues.length > 0).length, [rows]);
   const unreviewedCount = useMemo(
@@ -276,12 +293,23 @@ export function IngredientMastersFilter({
   const anyFilterActive =
     trimmed.length > 0 || superCat !== "all" || onlyFlagged || onlyUnreviewed || onlyEmpty;
 
+  // T3 §2: release the sticky selection whenever a filter input
+  // changes. "The detail pane keeps the ingredient you are working
+  // on ... It lets go when you pick another row or change search,
+  // category, a Show only chip or sort." Clearing selId on these
+  // flips lets the selected useMemo fall through to the natural
+  // filtered[0] when the ingredient no longer fits.
+  function releaseSticky() {
+    setSelId(null);
+  }
+
   function clearAll() {
     setQuery("");
     setSuperCat("all");
     setOnlyFlagged(false);
     setOnlyUnreviewed(false);
     setOnlyEmpty(false);
+    releaseSticky();
     inputRef.current?.focus();
   }
 
@@ -360,6 +388,7 @@ export function IngredientMastersFilter({
             onChange={(e) => {
               const v = e.target.value;
               setQuery(v);
+              releaseSticky();
             }}
             placeholder={
               mode === "resale"
@@ -372,7 +401,7 @@ export function IngredientMastersFilter({
             <button
               type="button"
               className="kf-ingp__search-clear"
-              onClick={() => { setQuery(""); inputRef.current?.focus(); }}
+              onClick={() => { setQuery(""); releaseSticky(); inputRef.current?.focus(); }}
               aria-label="Clear search"
             >
               <X size={16} strokeWidth={1.75} />
@@ -388,7 +417,7 @@ export function IngredientMastersFilter({
               role="radio"
               aria-checked={superCat === "all"}
               className={`kf-chip${superCat === "all" ? " kf-chip--on" : ""}`}
-              onClick={() => setSuperCat("all")}
+              onClick={() => { setSuperCat("all"); releaseSticky(); }}
             >
               All <span>{fmtCount(rows.length)}</span>
             </button>
@@ -402,7 +431,7 @@ export function IngredientMastersFilter({
                   role="radio"
                   aria-checked={superCat === cat}
                   className={`kf-chip${superCat === cat ? " kf-chip--on" : ""}`}
-                  onClick={() => setSuperCat(cat)}
+                  onClick={() => { setSuperCat(cat); releaseSticky(); }}
                 >
                   {cat} <span>{fmtCount(n)}</span>
                 </button>
@@ -416,7 +445,7 @@ export function IngredientMastersFilter({
               type="button"
               aria-pressed={onlyFlagged}
               className={`kf-chip kf-chip--warn${onlyFlagged ? " kf-chip--on" : ""}`}
-              onClick={() => setOnlyFlagged((v) => !v)}
+              onClick={() => { setOnlyFlagged((v) => !v); releaseSticky(); }}
               title="Ingredients with a spread, coverage, unit or outlier issue"
             >
               Needs attention <span>{fmtCount(needsCount)}</span>
@@ -425,7 +454,7 @@ export function IngredientMastersFilter({
               type="button"
               aria-pressed={onlyUnreviewed}
               className={`kf-chip${onlyUnreviewed ? " kf-chip--on" : ""}`}
-              onClick={() => setOnlyUnreviewed((v) => !v)}
+              onClick={() => { setOnlyUnreviewed((v) => !v); releaseSticky(); }}
               title="Ingredients whose Top 9 allergens have not been reviewed"
             >
               Allergens to check <span>{fmtCount(unreviewedCount)}</span>
@@ -434,7 +463,7 @@ export function IngredientMastersFilter({
               type="button"
               aria-pressed={onlyEmpty}
               className={`kf-chip${onlyEmpty ? " kf-chip--on" : ""}`}
-              onClick={() => setOnlyEmpty((v) => !v)}
+              onClick={() => { setOnlyEmpty((v) => !v); releaseSticky(); }}
               title="Ingredients with no live vendor items (candidates to retire)"
             >
               No items <span>{fmtCount(emptyCount)}</span>
@@ -479,6 +508,7 @@ export function IngredientMastersFilter({
               onChange={(e) => {
                 const v = e.target.value as SortMode;
                 setSort(v);
+                releaseSticky();
               }}
               aria-label="Sort order"
             >
@@ -1244,6 +1274,20 @@ function LinkedItems({
                 </button>
                 <span className="kf-ingp__item-sub">
                   {li.vendor}
+                  {/* T3 §4: every row left out of the blend names why
+                      on the same sub-line, in the same style. Before
+                      this fix only needs_measure and outlier rows got
+                      a reason - sizes_differ rows read "0 of 6 priced
+                      - / each" above six rows showing prices with no
+                      explanation. */}
+                  {li.statusKind === "sizes_differ" ? (
+                    <>
+                      {" · "}
+                      <span className="kf-ingp__item-sub-warn">
+                        left out - pack sizes differ
+                      </span>
+                    </>
+                  ) : null}
                   {li.statusKind === "needs_measure" ? (
                     <>
                       {" · "}

@@ -20,7 +20,10 @@ export async function POST(req: NextRequest) {
     const client = serviceClient();
     const result = await renameIngredient(client, { ingredientId, newName, actorEmail: gate.email });
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
-    return NextResponse.json({ ok: true, aliasWritten: result.aliasWritten });
+    // T3 §7: `changed` tells the client whether anything was saved.
+    // false = identical name after trim - client toasts "No change".
+    // true = casing-only or full rename - client toasts Saved.
+    return NextResponse.json({ ok: true, aliasWritten: result.aliasWritten, changed: result.changed });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ error: msg }, { status: 500 });

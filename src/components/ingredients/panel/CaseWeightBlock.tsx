@@ -8,7 +8,7 @@
 //
 // Writes through /api/review/set-case-weight.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtUsd } from "@/lib/fmt";
 import { DIM_BY_UOM } from "@/lib/ingredients/pack";
@@ -25,7 +25,20 @@ export function CaseWeightBlock({
   forceOpen?: boolean;
   onDone: () => void;
 }) {
-  const storedCw = item.caseWeightLb ?? null;
+  // T3 §3b: after clear(), the API write lands and onDone triggers
+  // a panel refetch (ItemPanelById bumps its nonce and GETs
+  // /api/review/item). The fetch takes a round-trip to complete.
+  // In the race window item.caseWeightLb is still the pre-clear
+  // value because ItemPanelById deliberately keeps its state.data
+  // visible during the refetch (no "Loading..." flash). `localCw`
+  // is the optimistic view: it mirrors the stored value at rest,
+  // and is set to null the moment clear() succeeds so the Clear
+  // button and hint flip immediately. The useEffect snaps localCw
+  // back to the server value once the refetch resolves.
+  const serverCw = item.caseWeightLb ?? null;
+  const [localCw, setLocalCw] = useState<number | null>(serverCw);
+  useEffect(() => { setLocalCw(serverCw); }, [serverCw]);
+  const storedCw = localCw;
   const [open, setOpen] = useState<boolean>(forceOpen || storedCw != null);
   const [val, setVal] = useState<string>(storedCw != null ? String(storedCw) : "");
   const [busy, setBusy] = useState(false);
@@ -71,6 +84,10 @@ export function CaseWeightBlock({
         toast(data.error ?? "Save failed");
         return;
       }
+      // T3 §3b: optimistically reflect the saved value so the hint
+      // and Clear-button visibility flip without waiting for the
+      // refetch.
+      if (n != null) setLocalCw(n);
       toast("Case weight saved");
       onDone();
     } catch (e) {
@@ -93,6 +110,11 @@ export function CaseWeightBlock({
         return;
       }
       setVal("");
+      // T3 §3b: flip the block's local view to "no case weight"
+      // immediately so the hint reads "Leave empty to use the
+      // ingredient's measures." and the Clear button disappears
+      // before the refetch resolves.
+      setLocalCw(null);
       toast("Case weight cleared");
       onDone();
     } catch (e) {

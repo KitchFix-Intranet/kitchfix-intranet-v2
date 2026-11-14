@@ -32,20 +32,33 @@ function DisclosureRow({
   label,
   sub,
   initialOpen = false,
+  onOpenChange,
   children,
 }: {
   label: string;
   sub: string;
   initialOpen?: boolean;
+  // T3 §1: Merge needs the parent (PanelClosedRows) to know when the
+  // row expands, so the parents fetch fires on first expand and
+  // doesn't re-run on every re-open (MergeRow unmounts between
+  // opens and can't cache state itself).
+  onOpenChange?: (open: boolean) => void;
   children: (open: boolean) => React.ReactNode;
 }) {
   const [open, setOpen] = useState(initialOpen);
+  function toggle() {
+    setOpen((v) => {
+      const next = !v;
+      if (onOpenChange) onOpenChange(next);
+      return next;
+    });
+  }
   return (
     <>
       <button
         type="button"
         className="kf-ipanel__drow"
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggle}
         aria-expanded={open}
       >
         <span className="kf-ipanel__drow-label">{label}</span>
@@ -159,47 +172,28 @@ function RetailRow({
 
 // --- Merge -----------------------------------------------------------
 
+// T3 §1: MergeRow is rendered inside a DisclosureRow whose body
+// unmounts on close and remounts on re-open. Any fetch state kept
+// here is lost between opens, which would mean a fresh GET every
+// expand. The fetch now lives above the disclosure (see
+// PanelClosedRows) and MergeRow reads the parents + load state as
+// props - that way "the list is fetched once per panel, not on
+// every open".
 function MergeRow({
   ingredient,
-  parents: parentsProp,
-  onLoadParents,
+  parents,
+  loadState,
+  loadError,
   onDone,
 }: {
   ingredient: ReviewCardIngredient;
   parents: ReviewCardIngredient[];
-  // N12 §R2: when parents wasn't fetched up front (ingredients tab:
-  // avoiding a fetch on selection), MergeRow runs this on first open
-  // and shows loading / error states inline. Reuses the strings the
-  // retired IngredientPanelById used.
-  onLoadParents?: () => Promise<ReviewCardIngredient[]>;
+  loadState: "idle" | "loading" | "ready" | "error";
+  loadError: string | null;
   onDone: () => void;
 }) {
   const [target, setTarget] = useState<string>("");
   const [busy, setBusy] = useState(false);
-  const [parents, setParents] = useState<ReviewCardIngredient[]>(parentsProp);
-  const [loadState, setLoadState] = useState<"idle" | "loading" | "ready" | "error">(
-    parentsProp.length > 0 ? "ready" : onLoadParents ? "idle" : "ready"
-  );
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (loadState !== "idle" || !onLoadParents) return;
-    let cancelled = false;
-    setLoadState("loading");
-    (async () => {
-      try {
-        const ps = await onLoadParents();
-        if (cancelled) return;
-        setParents(ps);
-        setLoadState("ready");
-      } catch (e) {
-        if (cancelled) return;
-        setLoadError(e instanceof Error ? e.message : String(e));
-        setLoadState("error");
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [loadState, onLoadParents]);
 
   const choices = useMemo(
     () => parents.filter((p) => p.id !== ingredient.id),
@@ -289,7 +283,7 @@ function MergeRow({
 export function PanelClosedRows({
   item,
   ingredient,
-  parents,
+  parents: parentsProp,
   onLoadParents,
   sendAllBack,
   onDone,
@@ -298,7 +292,7 @@ export function PanelClosedRows({
   ingredient: ReviewCardIngredient | null;
   parents: ReviewCardIngredient[];
   // N12 §R2: optional lazy fetcher for Merge candidates; fires once
-  // on first expand of the Merge row.
+  // per panel, not on every open of the Merge row.
   onLoadParents?: () => Promise<ReviewCardIngredient[]>;
   // N12 §2c.6: when present, "Send all back" renders between Merge
   // (or Evidence) and Change history.
@@ -307,6 +301,75 @@ export function PanelClosedRows({
 }) {
   // N8 §1i: closed-row sub copy comes from the render.
   const ingredientName = ingredient?.name ?? "this ingredient";
+
+  // T3 §1: parents fetch state lives here (above DisclosureRow) so
+  // the fetch fires once per panel, not once per expand. MergeRow
+  // unmounts when its disclosure collapses; keeping the state inside
+  // MergeRow would re-fetch on every re-open. The effect runs when
+  // the Merge disclosure first opens (`mergeOpen` flips true) or when
+  // the ingredient changes. parentsProp wins when it was passed in
+  // (drawer path on the review queue).
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const [parents, setParents] = useState<ReviewCardIngredient[]>(parentsProp);
+  const [loadState, setLoadState] = useState<"idle" | "loading" | "ready" | "error">(
+    parentsProp.length > 0 ? "ready" : onLoadParents ? "idle" : "ready"
+  );
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  // Sync parents from prop if the caller ever supplies a non-empty
+  // list (drawer path). The Ingredients-tab path leaves this empty
+  // and relies on onLoadParents below.
+  useEffect(() => {
+    if (parentsProp.length > 0) {
+      setParents(parentsProp);
+      setLoadState("ready");
+    }
+  }, [parentsProp]);
+
+  // Reset the cache when the ingredient under the panel changes, so
+  // switching to another ingredient's Merge row fetches that one's
+  // parents instead of showing the prior cache. The initial state
+  // when parentsProp is empty + onLoadParents is set is "idle"; the
+  // fetch below fires on the first Merge expand.
+  useEffect(() => {
+    if (parentsProp.length === 0 && onLoadParents) {
+      setLoadState("idle");
+      setParents([]);
+      setLoadError(null);
+      // Collapsing the row on ingredient change would surprise the
+      // user mid-task; leave mergeOpen alone. If they re-open, the
+      // fetch below picks up the fresh ingredient id via its
+      // callback identity.
+    }
+  }, [ingredient?.id, parentsProp.length, onLoadParents]);
+
+  useEffect(() => {
+    if (!mergeOpen) return;
+    if (loadState !== "idle") return;
+    if (!onLoadParents) return;
+    let cancelled = false;
+    setLoadState("loading");
+    (async () => {
+      try {
+        const ps = await onLoadParents();
+        if (cancelled) return;
+        setParents(ps);
+        setLoadState("ready");
+      } catch (e) {
+        if (cancelled) return;
+        setLoadError(e instanceof Error ? e.message : String(e));
+        setLoadState("error");
+      }
+    })();
+    return () => { cancelled = true; };
+    // `loadState` is read inside the effect but the writes happen
+    // through the state setters; the only trigger for a re-run is
+    // the row opening or a fresh fetcher. Tracked via mergeOpen +
+    // onLoadParents; loadState is intentionally excluded to prevent
+    // the re-run / cleanup / cancel race the original code had.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mergeOpen, onLoadParents]);
+
   return (
     <div className="kf-ipanel__drows">
       {ingredient ? (
@@ -316,12 +379,17 @@ export function PanelClosedRows({
       ) : null}
 
       {ingredient ? (
-        <DisclosureRow label="Merge" sub={`Fold ${ingredientName} into another ingredient`}>
+        <DisclosureRow
+          label="Merge"
+          sub={`Fold ${ingredientName} into another ingredient`}
+          onOpenChange={setMergeOpen}
+        >
           {() => (
             <MergeRow
               ingredient={ingredient}
               parents={parents}
-              onLoadParents={onLoadParents}
+              loadState={loadState}
+              loadError={loadError}
               onDone={onDone}
             />
           )}
