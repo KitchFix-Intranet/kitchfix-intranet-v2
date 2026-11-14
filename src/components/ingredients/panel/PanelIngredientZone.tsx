@@ -449,7 +449,7 @@ export function PanelIngredientZone({
         ingredient={ingredient}
         measures={measuresForBlock as Array<{ from_unit: string; qty: number; to_unit: string; source: "house_test" | "book" | "vendor_spec" | "estimate" | "pack" }>}
         itemUnits={Array.from(new Set(suggestionCandidates.map((c) => (c.packUom ?? "").toUpperCase()).filter(Boolean)))}
-        onAddForUom={(u) => { setAddForUom(u); setAddPrefillQty(null); setAddPickUnit(false); }}
+        onAddForUom={(u, pu) => { setAddForUom(u); setAddPrefillQty(null); setAddPickUnit(pu === true); }}
       />
 
       {/* Row 5: Allergens ---------------------------------------- */}

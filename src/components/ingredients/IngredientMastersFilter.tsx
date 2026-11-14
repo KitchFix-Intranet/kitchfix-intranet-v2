@@ -261,59 +261,59 @@ export function IngredientMastersFilter({
     return out;
   }, [rows, trimmed, superCat, onlyFlagged, onlyUnreviewed, onlyEmpty, sort]);
 
-  // T3 R2-2: selection stickiness, now in two states.
-  //   selId  - the user's last click. Stays across filter changes.
-  //   holdId - a save-driven hold: set when the ingredient under the
-  //            pane just left the active filter because rows changed.
-  //            Cleared on any filter / sort change (user intent to
-  //            realign) and on a new row pick.
+  // T3 R3-1: selection decided during render, no useEffect in the
+  // loop. Round 2's two-state model set the hold in a useEffect,
+  // which meant the render that first received the new rows had
+  // already painted `filtered[0]` before the effect ran - causing
+  // a "Salmon -> Beef -> Salmon" flicker, scrolling the pane back
+  // to the top and collapsing any open Merge / measures / history
+  // row on every save. R2 also only held when `selId` was set, so
+  // the default first row (never clicked) was not held at all.
   //
-  // Round 1 kept a single `selId` + an inside-useMemo fallback, which
-  // meant releaseSticky had to null selId on filter changes. That
-  // nulled selId even when the selected still matched the new filter
-  // (Chat-Claude: "select Bacon, sliced, click Proteins - the detail
-  // jumps to Beef flank steak. On 96813c8 Bacon stays, because it
-  // still matches."). The two-state model keeps selId across filter
-  // changes; holdId carries the "the save made me leave filter"
-  // signal and is cleared the next time the user touches a filter.
-  const [holdId, setHoldId] = useState<string | null>(null);
+  // Architecture:
+  //   - selId: the user's last click. Stays across filter changes.
+  //   - lastShownRef: a ref storing "what we rendered last, under
+  //     which filter key". Written during render after `selected` is
+  //     computed. Writing a ref during render is allowed for this
+  //     "track previous render" pattern; see React docs on ref
+  //     cheatsheet. Idempotent within a render, so StrictMode's
+  //     double invoke is safe.
+  //
+  // Decision tree:
+  //   1. If the user has clicked a row and that row is in `filtered`,
+  //      show it. The click is the clearest signal.
+  //   2. Else look at lastShownRef:
+  //      a. filter key unchanged (rows changed = save): if last-shown
+  //         is still in `rows`, show it. Covers scenario 1 (clicked
+  //         then save-outside-filter) AND scenario 2 (default row
+  //         then save-outside-filter).
+  //      b. filter key changed (user reconfigured): show last-shown
+  //         only when it still matches the new filter; else fall
+  //         through to filtered[0]. Covers scenarios 3 + 4.
+  //   3. Fallback: filtered[0].
   const filterKey = `${trimmed}|${superCat}|${onlyFlagged ? 1 : 0}|${onlyUnreviewed ? 1 : 0}|${onlyEmpty ? 1 : 0}|${sort}`;
-  const prevFilterKeyRef = useRef(filterKey);
-  const prevRowsRef = useRef(rows);
-  useEffect(() => {
-    if (prevFilterKeyRef.current !== filterKey) {
-      // Filter or sort changed. The user is reconfiguring the list;
-      // release the hold. selId stays.
-      prevFilterKeyRef.current = filterKey;
-      if (holdId != null) setHoldId(null);
-      prevRowsRef.current = rows;
-      return;
-    }
-    if (prevRowsRef.current !== rows) {
-      // Rows changed (router.refresh after a save). If the selected
-      // row just left the active filter but still exists, hold it so
-      // the pane does not snap to filtered[0].
-      prevRowsRef.current = rows;
-      if (selId) {
-        const stillInFiltered = filtered.some((r) => r.id === selId);
-        const stillInRows = rows.some((r) => r.id === selId);
-        if (!stillInFiltered && stillInRows) {
-          setHoldId(selId);
-        }
-      }
-    }
-  }, [filterKey, rows, filtered, selId, holdId]);
-  const selected = useMemo(() => {
+  const lastShownRef = useRef<{ filterKey: string; id: string | null }>({
+    filterKey: "",
+    id: null,
+  });
+  const selected: MasterRow | null = (() => {
     if (selId) {
       const inFiltered = filtered.find((r) => r.id === selId);
       if (inFiltered) return inFiltered;
-      if (holdId === selId) {
-        const inRows = rows.find((r) => r.id === selId);
+    }
+    const prev = lastShownRef.current;
+    if (prev.id) {
+      if (prev.filterKey === filterKey) {
+        const inRows = rows.find((r) => r.id === prev.id);
         if (inRows) return inRows;
+      } else {
+        const inFiltered = filtered.find((r) => r.id === prev.id);
+        if (inFiltered) return inFiltered;
       }
     }
     return filtered[0] ?? null;
-  }, [filtered, rows, selId, holdId]);
+  })();
+  lastShownRef.current = { filterKey, id: selected?.id ?? null };
   const matchedUsd = useMemo(() => filtered.reduce((s, r) => s + r.usd12m, 0), [filtered]);
   const needsCount = useMemo(() => rows.filter((r) => r.issues.length > 0).length, [rows]);
   const unreviewedCount = useMemo(

@@ -206,13 +206,23 @@ export function PanelMeasuresBlock({
   // true the to-unit stays blank and the toOptions filter to the
   // target's dim - the needs_measure path. Otherwise (sizes_differ or
   // chip click) the to-unit is set to the target.
+  //
+  // T3 R3 T1 follow-up: the `each: add a measure` chip on a weight
+  // or volume ingredient fires `onAddForUom("", true)` - pickUnit
+  // with an empty target. That opens the add row BLANK with no dim
+  // filter, exactly as the local "+ Add a measure" button opens it.
+  // Runs the effect even with an empty uom because the pickUnit
+  // signal is still live.
   useEffect(() => {
-    if (!openAddForUom) return;
-    const tu = openAddForUom.toUpperCase();
+    if (!openAddForUom && !openAddPickUnit) return;
+    const tu = (openAddForUom ?? "").toUpperCase();
     const tDim = DIM_BY_UOM[tu] ?? null;
     setAddingFrom("EA");
     if (openAddPickUnit) {
       setAddUom("");
+      // tDim is null when the chip passed an empty target; no filter.
+      // Non-null (needs_measure path) keeps the filter by the target's
+      // dim as before.
       setAddToDim(tDim);
     } else {
       setAddUom(tu);
