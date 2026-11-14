@@ -112,6 +112,27 @@ export function PanelChipsRow({
                 </span>
               );
             }
+            // T1 R2-3: for a count target on a weight / volume base
+            // the add row is an inverted bridge: "1 each = [blank]
+            // <base>". The chip's TARGET is EA but the measure writes
+            // from EA and reads to the ingredient's own unit. Passing
+            // baseCanonical to onAddForUom opens the existing add row
+            // correctly; the chip renders dashed, not dead.
+            const td = DIM_BY_UOM[u];
+            const bd = baseCanonical ? DIM_BY_UOM[baseCanonical] : undefined;
+            if (td === "count" && (bd === "weight" || bd === "volume") && baseCanonical) {
+              return (
+                <button
+                  key={u}
+                  type="button"
+                  className="kf-chip kf-chip--dashed"
+                  onClick={() => onAddForUom?.(baseCanonical)}
+                  aria-label={`Add a measure to reach ${u}`}
+                >
+                  {uomLabel(u)}: add a measure
+                </button>
+              );
+            }
             const from = prefillFromFor(u);
             // Never prefill EA to EA (same-dim, not a measure).
             if (from === u) {

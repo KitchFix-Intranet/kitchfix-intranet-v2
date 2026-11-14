@@ -12,6 +12,7 @@ import { useState } from "react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtUsd } from "@/lib/fmt";
 import { DIM_BY_UOM } from "@/lib/ingredients/pack";
+import { priceInUnit } from "@/lib/ingredients/measures";
 import type { ReviewGroupItem } from "../itemTypes";
 
 export function CaseWeightBlock({
@@ -106,20 +107,37 @@ export function CaseWeightBlock({
     storedCw != null && Number.isFinite(storedCw)
       ? "This case uses its own weight."
       : "Leave empty to use the ingredient's measures.";
-  // T1 fix 3: the number on this line is always the same number as
-  // the panel header's per-lb price. priceInUnit is already called
-  // server-side and the result lands on item.perBaseInIngUnit, so
-  // read that directly. The old line multiplied packQty * packSize *
-  // perBase outside the library, which M2 R3 fix 7 ruled out, and
-  // had no DZ handling.
-  const casePriceHint =
-    storedCw != null &&
-    Number.isFinite(storedCw) &&
-    item.perBaseInIngUnit != null &&
-    Number.isFinite(item.perBaseInIngUnit) &&
-    item.perBaseInIngUnit > 0
-      ? `${fmtUsd(item.perBaseInIngUnit)} / lb at ${storedCw} lb`
-      : null;
+  // T1 R2-2: ask the library for the per-lb number through the case
+  // weight the block is currently showing. priceInUnit returns the
+  // whole-case-weighs-X route when the case weight supplies the
+  // weight total; we print only when that route fires + viaCaseWeight
+  // is true. Fixes two ways the old line was wrong on 1b9ffe6:
+  //   1. item.perBaseInIngUnit is in the ingredient's unit, not lb.
+  //      For each-costed ingredients (Egg rolls, Tomatoes round) it
+  //      printed the per-each price beside a hard-coded "/ lb".
+  //   2. Any ingredient with no measures routed to kind="fallback",
+  //      which ignores case weight; the line had no business firing.
+  const liveCwHint: string | null = (() => {
+    const cw = storedCw;
+    if (cw == null || !Number.isFinite(cw) || cw <= 0) return null;
+    if (item.perBase == null || item.perBaseUom == null) return null;
+    const r = priceInUnit(
+      {
+        perBase: item.perBase,
+        baseUom: item.perBaseUom,
+        packQty: item.packQty,
+        packSize: item.packSize,
+        packUom: item.packUom,
+        caseWeightLb: cw,
+      },
+      "LB",
+      { measures: [] },
+    );
+    if (r == null) return null;
+    if (r.route.kind !== "stated" || !r.route.viaCaseWeight) return null;
+    return `${fmtUsd(r.per)} / lb at ${cw} lb`;
+  })();
+  const casePriceHint = liveCwHint;
 
   return (
     <div className="kf-ipanel__row kf-ipanel__row--case-weight">
