@@ -6,7 +6,7 @@
 // pr_v_overview_totals.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { categoryForParent, inferBaseUnit, type SuperCategory } from "@/lib/ingredients/categories";
+import { CATEGORY_BY_PARENT, categoryForParent, inferBaseUnit, type SuperCategory } from "@/lib/ingredients/categories";
 import { canonicalIngredientName } from "@/lib/ingredients/nameNorm";
 import { estimateFromOverride } from "@/lib/ingredients/estimate";
 import {
@@ -208,26 +208,42 @@ export async function confirmItems(
 export async function markNotFood(
   client: SupabaseClient,
   args: { itemIds: string[]; actorEmail: string }
-): Promise<{ marked: number; errors: string[] }> {
+): Promise<{ marked: number; skipped: number; errors: string[] }> {
   const { itemIds, actorEmail } = args;
   const errors: string[] = [];
   let marked = 0;
+  let skipped = 0;
   for (const id of itemIds) {
     // Set link_reason to 'notfood:' and link_status='rejected' so the
     // matcher skips (link_status != 'none') AND the item visibly drops
     // out of the proposed queue. We do NOT flip is_food - that's intake's
     // call, and a human disagreement with the AI shouldn't retro-rewrite
     // the intake classification.
-    const { error } = await client
+    //
+    // T3 §8: the `.in("link_status", [...])` guard means the UPDATE
+    // matches zero rows when the item already sits outside that set
+    // (already rejected, already confirmed, etc). Before this fix we
+    // still bumped `marked` and inserted a pr_events row for
+    // nothing - the toast said success, the ledger grew by one, the
+    // DB never changed. .select("id") on the update returns the rows
+    // that actually matched; we count those, and only write history
+    // when the write is real.
+    const { data, error } = await client
       .from("pr_vendor_items")
       .update({
         link_status: "rejected",
         link_reason: `notfood:${actorEmail}`,
       })
       .eq("id", id)
-      .in("link_status", ["proposed", "none"]);
+      .in("link_status", ["proposed", "none"])
+      .select("id");
     if (error) {
       errors.push(`${id}: ${error.message}`);
+      continue;
+    }
+    const changedRows = data?.length ?? 0;
+    if (changedRows === 0) {
+      skipped += 1;
       continue;
     }
     marked += 1;
@@ -238,7 +254,7 @@ export async function markNotFood(
       actor: actorEmail,
     });
   }
-  return { marked, errors };
+  return { marked, skipped, errors };
 }
 
 // Q2 §2: One-off purchase disposition. Real food bought once that
@@ -256,12 +272,16 @@ export async function markNotFood(
 export async function markOneOff(
   client: SupabaseClient,
   args: { itemIds: string[]; actorEmail: string }
-): Promise<{ marked: number; errors: string[] }> {
+): Promise<{ marked: number; skipped: number; errors: string[] }> {
   const { itemIds, actorEmail } = args;
   const errors: string[] = [];
   let marked = 0;
+  let skipped = 0;
   for (const id of itemIds) {
-    const { error } = await client
+    // T3 §8: see markNotFood for the shape rationale. The guard
+    // (.in link_status) means already-decided rows match zero; we
+    // count those as skipped and emit no history row.
+    const { data, error } = await client
       .from("pr_vendor_items")
       .update({
         status: "archived",
@@ -269,9 +289,15 @@ export async function markOneOff(
         link_reason: `oneoff:${actorEmail}`,
       })
       .eq("id", id)
-      .in("link_status", ["proposed", "none"]);
+      .in("link_status", ["proposed", "none"])
+      .select("id");
     if (error) {
       errors.push(`${id}: ${error.message}`);
+      continue;
+    }
+    const changedRows = data?.length ?? 0;
+    if (changedRows === 0) {
+      skipped += 1;
       continue;
     }
     marked += 1;
@@ -282,7 +308,7 @@ export async function markOneOff(
       actor: actorEmail,
     });
   }
-  return { marked, errors };
+  return { marked, skipped, errors };
 }
 
 // Retail disposition. Retail = sold as-is to players (bottled water,
@@ -479,19 +505,24 @@ export async function setFlag(
 export async function markArchived(
   client: SupabaseClient,
   args: { itemIds: string[]; actorEmail: string }
-): Promise<{ marked: number; usd: number; errors: string[] }> {
+): Promise<{ marked: number; skipped: number; usd: number; errors: string[] }> {
   const { itemIds, actorEmail } = args;
   const errors: string[] = [];
-  if (itemIds.length === 0) return { marked: 0, usd: 0, errors };
+  if (itemIds.length === 0) return { marked: 0, skipped: 0, usd: 0, errors };
 
   const rows = await readItems(client, itemIds);
   const eligible = rows.filter((r) => r.link_status === "proposed" || r.link_status === "none");
-  const eligibleIds = eligible.map((r) => r.id);
-  const totalUsd = eligible.reduce((s, r) => s + Number(r.usd_12m ?? 0), 0);
-
+  // T3 §8: count only rows the UPDATE actually changed. The prior
+  // code counted every row in `eligible` even when a race moved the
+  // row out of the guard between readItems and the UPDATE, and it
+  // inserted a history row for the no-op write too. .select("id")
+  // on the update returns the real match set; we bump marked on
+  // that and skip the event when nothing landed.
   let marked = 0;
+  let skipped = itemIds.length - eligible.length; // already-decided at read time
+  const changedIds: string[] = [];
   for (const r of eligible) {
-    const { error } = await client
+    const { data, error } = await client
       .from("pr_vendor_items")
       .update({
         status: "archived",
@@ -499,51 +530,74 @@ export async function markArchived(
         link_reason: `archived:${actorEmail}`,
       })
       .eq("id", r.id)
-      .in("link_status", ["proposed", "none"]);
+      .in("link_status", ["proposed", "none"])
+      .select("id");
     if (error) {
       errors.push(`${r.id}: ${error.message}`);
       continue;
     }
+    const changedRows = data?.length ?? 0;
+    if (changedRows === 0) {
+      skipped += 1;
+      continue;
+    }
     marked += 1;
+    changedIds.push(r.id);
+  }
+  // Aggregate the usd + event payload over rows that actually changed.
+  const changedUsd = rows
+    .filter((r) => changedIds.includes(r.id))
+    .reduce((s, r) => s + Number(r.usd_12m ?? 0), 0);
+  for (const id of changedIds) {
     await client.from("pr_events").insert({
       entity_type: "vendor_item",
-      entity_id: r.id,
+      entity_id: id,
       kind: "review_archive",
       after: {
-        item_ids: eligibleIds,
-        count: eligibleIds.length,
-        usd: Math.round(totalUsd),
+        item_ids: changedIds,
+        count: changedIds.length,
+        usd: Math.round(changedUsd),
       },
       actor: actorEmail,
     });
   }
-  return { marked, usd: Math.round(totalUsd), errors };
+  return { marked, skipped, usd: Math.round(changedUsd), errors };
 }
 
 export async function keepSeparate(
   client: SupabaseClient,
   args: { itemIds: string[]; actorEmail: string }
-): Promise<{ marked: number; errors: string[] }> {
+): Promise<{ marked: number; skipped: number; errors: string[] }> {
   const { itemIds, actorEmail } = args;
   const errors: string[] = [];
   let marked = 0;
+  let skipped = 0;
   // "Keep separate" = don't propose this item into the current group ever
   // again. We write link_status='rejected' + link_reason='keep_separate'
   // so the matcher (which only reads link_status='none') never looks at
   // it. The item appears on vendor-items with a Rejected pill. If Kevin
   // later wants to re-propose it (to a different ingredient), there is a
   // Relink path on the vendor-item drawer that resets link_status.
+  //
+  // T3 §8: count only rows the UPDATE actually changed; skip history
+  // for no-ops. See markNotFood for the reasoning.
   for (const id of itemIds) {
-    const { error } = await client
+    const { data, error } = await client
       .from("pr_vendor_items")
       .update({
         link_status: "rejected",
         link_reason: `keep_separate:${actorEmail}`,
       })
       .eq("id", id)
-      .in("link_status", ["proposed", "none"]);
+      .in("link_status", ["proposed", "none"])
+      .select("id");
     if (error) {
       errors.push(`${id}: ${error.message}`);
+      continue;
+    }
+    const changedRows = data?.length ?? 0;
+    if (changedRows === 0) {
+      skipped += 1;
       continue;
     }
     marked += 1;
@@ -554,16 +608,17 @@ export async function keepSeparate(
       actor: actorEmail,
     });
   }
-  return { marked, errors };
+  return { marked, skipped, errors };
 }
 
 export async function relinkItems(
   client: SupabaseClient,
   args: { ingredientId: string; itemIds: string[]; actorEmail: string }
-): Promise<{ relinked: number; errors: string[] }> {
+): Promise<{ relinked: number; marked: number; skipped: number; errors: string[] }> {
   const { ingredientId, itemIds, actorEmail } = args;
   const errors: string[] = [];
   let relinked = 0;
+  let skipped = 0;
 
   // Validate ingredient.
   const { data: ing, error: ingErr } = await client
@@ -576,17 +631,26 @@ export async function relinkItems(
     throw new Error("Ingredient not found or merged");
   }
 
+  // T3 §8: count only rows the UPDATE actually changed; skip
+  // history for no-ops. The .eq("link_status", "proposed") guard
+  // means items already confirmed / rejected match zero rows.
   for (const id of itemIds) {
-    const { error } = await client
+    const { data, error } = await client
       .from("pr_vendor_items")
       .update({
         ingredient_id: ingredientId,
         link_reason: `relinked:${actorEmail}`,
       })
       .eq("id", id)
-      .eq("link_status", "proposed");
+      .eq("link_status", "proposed")
+      .select("id");
     if (error) {
       errors.push(`${id}: ${error.message}`);
+      continue;
+    }
+    const changedRows = data?.length ?? 0;
+    if (changedRows === 0) {
+      skipped += 1;
       continue;
     }
     relinked += 1;
@@ -598,7 +662,10 @@ export async function relinkItems(
       actor: actorEmail,
     });
   }
-  return { relinked, errors };
+  // `marked` mirrors the shape of the other review helpers so route
+  // callers can read one field whether they called relink, not-food,
+  // or archive. relinked stays for existing readers.
+  return { relinked, marked: relinked, skipped, errors };
 }
 
 // Soft-revoke undo. The pr_ tables grant no DELETE (PR24 never-delete),
@@ -939,10 +1006,10 @@ export async function splitToNewIngredient(
 export async function renameIngredient(
   client: SupabaseClient,
   args: { ingredientId: string; newName: string; actorEmail: string }
-): Promise<{ ok: boolean; error?: string; aliasWritten: boolean }> {
+): Promise<{ ok: boolean; error?: string; aliasWritten: boolean; changed: boolean }> {
   const { ingredientId, newName, actorEmail } = args;
   const trimmed = newName.trim();
-  if (trimmed.length < 2) return { ok: false, error: "Name is too short", aliasWritten: false };
+  if (trimmed.length < 2) return { ok: false, error: "Name is too short", aliasWritten: false, changed: false };
   const newNorm = canonicalIngredientName(trimmed);
 
   // Load current for the before/after + the old-name alias.
@@ -951,13 +1018,36 @@ export async function renameIngredient(
     .select("id,name,name_norm,status")
     .eq("id", ingredientId)
     .maybeSingle();
-  if (curErr) return { ok: false, error: curErr.message, aliasWritten: false };
-  if (!cur) return { ok: false, error: "Ingredient not found", aliasWritten: false };
+  if (curErr) return { ok: false, error: curErr.message, aliasWritten: false, changed: false };
+  if (!cur) return { ok: false, error: "Ingredient not found", aliasWritten: false, changed: false };
   const row = cur as { id: string; name: string; name_norm: string; status: string };
-  if (row.status === "merged") return { ok: false, error: "Ingredient is merged", aliasWritten: false };
+  if (row.status === "merged") return { ok: false, error: "Ingredient is merged", aliasWritten: false, changed: false };
+
+  // T3 §7: when the trimmed new name differs from the stored name
+  // but normalizes the same, update `name` only - the row's casing
+  // change is a real save. The old code returned ok with no write,
+  // so BLUEBERRIES on top of Blueberries toasted "Saved" and saved
+  // nothing. Normalization is unchanged, so no alias and no
+  // collision check are needed on this path.
   if (row.name_norm === newNorm) {
-    // Same name after normalization - no-op success, no event, no alias.
-    return { ok: true, aliasWritten: false };
+    if (trimmed === row.name) {
+      // Identical name - nothing to save. Client toast says "No change".
+      return { ok: true, aliasWritten: false, changed: false };
+    }
+    const { error: upCasingErr } = await client
+      .from("pr_ingredients")
+      .update({ name: trimmed, updated_at: new Date().toISOString() })
+      .eq("id", ingredientId);
+    if (upCasingErr) return { ok: false, error: upCasingErr.message, aliasWritten: false, changed: false };
+    await client.from("pr_events").insert({
+      entity_type: "ingredient",
+      entity_id: ingredientId,
+      kind: "ingredient_renamed",
+      before: { name: row.name, name_norm: row.name_norm },
+      after: { name: trimmed, name_norm: newNorm, alias_written: false },
+      actor: actorEmail,
+    });
+    return { ok: true, aliasWritten: false, changed: true };
   }
 
   // Collision guard: live unique index pr_ingredients_name_norm_live_uq
@@ -971,14 +1061,14 @@ export async function renameIngredient(
     .neq("id", ingredientId)
     .maybeSingle();
   if (collision) {
-    return { ok: false, error: "Another active ingredient already uses that name", aliasWritten: false };
+    return { ok: false, error: "Another active ingredient already uses that name", aliasWritten: false, changed: false };
   }
 
   const { error: upErr } = await client
     .from("pr_ingredients")
     .update({ name: trimmed, name_norm: newNorm, updated_at: new Date().toISOString() })
     .eq("id", ingredientId);
-  if (upErr) return { ok: false, error: upErr.message, aliasWritten: false };
+  if (upErr) return { ok: false, error: upErr.message, aliasWritten: false, changed: false };
 
   // Preserve the old name as a rename-alias so matcher auto-handles the
   // same description_key on future intakes. kind='rename' is already in
@@ -1015,7 +1105,7 @@ export async function renameIngredient(
     actor: actorEmail,
   });
 
-  return { ok: true, aliasWritten };
+  return { ok: true, aliasWritten, changed: true };
 }
 
 // Set an ingredient's super-category + parent (sub-category). Both are
@@ -1035,6 +1125,23 @@ export async function setIngredientCategory(
 ): Promise<{ ok: boolean; error?: string }> {
   const { ingredientId, category, parent, actorEmail } = args;
   const parentTrim = parent?.trim() || null;
+
+  // T3 §5: reject (category, parent) pairs where the parent is a
+  // mapped sub-category under a different super-category. The client
+  // already restricts the dropdown, but 2026-11-13's user test
+  // landed a (Dairy, Vegetables and herbs) pair on a live
+  // ingredient - the server took it. A custom parent (not in the
+  // map) is still accepted under any category; that is the
+  // "ingredient carries a new parent nobody has mapped yet" path.
+  if (parentTrim && category) {
+    const expected = CATEGORY_BY_PARENT[parentTrim];
+    if (expected && expected !== category) {
+      return {
+        ok: false,
+        error: `Sub-category ${parentTrim} belongs to ${expected}`,
+      };
+    }
+  }
 
   const { data: cur, error: curErr } = await client
     .from("pr_ingredients")

@@ -15,7 +15,7 @@
 
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 import { DIM_BY_UOM, canonicalFromBaseUnit, uomLabel } from "@/lib/ingredients/pack";
-import { factor, priceInUnit } from "@/lib/ingredients/measures";
+import { factor } from "@/lib/ingredients/measures";
 import { fmtUsd } from "@/lib/fmt";
 
 export type AttentionIssue =
@@ -109,50 +109,41 @@ export function deriveAttention(
     });
   }
 
-  // M2 §4B §2.8: needs_measure fires when the item cannot reach the
-  // ingredient's base_unit via priceInUnit. The pack is fine; the
-  // ingredient needs a measure. This replaces unit_mismatch.
-  if (ingredient && item.perBase != null && item.perBaseUom) {
+  // T3 §3a: needs_measure fires when `item.statusKind` from
+  // computeIngredientBlend (M2.1's single source) says so. The old
+  // code re-ran priceInUnit here with `item.packQty / packSize`,
+  // which /api/review/item never sets on the item payload - so the
+  // reach test always failed and the banner stuck on "Needs a
+  // measure" even after a case weight save moved the item into the
+  // blend. Trust the server's statusKind, same signal the list row
+  // and the strip already read. The copy and action payload stay
+  // the same.
+  if (
+    ingredient &&
+    item.perBase != null &&
+    item.perBaseUom &&
+    (item as { statusKind?: string }).statusKind === "needs_measure"
+  ) {
     const target = canonicalFromBaseUnit(ingredient.base_unit);
-    const measures = (ingredient.measures ?? []) as Array<{
-      from_unit: string;
-      qty: number;
-      to_unit: string;
-      source: "house_test" | "book" | "vendor_spec" | "estimate" | "pack";
-    }>;
     if (target) {
-      const result = priceInUnit(
-        {
-          perBase: item.perBase,
-          baseUom: item.perBaseUom,
-          packQty: item.packQty ?? null,
-          packSize: item.packSize ?? null,
-          packUom: item.packUom ?? null,
-          caseWeightLb: item.caseWeightLb ?? null,
-        },
-        target,
-        { measures },
-      );
-      if (result == null) {
-        // Polish fix 2: the body says HOW the case is priced, not
-        // what unit it names. Three phrasings, keyed off the pack
-        // dim; "by the each" (count), "by weight", "by volume".
-        const packDim = DIM_BY_UOM[(item.packUom ?? "").toUpperCase()] ?? null;
-        const countedBy =
-          packDim === "weight"
-            ? "This case is counted by weight"
-            : packDim === "volume"
-              ? "This case is counted by volume"
-              : "This case is counted by the each";
-        issues.push({
-          kind: "needs_measure",
-          tone: "bad",
-          head: `${ingredient.name} has no measure that reaches ${ingredient.base_unit}`,
-          body: `${countedBy}. Add one measure on the ingredient and this item will price.`,
-          action: "add_measure",
-          targetUom: target,
-        });
-      }
+      // Polish fix 2: the body says HOW the case is priced, not
+      // what unit it names. Three phrasings, keyed off the pack
+      // dim; "by the each" (count), "by weight", "by volume".
+      const packDim = DIM_BY_UOM[(item.packUom ?? "").toUpperCase()] ?? null;
+      const countedBy =
+        packDim === "weight"
+          ? "This case is counted by weight"
+          : packDim === "volume"
+            ? "This case is counted by volume"
+            : "This case is counted by the each";
+      issues.push({
+        kind: "needs_measure",
+        tone: "bad",
+        head: `${ingredient.name} has no measure that reaches ${ingredient.base_unit}`,
+        body: `${countedBy}. Add one measure on the ingredient and this item will price.`,
+        action: "add_measure",
+        targetUom: target,
+      });
     }
   }
 
