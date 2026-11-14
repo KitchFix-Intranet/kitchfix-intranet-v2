@@ -326,11 +326,18 @@ export function PanelClosedRows({
     }
   }, [parentsProp]);
 
-  // Reset the cache when the ingredient under the panel changes, so
-  // switching to another ingredient's Merge row fetches that one's
-  // parents instead of showing the prior cache. The initial state
-  // when parentsProp is empty + onLoadParents is set is "idle"; the
-  // fetch below fires on the first Merge expand.
+  // T3 R2-1: reset the cache ONLY when the ingredient id changes.
+  // The previous deps `[ingredient?.id, parentsProp.length,
+  // onLoadParents]` fired on every router.refresh(): IngredientMasters-
+  // Filter's `loadParents` was `useCallback(..., [selected])`, and
+  // `selected` is a new object after a refresh, so onLoadParents's
+  // identity flipped and this effect set loadState="idle" +
+  // parents=[]. The loader effect below did not re-run (loadState is
+  // not in its deps), so the Merge picker went empty with no second
+  // call and stayed that way.
+  //
+  // Reset only on id change. parentsProp / onLoadParents identity
+  // changes without an id change are no-ops - the loaded list stays.
   useEffect(() => {
     if (parentsProp.length === 0 && onLoadParents) {
       setLoadState("idle");
@@ -341,7 +348,8 @@ export function PanelClosedRows({
       // fetch below picks up the fresh ingredient id via its
       // callback identity.
     }
-  }, [ingredient?.id, parentsProp.length, onLoadParents]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ingredient?.id]);
 
   useEffect(() => {
     if (!mergeOpen) return;

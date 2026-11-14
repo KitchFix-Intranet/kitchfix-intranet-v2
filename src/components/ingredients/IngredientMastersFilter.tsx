@@ -261,27 +261,59 @@ export function IngredientMastersFilter({
     return out;
   }, [rows, trimmed, superCat, onlyFlagged, onlyUnreviewed, onlyEmpty, sort]);
 
-  // T3 §2: selection stickiness. The detail pane keeps the ingredient
-  // the user is working on even when a save makes its row leave the
-  // active filter (e.g. "Needs attention" on, user fixes the issue,
-  // the row drops out of `filtered`). While selId is in `rows` but
-  // not in `filtered`, the list has no highlighted row and the
-  // detail pane holds the worked-on ingredient. The highlight
-  // reappears the moment the row rejoins `filtered` (or when the
-  // ingredient disappears from `rows` altogether, falling through to
-  // filtered[0] ?? null).
-  // Release events: picking another row (onSelectRow), changing
-  // search / category / a Show-only chip / sort - all of those flip
-  // selId to the new row (or clear it to realign with the filter).
+  // T3 R2-2: selection stickiness, now in two states.
+  //   selId  - the user's last click. Stays across filter changes.
+  //   holdId - a save-driven hold: set when the ingredient under the
+  //            pane just left the active filter because rows changed.
+  //            Cleared on any filter / sort change (user intent to
+  //            realign) and on a new row pick.
+  //
+  // Round 1 kept a single `selId` + an inside-useMemo fallback, which
+  // meant releaseSticky had to null selId on filter changes. That
+  // nulled selId even when the selected still matched the new filter
+  // (Chat-Claude: "select Bacon, sliced, click Proteins - the detail
+  // jumps to Beef flank steak. On 96813c8 Bacon stays, because it
+  // still matches."). The two-state model keeps selId across filter
+  // changes; holdId carries the "the save made me leave filter"
+  // signal and is cleared the next time the user touches a filter.
+  const [holdId, setHoldId] = useState<string | null>(null);
+  const filterKey = `${trimmed}|${superCat}|${onlyFlagged ? 1 : 0}|${onlyUnreviewed ? 1 : 0}|${onlyEmpty ? 1 : 0}|${sort}`;
+  const prevFilterKeyRef = useRef(filterKey);
+  const prevRowsRef = useRef(rows);
+  useEffect(() => {
+    if (prevFilterKeyRef.current !== filterKey) {
+      // Filter or sort changed. The user is reconfiguring the list;
+      // release the hold. selId stays.
+      prevFilterKeyRef.current = filterKey;
+      if (holdId != null) setHoldId(null);
+      prevRowsRef.current = rows;
+      return;
+    }
+    if (prevRowsRef.current !== rows) {
+      // Rows changed (router.refresh after a save). If the selected
+      // row just left the active filter but still exists, hold it so
+      // the pane does not snap to filtered[0].
+      prevRowsRef.current = rows;
+      if (selId) {
+        const stillInFiltered = filtered.some((r) => r.id === selId);
+        const stillInRows = rows.some((r) => r.id === selId);
+        if (!stillInFiltered && stillInRows) {
+          setHoldId(selId);
+        }
+      }
+    }
+  }, [filterKey, rows, filtered, selId, holdId]);
   const selected = useMemo(() => {
     if (selId) {
       const inFiltered = filtered.find((r) => r.id === selId);
       if (inFiltered) return inFiltered;
-      const inRows = rows.find((r) => r.id === selId);
-      if (inRows) return inRows;
+      if (holdId === selId) {
+        const inRows = rows.find((r) => r.id === selId);
+        if (inRows) return inRows;
+      }
     }
     return filtered[0] ?? null;
-  }, [filtered, rows, selId]);
+  }, [filtered, rows, selId, holdId]);
   const matchedUsd = useMemo(() => filtered.reduce((s, r) => s + r.usd12m, 0), [filtered]);
   const needsCount = useMemo(() => rows.filter((r) => r.issues.length > 0).length, [rows]);
   const unreviewedCount = useMemo(
@@ -293,23 +325,17 @@ export function IngredientMastersFilter({
   const anyFilterActive =
     trimmed.length > 0 || superCat !== "all" || onlyFlagged || onlyUnreviewed || onlyEmpty;
 
-  // T3 §2: release the sticky selection whenever a filter input
-  // changes. "The detail pane keeps the ingredient you are working
-  // on ... It lets go when you pick another row or change search,
-  // category, a Show only chip or sort." Clearing selId on these
-  // flips lets the selected useMemo fall through to the natural
-  // filtered[0] when the ingredient no longer fits.
-  function releaseSticky() {
-    setSelId(null);
-  }
-
+  // T3 R2-2: releaseSticky is gone. The hold is a separate state
+  // cleared by the filter-change effect above. Filter / sort handlers
+  // need no extra call; selId stays. clearAll resets filters and
+  // focuses the search - the effect's filterKey change clears the
+  // hold.
   function clearAll() {
     setQuery("");
     setSuperCat("all");
     setOnlyFlagged(false);
     setOnlyUnreviewed(false);
     setOnlyEmpty(false);
-    releaseSticky();
     inputRef.current?.focus();
   }
 
@@ -367,13 +393,21 @@ export function IngredientMastersFilter({
   // N12 §R2: lazy loader for Merge candidates. GET /api/review/
   // ingredient?id=<selected> returns { parents: ReviewCardIngredient[] }.
   // No fetch on selection; Merge row fires this on first expand.
+  //
+  // T3 R2-1: deps are `selected?.id`, not `selected`. After a
+  // router.refresh() the `selected` object identity flips (new row
+  // objects on the refreshed `rows` list), which pointlessly busted
+  // PanelClosedRows's downstream useEffect and emptied the Merge
+  // picker. Keying on id means the callback is stable across
+  // refreshes of the same ingredient.
+  const selectedId = selected?.id ?? null;
   const loadParents = useCallback(async (): Promise<ReviewCardIngredient[]> => {
-    if (!selected) return [];
-    const res = await fetch(`/api/review/ingredient?id=${encodeURIComponent(selected.id)}`);
+    if (!selectedId) return [];
+    const res = await fetch(`/api/review/ingredient?id=${encodeURIComponent(selectedId)}`);
     if (!res.ok) throw new Error(`fetch failed (${res.status})`);
     const data = (await res.json()) as { parents?: ReviewCardIngredient[] };
     return data.parents ?? [];
-  }, [selected]);
+  }, [selectedId]);
 
   return (
     <div className={`kf-ingp__workspace${paneOpen ? " kf-ingp__workspace--detail-open" : ""}`}>
@@ -388,7 +422,7 @@ export function IngredientMastersFilter({
             onChange={(e) => {
               const v = e.target.value;
               setQuery(v);
-              releaseSticky();
+              
             }}
             placeholder={
               mode === "resale"
@@ -401,7 +435,7 @@ export function IngredientMastersFilter({
             <button
               type="button"
               className="kf-ingp__search-clear"
-              onClick={() => { setQuery(""); releaseSticky(); inputRef.current?.focus(); }}
+              onClick={() => { setQuery(""); inputRef.current?.focus(); }}
               aria-label="Clear search"
             >
               <X size={16} strokeWidth={1.75} />
@@ -417,7 +451,7 @@ export function IngredientMastersFilter({
               role="radio"
               aria-checked={superCat === "all"}
               className={`kf-chip${superCat === "all" ? " kf-chip--on" : ""}`}
-              onClick={() => { setSuperCat("all"); releaseSticky(); }}
+              onClick={() => { setSuperCat("all") }}
             >
               All <span>{fmtCount(rows.length)}</span>
             </button>
@@ -431,7 +465,7 @@ export function IngredientMastersFilter({
                   role="radio"
                   aria-checked={superCat === cat}
                   className={`kf-chip${superCat === cat ? " kf-chip--on" : ""}`}
-                  onClick={() => { setSuperCat(cat); releaseSticky(); }}
+                  onClick={() => { setSuperCat(cat) }}
                 >
                   {cat} <span>{fmtCount(n)}</span>
                 </button>
@@ -445,7 +479,7 @@ export function IngredientMastersFilter({
               type="button"
               aria-pressed={onlyFlagged}
               className={`kf-chip kf-chip--warn${onlyFlagged ? " kf-chip--on" : ""}`}
-              onClick={() => { setOnlyFlagged((v) => !v); releaseSticky(); }}
+              onClick={() => { setOnlyFlagged((v) => !v) }}
               title="Ingredients with a spread, coverage, unit or outlier issue"
             >
               Needs attention <span>{fmtCount(needsCount)}</span>
@@ -454,7 +488,7 @@ export function IngredientMastersFilter({
               type="button"
               aria-pressed={onlyUnreviewed}
               className={`kf-chip${onlyUnreviewed ? " kf-chip--on" : ""}`}
-              onClick={() => { setOnlyUnreviewed((v) => !v); releaseSticky(); }}
+              onClick={() => { setOnlyUnreviewed((v) => !v) }}
               title="Ingredients whose Top 9 allergens have not been reviewed"
             >
               Allergens to check <span>{fmtCount(unreviewedCount)}</span>
@@ -463,7 +497,7 @@ export function IngredientMastersFilter({
               type="button"
               aria-pressed={onlyEmpty}
               className={`kf-chip${onlyEmpty ? " kf-chip--on" : ""}`}
-              onClick={() => { setOnlyEmpty((v) => !v); releaseSticky(); }}
+              onClick={() => { setOnlyEmpty((v) => !v) }}
               title="Ingredients with no live vendor items (candidates to retire)"
             >
               No items <span>{fmtCount(emptyCount)}</span>
@@ -508,7 +542,7 @@ export function IngredientMastersFilter({
               onChange={(e) => {
                 const v = e.target.value as SortMode;
                 setSort(v);
-                releaseSticky();
+                
               }}
               aria-label="Sort order"
             >
