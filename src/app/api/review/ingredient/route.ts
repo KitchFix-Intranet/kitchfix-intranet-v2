@@ -18,10 +18,11 @@ import { requireOwnerApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
 import type { ReviewCardIngredient } from "@/components/ingredients/itemTypes";
 import {
-  isMeasuresWorld,
+  isMeasuresWorldCached,
   readMeasuresForIngredient,
   legacyEachMeasureToMeasures,
 } from "@/lib/ingredients/measuresRead";
+import { startTimer, mark, endTimer } from "@/lib/timing";
 // M2 §4B part 2: shape helper no longer called here. Nothing on
 // screen reads each_measure_*.
 // M2.1: ingredient payload carries blendedAvgPerBase computed by the
@@ -38,13 +39,15 @@ export const dynamic = "force-dynamic";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function GET(req: NextRequest) {
+  const timer = startTimer("/api/review/ingredient");
   const gate = await requireOwnerApi();
-  if (gate instanceof Response) return gate;
+  mark(timer, "gate");
+  if (gate instanceof Response) { endTimer(timer, { ok: false, stage: "gate" }); return gate; }
 
   const id = req.nextUrl.searchParams.get("id");
-  if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
+  if (!id) { endTimer(timer, { ok: false, stage: "id" }); return NextResponse.json({ error: "id required" }, { status: 400 }); }
   // Reject malformed uuids at the edge so Postgres never sees them.
-  if (!UUID_RE.test(id)) return NextResponse.json({ error: "id must be a uuid" }, { status: 400 });
+  if (!UUID_RE.test(id)) { endTimer(timer, { ok: false, stage: "id" }); return NextResponse.json({ error: "id must be a uuid" }, { status: 400 }); }
 
   const client = serviceClient();
 
@@ -65,9 +68,10 @@ export async function GET(req: NextRequest) {
       .eq("status", "active")
       .order("name"),
   ]);
-  if (ingRes.error) return NextResponse.json({ error: ingRes.error.message }, { status: 500 });
-  if (!ingRes.data) return NextResponse.json({ error: "Ingredient not found" }, { status: 404 });
-  if (parentsRes.error) return NextResponse.json({ error: parentsRes.error.message }, { status: 500 });
+  if (ingRes.error) { endTimer(timer, { ok: false, stage: "ingredient" }); return NextResponse.json({ error: ingRes.error.message }, { status: 500 }); }
+  if (!ingRes.data) { endTimer(timer, { ok: false, stage: "ingredient" }); return NextResponse.json({ error: "Ingredient not found" }, { status: 404 }); }
+  if (parentsRes.error) { endTimer(timer, { ok: false, stage: "parents" }); return NextResponse.json({ error: parentsRes.error.message }, { status: 500 }); }
+  mark(timer, "batch1");
 
   const rawIngredient = ingRes.data as ReviewCardIngredient;
   const parents = (parentsRes.data ?? []) as ReviewCardIngredient[];
@@ -76,7 +80,9 @@ export async function GET(req: NextRequest) {
   // world rewrite the legacy each_measure_* triple on the ingredient
   // from the new count-to-X row so deriveRecipePrice sees the new
   // numbers without a JSX change.
-  const newWorld = await isMeasuresWorld(client);
+  // T4 §2b: module-cached so first request pays the probe and later
+  // calls read a resolved boolean.
+  const newWorld = await isMeasuresWorldCached(client);
   let measures: ReturnType<typeof legacyEachMeasureToMeasures> = [];
   let ingredient: ReviewCardIngredient = rawIngredient;
   if (newWorld) {
@@ -139,6 +145,8 @@ export async function GET(req: NextRequest) {
     yieldSource,
     blendedAvgPerBase,
   };
+  mark(timer, "blend");
+  endTimer(timer);
   return NextResponse.json({
     ingredient: ingredientOut,
     parents,

@@ -43,6 +43,25 @@ export async function isMeasuresWorld(client: SupabaseClient): Promise<boolean> 
   throw new Error(`isMeasuresWorld: ${error.message ?? "unknown error"}`);
 }
 
+// T4 §2b: per-server-instance cache. Migration 0019 flips this flag
+// exactly once in production and it never flips back; the per-request
+// probe above was costing ~5-20 ms on every /api/review/item call for
+// a value that has not changed for weeks. The cache is a module-level
+// promise so concurrent first calls share the one probe; failures are
+// NOT cached - a transient error must be re-probed on the next call.
+// The fallback (42P01 -> false) is kept inside isMeasuresWorld, so
+// pre-0019 deploys still read legacy columns.
+let worldCache: Promise<boolean> | null = null;
+export function isMeasuresWorldCached(client: SupabaseClient): Promise<boolean> {
+  if (!worldCache) {
+    worldCache = isMeasuresWorld(client).catch((e: unknown) => {
+      worldCache = null;
+      throw e;
+    });
+  }
+  return worldCache;
+}
+
 // Read the full measures list for one ingredient. Measures-world only.
 // Throws on any error (M1 R2 fix 4): returning [] would let set-each-
 // measure rebuild the ingredient's list from nothing and wipe a
@@ -58,6 +77,35 @@ export async function readMeasuresForIngredient(
     .order("from_dim", { ascending: true })
     .order("to_dim", { ascending: true });
   if (error) throw new Error(`readMeasuresForIngredient(${ingredientId}): ${error.message}`);
+  return (data ?? []).map((r) => ({
+    from_unit: String((r as { from_unit: string }).from_unit).toUpperCase(),
+    qty: Number((r as { qty: number }).qty),
+    to_unit: String((r as { to_unit: string }).to_unit).toUpperCase(),
+    source: (r as { source: Measure["source"] }).source,
+  }));
+}
+
+// T4 §2b variant: same read with a legacy-world fallback. Catches 42P01
+// (undefined_table) and returns an empty list so the caller can batch
+// this alongside the other enrichment reads without a measures-world
+// pre-check. Any OTHER error still throws (the M1 R2 fix 4 reason
+// still holds for non-fallback errors). Call sites that NEED the
+// strict throw-on-anything behaviour keep calling the original.
+export async function readMeasuresForIngredientBatchable(
+  client: SupabaseClient,
+  ingredientId: string | null,
+): Promise<Measure[]> {
+  if (!ingredientId) return [];
+  const { data, error } = await client
+    .from("pr_ingredient_measures")
+    .select("from_unit,qty,to_unit,source,from_dim,to_dim")
+    .eq("ingredient_id", ingredientId)
+    .order("from_dim", { ascending: true })
+    .order("to_dim", { ascending: true });
+  if (error) {
+    if (isUndefinedTable(error)) return [];
+    throw new Error(`readMeasuresForIngredient(${ingredientId}): ${error.message}`);
+  }
   return (data ?? []).map((r) => ({
     from_unit: String((r as { from_unit: string }).from_unit).toUpperCase(),
     qty: Number((r as { qty: number }).qty),

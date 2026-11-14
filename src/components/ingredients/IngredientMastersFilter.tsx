@@ -21,7 +21,6 @@
 // fact labels in IngredientMasters.tsx are a separate ask.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   Check,
@@ -31,6 +30,7 @@ import {
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtUsd, fmtUsdLong } from "@/lib/fmt";
 import { ItemPanelById } from "./ItemPanelById";
+import { loadParents as loadParentsFromStore } from "./parentsStore";
 import { SUPER_CATEGORIES } from "@/lib/ingredients/categories";
 import { canonicalFromBaseUnit, uomLabel } from "@/lib/ingredients/pack";
 // M2 §4B amendment 4 + part 3 fix 9: no screen imports deriveRecipePrice
@@ -217,7 +217,6 @@ export function IngredientMastersFilter({
   rows: MasterRow[];
   mode?: "recipe" | "resale";
 }) {
-  const router = useRouter();
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortMode>("spend");
   const [superCat, setSuperCat] = useState<string | "all">("all");
@@ -336,15 +335,13 @@ export function IngredientMastersFilter({
     };
   }, [selected]);
 
-  // N12 §R2: lazy loader for Merge candidates. GET /api/review/
-  // ingredient?id=<selected> returns { parents: ReviewCardIngredient[] }.
-  // No fetch on selection; Merge row fires this on first expand.
+  // N12 §R2 + T4 §2a: lazy loader for Merge candidates. Reads through
+  // the shared parentsStore cache so the drawer opened from this tab
+  // and this detail-pane row never fetch twice. Merge row fires this
+  // on first expand.
   const loadParents = useCallback(async (): Promise<ReviewCardIngredient[]> => {
     if (!selected) return [];
-    const res = await fetch(`/api/review/ingredient?id=${encodeURIComponent(selected.id)}`);
-    if (!res.ok) throw new Error(`fetch failed (${res.status})`);
-    const data = (await res.json()) as { parents?: ReviewCardIngredient[] };
-    return data.parents ?? [];
+    return loadParentsFromStore(selected.id);
   }, [selected]);
 
   return (
@@ -544,7 +541,13 @@ export function IngredientMastersFilter({
                   row={selected}
                   ingredient={selectedIngredient}
                   parentOptions={parentOptions}
-                  onDone={() => router.refresh()}
+                  // T4 §3: DetailView's descendants (PanelIngredientZone,
+                  // PanelClosedRows) now route their saves through
+                  // useSaveWithRefresh, which fires router.refresh()
+                  // inside a transition and keeps the control busy
+                  // until the refresh has rendered. Nothing left for
+                  // the parent to do on onDone.
+                  onDone={() => {}}
                   onLoadParents={loadParents}
                   onOpenItem={(id) => setOpenItemId(id)}
                 />

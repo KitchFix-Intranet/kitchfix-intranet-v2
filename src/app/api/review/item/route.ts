@@ -2,13 +2,20 @@
 //
 // Returns the facts one vendor item needs to fill the DetailPanel:
 //   { item: ReviewGroupItem; ingredient: ReviewCardIngredient | null;
-//     parents: ReviewCardIngredient[] }
+//     parentOptions: string[] }
 //
 // Introduced by Prompt A1 so the Ingredients pane can open the same
 // DetailPanel the Review queue uses. The queue component (ReviewQueue)
 // hands those three props in from props it already has in memory; the
 // Ingredients pane only holds a thin MasterLinkedItem per row, so the
 // panel needs a second way in - by itemId, fetching its own facts.
+//
+// T4 §2a: the response used to carry the FULL active-ingredient list as
+// `parents` (~249 KB of a 251 KB response). The panel needs that list
+// only for Merge and Sub-category; Sub-category just needs the distinct
+// parent names, which we project server-side as `parentOptions`. Merge
+// loads the full list lazily via /api/review/ingredient the first time
+// the row opens (parentsStore caches it for the life of the page).
 //
 // The ReviewGroupItem mapping below mirrors ReviewQueue.tsx verbatim
 // (same expressions, same semantics) so the panel reads identical
@@ -27,10 +34,11 @@ import {
 } from "@/components/ingredients/itemTypes";
 import { readPerBase } from "@/lib/ingredients/priceEstimate";
 import {
-  isMeasuresWorld,
-  readMeasuresForIngredient,
+  isMeasuresWorldCached,
+  readMeasuresForIngredientBatchable,
   legacyEachMeasureToMeasures,
 } from "@/lib/ingredients/measuresRead";
+import { startTimer, mark, endTimer } from "@/lib/timing";
 // M2 §4B part 2: shape helpers no longer called here. Nothing on
 // screen reads each_measure_*; the GET returns the raw legacy
 // values when present (type-level back-compat) and the real
@@ -72,31 +80,53 @@ function parseReason(raw: string | null): { body: string } {
 }
 
 export async function GET(req: NextRequest) {
+  const timer = startTimer("/api/review/item");
   const gate = await requireOwnerApi();
-  if (gate instanceof Response) return gate;
+  mark(timer, "gate");
+  if (gate instanceof Response) { endTimer(timer, { ok: false, stage: "gate" }); return gate; }
 
   const id = req.nextUrl.searchParams.get("id");
-  if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
+  if (!id) { endTimer(timer, { ok: false, stage: "id" }); return NextResponse.json({ error: "id required" }, { status: 400 }); }
   // Reject malformed uuids at the edge so Postgres never sees them -
   // otherwise .eq("id", "abc") trips a 500 from the type cast.
-  if (!UUID_RE.test(id)) return NextResponse.json({ error: "id must be a uuid" }, { status: 400 });
+  if (!UUID_RE.test(id)) { endTimer(timer, { ok: false, stage: "id" }); return NextResponse.json({ error: "id must be a uuid" }, { status: 400 }); }
 
   const client = serviceClient();
 
+  // T4 §2b: resolve the measures-world flag FIRST so the primary item
+  // SELECT can carry case_weight_lb in post-0019 deploys (the column
+  // does not exist pre-0019 and PostgREST would 42703 the SELECT). The
+  // module-level cache means this costs one network round trip on a
+  // cold server instance and zero on every call after - a far cheaper
+  // deal than the per-request probe the file used to do.
+  const measuresWorld = await isMeasuresWorldCached(client);
+  mark(timer, "world");
+
+  // T4 §2b: case_weight_lb added to the primary SELECT so the separate
+  // read at the former line ~358 is no longer needed. Measures-world +
+  // mates run alongside the enrichment batch below (not after it) so
+  // the serial await chain shrinks from four steps to two.
+  const ITEM_SELECT_BASE =
+    "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_qty,pack_size,pack_uom,pack_state,pack_override,pack_note,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen,flagged,flag_note,flagged_by,flagged_at,price_estimate,grade,each_measure_qty,each_measure_uom,needs_review_lines,first_seen,status,is_food,food_reason";
+  const ITEM_SELECT = measuresWorld
+    ? `${ITEM_SELECT_BASE},case_weight_lb`
+    : ITEM_SELECT_BASE;
   const { data: itRow, error: itErr } = await client
     .from("pr_vendor_items")
-    .select(
-      // N13 R3: five columns added (needs_review_lines, first_seen,
-      // status, is_food, food_reason) so the item panel can carry the
-      // facts the old VendorItemDrawer displayed. Additive only.
-      "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_qty,pack_size,pack_uom,pack_state,pack_override,pack_note,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen,flagged,flag_note,flagged_by,flagged_at,price_estimate,grade,each_measure_qty,each_measure_uom,needs_review_lines,first_seen,status,is_food,food_reason"
-    )
+    // N13 R3: five additive columns (needs_review_lines, first_seen,
+    // status, is_food, food_reason) so the item panel can carry the
+    // facts the old VendorItemDrawer displayed.
+    .select(ITEM_SELECT)
     .eq("id", id)
     .maybeSingle();
-  if (itErr) return NextResponse.json({ error: itErr.message }, { status: 500 });
-  if (!itRow) return NextResponse.json({ error: "Item not found" }, { status: 404 });
+  if (itErr) { endTimer(timer, { ok: false, stage: "item" }); return NextResponse.json({ error: itErr.message }, { status: 500 }); }
+  if (!itRow) { endTimer(timer, { ok: false, stage: "item" }); return NextResponse.json({ error: "Item not found" }, { status: 404 }); }
+  mark(timer, "item");
 
-  const it = itRow as {
+  // Cast via unknown: the Supabase JS select-string type parser cannot
+  // statically type a template-literal SELECT (same pattern as
+  // IngredientMasters's LINKED_SELECT read).
+  const it = itRow as unknown as {
     id: string;
     vendor_id: string;
     item_number: string | null;
@@ -139,6 +169,11 @@ export async function GET(req: NextRequest) {
     // N6: per-item each measure override. Both null for most rows.
     each_measure_qty: number | null;
     each_measure_uom: string | null;
+    // T4 §2b: carried on the item row in measures-world so the second
+    // read is gone. Pre-0019 the column does not exist and the SELECT
+    // omits it (see ITEM_SELECT above), so this field stays optional
+    // on the type.
+    case_weight_lb?: number | null;
     // N13 R3: additive columns for the item-panel surfaces that used
     // to live inside VendorItemDrawer.
     needs_review_lines: number | null;
@@ -147,12 +182,34 @@ export async function GET(req: NextRequest) {
     is_food: boolean | null;
     food_reason: string | null;
   };
+  // T4 §2b: the item row carries case_weight_lb in measures-world;
+  // downstream readers use `caseWeightLb` so capture it once here and
+  // the measures-world branch below does not need a second read. Legacy
+  // world: column omitted from SELECT -> `undefined` -> null below.
+  const caseWeightLbFromRow: number | null =
+    it.case_weight_lb == null ? null : Number(it.case_weight_lb);
 
-  // Enrichment reads: vendor name, catalog match (if the item has a
-  // normalized number), latest observed unit price, the item's own
-  // ingredient and the full parents list for the panel's sub-category
-  // dropdown. All run in parallel.
-  const [vendorRes, catalogRes, obsRes, ingredientRes, parentsRes] = await Promise.all([
+  // T4 §2b: BATCH 1. Everything that depends only on the item row runs
+  // in one Promise.all - vendor name, catalog match, latest observed
+  // unit price, the item's own ingredient, mates (confirmed + LIVE
+  // under the same ingredient_id), the ingredient's measures, the
+  // distinct parent-name set for the Sub-category dropdown, and the
+  // measures-world flag (cached module-wide).
+  //
+  // T4 §2a: the full parents list is gone from this response. Readers
+  // that need it (Merge row) load it lazily via /api/review/ingredient,
+  // one fetch per page life (parentsStore caches). The panel's
+  // Sub-category dropdown needs only the distinct parent names, which
+  // we project here as `parentOptions: string[]`.
+  const [
+    vendorRes,
+    catalogRes,
+    obsRes,
+    ingredientRes,
+    parentOptionsRes,
+    matesRes,
+    measuresFromBatch,
+  ] = await Promise.all([
     client.from("pr_vendors").select("id,name").eq("id", it.vendor_id).maybeSingle(),
     it.item_number_norm
       ? client
@@ -181,15 +238,37 @@ export async function GET(req: NextRequest) {
           .eq("id", it.ingredient_id)
           .maybeSingle()
       : Promise.resolve({ data: null as unknown, error: null }),
+    // T4 §2a: distinct parent names across active ingredients. One
+    // SELECT, one small payload - a few hundred bytes versus the ~249
+    // KB `parents` list this call used to return.
     client
       .from("pr_ingredients")
-      // N5: avg_weight_lb + avg_weight_source on the parents list too.
-      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source,yield_pct,yield_source")
+      .select("parent")
       .eq("status", "active")
-      .order("name"),
+      .not("parent", "is", null),
+    // T4 §2b: mates depend only on ingredient_id (which the item row
+    // above already gave us). Runs alongside the enrichment reads
+    // instead of serially after them. When the item has no ingredient
+    // we skip the call and use an empty set below.
+    it.ingredient_id
+      ? client
+          .from("pr_vendor_items")
+          .select("id,vendor_id,status,link_status,grade,pack_qty,pack_size,pack_uom,case_weight_lb,price_estimate,usd_12m")
+          .eq("link_status", "confirmed")
+          .in("status", LIVE_STATUSES)
+          .eq("ingredient_id", it.ingredient_id)
+      : Promise.resolve({ data: [] as unknown[], error: null }),
+    // T4 §2b: measures depend on ingredient_id which the item row
+    // already carries. Reads in the same batch as the enrichment so
+    // the serial "measures-after-ingredient" step is gone. Uses the
+    // batchable variant so pre-0019 (legacy world) returns [] on the
+    // 42P01 instead of throwing; the measuresWorld flag below still
+    // decides whether to feed measures into the pipeline.
+    readMeasuresForIngredientBatchable(client, it.ingredient_id),
   ]);
-  if (vendorRes.error) return NextResponse.json({ error: vendorRes.error.message }, { status: 500 });
-  if (parentsRes.error) return NextResponse.json({ error: parentsRes.error.message }, { status: 500 });
+  if (vendorRes.error) { endTimer(timer, { ok: false, stage: "batch1" }); return NextResponse.json({ error: vendorRes.error.message }, { status: 500 }); }
+  if (parentOptionsRes.error) { endTimer(timer, { ok: false, stage: "batch1" }); return NextResponse.json({ error: parentOptionsRes.error.message }, { status: 500 }); }
+  mark(timer, "batch1");
 
   const vendorName = (vendorRes.data as { name?: string } | null)?.name ?? it.vendor_id;
   const cat = (catalogRes.data as {
@@ -203,6 +282,16 @@ export async function GET(req: NextRequest) {
     billed_unit: string | null;
     invoice_date: string | null;
   } | null) ?? null;
+  // T4 §2a: distinct, non-blank, sorted parent names. The projection
+  // is deliberately small (names only) so the panel's Sub-category
+  // dropdown has what it needs without the panel having to receive
+  // the full ingredient rows just to project them.
+  const parentOptionsSet = new Set<string>();
+  for (const row of (parentOptionsRes.data ?? []) as Array<{ parent: string | null }>) {
+    const p = row.parent?.trim();
+    if (p && p.length > 0) parentOptionsSet.add(p);
+  }
+  const parentOptions: string[] = Array.from(parentOptionsSet).sort();
 
   // Mirrors ReviewQueue.tsx:248-323 verbatim - same expressions, same
   // semantics. If anything in that block changes, update this too.
@@ -335,33 +424,29 @@ export async function GET(req: NextRequest) {
   };
 
   const rawIngredient = (ingredientRes.data as ReviewCardIngredient | null) ?? null;
-  const parents = (parentsRes.data ?? []) as ReviewCardIngredient[];
 
   // M1 R2 fix 1 + amendment 4: one world per request. In measures-
   // world, rewrite the LEGACY-SHAPED FIELDS downstream readers feed
   // into deriveRecipePrice (ingredient.each_measure_* and
   // item.eachMeasure) so the display pipeline sees the new numbers.
-  const newWorld = await isMeasuresWorld(client);
+  //
+  // T4 §2b: the world flag, mates AND measures are all resolved in
+  // BATCH 1 above. caseWeightLb comes from the primary item SELECT.
+  // Nothing in this branch awaits.
+  const newWorld = measuresWorld;
   let measures: ReturnType<typeof legacyEachMeasureToMeasures> = [];
-  let caseWeightLb: number | null = null;
+  let caseWeightLb: number | null = newWorld ? caseWeightLbFromRow : null;
   let ingredient: ReviewCardIngredient | null = rawIngredient;
   let itemEachMeasure: { qty: number; uom: string } | null = item.eachMeasure;
   if (newWorld) {
     if (rawIngredient) {
-      measures = await readMeasuresForIngredient(client, rawIngredient.id);
+      measures = measuresFromBatch;
       // M2 §4B part 2: screens don't read each_measure_* any more.
       // The ingredient passes through with its legacy columns intact
       // (type-level back-compat); the authoritative shape is
       // `measures` which rides on the response below.
       ingredient = rawIngredient;
     }
-    const { data: cwRow } = await client
-      .from("pr_vendor_items")
-      .select("case_weight_lb")
-      .eq("id", id)
-      .maybeSingle();
-    const raw = (cwRow as { case_weight_lb: number | null } | null)?.case_weight_lb ?? null;
-    caseWeightLb = raw == null ? null : Number(raw);
     // item.eachMeasure is unread on screen; kept as-is.
     itemEachMeasure = item.eachMeasure;
   } else if (rawIngredient) {
@@ -415,12 +500,10 @@ export async function GET(req: NextRequest) {
   // value shown to the user stays the confirmed-only run.
   let blendedAvgPerBase: number | null = null;
   if (ingredient) {
-    const { data: matesRaw } = await client
-      .from("pr_vendor_items")
-      .select("id,vendor_id,status,link_status,grade,pack_qty,pack_size,pack_uom,case_weight_lb,price_estimate,usd_12m")
-      .eq("link_status", "confirmed")
-      .in("status", LIVE_STATUSES)
-      .eq("ingredient_id", ingredient.id);
+    // T4 §2b: mates were fetched in BATCH 1 above alongside the
+    // enrichment reads - the query depends only on ingredient_id, which
+    // the item row already gave us. No second await here.
+    const matesRaw = matesRes.data as unknown[] | null | undefined;
     type MateRow = {
       id: string;
       vendor_id: string | null;
@@ -491,10 +574,15 @@ export async function GET(req: NextRequest) {
   const ingredientOut = ingredient
     ? { ...ingredient, measures, yieldPct, yieldSource, blendedAvgPerBase }
     : null;
+  mark(timer, "blend");
+  endTimer(timer);
+  // T4 §2a: `parents` gone from the response. `parentOptions` is the
+  // only new key; readers that need the full ingredient list (Merge
+  // row) load it lazily via parentsStore.
   return NextResponse.json({
     item: itemOut,
     ingredient: ingredientOut,
-    parents,
+    parentOptions,
     measures,
     yieldPct,
     yieldSource,

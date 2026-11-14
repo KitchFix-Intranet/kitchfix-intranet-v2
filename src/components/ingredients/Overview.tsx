@@ -16,6 +16,7 @@ import { CountUp } from "@/components/ui/CountUp";
 import { Tabs } from "./Tabs";
 import { CoverageMeters } from "./CoverageMeters";
 import { UnflagButton } from "./UnflagButton";
+import { startTimer, mark, endTimer } from "@/lib/timing";
 import "./ingredients.css";
 import "./review.css";
 
@@ -63,6 +64,7 @@ async function loadOverview(): Promise<{
   topVendors: MeterRow[];
   flagged: FlaggedItem[];
 }> {
+  const timer = startTimer("page:overview");
   const client = serviceClient();
   const [totalsRes, byAcctRes, byVendorRes, runsRes, ingredientsRes, needsReviewLinesRes, flaggedRes, vendorsRes] =
     await Promise.all([
@@ -100,6 +102,7 @@ async function loadOverview(): Promise<{
   if (totalsRes.error) throw totalsRes.error;
   if (byAcctRes.error) throw byAcctRes.error;
   if (byVendorRes.error) throw byVendorRes.error;
+  mark(timer, "batch1");
 
   const t = (totalsRes.data ?? {}) as Record<string, unknown>;
   const n = (k: string) => Number(t[k] ?? 0);
@@ -148,6 +151,8 @@ async function loadOverview(): Promise<{
     flaggedAt: r.flagged_at,
   }));
 
+  mark(timer, "shape");
+  endTimer(timer);
   return {
     totals,
     lastRun: ((runsRes.data ?? [])[0] ?? null) as IntakeRun | null,

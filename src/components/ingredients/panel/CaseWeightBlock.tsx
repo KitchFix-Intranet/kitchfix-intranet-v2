@@ -7,12 +7,17 @@
 // the item back on the ingredient's measures.
 //
 // Writes through /api/review/set-case-weight.
+//
+// T4 §3: save + clear both route through the shared save-and-refresh
+// helper so the Save button stays "Saving..." until the refreshed
+// number has rendered; the success toast fires at that moment.
 
 import { useState } from "react";
-import { toast } from "@/components/ui/Toaster";
 import { fmtUsd } from "@/lib/fmt";
 import { DIM_BY_UOM } from "@/lib/ingredients/pack";
 import type { ReviewGroupItem } from "../itemTypes";
+import { postJson } from "./common";
+import { useSaveWithRefresh } from "./useSaveWithRefresh";
 
 export function CaseWeightBlock({
   item,
@@ -28,7 +33,7 @@ export function CaseWeightBlock({
   const storedCw = item.caseWeightLb ?? null;
   const [open, setOpen] = useState<boolean>(forceOpen || storedCw != null);
   const [val, setVal] = useState<string>(storedCw != null ? String(storedCw) : "");
-  const [busy, setBusy] = useState(false);
+  const { save: runSave, busy } = useSaveWithRefresh();
 
   // Not shown at all for a weight case (pack_uom is weight). Those
   // items price per the pack's own weight; no override needed.
@@ -59,47 +64,21 @@ export function CaseWeightBlock({
   const dirty = (storedCw ?? null) !== (n ?? null);
 
   async function save() {
-    setBusy(true);
-    try {
-      const res = await fetch("/api/review/set-case-weight", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ itemId: item.id, caseWeightLb: n }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-        toast(data.error ?? "Save failed");
-        return;
-      }
-      toast("Case weight saved");
-      onDone();
-    } catch (e) {
-      toast(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+    await runSave({
+      op: () => postJson("/api/review/set-case-weight", { itemId: item.id, caseWeightLb: n }),
+      successMessage: "Case weight saved",
+      errorFallback: "Save failed",
+      onDone,
+    });
   }
   async function clear() {
-    setBusy(true);
-    try {
-      const res = await fetch("/api/review/set-case-weight", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ itemId: item.id, caseWeightLb: null }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-        toast(data.error ?? "Clear failed");
-        return;
-      }
-      setVal("");
-      toast("Case weight cleared");
-      onDone();
-    } catch (e) {
-      toast(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+    const r = await runSave({
+      op: () => postJson("/api/review/set-case-weight", { itemId: item.id, caseWeightLb: null }),
+      successMessage: "Case weight cleared",
+      errorFallback: "Clear failed",
+      onDone,
+    });
+    if (r.ok) setVal("");
   }
 
   const hint =

@@ -27,6 +27,8 @@ import { LedgerBlock } from "./LedgerBlock";
 import { MasterSendAllBackButton } from "../MasterSendAllBackButton";
 import { postJson, errMsg } from "./common";
 import { SaveFlash } from "./SaveFlash";
+import { useSaveWithRefresh } from "./useSaveWithRefresh";
+import { dropParents } from "../parentsStore";
 
 function DisclosureRow({
   label,
@@ -71,9 +73,11 @@ function RetailRow({
   ingredient: ReviewCardIngredient;
   onDone: () => void;
 }) {
-  const [busy, setBusy] = useState(false);
-  const [savedAt, setSavedAt] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // T4 §3: busy stays true through POST + refresh so the checkbox is
+  // not clickable a second time while the move-count toast is still
+  // counting the first move. The toast fires at the moment the move
+  // has rendered.
+  const { save: runSave, busy, savedAt, error } = useSaveWithRefresh();
   const [preview, setPreview] = useState<{ active: number; resale: number } | null>(null);
 
   // Preview GET fires once the row is mounted (i.e. the disclosure is
@@ -102,30 +106,28 @@ function RetailRow({
 
   async function toggle(next: boolean) {
     if (busy) return;
-    setBusy(true);
-    setError(null);
-    const r = await postJson("/api/review/set-resale", {
-      ingredientId: ingredient.id,
-      resale: next,
+    await runSave({
+      op: () =>
+        postJson("/api/review/set-resale", {
+          ingredientId: ingredient.id,
+          resale: next,
+        }),
+      successMessage: (d) => {
+        // Response shape is { moved?: number }; keep the narrow guard
+        // where the body meets the typed world.
+        let moved = 0;
+        if (d && typeof d === "object") {
+          const rec = d as { moved?: unknown };
+          if (typeof rec.moved === "number") moved = rec.moved;
+        }
+        const base = next ? "Saved: moved to retail bucket" : "Saved: moved to recipe-coverage bucket";
+        const direction = next ? "to retail" : "back to active";
+        return moved > 0
+          ? `${base} (${fmtCount(moved)} confirmed items moved ${direction})`
+          : base;
+      },
+      onDone,
     });
-    if (!r.ok) {
-      const msg = errMsg(r.data, `Save failed (${r.status})`);
-      setError(msg);
-      toast(msg, { tone: "block" });
-      setBusy(false);
-      return;
-    }
-    const moved = ((r.data ?? {}) as { moved?: number }).moved ?? 0;
-    const base = next ? "Saved: moved to retail bucket" : "Saved: moved to recipe-coverage bucket";
-    const direction = next ? "to retail" : "back to active";
-    toast(
-      moved > 0
-        ? `${base} (${fmtCount(moved)} confirmed items moved ${direction})`
-        : base
-    );
-    setSavedAt(Date.now());
-    setBusy(false);
-    onDone();
   }
 
   return (
@@ -175,7 +177,11 @@ function MergeRow({
   onDone: () => void;
 }) {
   const [target, setTarget] = useState<string>("");
-  const [busy, setBusy] = useState(false);
+  // T4 §3: busy must span POST + refresh so the Merge primary stays
+  // "Saving..." until the list reads the new membership. The toast
+  // here is special (carries an undo) so we fire it ourselves on
+  // success instead of letting the helper fire a plain-string toast.
+  const { save: runSave, busy } = useSaveWithRefresh();
   const [parents, setParents] = useState<ReviewCardIngredient[]>(parentsProp);
   const [loadState, setLoadState] = useState<"idle" | "loading" | "ready" | "error">(
     parentsProp.length > 0 ? "ready" : onLoadParents ? "idle" : "ready"
@@ -214,33 +220,44 @@ function MergeRow({
       `Merge "${ingredient.name}" into "${targetName}"?\n\nEvery item on "${ingredient.name}" will move to "${targetName}". This is reversible from the Recent decisions ledger.`
     );
     if (!confirmed) return;
-    setBusy(true);
-    const r = await postJson("/api/review/merge-ingredient", {
-      sourceId: ingredient.id,
-      targetId: target,
-    });
-    if (!r.ok) {
-      toast(errMsg(r.data, `Merge failed (${r.status})`), { tone: "block" });
-      setBusy(false);
-      return;
-    }
-    const d = r.data as { movedItems?: number };
     const srcId = ingredient.id;
-    toast(
-      `Merged ${d.movedItems ?? 0} items into ${targetName}`,
-      {
-        undo: async () => {
-          await fetch("/api/review/undo-merge", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ sourceId: srcId }),
-          });
-          onDone();
-        },
-      }
-    );
-    setBusy(false);
-    onDone();
+    await runSave({
+      op: () =>
+        postJson("/api/review/merge-ingredient", {
+          sourceId: ingredient.id,
+          targetId: target,
+        }),
+      successMessage: (d) => {
+        let movedItems = 0;
+        if (d && typeof d === "object") {
+          const rec = d as { movedItems?: unknown };
+          if (typeof rec.movedItems === "number") movedItems = rec.movedItems;
+        }
+        return `Merged ${movedItems} items into ${targetName}`;
+      },
+      errorFallback: "Merge failed",
+      // T4 §2a: a merge removes one ingredient from the active set,
+      // so Merge + Sub-category dropdowns both need the fresh list on
+      // their next open.
+      onAfterSuccess: dropParents,
+      // Merge's success toast carries an undo, which the plain-string
+      // helper toast cannot express. Fire a custom toast at the same
+      // moment the helper would have fired the plain one.
+      fireSuccessToast: (_d, message) => {
+        toast(message, {
+          undo: async () => {
+            await fetch("/api/review/undo-merge", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ sourceId: srcId }),
+            });
+            dropParents();
+            onDone();
+          },
+        });
+      },
+      onDone,
+    });
   }
 
   if (loadState === "loading") {

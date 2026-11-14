@@ -4,10 +4,14 @@
 // > 0 and <= 100 (DB-enforced via pr_ingredients_yield_range). Source
 // select is the 4-value yield vocab (no "pack"). Clearing saves null
 // for both fields. Yield changes NO price anywhere in M2.
+//
+// T4 §3: shared save-and-refresh helper so Save stays "Saving..."
+// until the refreshed yield has rendered.
 
 import { useState } from "react";
-import { toast } from "@/components/ui/Toaster";
 import type { ReviewCardIngredient } from "../itemTypes";
+import { postJson } from "./common";
+import { useSaveWithRefresh } from "./useSaveWithRefresh";
 
 const YIELD_SOURCES = [
   { v: "house_test", label: "house test" },
@@ -29,7 +33,7 @@ export function PanelYieldRow({
 }) {
   const [qtyStr, setQtyStr] = useState<string>(yieldPct != null ? String(yieldPct) : "");
   const [source, setSource] = useState<string>(yieldSource ?? "estimate");
-  const [busy, setBusy] = useState(false);
+  const { save: runSave, busy } = useSaveWithRefresh();
 
   const trimmed = qtyStr.trim();
   const n = trimmed ? Number(trimmed) : null;
@@ -43,28 +47,15 @@ export function PanelYieldRow({
   })();
 
   async function save(toClear: boolean) {
-    setBusy(true);
-    try {
-      const body = toClear
-        ? { ingredientId: ingredient.id, yieldPct: null, yieldSource: null }
-        : { ingredientId: ingredient.id, yieldPct: n, yieldSource: source };
-      const res = await fetch("/api/review/set-ingredient-yield", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-        toast(data.error ?? "Save failed");
-        return;
-      }
-      toast(toClear ? "Yield cleared" : "Yield saved");
-      onDone();
-    } catch (e) {
-      toast(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+    const body = toClear
+      ? { ingredientId: ingredient.id, yieldPct: null, yieldSource: null }
+      : { ingredientId: ingredient.id, yieldPct: n, yieldSource: source };
+    await runSave({
+      op: () => postJson("/api/review/set-ingredient-yield", body),
+      successMessage: toClear ? "Yield cleared" : "Yield saved",
+      errorFallback: "Save failed",
+      onDone,
+    });
   }
 
   return (
