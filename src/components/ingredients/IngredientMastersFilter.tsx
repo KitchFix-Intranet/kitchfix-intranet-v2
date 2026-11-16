@@ -187,18 +187,48 @@ function matches(row: MasterRow, needle: string): boolean {
 }
 
 // N12 §R1: price-sub precedence on the row. First match wins.
+// T6 §1: the warn branch of the spread sub-line names the same
+// subset the detail-panel banner does. Gated on a populated grade
+// subset over threshold (ratioFlag's shape in IngredientMasters.tsx),
+// not on the blended figure. Single-grade masters keep the exact
+// pre-T6 copy - that subset IS the blend.
 function rowPriceSub(row: MasterRow): { text: string; warn: boolean } | null {
   if (row.linkedCount === 0) return null;
   if (row.pricedCount === 0) return { text: "not priced", warn: true };
   if (row.pricedCount < row.linkedCount) {
     return { text: `${fmtCount(row.pricedCount)} of ${fmtCount(row.linkedCount)} priced`, warn: true };
   }
-  if (row.spreadRatio != null && row.spreadRatio > SPREAD_RATIO_MAX) {
-    return { text: `${row.spreadRatio.toFixed(1)}x spread`, warn: true };
+  const std = row.statsByLens.standard;
+  const prem = row.statsByLens.premium;
+  const stdPop = std.linkedCount > 0;
+  const premPop = prem.linkedCount > 0;
+  const bothPop = stdPop && premPop;
+  const stdOver = stdPop && std.spreadRatio != null && std.spreadRatio > SPREAD_RATIO_MAX;
+  const premOver = premPop && prem.spreadRatio != null && prem.spreadRatio > SPREAD_RATIO_MAX;
+  if (stdOver || premOver) {
+    if (!bothPop) {
+      // Single grade: byte-identical to pre-T6. No grade word.
+      return { text: `${(row.spreadRatio ?? 0).toFixed(1)}x spread`, warn: true };
+    }
+    // Two-grade: name the subset. When both are over, name the worse.
+    if (stdOver && premOver) {
+      const stdR = std.spreadRatio!;
+      const premR = prem.spreadRatio!;
+      if (stdR >= premR) {
+        return { text: `${stdR.toFixed(1)}x Standard spread`, warn: true };
+      }
+      return { text: `${premR.toFixed(1)}x Premium spread`, warn: true };
+    }
+    if (stdOver) {
+      return { text: `${std.spreadRatio!.toFixed(1)}x Standard spread`, warn: true };
+    }
+    return { text: `${prem.spreadRatio!.toFixed(1)}x Premium spread`, warn: true };
   }
   // M2 §4B amendment 4: the "in recipes" derived sub-line moved to
   // the expand's chip view switch. Row header shows the base_unit
   // price only; alternate units via chip.
+  // Includes the pure-grade-gap case (blended > threshold but no
+  // subset over): report quietly, no red.
   if (row.spreadRatio != null) {
     return { text: `${row.spreadRatio.toFixed(1)}x spread`, warn: false };
   }
@@ -810,7 +840,20 @@ function DetailView({
   }, [active.minPerBase, active.maxPerBase, viewConvFactor]);
 
   const partial = active.linkedCount > 0 && active.pricedCount < active.linkedCount;
-  const spreadBad = active.spreadRatio != null && active.spreadRatio > SPREAD_RATIO_MAX;
+  // T6 §2: red only when the figure IN THE TILE describes a real
+  // in-grade defect. On a two-grade master with Blended selected the
+  // tile paints the across-grade ratio, which the G3 rule says is
+  // the grade working, not a pricing problem - house rule is red
+  // means one thing. Single-grade masters are unchanged: blended
+  // is the subset. Standard / Premium selected: the subset's own
+  // ratio decides (what active.spreadRatio already is).
+  const bothGradesPopulated =
+    row.statsByLens.standard.linkedCount > 0 &&
+    row.statsByLens.premium.linkedCount > 0;
+  const spreadBad =
+    effectiveLens === "blended" && bothGradesPopulated
+      ? false
+      : active.spreadRatio != null && active.spreadRatio > SPREAD_RATIO_MAX;
 
   const derivedForStrip = stripDerivedSub(row, active);
 

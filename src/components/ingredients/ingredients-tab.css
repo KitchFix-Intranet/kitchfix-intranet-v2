@@ -479,12 +479,15 @@
   overflow: hidden;
   text-overflow: clip;
 }
-/* Round 3 fix 3: lens label sizes to its select's content (not the
- * strip-cell's cross-axis). align-self: flex-start stops the strip-
- * cell's default stretch; max-content width keeps the chrome tight
- * around "Blended" / "Standard" / "Premium". An invisible ::before
- * halo gives the 44 px click target the floor rule asks for while
- * the visible chrome stays 28 px. */
+/* T6 §3: lens label sizes to its select's content (not the strip-
+ * cell's cross-axis). align-self: flex-start stops the strip-cell's
+ * default stretch; max-content width keeps the chrome tight around
+ * "Blended" / "Standard" / "Premium". The control itself is the
+ * 44 px click target now - an earlier version added an invisible
+ * ::before halo to fake a floor-compliant hit area around a 28 px
+ * pill, but the halo painted above the in-flow <select> and
+ * swallowed every click, and a <label> wrapping a <select> only
+ * focuses it, does not open it. Delete the halo, grow the chrome. */
 .kf-ingp__lens {
   position: relative;
   align-self: flex-start;
@@ -492,20 +495,15 @@
   align-items: center;
   width: max-content;
   min-width: 0;
-  height: 28px;
-  padding: 0 var(--sp-sp-2);
+  height: 44px;
+  padding: 0 var(--sp-sp-3);
   margin: var(--sp-sp-1) 0;
   border: 1px solid var(--sp-line);
-  border-radius: var(--sp-r-sm);
+  border-radius: var(--sp-r-ctl);
   background: var(--sp-card);
   font-family: var(--sp-ui);
   font-size: var(--sp-t-micro);
   color: var(--sp-ink);
-}
-.kf-ingp__lens::before {
-  content: "";
-  position: absolute;
-  inset: -8px 0;
 }
 .kf-ingp__lens select {
   background: transparent;
