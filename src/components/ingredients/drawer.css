@@ -440,6 +440,14 @@
 .kf-ipanel__pin .kf-ipanel__strip-cell {
   padding: var(--sp-sp-2) var(--sp-sp-3);
 }
+/* T8 round 3: the shorthand above lands on the same specificity as
+ * the base .kf-ipanel__strip-cell:first-child / :last-child rules and
+ * wins on source order, so it overwrites the 24 px outer gutter. These
+ * two re-assert the 24 px inset INSIDE the pin scope so the strip's
+ * outer edges line up with the head's gutter above and the first
+ * .kf-ipanel__row gutter below. They must stay below the shorthand. */
+.kf-ipanel__pin .kf-ipanel__strip-cell:first-child { padding-left: var(--sp-sp-5); }
+.kf-ipanel__pin .kf-ipanel__strip-cell:last-child { padding-right: var(--sp-sp-5); }
 .kf-ipanel__pin .kf-ipanel__strip-label {
   line-height: 1;
   letter-spacing: 1.2px;
