@@ -18,6 +18,7 @@
 
 import { getServiceClient } from "@/lib/sc/_seams";
 import { networkFetch } from "@/lib/sc/outbound";
+import type { SupabaseClient, DayMetadataReviewRow } from "./types";
 
 /**
  * Clear review state (all three columns) for a set of
@@ -35,7 +36,11 @@ import { networkFetch } from "@/lib/sc/outbound";
  * @param {object}   supa?    optional shared client (test harness)
  * @returns {Promise<{ success: boolean, error?: string, cleared?: number }>}
  */
-export async function clearReviewStateForDays(accountKey: any, dates: any, supa: any) {
+export async function clearReviewStateForDays(
+  accountKey: string,
+  dates: string[],
+  supa?: SupabaseClient
+): Promise<{ success: boolean; error?: string; cleared?: number }> {
   if (!accountKey) return { success: false, error: "accountKey required" };
   if (!Array.isArray(dates) || dates.length === 0) {
     return { success: true, cleared: 0 };
@@ -70,7 +75,11 @@ export async function clearReviewStateForDays(accountKey: any, dates: any, supa:
  * @param {object}   supa?
  * @returns {Promise<{ success: boolean, error?: string, rows?: Array<{ service_date, review_status, reviewed_by, reviewed_at }> }>}
  */
-export async function readReviewStateForDays(accountKey: any, dates: any, supa: any) {
+export async function readReviewStateForDays(
+  accountKey: string,
+  dates: string[],
+  supa?: SupabaseClient
+): Promise<{ success: boolean; error?: string; rows?: DayMetadataReviewRow[] }> {
   if (!accountKey) return { success: false, error: "accountKey required" };
   if (!Array.isArray(dates) || dates.length === 0) {
     return { success: true, rows: [] };
@@ -95,12 +104,16 @@ export async function readReviewStateForDays(accountKey: any, dates: any, supa: 
  *
  * Used by sc-finalize-week's extended gate.
  */
-export async function requireAllDaysApproved(accountKey: any, dates: any, supa: any) {
+export async function requireAllDaysApproved(
+  accountKey: string,
+  dates: string[],
+  supa?: SupabaseClient
+): Promise<{ success: boolean; error?: string; allApproved?: boolean; missingDates?: string[] }> {
   const read = await readReviewStateForDays(accountKey, dates, supa);
   if (!read.success) return { success: false, error: read.error };
-  const byDate = new Map();
-  for (const r of read.rows) byDate.set(String(r.service_date).slice(0, 10), r);
-  const missing = [];
+  const byDate = new Map<string, DayMetadataReviewRow>();
+  for (const r of read.rows!) byDate.set(String(r.service_date).slice(0, 10), r);
+  const missing: string[] = [];
   for (const d of dates) {
     const row = byDate.get(d);
     if (!row || row.review_status !== "approved") missing.push(d);
@@ -135,7 +148,15 @@ export async function alertReviewClearFailure({
   clearError,
   revertedBy,
   slackWebhookUrl,
-}: any) {
+}: {
+  accountKey: string;
+  weekStart: string;
+  weekEnd: string;
+  affectedDates: string[];
+  clearError: string;
+  revertedBy: string;
+  slackWebhookUrl?: string;
+}): Promise<{ sent: boolean; skipped?: string; error?: string }> {
   const webhook = slackWebhookUrl || process.env.SLACK_SC_BILLING_WEBHOOK_URL;
   if (!webhook) {
     // eslint-disable-next-line no-console

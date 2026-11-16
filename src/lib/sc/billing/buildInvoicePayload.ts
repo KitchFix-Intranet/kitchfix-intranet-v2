@@ -187,13 +187,30 @@ function parseWeekIndex(label: any) {
 }
 
 // ─── Main entry ───────────────────────────────────────────────────
+import type {
+  DailyRevenueRow,
+  AccountMapRow,
+  ServiceMapRow,
+  BuildInvoicePayloadResult,
+} from "../types";
+
+export type { BuildInvoicePayloadResult } from "../types";
+
+export interface BuildInvoicePayloadArgs {
+  accountKey: string;
+  weekStart: string;           // ISO Monday
+  rows: DailyRevenueRow[];     // sc_daily_revenue rows (already fetched by caller)
+  accountMap: AccountMapRow;   // sc_qbo_account_map row for accountKey
+  serviceMap: ServiceMapRow[]; // sc_qbo_service_map rows for accountKey
+}
+
 export function buildInvoicePayload({
   accountKey,
   weekStart,       // ISO Monday
   rows,            // sc_daily_revenue rows (already fetched by caller)
   accountMap,      // sc_qbo_account_map row for accountKey
   serviceMap,      // sc_qbo_service_map rows for accountKey
-}: any) {
+}: BuildInvoicePayloadArgs): BuildInvoicePayloadResult {
   if (!accountKey) throw new Error("buildInvoicePayload: accountKey required");
   if (!weekStart) throw new Error("buildInvoicePayload: weekStart required");
   if (!accountMap) throw new Error(`buildInvoicePayload: accountMap missing for ${accountKey}`);

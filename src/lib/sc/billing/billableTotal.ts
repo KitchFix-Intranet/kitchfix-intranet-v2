@@ -18,6 +18,8 @@
 // what the SC pushes to QBO). confirmedPretaxCents (billable) is the only
 // consumer that needs the narrower definition.
 
+import type { SumBillableRow } from "../types";
+
 /**
  * Sum billable pretax from sc_daily_revenue-shaped rows.
  *
@@ -29,7 +31,10 @@
  *   used by loadMonthDataPostgres so independent callers reach the same
  *   integer.
  */
-export function sumBillablePretaxCents(rows: any, exportExcludedServiceIds: any) {
+export function sumBillablePretaxCents(
+  rows: readonly SumBillableRow[] | null | undefined,
+  exportExcludedServiceIds: Iterable<string> | null | undefined
+): number {
   const excluded = exportExcludedServiceIds instanceof Set
     ? exportExcludedServiceIds
     : new Set(exportExcludedServiceIds || []);

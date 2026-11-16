@@ -42,7 +42,11 @@ import { isScLockOverrideDb } from "@/lib/sc/admin";
  * @param {string}   email          - session.user.email
  * @returns {Promise<null | { code: 'PERIOD_LOCKED', lockedDates: string[], message: string }>}
  */
-export async function assertDaysUnlockedForWrite(accountKey: any, dates: any, email: any) {
+export async function assertDaysUnlockedForWrite(
+  accountKey: string,
+  dates: string[],
+  email: string | null | undefined
+): Promise<null | { code: "PERIOD_LOCKED"; lockedDates: string[]; message: string }> {
   if (!accountKey) {
     throw new Error("assertDaysUnlockedForWrite: accountKey required");
   }
@@ -66,7 +70,7 @@ export async function assertDaysUnlockedForWrite(accountKey: any, dates: any, em
     )
   );
 
-  const lockedDates = [];
+  const lockedDates: string[] = [];
   for (let i = 0; i < uniqueDates.length; i++) {
     const { data, error } = results[i];
     if (error) {

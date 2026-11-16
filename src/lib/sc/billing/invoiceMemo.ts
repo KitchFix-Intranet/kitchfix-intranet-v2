@@ -38,7 +38,7 @@
 // timeZone: UTC because ISO date strings are date-only, not local
 // timestamps; without UTC, JS parses at local midnight and can shift
 // the day when server tz != US.
-function formatMemoDate(iso: any) {
+function formatMemoDate(iso: string | null | undefined): string {
   if (!iso) return "";
   return new Date(`${iso}T12:00:00Z`).toLocaleDateString("en-US", {
     month:    "short",
@@ -60,11 +60,11 @@ function formatMemoDate(iso: any) {
 // self-descriptive on its own. If Sebastian prefers uniform "period"
 // or uniform "weeks" or explicit "Weeks 1-2 of Period N", edit the
 // templates below and nothing else.
-export function MEMO_WEEKLY_TEMPLATE(startFormatted: any, endFormatted: any) {
+export function MEMO_WEEKLY_TEMPLATE(startFormatted: string, endFormatted: string): string {
   return `Service week: ${startFormatted} - ${endFormatted}`;
 }
 
-export function MEMO_BIWEEKLY_TEMPLATE(startFormatted: any, endFormatted: any) {
+export function MEMO_BIWEEKLY_TEMPLATE(startFormatted: string, endFormatted: string): string {
   return `Service period: ${startFormatted} - ${endFormatted}`;
 }
 
@@ -82,7 +82,9 @@ export function MEMO_BIWEEKLY_TEMPLATE(startFormatted: any, endFormatted: any) {
  * @param {boolean} opts.isBiweekly  From accountMap.cadence === "biweekly".
  * @returns {string} The memo text ready to drop into CustomerMemo.value.
  */
-export function buildInvoiceMemo({ weekStart, weekEnd, isBiweekly }: any) {
+export function buildInvoiceMemo(
+  { weekStart, weekEnd, isBiweekly }: { weekStart: string; weekEnd: string; isBiweekly: boolean }
+): string {
   const start = formatMemoDate(weekStart);
   const end   = formatMemoDate(weekEnd);
   return isBiweekly

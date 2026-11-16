@@ -42,7 +42,9 @@ export const VARIANCE_DIGIT_DROP_MULT = 10; // condition 3 multiplier
  *   `"Projected 110, entered 11 - is a digit missing?"` (per Kevin's
  *   ruling 2026-08-17).
  */
-export function shouldFlagVariance({ projected, entered, isFlatFee }: any) {
+export function shouldFlagVariance(
+  { projected, entered, isFlatFee }: { projected: number; entered: number; isFlatFee: boolean }
+): { message: string } | null {
   if (isFlatFee) return null;
   if (!Number.isFinite(projected) || projected < VARIANCE_MIN_PROJECTED) return null;
   if (!Number.isFinite(entered) || entered <= 0) return null;

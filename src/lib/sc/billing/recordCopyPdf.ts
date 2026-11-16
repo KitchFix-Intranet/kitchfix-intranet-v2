@@ -72,7 +72,7 @@ const LOGO_DISPLAY_W = 132; // matches render .ph .lg { width:132px }
 
 const EM_DASH = "—";
 
-export function buildRecordCopyFilename(accountKey: any, weekStartISO: any) {
+export function buildRecordCopyFilename(accountKey: string, weekStartISO: string): string {
   if (accountKey && String(accountKey).includes(EM_DASH)) {
     throw new Error(
       `buildRecordCopyFilename: account key contains em-dash (U+2014): ${JSON.stringify(accountKey)}. Ops accounts use ASCII hyphens; fix upstream.`
@@ -177,6 +177,26 @@ function truncateToWidth(font: any, text: any, size: any, maxWidth: any) {
 // @param {string} args.approvedByLabel   Text for the "Approved by" meta row (compute in n1Body per multi-approver rule)
 // @param {Array}  args.invoiceRecords    Per-slot invoice records (aggregated across the week)
 // @returns {Promise<{ pdfBase64: string, pdfBuffer: Buffer, filename: string, pretaxCents: number, lineCount: number }>}
+import type { InvoiceRecord, ReviewRow } from "../types";
+
+export interface BuildRecordCopyPdfArgs {
+  accountKey: string;
+  accountLabel?: string;
+  weekStart: string;
+  weekEnd: string;
+  finalizedDateISO?: string | null;
+  approvedByLabel?: string | null;
+  invoiceRecords: InvoiceRecord[];
+}
+
+export interface BuildRecordCopyPdfResult {
+  pdfBase64: string;
+  pdfBuffer: Buffer;
+  filename: string;
+  pretaxCents: number;
+  lineCount: number;
+}
+
 export async function buildRecordCopyPdf({
   accountKey,
   accountLabel,
@@ -185,7 +205,7 @@ export async function buildRecordCopyPdf({
   finalizedDateISO,
   approvedByLabel,
   invoiceRecords,
-}: any) {
+}: BuildRecordCopyPdfArgs): Promise<BuildRecordCopyPdfResult> {
   const { lines, pretaxCents } = flattenLines(invoiceRecords);
   const filename = buildRecordCopyFilename(accountKey, weekStart);
 
@@ -466,7 +486,13 @@ function drawWatermark(page: any, fontBold: any) {
 // even when they overlap with the approver set (natural repetition
 // is preferred over ambiguity).
 
-export function computeApproverPhrase({ reviewRows, finalizerName, accountKey }: any) {
+export function computeApproverPhrase(
+  { reviewRows, finalizerName, accountKey }: {
+    reviewRows?: ReviewRow[];
+    finalizerName?: string;
+    accountKey: string;
+  }
+): { approvers: string[]; lede: string; meta: string } {
   const counts = new Map();
   const earliestTs = new Map();
   for (const r of reviewRows || []) {

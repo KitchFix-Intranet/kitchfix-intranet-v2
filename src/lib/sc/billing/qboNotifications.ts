@@ -41,6 +41,90 @@
 import { resolveRecipients, NOTIFICATION_TYPES, KEVIN_EMAIL, SEBASTIAN_EMAIL } from "./recipients";
 import { sendEmailSA, networkFetch } from "@/lib/sc/outbound";
 import { buildRecordCopyPdf, computeApproverPhrase } from "./recordCopyPdf";
+import type {
+  InvoiceRecord,
+  ReviewRow,
+  EmailResult,
+  SlackResult,
+  FireN1Result,
+  FireN2Result,
+  FireNoOpAlertResult,
+  RenderN1Result,
+  RenderN2Result,
+} from "@/lib/sc/types";
+
+export interface FireN1Args {
+  qboMode: string;
+  accountKey: string;
+  accountLabel?: string;
+  weekStart: string;
+  weekEnd: string;
+  submitterEmail: string;
+  submitterName?: string;
+  invoiceRecords: InvoiceRecord[];
+  scWeekLink: string;
+  accountMap?: {
+    salariedManagerEmails?: string[] | null;
+    rdoEmail?: string | null;
+    notifyOperators?: boolean;
+  };
+  finalizedDateISO?: string | null;
+  reviewRows?: ReviewRow[];
+  daysInWeek?: number;
+  send?: boolean;
+  deps?: {
+    emailSender?: (args: Record<string, unknown>) => Promise<EmailResult>;
+    sendSlack?: (args: Record<string, unknown>) => Promise<SlackResult>;
+    slackWebhookUrl?: string;
+    buildRecordCopyPdf?: typeof buildRecordCopyPdf;
+  };
+}
+
+export interface FireN2Args {
+  qboMode: string;
+  accountKey: string;
+  weekStart: string;
+  weekEnd: string;
+  errorText: string;
+  retryLink?: string;
+  scWeekLink?: string;
+  attempt: number;
+  accountMap?: {
+    salariedManagerEmails?: string[] | null;
+    rdoEmail?: string | null;
+    notifyOperators?: boolean;
+  };
+  send?: boolean;
+  deps?: {
+    emailSender?: (args: Record<string, unknown>) => Promise<EmailResult>;
+    sendSlack?: (args: Record<string, unknown>) => Promise<SlackResult>;
+    slackWebhookUrl?: string;
+  };
+}
+
+export interface FireNoOpAlertArgs {
+  accountKey: string;
+  weekStart: string;
+  weekEnd: string;
+  submitterEmail?: string;
+  finalizedAt?: string | null;
+  priorInvoices: Array<{
+    invoice_slot?: string;
+    qbo_doc_number?: string;
+    qbo_invoice_id?: string;
+    ledger_row_id?: string;
+  }>;
+  send?: boolean;
+  deps?: {
+    emailSender?: (args: Record<string, unknown>) => Promise<EmailResult>;
+    sendSlack?: (args: Record<string, unknown>) => Promise<SlackResult>;
+    slackWebhookUrl?: string;
+  };
+}
+
+// Concrete per-function result types are declared in src/lib/sc/types.ts.
+// Re-exported here so existing imports can find them under this file.
+export type { FireN1Result, FireN2Result, FireNoOpAlertResult } from "@/lib/sc/types";
 
 // ─── Copy constants ───────────────────────────────────────────────
 
@@ -350,7 +434,7 @@ async function sendSlack({ webhookUrl, text }: any) {
  * @param {Object} [args.deps]        { emailSender, sendSlack, slackWebhookUrl } for tests.
  * @returns {Promise<{recipients:{to:string[],cc:string[]}, subject:string, html:string, preheader:string, email:{result:string}, slack:{text:string, result:object}}>}
  */
-export async function fireN1(args: any) {
+export async function fireN1(args: FireN1Args): Promise<FireN1Result> {
   const {
     qboMode, accountKey, accountLabel, weekStart, weekEnd, submitterEmail,
     submitterName, invoiceRecords, scWeekLink, accountMap, finalizedDateISO,
@@ -478,7 +562,7 @@ export async function fireN1(args: any) {
     : baseSlackText;
 
   let emailResult = "not_sent";
-  let slackResult = { sent: false, skipped: "not sent (send=false)" };
+  let slackResult: SlackResult = { sent: false, skipped: "not sent (send=false)" };
 
   if (send) {
     // Email. Presence-check env vars first when running the real
@@ -562,7 +646,7 @@ export async function fireN1(args: any) {
  * resolveRecipients. Slack posts in both modes; test mode always
  * carries [TEST] prefix + TEST_SLACK_FOOTER.
  */
-export async function fireN2(args: any) {
+export async function fireN2(args: FireN2Args): Promise<FireN2Result> {
   const {
     qboMode, accountKey, weekStart, weekEnd, errorText, retryLink,
     scWeekLink, attempt, accountMap, send = true, deps,
@@ -582,7 +666,7 @@ export async function fireN2(args: any) {
   const slackText = n2SlackText({ accountKey, weekStart, weekEnd, errorText, retryLink, isTest, attempt });
 
   let emailResult = "not_sent";
-  let slackResult = { sent: false, skipped: "not sent (send=false)" };
+  let slackResult: SlackResult = { sent: false, skipped: "not sent (send=false)" };
   if (send) {
     if (recipients.to.length > 0) {
       const sender = deps?.emailSender || sendEmailSA;
@@ -698,7 +782,7 @@ function noOpAlertSlackText({ accountKey, weekStart, submitterEmail, priorInvoic
  * @param {Object}  [args.deps]        { emailSender, sendSlack, slackWebhookUrl } for injection
  * @returns {{ recipients, subject, preheader, html, slack, email }}
  */
-export async function fireNoOpAlert(args: any) {
+export async function fireNoOpAlert(args: FireNoOpAlertArgs): Promise<FireNoOpAlertResult> {
   const {
     accountKey, weekStart, weekEnd, submitterEmail, finalizedAt,
     priorInvoices = [], send = true, deps,
@@ -723,7 +807,7 @@ export async function fireNoOpAlert(args: any) {
   const recipients = { to: [KEVIN_EMAIL], cc: [] };
 
   let emailResult = "not_sent";
-  let slackResult = { sent: false, skipped: "not sent (send=false)" };
+  let slackResult: SlackResult = { sent: false, skipped: "not sent (send=false)" };
   if (send) {
     const sender = deps?.emailSender || sendEmailSA;
     emailResult = await sender({
@@ -753,7 +837,17 @@ export async function fireNoOpAlert(args: any) {
 // as thin wrappers around fireN1 / fireN2 with send=false so no
 // live send happens from a render-only path.
 
-export function renderN1({ accountKey, weekStart, weekEnd, submitterEmail, invoiceRecords, scWeekLink, dryRunOnly }: any) {
+export function renderN1(
+  { accountKey, weekStart, weekEnd, submitterEmail, invoiceRecords, scWeekLink, dryRunOnly }: {
+    accountKey: string;
+    weekStart: string;
+    weekEnd: string;
+    submitterEmail?: string;
+    invoiceRecords: InvoiceRecord[];
+    scWeekLink?: string;
+    dryRunOnly?: boolean;
+  }
+): RenderN1Result {
   if (dryRunOnly === false) {
     throw new Error("renderN1 is render-only. Use fireN1 for live send.");
   }
@@ -788,7 +882,16 @@ export function renderN1({ accountKey, weekStart, weekEnd, submitterEmail, invoi
   return { mode: "dryrun", to, subject, html };
 }
 
-export function renderN2({ accountKey, weekStart, weekEnd, errorText, retryLink, dryRunOnly }: any) {
+export function renderN2(
+  { accountKey, weekStart, weekEnd, errorText, retryLink, dryRunOnly }: {
+    accountKey: string;
+    weekStart: string;
+    weekEnd: string;
+    errorText: string;
+    retryLink?: string;
+    dryRunOnly?: boolean;
+  }
+): RenderN2Result {
   if (dryRunOnly === false) {
     throw new Error("renderN2 is render-only. Use fireN2 for live send.");
   }
