@@ -8,46 +8,8 @@
 
 import { forwardRef } from "react";
 import { X } from "lucide-react";
-import { fmtDate, fmtPackNumbersInText, fmtUsd, fmtUsdLong } from "@/lib/fmt";
-import { canonicalFromBaseUnit, uomLabel } from "@/lib/ingredients/pack";
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
-
-// T7: the four facts PanelStrip prints in its summary cells.
-// Composed here (not in PanelStrip) so this PR touches two files;
-// the primitives (fmtUsd / fmtPackNumbersInText / fmtUsdLong /
-// fmtDate / uomLabel / canonicalFromBaseUnit) are the same ones
-// PanelStrip calls, so the sticky sub-line matches the strip to
-// the character. If PanelStrip's primary-value logic ever changes,
-// this helper must change with it - see PanelStrip.tsx lines
-// 46-49 (the showIngUnitAsPrimary pick) and 94 (fmtUsdLong on
-// usd12m).
-function itemHeadFacts(
-  item: ReviewGroupItem,
-  ingredient: ReviewCardIngredient | null,
-): { unitPrice: string; pack: string; annualSpend: string; lastBought: string } {
-  const perBaseUomLower = item.perBaseUom
-    ? item.perBaseUom === "LB" ? "lb"
-      : item.perBaseUom === "FLOZ" ? "fl oz"
-      : item.perBaseUom === "EA" ? "each"
-      : item.perBaseUom.toLowerCase()
-    : null;
-  const ingUnitLabel = ingredient ? uomLabel(canonicalFromBaseUnit(ingredient.base_unit) ?? "") : "";
-  const primaryPer = item.perBaseInIngUnit ?? null;
-  const showIngUnitAsPrimary =
-    primaryPer != null && Number.isFinite(primaryPer) && primaryPer > 0 && Boolean(ingUnitLabel);
-  const unitPrice = showIngUnitAsPrimary
-    ? `${fmtUsd(primaryPer as number)} / ${ingUnitLabel}`
-    : item.perBase != null && perBaseUomLower
-      ? `${fmtUsd(item.perBase)} / ${perBaseUomLower}`
-      : "-";
-  const pack = fmtPackNumbersInText(item.packNormalized ?? item.pack ?? "-");
-  // Strip uses `$${fmtUsdLong(x).replace(/^\$/, "")}` - fmtUsdLong
-  // always begins with the currency sign, so the two reduce to
-  // the same rendered string.
-  const annualSpend = `${fmtUsdLong(item.usd12m)} a year`;
-  const lastBought = item.lastSeen ? `last bought ${fmtDate(item.lastSeen)}` : "last bought -";
-  return { unitPrice, pack, annualSpend, lastBought };
-}
+import { itemFacts } from "./itemFacts";
 
 export const PanelHead = forwardRef<HTMLButtonElement, {
   labelId: string;
@@ -154,18 +116,25 @@ export const PanelHead = forwardRef<HTMLButtonElement, {
             slides under it as the user scrolls down. Item mode only
             - kind="ingredient" gains nothing. Known trade: at
             scroll-top the four facts appear twice (here as running
-            text, below in the labelled strip). */}
+            text, below in the labelled strip). Values come from the
+            same itemFacts helper PanelStrip uses. */}
         {kind === "item" && item ? (() => {
-          const facts = itemHeadFacts(item, ingredient);
+          const facts = itemFacts(item, ingredient);
+          const unitPrice =
+            facts.primaryValue != null && facts.primaryUnit != null
+              ? `${facts.primaryValue} / ${facts.primaryUnit}`
+              : "-";
+          const annualSpend = `${facts.annualSpend} a year`;
+          const lastBought = facts.lastBought ? `last bought ${facts.lastBought}` : "last bought -";
           return (
             <div className="kf-ipanel__head-facts" aria-label="Item at a glance">
-              <span>{facts.unitPrice}</span>
+              <span>{unitPrice}</span>
               <span className="kf-ipanel__head-facts-sep" aria-hidden>·</span>
               <span>{facts.pack}</span>
               <span className="kf-ipanel__head-facts-sep" aria-hidden>·</span>
-              <span>{facts.annualSpend}</span>
+              <span>{annualSpend}</span>
               <span className="kf-ipanel__head-facts-sep" aria-hidden>·</span>
-              <span>{facts.lastBought}</span>
+              <span>{lastBought}</span>
             </div>
           );
         })() : null}
