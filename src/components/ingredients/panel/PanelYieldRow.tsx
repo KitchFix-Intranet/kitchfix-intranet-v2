@@ -50,10 +50,24 @@ export function PanelYieldRow({
     const body = toClear
       ? { ingredientId: ingredient.id, yieldPct: null, yieldSource: null }
       : { ingredientId: ingredient.id, yieldPct: n, yieldSource: source };
+    // T4 §3 wrapper keeps the Save button in "Saving..." through the
+    // refresh + toast. T3 §3c draft reset rides inside onAfterSuccess
+    // so the box stops reading its pre-save value (clear leaves qty
+    // = 95 + source still dirty = Save stays live, which was the
+    // bug). Clear wipes both; a non-null save re-seeds qtyStr with
+    // the stored number.
     await runSave({
       op: () => postJson("/api/review/set-ingredient-yield", body),
       successMessage: toClear ? "Yield cleared" : "Yield saved",
       errorFallback: "Save failed",
+      onAfterSuccess: () => {
+        if (toClear) {
+          setQtyStr("");
+          setSource("estimate");
+        } else if (n != null) {
+          setQtyStr(String(n));
+        }
+      },
       onDone,
     });
   }

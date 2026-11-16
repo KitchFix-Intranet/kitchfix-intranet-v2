@@ -345,7 +345,17 @@ export function ReviewActions({
       setOp(null);
       return;
     }
-    toast("Relinked");
+    // T3 §8: count actual changes, report both.
+    const d = (r.data ?? {}) as { marked?: number; relinked?: number; skipped?: number };
+    const marked = Number(d.marked ?? d.relinked ?? 0);
+    const skipped = Number(d.skipped ?? 0);
+    if (marked === 0) {
+      toast("Nothing changed - already decided");
+    } else if (skipped > 0) {
+      toast(`Relinked ${fmtCount(marked)} (${fmtCount(skipped)} already decided)`);
+    } else {
+      toast(`Relinked ${fmtCount(marked)}`);
+    }
     setShowRelink(false);
     setOp(null);
     setLastDone(Date.now());
@@ -534,7 +544,19 @@ export function ReviewActions({
       setOp(null);
       return;
     }
-    toast(`Marked ${fmtCount(checkedCount)} as not food`);
+    // T3 §8: server returns { marked, skipped }. When marked is 0 the
+    // UPDATE matched nothing (every item was already decided), so
+    // the toast says so instead of claiming success.
+    const d = (r.data ?? {}) as { marked?: number; skipped?: number };
+    const marked = Number(d.marked ?? 0);
+    const skipped = Number(d.skipped ?? 0);
+    if (marked === 0) {
+      toast("Nothing changed - already decided");
+    } else if (skipped > 0) {
+      toast(`Marked ${fmtCount(marked)} as not food (${fmtCount(skipped)} already decided)`);
+    } else {
+      toast(`Marked ${fmtCount(marked)} as not food`);
+    }
     setOp(null);
     setLastDone(Date.now());
     router.refresh();
@@ -556,7 +578,17 @@ export function ReviewActions({
       setOp(null);
       return;
     }
-    toast(`Marked ${fmtCount(checkedCount)} as one-off purchase${checkedCount === 1 ? "" : "s"}`);
+    // T3 §8: see markNotFood - count actual changes, report both.
+    const d = (r.data ?? {}) as { marked?: number; skipped?: number };
+    const marked = Number(d.marked ?? 0);
+    const skipped = Number(d.skipped ?? 0);
+    if (marked === 0) {
+      toast("Nothing changed - already decided");
+    } else if (skipped > 0) {
+      toast(`Marked ${fmtCount(marked)} as one-off purchase${marked === 1 ? "" : "s"} (${fmtCount(skipped)} already decided)`);
+    } else {
+      toast(`Marked ${fmtCount(marked)} as one-off purchase${marked === 1 ? "" : "s"}`);
+    }
     setOp(null);
     setLastDone(Date.now());
     router.refresh();
@@ -682,7 +714,17 @@ export function ReviewActions({
       setOp(null);
       return;
     }
-    toast(`Archived ${fmtCount(checkedCount)} item${checkedCount === 1 ? "" : "s"}`);
+    // T3 §8: count actual changes, report both.
+    const d = (r.data ?? {}) as { marked?: number; skipped?: number };
+    const marked = Number(d.marked ?? 0);
+    const skipped = Number(d.skipped ?? 0);
+    if (marked === 0) {
+      toast("Nothing changed - already decided");
+    } else if (skipped > 0) {
+      toast(`Archived ${fmtCount(marked)} item${marked === 1 ? "" : "s"} (${fmtCount(skipped)} already decided)`);
+    } else {
+      toast(`Archived ${fmtCount(marked)} item${marked === 1 ? "" : "s"}`);
+    }
     setOp(null);
     setLastDone(Date.now());
     router.refresh();
@@ -726,7 +768,17 @@ export function ReviewActions({
       setOp(null);
       return;
     }
-    toast(`${fmtCount(checkedCount)} items held out of this group`);
+    // T3 §8: count actual changes, report both.
+    const d = (r.data ?? {}) as { marked?: number; skipped?: number };
+    const marked = Number(d.marked ?? 0);
+    const skipped = Number(d.skipped ?? 0);
+    if (marked === 0) {
+      toast("Nothing changed - already decided");
+    } else if (skipped > 0) {
+      toast(`${fmtCount(marked)} item${marked === 1 ? "" : "s"} held out of this group (${fmtCount(skipped)} already decided)`);
+    } else {
+      toast(`${fmtCount(marked)} item${marked === 1 ? "" : "s"} held out of this group`);
+    }
     setOp(null);
     setLastDone(Date.now());
     router.refresh();

@@ -38,10 +38,12 @@ import { canonicalFromBaseUnit, uomLabel } from "@/lib/ingredients/pack";
 // sub-line used to carry is handled by the expand's chip view switch
 // (§2.6) which computes in the browser via priceInUnit.
 import {
+  factor,
   priceInUnit,
   reachableUnits,
   type Measure,
 } from "@/lib/ingredients/measures";
+import { SPREAD_RATIO_MAX } from "@/lib/ingredients/blend";
 import { RowSendBackButton } from "./RowSendBackButton";
 import { RowGradeToggle } from "./RowGradeToggle";
 import { PanelIngredientZone } from "./panel/PanelIngredientZone";
@@ -185,18 +187,51 @@ function matches(row: MasterRow, needle: string): boolean {
 }
 
 // N12 §R1: price-sub precedence on the row. First match wins.
+// T6 §1: the warn branch of the spread sub-line names the same
+// subset the detail-panel banner does. Gated on a populated grade
+// subset over threshold (ratioFlag's shape in IngredientMasters.tsx),
+// not on the blended figure. Single-grade masters keep the exact
+// pre-T6 copy - that subset IS the blend.
 function rowPriceSub(row: MasterRow): { text: string; warn: boolean } | null {
   if (row.linkedCount === 0) return null;
   if (row.pricedCount === 0) return { text: "not priced", warn: true };
   if (row.pricedCount < row.linkedCount) {
     return { text: `${fmtCount(row.pricedCount)} of ${fmtCount(row.linkedCount)} priced`, warn: true };
   }
-  if (row.spreadRatio != null && row.spreadRatio > 3) {
-    return { text: `${row.spreadRatio.toFixed(1)}x spread`, warn: true };
+  const std = row.statsByLens.standard;
+  const prem = row.statsByLens.premium;
+  const stdPop = std.linkedCount > 0;
+  const premPop = prem.linkedCount > 0;
+  const bothPop = stdPop && premPop;
+  const stdOver = stdPop && std.spreadRatio != null && std.spreadRatio > SPREAD_RATIO_MAX;
+  const premOver = premPop && prem.spreadRatio != null && prem.spreadRatio > SPREAD_RATIO_MAX;
+  if (stdOver || premOver) {
+    if (!bothPop) {
+      // Single grade: byte-identical to pre-T6. No grade word.
+      return { text: `${(row.spreadRatio ?? 0).toFixed(1)}x spread`, warn: true };
+    }
+    // Two-grade: name the subset. When both are over, name the worse.
+    // Drop "spread" here - the 116 px price column ellipses
+    // "4.3x Standard spread" (126 px at 800 12 px Mulish). The
+    // single-grade branch above keeps "${ratio}x spread" verbatim.
+    if (stdOver && premOver) {
+      const stdR = std.spreadRatio!;
+      const premR = prem.spreadRatio!;
+      if (stdR >= premR) {
+        return { text: `${stdR.toFixed(1)}x Standard`, warn: true };
+      }
+      return { text: `${premR.toFixed(1)}x Premium`, warn: true };
+    }
+    if (stdOver) {
+      return { text: `${std.spreadRatio!.toFixed(1)}x Standard`, warn: true };
+    }
+    return { text: `${prem.spreadRatio!.toFixed(1)}x Premium`, warn: true };
   }
   // M2 §4B amendment 4: the "in recipes" derived sub-line moved to
   // the expand's chip view switch. Row header shows the base_unit
   // price only; alternate units via chip.
+  // Includes the pure-grade-gap case (blended > threshold but no
+  // subset over): report quietly, no red.
   if (row.spreadRatio != null) {
     return { text: `${row.spreadRatio.toFixed(1)}x spread`, warn: false };
   }
@@ -260,10 +295,59 @@ export function IngredientMastersFilter({
     return out;
   }, [rows, trimmed, superCat, onlyFlagged, onlyUnreviewed, onlyEmpty, sort]);
 
-  const selected = useMemo(
-    () => filtered.find((r) => r.id === selId) ?? filtered[0] ?? null,
-    [filtered, selId]
-  );
+  // T3 R3-1: selection decided during render, no useEffect in the
+  // loop. Round 2's two-state model set the hold in a useEffect,
+  // which meant the render that first received the new rows had
+  // already painted `filtered[0]` before the effect ran - causing
+  // a "Salmon -> Beef -> Salmon" flicker, scrolling the pane back
+  // to the top and collapsing any open Merge / measures / history
+  // row on every save. R2 also only held when `selId` was set, so
+  // the default first row (never clicked) was not held at all.
+  //
+  // Architecture:
+  //   - selId: the user's last click. Stays across filter changes.
+  //   - lastShownRef: a ref storing "what we rendered last, under
+  //     which filter key". Written during render after `selected` is
+  //     computed. Writing a ref during render is allowed for this
+  //     "track previous render" pattern; see React docs on ref
+  //     cheatsheet. Idempotent within a render, so StrictMode's
+  //     double invoke is safe.
+  //
+  // Decision tree:
+  //   1. If the user has clicked a row and that row is in `filtered`,
+  //      show it. The click is the clearest signal.
+  //   2. Else look at lastShownRef:
+  //      a. filter key unchanged (rows changed = save): if last-shown
+  //         is still in `rows`, show it. Covers scenario 1 (clicked
+  //         then save-outside-filter) AND scenario 2 (default row
+  //         then save-outside-filter).
+  //      b. filter key changed (user reconfigured): show last-shown
+  //         only when it still matches the new filter; else fall
+  //         through to filtered[0]. Covers scenarios 3 + 4.
+  //   3. Fallback: filtered[0].
+  const filterKey = `${trimmed}|${superCat}|${onlyFlagged ? 1 : 0}|${onlyUnreviewed ? 1 : 0}|${onlyEmpty ? 1 : 0}|${sort}`;
+  const lastShownRef = useRef<{ filterKey: string; id: string | null }>({
+    filterKey: "",
+    id: null,
+  });
+  const selected: MasterRow | null = (() => {
+    if (selId) {
+      const inFiltered = filtered.find((r) => r.id === selId);
+      if (inFiltered) return inFiltered;
+    }
+    const prev = lastShownRef.current;
+    if (prev.id) {
+      if (prev.filterKey === filterKey) {
+        const inRows = rows.find((r) => r.id === prev.id);
+        if (inRows) return inRows;
+      } else {
+        const inFiltered = filtered.find((r) => r.id === prev.id);
+        if (inFiltered) return inFiltered;
+      }
+    }
+    return filtered[0] ?? null;
+  })();
+  lastShownRef.current = { filterKey, id: selected?.id ?? null };
   const matchedUsd = useMemo(() => filtered.reduce((s, r) => s + r.usd12m, 0), [filtered]);
   const needsCount = useMemo(() => rows.filter((r) => r.issues.length > 0).length, [rows]);
   const unreviewedCount = useMemo(
@@ -275,6 +359,11 @@ export function IngredientMastersFilter({
   const anyFilterActive =
     trimmed.length > 0 || superCat !== "all" || onlyFlagged || onlyUnreviewed || onlyEmpty;
 
+  // T3 R2-2: releaseSticky is gone. The hold is a separate state
+  // cleared by the filter-change effect above. Filter / sort handlers
+  // need no extra call; selId stays. clearAll resets filters and
+  // focuses the search - the effect's filterKey change clears the
+  // hold.
   function clearAll() {
     setQuery("");
     setSuperCat("all");
@@ -335,14 +424,20 @@ export function IngredientMastersFilter({
     };
   }, [selected]);
 
-  // N12 §R2 + T4 §2a: lazy loader for Merge candidates. Reads through
-  // the shared parentsStore cache so the drawer opened from this tab
-  // and this detail-pane row never fetch twice. Merge row fires this
-  // on first expand.
+  // T4 §2a + T3 R2-1: lazy loader for Merge candidates reads through
+  // the shared parentsStore cache (one fetch per page life across
+  // the drawer and this detail pane), and the useCallback is keyed
+  // on `selected?.id` rather than `selected`. The object identity
+  // of `selected` flips on every router.refresh (new MasterRow
+  // references), which was emptying the Merge picker through
+  // PanelClosedRows's downstream useEffect. Keying on the id keeps
+  // the callback reference stable across refreshes of the same
+  // ingredient, so the cache keeps hitting.
+  const selectedId = selected?.id ?? null;
   const loadParents = useCallback(async (): Promise<ReviewCardIngredient[]> => {
-    if (!selected) return [];
-    return loadParentsFromStore(selected.id);
-  }, [selected]);
+    if (!selectedId) return [];
+    return loadParentsFromStore(selectedId);
+  }, [selectedId]);
 
   return (
     <div className={`kf-ingp__workspace${paneOpen ? " kf-ingp__workspace--detail-open" : ""}`}>
@@ -357,6 +452,7 @@ export function IngredientMastersFilter({
             onChange={(e) => {
               const v = e.target.value;
               setQuery(v);
+              
             }}
             placeholder={
               mode === "resale"
@@ -385,7 +481,7 @@ export function IngredientMastersFilter({
               role="radio"
               aria-checked={superCat === "all"}
               className={`kf-chip${superCat === "all" ? " kf-chip--on" : ""}`}
-              onClick={() => setSuperCat("all")}
+              onClick={() => { setSuperCat("all") }}
             >
               All <span>{fmtCount(rows.length)}</span>
             </button>
@@ -399,7 +495,7 @@ export function IngredientMastersFilter({
                   role="radio"
                   aria-checked={superCat === cat}
                   className={`kf-chip${superCat === cat ? " kf-chip--on" : ""}`}
-                  onClick={() => setSuperCat(cat)}
+                  onClick={() => { setSuperCat(cat) }}
                 >
                   {cat} <span>{fmtCount(n)}</span>
                 </button>
@@ -413,7 +509,7 @@ export function IngredientMastersFilter({
               type="button"
               aria-pressed={onlyFlagged}
               className={`kf-chip kf-chip--warn${onlyFlagged ? " kf-chip--on" : ""}`}
-              onClick={() => setOnlyFlagged((v) => !v)}
+              onClick={() => { setOnlyFlagged((v) => !v) }}
               title="Ingredients with a spread, coverage, unit or outlier issue"
             >
               Needs attention <span>{fmtCount(needsCount)}</span>
@@ -422,7 +518,7 @@ export function IngredientMastersFilter({
               type="button"
               aria-pressed={onlyUnreviewed}
               className={`kf-chip${onlyUnreviewed ? " kf-chip--on" : ""}`}
-              onClick={() => setOnlyUnreviewed((v) => !v)}
+              onClick={() => { setOnlyUnreviewed((v) => !v) }}
               title="Ingredients whose Top 9 allergens have not been reviewed"
             >
               Allergens to check <span>{fmtCount(unreviewedCount)}</span>
@@ -431,7 +527,7 @@ export function IngredientMastersFilter({
               type="button"
               aria-pressed={onlyEmpty}
               className={`kf-chip${onlyEmpty ? " kf-chip--on" : ""}`}
-              onClick={() => setOnlyEmpty((v) => !v)}
+              onClick={() => { setOnlyEmpty((v) => !v) }}
               title="Ingredients with no live vendor items (candidates to retire)"
             >
               No items <span>{fmtCount(emptyCount)}</span>
@@ -476,6 +572,7 @@ export function IngredientMastersFilter({
               onChange={(e) => {
                 const v = e.target.value as SortMode;
                 setSort(v);
+                
               }}
               aria-label="Sort order"
             >
@@ -718,46 +815,49 @@ function DetailView({
     });
   }, [row.linkedItems, row.baseUom, row.measures, viewUom, baseCanonical]);
 
-  // Strip tile reprices from the in-view prices (same math as the row
-  // baseline but through viewUom). When viewUom === baseCanonical the
-  // server's active.avgPerBase stays authoritative.
+  // T1 fix 2: the unit chip must never change which items are in the
+  // number. In any lens, the price and the low / high shown in unit X
+  // are the LENS's own price and low / high converted to X - one
+  // definition of the mean, in blend.ts (via `active.avgPerBase`).
+  //
+  // factor(from, to, m) returns "how many `to` units in 1 `from`
+  // unit", so a price in /from becomes /to by DIVIDING by that
+  // factor. Example: base LB, view OZ, factor(LB, OZ) = 16; a per-lb
+  // lens price divided by 16 is the per-oz view price.
+  const viewConvFactor: number | null = useMemo(() => {
+    if (!baseCanonical) return null;
+    if (viewUom === baseCanonical) return 1;
+    return factor(baseCanonical, viewUom, { measures: row.measures as Measure[] });
+  }, [baseCanonical, viewUom, row.measures]);
   const stripPrice: number | null = useMemo(() => {
-    if (baseCanonical && viewUom === baseCanonical) return active.avgPerBase;
-    const priced = repricedLinkedItems
-      .filter((li) => li.statusKind === "in_blend" && li.viewPrice != null)
-      .map((li) => ({ p: li.viewPrice as number, w: li.usd12m }));
-    if (priced.length === 0) return null;
-    const totW = priced.reduce((a, b) => a + b.w, 0);
-    if (totW <= 0) {
-      return priced.reduce((a, b) => a + b.p, 0) / priced.length;
-    }
-    return priced.reduce((a, b) => a + b.p * b.w, 0) / totW;
-  }, [repricedLinkedItems, active.avgPerBase, baseCanonical, viewUom]);
+    if (viewConvFactor == null || viewConvFactor <= 0) return null;
+    return active.avgPerBase != null ? active.avgPerBase / viewConvFactor : null;
+  }, [active.avgPerBase, viewConvFactor]);
 
-  // Polish fix 3: min/max for the Spread tile reprices alongside the
-  // selected unit. Same filter as the strip price - in-blend items
-  // with a viewPrice.
   const stripMinMax: { min: number; max: number } | null = useMemo(() => {
-    if (baseCanonical && viewUom === baseCanonical) {
-      return active.minPerBase != null && active.maxPerBase != null
-        ? { min: active.minPerBase, max: active.maxPerBase }
-        : null;
-    }
-    const priced = repricedLinkedItems
-      .filter((li) => li.statusKind === "in_blend" && li.viewPrice != null)
-      .map((li) => li.viewPrice as number);
-    if (priced.length === 0) return null;
-    return { min: Math.min(...priced), max: Math.max(...priced) };
-  }, [
-    repricedLinkedItems,
-    active.minPerBase,
-    active.maxPerBase,
-    baseCanonical,
-    viewUom,
-  ]);
+    if (viewConvFactor == null || viewConvFactor <= 0) return null;
+    if (active.minPerBase == null || active.maxPerBase == null) return null;
+    return {
+      min: active.minPerBase / viewConvFactor,
+      max: active.maxPerBase / viewConvFactor,
+    };
+  }, [active.minPerBase, active.maxPerBase, viewConvFactor]);
 
   const partial = active.linkedCount > 0 && active.pricedCount < active.linkedCount;
-  const spreadBad = active.spreadRatio != null && active.spreadRatio > 3;
+  // T6 §2: red only when the figure IN THE TILE describes a real
+  // in-grade defect. On a two-grade master with Blended selected the
+  // tile paints the across-grade ratio, which the G3 rule says is
+  // the grade working, not a pricing problem - house rule is red
+  // means one thing. Single-grade masters are unchanged: blended
+  // is the subset. Standard / Premium selected: the subset's own
+  // ratio decides (what active.spreadRatio already is).
+  const bothGradesPopulated =
+    row.statsByLens.standard.linkedCount > 0 &&
+    row.statsByLens.premium.linkedCount > 0;
+  const spreadBad =
+    effectiveLens === "blended" && bothGradesPopulated
+      ? false
+      : active.spreadRatio != null && active.spreadRatio > SPREAD_RATIO_MAX;
 
   const derivedForStrip = stripDerivedSub(row, active);
 
@@ -984,16 +1084,86 @@ function IngredientAttention({ row, onDone }: { row: MasterRow; onDone: () => vo
   }
 
   if (row.issues.includes("spread")) {
-    issues.push({
-      lead: `Spread is ${row.spreadRatio?.toFixed(1)}x.`,
-      body: (
-        <>
-          {" "}Cheapest linked item is {fmtUsd(row.minPerBase ?? 0)}/{uom}, dearest is{" "}
-          {fmtUsd(row.maxPerBase ?? 0)}/{uom}. Over 3x usually means one item has a bad pack size,
-          not a real price difference.
-        </>
-      ),
-    });
+    // T5: the G3 flag rule fires on a populated grade subset whose
+    // own spreadRatio > SPREAD_RATIO_MAX, not on the blended figure. The banner was
+    // reading row.spreadRatio / row.minPerBase / row.maxPerBase, which
+    // are the BLENDED numbers; for a two-bucket ingredient (Standard
+    // over threshold, Premium under) that printed the Standard-floor-
+    // vs-Premium-ceiling gap, a number that describes no in-grade
+    // item pair. The row already carries statsByLens.standard /
+    // .premium - we just read the right three fields off the right
+    // object.
+    //
+    // Single-grade ingredients (the common case: 2032 / 2076 items
+    // carry no grade, zero items are tagged standard) render the
+    // original copy byte-identical: that subset IS the blend. No
+    // grade word.
+    const std = row.statsByLens.standard;
+    const prem = row.statsByLens.premium;
+    const stdPopulated = std.linkedCount > 0;
+    const premPopulated = prem.linkedCount > 0;
+    const bothPopulated = stdPopulated && premPopulated;
+    const stdOver = stdPopulated && std.spreadRatio != null && std.spreadRatio > SPREAD_RATIO_MAX;
+    const premOver = premPopulated && prem.spreadRatio != null && prem.spreadRatio > SPREAD_RATIO_MAX;
+    if (!bothPopulated) {
+      issues.push({
+        lead: `Spread is ${row.spreadRatio?.toFixed(1)}x.`,
+        body: (
+          <>
+            {" "}Cheapest linked item is {fmtUsd(row.minPerBase ?? 0)}/{uom}, dearest is{" "}
+            {fmtUsd(row.maxPerBase ?? 0)}/{uom}. Over 3x usually means one item has a bad pack size,
+            not a real price difference.
+          </>
+        ),
+      });
+    } else if (stdOver && premOver) {
+      issues.push({
+        lead: `Standard spread is ${std.spreadRatio!.toFixed(1)}x; Premium spread is ${prem.spreadRatio!.toFixed(1)}x.`,
+        body: (
+          <>
+            {" "}Standard items run {fmtUsd(std.minPerBase ?? 0)} to {fmtUsd(std.maxPerBase ?? 0)} / {uom};
+            Premium items run {fmtUsd(prem.minPerBase ?? 0)} to {fmtUsd(prem.maxPerBase ?? 0)} / {uom}.
+            Over 3x inside one grade usually means one item has a bad pack size, not a real price difference.
+          </>
+        ),
+      });
+    } else if (stdOver) {
+      issues.push({
+        lead: `Standard spread is ${std.spreadRatio!.toFixed(1)}x.`,
+        body: (
+          <>
+            {" "}Cheapest Standard item is {fmtUsd(std.minPerBase ?? 0)} / {uom}, dearest is{" "}
+            {fmtUsd(std.maxPerBase ?? 0)} / {uom}. Over 3x inside one grade usually means one item
+            has a bad pack size, not a real price difference.
+          </>
+        ),
+      });
+    } else if (premOver) {
+      issues.push({
+        lead: `Premium spread is ${prem.spreadRatio!.toFixed(1)}x.`,
+        body: (
+          <>
+            {" "}Cheapest Premium item is {fmtUsd(prem.minPerBase ?? 0)} / {uom}, dearest is{" "}
+            {fmtUsd(prem.maxPerBase ?? 0)} / {uom}. Over 3x inside one grade usually means one item
+            has a bad pack size, not a real price difference.
+          </>
+        ),
+      });
+    } else {
+      // Defensive: both subsets populated but neither over threshold.
+      // The G3 flag rule should not fire here, but fall back to the
+      // original copy if it somehow does.
+      issues.push({
+        lead: `Spread is ${row.spreadRatio?.toFixed(1)}x.`,
+        body: (
+          <>
+            {" "}Cheapest linked item is {fmtUsd(row.minPerBase ?? 0)}/{uom}, dearest is{" "}
+            {fmtUsd(row.maxPerBase ?? 0)}/{uom}. Over 3x usually means one item has a bad pack size,
+            not a real price difference.
+          </>
+        ),
+      });
+    }
   }
   if (row.issues.includes("coverage")) {
     issues.push({
@@ -1247,6 +1417,20 @@ function LinkedItems({
                 </button>
                 <span className="kf-ingp__item-sub">
                   {li.vendor}
+                  {/* T3 §4: every row left out of the blend names why
+                      on the same sub-line, in the same style. Before
+                      this fix only needs_measure and outlier rows got
+                      a reason - sizes_differ rows read "0 of 6 priced
+                      - / each" above six rows showing prices with no
+                      explanation. */}
+                  {li.statusKind === "sizes_differ" ? (
+                    <>
+                      {" · "}
+                      <span className="kf-ingp__item-sub-warn">
+                        left out - pack sizes differ
+                      </span>
+                    </>
+                  ) : null}
                   {li.statusKind === "needs_measure" ? (
                     <>
                       {" · "}

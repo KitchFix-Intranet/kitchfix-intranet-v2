@@ -12,9 +12,10 @@
 // helper so the Save button stays "Saving..." until the refreshed
 // number has rendered; the success toast fires at that moment.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { fmtUsd } from "@/lib/fmt";
 import { DIM_BY_UOM } from "@/lib/ingredients/pack";
+import { priceInUnit } from "@/lib/ingredients/measures";
 import type { ReviewGroupItem } from "../itemTypes";
 import { postJson } from "./common";
 import { useSaveWithRefresh } from "./useSaveWithRefresh";
@@ -30,7 +31,20 @@ export function CaseWeightBlock({
   forceOpen?: boolean;
   onDone: () => void;
 }) {
-  const storedCw = item.caseWeightLb ?? null;
+  // T3 §3b: after clear(), the API write lands and onDone triggers
+  // a panel refetch (ItemPanelById bumps its nonce and GETs
+  // /api/review/item). The fetch takes a round-trip to complete.
+  // In the race window item.caseWeightLb is still the pre-clear
+  // value because ItemPanelById deliberately keeps its state.data
+  // visible during the refetch (no "Loading..." flash). `localCw`
+  // is the optimistic view: it mirrors the stored value at rest,
+  // and is set to null the moment clear() succeeds so the Clear
+  // button and hint flip immediately. The useEffect snaps localCw
+  // back to the server value once the refetch resolves.
+  const serverCw = item.caseWeightLb ?? null;
+  const [localCw, setLocalCw] = useState<number | null>(serverCw);
+  useEffect(() => { setLocalCw(serverCw); }, [serverCw]);
+  const storedCw = localCw;
   const [open, setOpen] = useState<boolean>(forceOpen || storedCw != null);
   const [val, setVal] = useState<string>(storedCw != null ? String(storedCw) : "");
   const { save: runSave, busy } = useSaveWithRefresh();
@@ -64,10 +78,18 @@ export function CaseWeightBlock({
   const dirty = (storedCw ?? null) !== (n ?? null);
 
   async function save() {
+    // T4 §3 wrapper keeps the Save button in "Saving..." until the
+    // refreshed data has rendered + the toast fires at that moment.
+    // T3 §3b optimistic flip rides INSIDE onAfterSuccess so the hint
+    // and Clear-button visibility move the instant the POST returns
+    // 200 - ItemPanelById's own nonce refetch still lags the strip
+    // header a tick, which is a race T4's useTransition does not
+    // close.
     await runSave({
       op: () => postJson("/api/review/set-case-weight", { itemId: item.id, caseWeightLb: n }),
       successMessage: "Case weight saved",
       errorFallback: "Save failed",
+      onAfterSuccess: () => { if (n != null) setLocalCw(n); },
       onDone,
     });
   }
@@ -76,6 +98,10 @@ export function CaseWeightBlock({
       op: () => postJson("/api/review/set-case-weight", { itemId: item.id, caseWeightLb: null }),
       successMessage: "Case weight cleared",
       errorFallback: "Clear failed",
+      // T3 §3b: flip "no case weight" immediately on success so the
+      // hint reads "Leave empty to use the ingredient's measures."
+      // and the Clear button disappears before the refetch resolves.
+      onAfterSuccess: () => setLocalCw(null),
       onDone,
     });
     if (r.ok) setVal("");
@@ -85,10 +111,37 @@ export function CaseWeightBlock({
     storedCw != null && Number.isFinite(storedCw)
       ? "This case uses its own weight."
       : "Leave empty to use the ingredient's measures.";
-  const casePriceHint =
-    storedCw != null && Number.isFinite(storedCw) && item.perBase != null && n && n > 0
-      ? `${fmtUsd((item.perBase * (item.packQty ?? 1) * (item.packSize ?? 1)) / n)} / lb at ${n} lb`
-      : null;
+  // T1 R2-2: ask the library for the per-lb number through the case
+  // weight the block is currently showing. priceInUnit returns the
+  // whole-case-weighs-X route when the case weight supplies the
+  // weight total; we print only when that route fires + viaCaseWeight
+  // is true. Fixes two ways the old line was wrong on 1b9ffe6:
+  //   1. item.perBaseInIngUnit is in the ingredient's unit, not lb.
+  //      For each-costed ingredients (Egg rolls, Tomatoes round) it
+  //      printed the per-each price beside a hard-coded "/ lb".
+  //   2. Any ingredient with no measures routed to kind="fallback",
+  //      which ignores case weight; the line had no business firing.
+  const liveCwHint: string | null = (() => {
+    const cw = storedCw;
+    if (cw == null || !Number.isFinite(cw) || cw <= 0) return null;
+    if (item.perBase == null || item.perBaseUom == null) return null;
+    const r = priceInUnit(
+      {
+        perBase: item.perBase,
+        baseUom: item.perBaseUom,
+        packQty: item.packQty,
+        packSize: item.packSize,
+        packUom: item.packUom,
+        caseWeightLb: cw,
+      },
+      "LB",
+      { measures: [] },
+    );
+    if (r == null) return null;
+    if (r.route.kind !== "stated" || !r.route.viaCaseWeight) return null;
+    return `${fmtUsd(r.per)} / lb at ${cw} lb`;
+  })();
+  const casePriceHint = liveCwHint;
 
   return (
     <div className="kf-ipanel__row kf-ipanel__row--case-weight">

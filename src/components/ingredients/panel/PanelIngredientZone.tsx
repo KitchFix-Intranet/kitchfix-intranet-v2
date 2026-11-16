@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtUsd } from "@/lib/fmt";
-import { SUPER_CATEGORIES, type SuperCategory } from "@/lib/ingredients/categories";
+import { CATEGORY_BY_PARENT, SUPER_CATEGORIES, type SuperCategory } from "@/lib/ingredients/categories";
 import { DIM_BY_UOM, WEIGHT_UOMS, VOLUME_UOMS, uomLabel } from "@/lib/ingredients/pack";
 // M2 §4B amendment 4: no screen imports deriveRecipePrice. The
 // measureFoot sentence below reads item.perBaseInIngUnit (set by
@@ -151,7 +151,14 @@ export function PanelIngredientZone({
     const next = renameDraft.trim();
     if (renameBusy) return;
     if (next.length < 2) { toast("Name is too short", { tone: "block" }); return; }
-    if (next === ingredient.name) { toast("Same name, nothing to save"); return; }
+    // T3 §7: the server returns { changed, aliasWritten }. A
+    // capitals-only rename normalises the same but counts as changed
+    // (name only updates, no alias), so the toast says what was
+    // saved; literal-equal names short-circuit here or come back
+    // changed=false and both routes toast "No change". Wrapped in
+    // T4 §3's runRename so the button stays "Saving..." through the
+    // refresh + toast.
+    if (next === ingredient.name) { toast("No change"); return; }
     await runRename({
       op: () =>
         postJson("/api/review/rename-ingredient", {
@@ -159,14 +166,14 @@ export function PanelIngredientZone({
           newName: next,
         }),
       successMessage: (d) => {
-        let aliasWritten = false;
         if (d && typeof d === "object") {
-          const rec = d as { aliasWritten?: unknown };
-          if (typeof rec.aliasWritten === "boolean") aliasWritten = rec.aliasWritten;
+          const rec = d as { changed?: unknown; aliasWritten?: unknown };
+          if (rec.changed === false) return "No change";
+          if (rec.aliasWritten === true) {
+            return "Saved - old name kept as an alias so links survive";
+          }
         }
-        return aliasWritten
-          ? "Saved - old name kept as an alias so links survive"
-          : "Saved: name";
+        return "Saved: name";
       },
       errorFallback: "Rename failed",
       // T4 §2a: a rename changes the string the Merge picker shows,
@@ -290,8 +297,23 @@ export function PanelIngredientZone({
           onChange={(e) => {
             const v = e.target.value;
             setSuperDraft(v);
-            const nextSub =
+            // T3 §5: when the chosen super changes, if the current
+            // sub-category belongs to a different super (per
+            // CATEGORY_BY_PARENT), clear the sub in the SAME save.
+            // Unmapped (custom) subs stay - they fit under any
+            // super. Empty super ("Needs category") keeps whatever
+            // sub is on the row.
+            const draftSub =
               subMode === "new" ? subNew.trim() || null : (subPick === "" ? null : subPick);
+            let nextSub = draftSub;
+            if (v !== "" && draftSub) {
+              const mappedFor = CATEGORY_BY_PARENT[draftSub];
+              if (mappedFor && mappedFor !== v) {
+                nextSub = null;
+                setSubPick("");
+                setSubNew("");
+              }
+            }
             void doCategory({
               nextSuper: v === "" ? null : (v as SuperCategory),
               nextSub,
@@ -305,6 +327,13 @@ export function PanelIngredientZone({
           ))}
         </select>
         {subMode === "pick" ? (
+          // T3 §5: restrict the sub-category list to those that
+          // belong to the chosen super-category (CATEGORY_BY_PARENT),
+          // plus any custom (unmapped) sub-category already on this
+          // ingredient so the user can see what the ingredient
+          // currently carries. 2026-11-13's user test saved
+          // (Dairy, Vegetables and herbs) because the list showed
+          // every parent regardless of the super-category chosen.
           <select
             className="kf-ipanel__ctl"
             value={subPick}
@@ -320,9 +349,22 @@ export function PanelIngredientZone({
             aria-label="Sub-category"
           >
             <option value="">(none)</option>
-            {parentOptions.map((p) => (
-              <option key={p} value={p}>{p}</option>
-            ))}
+            {parentOptions
+              .filter((p) => {
+                if (superDraft === "") return true;
+                const mapped = CATEGORY_BY_PARENT[p];
+                // Mapped and belongs to the chosen super - show.
+                if (mapped === superDraft) return true;
+                // Mapped and belongs to a different super - hide.
+                if (mapped) return false;
+                // Unmapped (custom). Show only if this is the
+                // ingredient's current parent, so a legacy custom
+                // sub stays visible on the row it is on.
+                return p === (ingredient.parent ?? "");
+              })
+              .map((p) => (
+                <option key={p} value={p}>{p}</option>
+              ))}
           </select>
         ) : (
           <input
@@ -413,7 +455,7 @@ export function PanelIngredientZone({
         ingredient={ingredient}
         measures={measuresForBlock as Array<{ from_unit: string; qty: number; to_unit: string; source: "house_test" | "book" | "vendor_spec" | "estimate" | "pack" }>}
         itemUnits={Array.from(new Set(suggestionCandidates.map((c) => (c.packUom ?? "").toUpperCase()).filter(Boolean)))}
-        onAddForUom={(u) => { setAddForUom(u); setAddPrefillQty(null); setAddPickUnit(false); }}
+        onAddForUom={(u, pu) => { setAddForUom(u); setAddPrefillQty(null); setAddPickUnit(pu === true); }}
       />
 
       {/* Row 5: Allergens ---------------------------------------- */}

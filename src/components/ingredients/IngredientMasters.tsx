@@ -127,9 +127,10 @@ const BANDS: Record<string, { low: number; high: number }> = {
 
 // B3: the "wide spread" threshold, shared between the Spread flag
 // (ratioFlag) and the band's corroboration check. "Vendors agree" IS
-// the Spread threshold - do not duplicate the number. Any future
-// tuning updates both callers.
-const SPREAD_RATIO_MAX = 3;
+// the Spread threshold - do not duplicate the number. T5 tidy: the
+// value moved to src/lib/ingredients/blend.ts so the four comparison
+// sites in IngredientMastersFilter.tsx read the same constant (that
+// file cannot import this one - cycle). Imported above.
 
 // B3: count units where the typical-price comparison is meaningless
 // by construction - a case-priced sauce and a bottle of water are
@@ -167,6 +168,7 @@ import { reachableUnits, type Measure } from "@/lib/ingredients/measures";
 import {
   OUTLIER_RATIO,
   OUTLIER_MIN,
+  SPREAD_RATIO_MAX,
   blendStats,
 } from "@/lib/ingredients/blend";
 import {
@@ -358,9 +360,14 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
     // the blend.
     //
     // Measured on production 2026-11-04: Salmon filet, Bacon sliced
-    // and Chicken breast b/s clear; Beef tenderloin PSMO is unchanged
+    // and Chicken breast b/s clear; Beef tenderloin PSMO was unchanged
     // (2.9x lives inside Standard, under the 3x threshold, so it is
-    // already unflagged and stays unflagged).
+    // already unflagged and stays unflagged). Re-measured 2026-11-16:
+    // PSMO still holds (2.93x); the three named masters now fire on
+    // Standard (Salmon 4.3x, Bacon sliced 3.5x, Chicken breast b/s
+    // 5.1x) - either data moved or a merge consolidated their items
+    // since 11-04. Logic unchanged; this comment just records the
+    // drift.
     const stdSpread = standardLens.spreadRatio;
     const premSpread = premiumLens.spreadRatio;
     const stdSpreadFlag = stdSpread != null && stdSpread > SPREAD_RATIO_MAX;

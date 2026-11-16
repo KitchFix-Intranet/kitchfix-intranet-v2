@@ -1,0 +1,266 @@
+// ═══════════════════════════════════════════════════════════════════
+// recipients - the SC billing notification recipient resolver.
+// PR-F of the SC -> QBO billing arc (2026-08-13).
+// ═══════════════════════════════════════════════════════════════════
+// Types (train 2 part one):
+import type { NotificationType, Recipients } from "../types";
+
+export interface ResolveRecipientsArgs {
+  // The string identifying which notification. The hand-written union
+  // matches the five values of NOTIFICATION_TYPES below, read from
+  // the keys written on the Object.freeze call. If a value is added
+  // to the frozen object, add it here too.
+  notification: NotificationType | string;
+  accountKey?: string;
+  // mode is sc_qbo_account_map.qbo_mode text. Treated as "test"
+  // vs non-"test" at the first branch of resolveRecipients.
+  mode?: string;
+  submitterEmail?: string | null;
+  accountMap?: {
+    salariedManagerEmails?: string[] | null;
+    rdoEmail?: string | null;
+    notifyOperators?: boolean;
+  };
+  adjusterEmail?: string | null;
+}
+//
+// Spec authority: docs/SC_QBO_SHAPE_SPEC_ADDENDUM_A.md §A5 (test/live)
+// + §A6 (matrix). Every billing notification's recipient list comes
+// through resolveRecipients - no code path composes recipients any
+// other way.
+//
+// ─── The test-mode override is structural, not conditional ────────
+//
+// The first branch of resolveRecipients checks mode === 'test' and
+// returns Kevin only, immediately. No notification type, no account,
+// no argument reaches past that line in test mode. Enforced by the
+// F6 grep proof + a matrix test that walks every (notification,
+// account) pair.
+//
+// ─── notifyOperators is a second structural override (sc-45) ──────
+//
+// The second branch checks accountMap.notifyOperators === false and
+// also returns Kevin only. Decouples "who gets the notification"
+// from "which QBO customer receives the invoice." Used when Kevin
+// wants real invoices (mode='live') but wants operator emails
+// silenced (weekend before Monday training, sc-45 ruling
+// 2026-09-17). Both overrides collapse to Kevin so their order is
+// immaterial; test-mode remains first for historical continuity.
+//
+// ─── Live-mode lookups (addendum §A6) ─────────────────────────────
+//
+// Two per-account lookups feed live-mode resolution:
+//   - salariedManagerEmails: TEXT[]. Derived live from `people`
+//     (2026-09-17, Kevin ruling; see src/lib/billing/
+//     getSalariedManagerEmails.js). Was stored on
+//     sc_qbo_account_map.salaried_manager_emails until that column
+//     drifted on two of four accounts. The addendum §A8 rationale
+//     ("no authoritative person-level salaried flag") no longer
+//     holds - people.is_salaried is that flag.
+//   - rdoEmail: TEXT read from sc_qbo_account_map.rdo_email (sc-35).
+//     Owner-populated. NULL until Kevin writes it. When set, joins
+//     N3.3 and N4 only (addendum §A6 ruling: RDOs skip N1 so the
+//     weekly cadence does not train them to filter the sender).
+//
+// Both live-mode lookups come in via the accountMap argument so the
+// resolver is pure - no DB access here; the finalize caller reads
+// accountMap once and threads it through.
+
+// Static-set primary recipients per addendum §A6.
+export const KEVIN_EMAIL     = "k.fietek@kitchfix.com";
+// 2026-09-24 Sebastian address correction. The prior "sebastian@kitchfix.com"
+// mailbox does not exist - every N1/N2/chase to Sebastian since the feature
+// shipped bounced. His real address is s.castro@kitchfix.com, matching
+// src/lib/admin.js, src/lib/opdAcl.js, LaborTool.js, InvoiceAdmin.js, and
+// the `people` table.
+export const SEBASTIAN_EMAIL = "s.castro@kitchfix.com";
+export const JOE_EMAIL       = "joe@kitchfix.com";     // Joe Lessard (VPO), aligned with incidentSchema.js VPO_EMAIL
+export const JOSH_EMAIL      = "josh@kitchfix.com";    // Josh Katt (CEO), aligned with incidentSchema.js CEO_EMAIL
+// 2026-09-24 Kevin ruling: the AR mailbox joins the invoice-confirmation
+// email (N1) only. Not on N2 (push failed - no invoice to act on) and not
+// on the chase ladder (N3.reminder / N3.urgent - those are operators being
+// nagged for counts).
+//
+// 2026-10-05 correction (Kevin ruling): this was ap@kitchfix.com from
+// 2026-09-24 to 2026-10-05 and six live confirmations went to the wrong
+// mailbox. KitchFix sending an invoice to a client is accounts RECEIVABLE;
+// ap@ is where bills KitchFix pays arrive. QBO has carried AR@Kitchfix.com
+// on the customer records the whole time - the mismatch surfaced during the
+// sc-50 Cc/Bcc investigation. Constant renamed, not just revalued, so the
+// name cannot drift from the address again.
+export const AR_EMAIL        = "ar@kitchfix.com";
+
+// Recognized notification types. Adding one here without a matching
+// live-mode branch is a compile-time-esque error (the switch defaults
+// to a throw so mistakes surface at first fire, not on Sebastian's
+// invoice).
+//
+// Chase-ladder rebuild 2026-09-09: three stages became two per
+// Kevin's ruling to Sebastian (see docs/design/KF_CHASE_EMAILS_RENDER.html
+// and the CC_PROMPT_CHASE_REBUILD.md brief).
+//   N3.1 (Friday 12:00 reminder) - RETIRED. Kevin dropped the Friday
+//     nudge entirely.
+//   N3.2 (Monday 12:00 urgent)   - RETIRED, superseded by N3_URGENT
+//     with new time + recipients + copy.
+//   N3.3 (Tuesday 09:00 past-due) - RETIRED. The Tuesday billing-run
+//     concept it named was fiction; no cron actually bills at that
+//     time. New shape names real consequences instead.
+//   N3_REMINDER (Sunday 18:00 local) - NEW.
+//   N3_URGENT   (Monday 15:00 local) - NEW.
+//
+// Old symbol names retained below as commented notes; do not
+// re-export them - a caller passing "N3.1" now hits the switch's
+// default throw at first fire, which is the correct failure mode.
+export const NOTIFICATION_TYPES = Object.freeze({
+  N1:          "N1",             // Invoice ready
+  N2:          "N2",             // Push failed
+  N3_REMINDER: "N3.reminder",    // Sunday 18:00 local - salaried list, no RDO
+  N3_URGENT:   "N3.urgent",      // Monday 15:00 local - salaried + Sebastian + Kevin + RDO
+  N4:          "N4",             // Credit needed (+RDO to)
+});
+
+// Deduplicate while preserving order + case-folded key so
+// "Kevin@Kitchfix.com" and "kevin@kitchfix.com" collapse.
+function dedup(list: Iterable<string | null | undefined> | null | undefined): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of list || []) {
+    const key = String(raw || "").trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
+  }
+  return out;
+}
+
+/**
+ * Resolve recipients for a notification, respecting the test-mode
+ * structural override.
+ *
+ * @param {Object} args
+ * @param {string} args.notification    One of NOTIFICATION_TYPES values.
+ * @param {string} args.accountKey      e.g. "TXR - AZ"
+ * @param {"test"|"live"} args.mode     From sc_qbo_account_map.qbo_mode.
+ * @param {string} [args.submitterEmail] Site leader who finalized (N1 only).
+ * @param {Object} [args.accountMap]     Live-mode lookups.
+ * @param {string[]} [args.accountMap.salariedManagerEmails]
+ * @param {string|null} [args.accountMap.rdoEmail]
+ * @param {boolean} [args.accountMap.notifyOperators] Default true. When explicitly false,
+ *        resolveRecipients returns Kevin-only regardless of mode. sc-45.
+ * @param {string} [args.adjusterEmail] N4 only.
+ * @returns {{ to: string[], cc: string[] }}
+ */
+export function resolveRecipients(args: ResolveRecipientsArgs): Recipients {
+  // ─── FIRST BRANCH: structural test-mode override ────────────────
+  // Do not touch args.notification, args.accountKey, or anything else
+  // in test mode. Kevin's address, immediately. See docs/SC_QBO_SHAPE_SPEC_
+  // ADDENDUM_A.md §A5: "Recipient override is structural, not conditional".
+  if (args?.mode === "test") {
+    return { to: [KEVIN_EMAIL], cc: [] };
+  }
+
+  // ─── SECOND BRANCH: structural notify-operators override (sc-45) ─
+  // Symmetric shape with the test-mode branch. Explicit `=== false`
+  // so an accountMap without the field (older callers, transitional
+  // rows) resolves as live-mode notify=true rather than accidentally
+  // silencing. Kevin sets notify_operators=false only for the pilots'
+  // silent-operators weekend.
+  if (args?.accountMap?.notifyOperators === false) {
+    return { to: [KEVIN_EMAIL], cc: [] };
+  }
+
+  // Everything below is live-mode. Every path returns a
+  // { to, cc } object - the switch's default throws to surface
+  // an unknown-notification-type at first fire.
+  const notification = args?.notification;
+  const submitter = args?.submitterEmail || null;
+  const salaried = Array.isArray(args?.accountMap?.salariedManagerEmails)
+    ? args.accountMap.salariedManagerEmails
+    : [];
+  const rdo = args?.accountMap?.rdoEmail || null;
+
+  switch (notification) {
+    // N1 Invoice ready: Sebastian, Kevin, salaried managers, submitter, RDO.
+    // RDO added 2026-09-09 per Kevin ruling in the confirmation-email
+    // rebuild - "all account managers and RDO"; managers are already
+    // covered by salariedManagerEmails, RDO was the missing piece.
+    // dedup() drops the null when rdoEmail is unset.
+    //
+    // 2026-09-17 Kevin ruling: Joe (VPO) and Josh (CEO) are OFF N1
+    // for now. Both confirmed they do not want the per-invoice stream.
+    // "For now" is deliberate - this is a preference and may flip back
+    // per-person or per-account later. When it does, the right home is
+    // a per-account exec-CC column on sc_qbo_account_map, NOT a
+    // constant reintroduced here: a hardcoded recipient list is a
+    // thing nobody can change without a deploy, which is exactly why
+    // this took a month to action. Sebastian + Kevin stay structural
+    // (Sebastian reviews and sends every invoice; Kevin owns the
+    // system). The JOE_EMAIL + JOSH_EMAIL constants remain exported
+    // because N4 (credit-needed) still routes to them per §A6.
+    case NOTIFICATION_TYPES.N1: {
+      // 2026-09-24 Kevin ruling, corrected 2026-10-05: AR_EMAIL joins N1.
+      // AR receives every invoice-ready confirmation; the address is
+      // generic (not personal), so it does not belong on push-failed (N2)
+      // or the chase ladder (N3.reminder / N3.urgent).
+      const to = dedup([
+        SEBASTIAN_EMAIL, KEVIN_EMAIL, AR_EMAIL,
+        ...salaried,
+        submitter,
+        rdo,
+      ]);
+      return { to, cc: [] };
+    }
+
+    // N2 Push failed: Kevin, Sebastian
+    case NOTIFICATION_TYPES.N2: {
+      return { to: dedup([KEVIN_EMAIL, SEBASTIAN_EMAIL]), cc: [] };
+    }
+
+    // N3.reminder (Sunday 18:00): salaried list only. No RDO on
+    // Sunday - Kevin's ruling. An RDO who covers two accounts and
+    // gets weekly Sunday emails per account regardless of whether
+    // anything is wrong learns to filter the sender. Under this
+    // shape, an email from the ladder means something needs their
+    // attention. See docs/design/KF_CHASE_EMAILS_RENDER.html.
+    case NOTIFICATION_TYPES.N3_REMINDER: {
+      return {
+        to: dedup(salaried),
+        cc: [],
+      };
+    }
+
+    // N3.urgent (Monday 15:00): salaried list + Sebastian + Kevin +
+    // RDO. All primary, no cc split. The prior render suggested a
+    // submitter/other-salaried TO/CC split, but that required a
+    // submitter distinct from the salaried list which does not
+    // exist as a data concept (see Kevin ruling 2026-09-09). One
+    // list, one field, no derivation.
+    case NOTIFICATION_TYPES.N3_URGENT: {
+      return {
+        to: dedup([
+          ...salaried,
+          SEBASTIAN_EMAIL,
+          KEVIN_EMAIL,
+          rdo,
+        ]),
+        cc: [],
+      };
+    }
+
+    // N4 Credit needed: adjuster, Joe, Josh, Sebastian, RDO (to)
+    case NOTIFICATION_TYPES.N4: {
+      return {
+        to: dedup([
+          args?.adjusterEmail || null,
+          JOE_EMAIL, JOSH_EMAIL, SEBASTIAN_EMAIL, rdo,
+        ]),
+        cc: [],
+      };
+    }
+
+    default:
+      throw new Error(
+        `resolveRecipients: unknown notification type ${JSON.stringify(notification)}. Add it to NOTIFICATION_TYPES + the switch.`
+      );
+  }
+}
