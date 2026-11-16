@@ -43,6 +43,7 @@ import {
   reachableUnits,
   type Measure,
 } from "@/lib/ingredients/measures";
+import { SPREAD_RATIO_MAX } from "@/lib/ingredients/blend";
 import { RowSendBackButton } from "./RowSendBackButton";
 import { RowGradeToggle } from "./RowGradeToggle";
 import { PanelIngredientZone } from "./panel/PanelIngredientZone";
@@ -192,7 +193,7 @@ function rowPriceSub(row: MasterRow): { text: string; warn: boolean } | null {
   if (row.pricedCount < row.linkedCount) {
     return { text: `${fmtCount(row.pricedCount)} of ${fmtCount(row.linkedCount)} priced`, warn: true };
   }
-  if (row.spreadRatio != null && row.spreadRatio > 3) {
+  if (row.spreadRatio != null && row.spreadRatio > SPREAD_RATIO_MAX) {
     return { text: `${row.spreadRatio.toFixed(1)}x spread`, warn: true };
   }
   // M2 §4B amendment 4: the "in recipes" derived sub-line moved to
@@ -809,7 +810,7 @@ function DetailView({
   }, [active.minPerBase, active.maxPerBase, viewConvFactor]);
 
   const partial = active.linkedCount > 0 && active.pricedCount < active.linkedCount;
-  const spreadBad = active.spreadRatio != null && active.spreadRatio > 3;
+  const spreadBad = active.spreadRatio != null && active.spreadRatio > SPREAD_RATIO_MAX;
 
   const derivedForStrip = stripDerivedSub(row, active);
 
@@ -1036,16 +1037,86 @@ function IngredientAttention({ row, onDone }: { row: MasterRow; onDone: () => vo
   }
 
   if (row.issues.includes("spread")) {
-    issues.push({
-      lead: `Spread is ${row.spreadRatio?.toFixed(1)}x.`,
-      body: (
-        <>
-          {" "}Cheapest linked item is {fmtUsd(row.minPerBase ?? 0)}/{uom}, dearest is{" "}
-          {fmtUsd(row.maxPerBase ?? 0)}/{uom}. Over 3x usually means one item has a bad pack size,
-          not a real price difference.
-        </>
-      ),
-    });
+    // T5: the G3 flag rule fires on a populated grade subset whose
+    // own spreadRatio > SPREAD_RATIO_MAX, not on the blended figure. The banner was
+    // reading row.spreadRatio / row.minPerBase / row.maxPerBase, which
+    // are the BLENDED numbers; for a two-bucket ingredient (Standard
+    // over threshold, Premium under) that printed the Standard-floor-
+    // vs-Premium-ceiling gap, a number that describes no in-grade
+    // item pair. The row already carries statsByLens.standard /
+    // .premium - we just read the right three fields off the right
+    // object.
+    //
+    // Single-grade ingredients (the common case: 2032 / 2076 items
+    // carry no grade, zero items are tagged standard) render the
+    // original copy byte-identical: that subset IS the blend. No
+    // grade word.
+    const std = row.statsByLens.standard;
+    const prem = row.statsByLens.premium;
+    const stdPopulated = std.linkedCount > 0;
+    const premPopulated = prem.linkedCount > 0;
+    const bothPopulated = stdPopulated && premPopulated;
+    const stdOver = stdPopulated && std.spreadRatio != null && std.spreadRatio > SPREAD_RATIO_MAX;
+    const premOver = premPopulated && prem.spreadRatio != null && prem.spreadRatio > SPREAD_RATIO_MAX;
+    if (!bothPopulated) {
+      issues.push({
+        lead: `Spread is ${row.spreadRatio?.toFixed(1)}x.`,
+        body: (
+          <>
+            {" "}Cheapest linked item is {fmtUsd(row.minPerBase ?? 0)}/{uom}, dearest is{" "}
+            {fmtUsd(row.maxPerBase ?? 0)}/{uom}. Over 3x usually means one item has a bad pack size,
+            not a real price difference.
+          </>
+        ),
+      });
+    } else if (stdOver && premOver) {
+      issues.push({
+        lead: `Standard spread is ${std.spreadRatio!.toFixed(1)}x; Premium spread is ${prem.spreadRatio!.toFixed(1)}x.`,
+        body: (
+          <>
+            {" "}Standard items run {fmtUsd(std.minPerBase ?? 0)} to {fmtUsd(std.maxPerBase ?? 0)} / {uom};
+            Premium items run {fmtUsd(prem.minPerBase ?? 0)} to {fmtUsd(prem.maxPerBase ?? 0)} / {uom}.
+            Over 3x inside one grade usually means one item has a bad pack size, not a real price difference.
+          </>
+        ),
+      });
+    } else if (stdOver) {
+      issues.push({
+        lead: `Standard spread is ${std.spreadRatio!.toFixed(1)}x.`,
+        body: (
+          <>
+            {" "}Cheapest Standard item is {fmtUsd(std.minPerBase ?? 0)} / {uom}, dearest is{" "}
+            {fmtUsd(std.maxPerBase ?? 0)} / {uom}. Over 3x inside one grade usually means one item
+            has a bad pack size, not a real price difference.
+          </>
+        ),
+      });
+    } else if (premOver) {
+      issues.push({
+        lead: `Premium spread is ${prem.spreadRatio!.toFixed(1)}x.`,
+        body: (
+          <>
+            {" "}Cheapest Premium item is {fmtUsd(prem.minPerBase ?? 0)} / {uom}, dearest is{" "}
+            {fmtUsd(prem.maxPerBase ?? 0)} / {uom}. Over 3x inside one grade usually means one item
+            has a bad pack size, not a real price difference.
+          </>
+        ),
+      });
+    } else {
+      // Defensive: both subsets populated but neither over threshold.
+      // The G3 flag rule should not fire here, but fall back to the
+      // original copy if it somehow does.
+      issues.push({
+        lead: `Spread is ${row.spreadRatio?.toFixed(1)}x.`,
+        body: (
+          <>
+            {" "}Cheapest linked item is {fmtUsd(row.minPerBase ?? 0)}/{uom}, dearest is{" "}
+            {fmtUsd(row.maxPerBase ?? 0)}/{uom}. Over 3x usually means one item has a bad pack size,
+            not a real price difference.
+          </>
+        ),
+      });
+    }
   }
   if (row.issues.includes("coverage")) {
     issues.push({
