@@ -461,3 +461,84 @@ export interface RenderN2Result {
   email: { mode: "dryrun"; to: string[]; subject: string; html: string };
   slack: { mode: "dryrun"; text: string };
 }
+
+// ─────────────────────────────────────────────────────────────────
+// Submit library types (sc-64, Kevin ruling 2026-11-16)
+// ─────────────────────────────────────────────────────────────────
+
+// The full FinalizeRow after the six-column migration applied on
+// 2026-11-16. Carried as a distinct type so FinalizeRow callers that
+// ignore the retry columns do not have to change. `submitted_via`
+// is the fence: null means the row was made by v1 and the V2 submit
+// layer never touches it. `push_attempts` is the atomic counter the
+// claim step increments.
+export interface FinalizeRowWithRetry extends FinalizeRow {
+  submitted_via:    "v2" | null;
+  push_attempts:    number;
+  push_next_try_at: string | null;
+  push_done_at:     string | null;
+  push_gave_up_at:  string | null;
+  push_last_error:  string | null;
+  reverted_at:      string | null;
+  reverted_by:      string | null;
+  revert_reason:    string | null;
+}
+
+// accounts.region + accounts.timezone, keyed by team_key. Read by
+// the submit path (region for the regional-director rule; timezone
+// is informational, not used by the checks today).
+export interface AccountRegionRow {
+  team_key: string;
+  region:   string | null;
+  timezone: string | null;
+}
+
+// The people row columns canSubmitForAccount reads. Shared with the
+// train 2 part 2-A PersonManagerRow where fields overlap.
+export interface PersonAccessRow {
+  work_email:           string | null;
+  account_key:          string | null;
+  status:               string;
+  is_salaried:          boolean | null;
+  is_corp:              boolean | null;
+  is_regional_director: boolean | null;
+  region:               string | null;
+}
+
+// canSubmitForAccount's return. `via` names which of the three
+// rules admitted the person; null when allowed is false.
+export interface SubmitAccess {
+  allowed: boolean;
+  via:     "corp" | "regional_director" | "site" | null;
+}
+
+// Every reason a week cannot be submitted. Discriminated on `code`
+// so a reader switching on code gets the right fields with no cast.
+// No path in the detail carries an email address.
+export type SubmitBlock =
+  | { code: "NOT_AUTHORIZED";       detail: { reason: string } }
+  | { code: "ALREADY_SUBMITTED";    detail: { submittedAt: string } }
+  | { code: "WEEK_IN_FUTURE";       detail: { weekStart: string; siteToday: string } }
+  | { code: "NOT_CLOSING_WEEK";     detail: { closingWeekStart: string } }
+  | { code: "WEEK_LABEL_MISSING";   detail: { weekStart: string } }
+  | { code: "PERIOD_LOCKED";        detail: { lockedDates: string[] } }
+  | { code: "DAY_FLAGGED";          detail: { flaggedDates: string[] } }
+  | { code: "PROJECTION_UNENTERED"; detail: { lines: Array<{ service_id: string; service_name: string; service_date: string }> } }
+  | { code: "UNPRICED_LINES";       detail: { lines: Array<{ service_id: string; service_name: string; service_date: string }> } };
+
+export type SubmitBlockCode = SubmitBlock["code"];
+
+// submitWeek's return. On ok=true the row is on record. On ok=false
+// nothing was written and `blocks` names every reason.
+export type SubmitResult =
+  | { ok: true;  row: FinalizeRowWithRetry }
+  | { ok: false; blocks: SubmitBlock[] };
+
+// The outcome of one push attempt. `skipped` is a non-event (not
+// due, not v2, already done, or a race-lost claim). `done` means
+// nothing more will be attempted for this row.
+export type PushAttemptResult =
+  | { done: true;  state: "pushed" | "awaiting_pair_close" | "no_billable_actuals" | "already_invoiced" }
+  | { done: false; state: "failed";   error: string; attempt: number; nextTryAt: string }
+  | { done: false; state: "gave_up";  error: string; attempt: number }
+  | { done: false; state: "skipped";  reason: "not_v2" | "not_due" | "already_done" | "reverted" | "claim_lost" | "not_found" };

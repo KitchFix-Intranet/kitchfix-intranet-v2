@@ -148,6 +148,47 @@ Database functions:
 
 The engine does not read `sc_fee_schedule`. Prices reach it through the view `sc_daily_revenue`, which reads `sc_daily_actuals`, `sc_daily_projections`, `sc_day_metadata`, `sc_service_groups`, `sc_service_prices` and `sc_services`.
 
+## The submit library (train 2 part two-B, 2026-11-16)
+
+The engine can build and push an invoice. Train 2 part two-B adds what sits in front of that: the rules for who may submit a week, the checks before anything is locked, the lock itself, and a push to QuickBooks that retries on its own. It is a library under `src/lib/sc/submit/**`. No route, no page, no scheduled job, no `vercel.json` entry; those are thin wrappers that ship with the first screen.
+
+**Six exported functions, plus the migration record.**
+
+- `canSubmitForAccount(email, accountKey, supa?)` - may this address submit for this site? True when any ACTIVE `people` row for the address is corporate, OR a regional director whose `region` equals the account's region, OR salaried at the account.
+- `checkWeekSubmittable(args, supa?)` - every reason the week cannot be submitted, in nine codes: `NOT_AUTHORIZED`, `ALREADY_SUBMITTED`, `WEEK_IN_FUTURE`, `NOT_CLOSING_WEEK` (biweekly first-week refused), `WEEK_LABEL_MISSING` (biweekly with no label on the Monday), `PERIOD_LOCKED`, `DAY_FLAGGED`, `PROJECTION_UNENTERED`, `UNPRICED_LINES` (billed sites only). An empty list means the lock may write.
+- `submitWeek(args, supa?)` - runs the checks and, if the list is empty, writes one row into `sc_week_finalize`. A billed site gets `push_next_try_at=now()`; a non-billed site is done at once (`push_done_at=now()`, no next try). A unique-index refusal is treated as `ALREADY_SUBMITTED`, not an error.
+- `attemptPushForRow(rowId, deps?)`, `findAndAttemptDuePushRows(deps?)`, `pushAgain(rowId, supa?)` - the push, with retries. Every 10 minutes, six tries in all, then Kevin and Sebastian are told through the engine's existing failure notice. Not before. Only rows marked `submitted_via='v2'` are touched. `pushAgain` resets a given-up row to a fresh six-try run; it refuses rows that are not v2, reverted, already done, or not given up.
+
+**The row's life.**
+
+| Event | status | submitted_via | push_attempts | push_next_try_at | push_done_at | push_gave_up_at | push_last_error |
+|---|---|---|---|---|---|---|---|
+| Submit (billed site) | finalized | 'v2' | 0 | now | null | null | null |
+| Submit (non-billed site) | finalized | 'v2' | 0 | null | now | null | null |
+| Fail on tries 1-5 | push_failed | 'v2' | 1..5 | now + 10 min | null | null | error |
+| Success on any try | finalized | 'v2' | N | null | now | null | null |
+| Give up (attempt 6) | push_failed | 'v2' | 6 | null | null | now | error |
+| Push again | push_failed | 'v2' | 0 | now | null | null | null |
+
+No V2 path writes `status='billed'`. v1 uses that word to mean "cannot be reverted"; V2 success stays `finalized` and is told apart by `push_done_at`. "It succeeded" is told by the timestamp, not the status word.
+
+**The claim.** A compare-and-swap through supabase-js (no raw SQL, no new database function): read the row (push_attempts = n), then UPDATE with new values filtered on `id`, `submitted_via='v2'`, `push_attempts=n`, `push_next_try_at <= now`, `push_done_at IS NULL`, `push_gave_up_at IS NULL`, `status <> 'reverted'`, and ask for the row back. Postgres re-checks under the row lock, so two runs cannot both win. The lease is 20 minutes - if a worker dies mid-attempt, the counter is one above where it was and the row is unclaimable for 20 minutes; after that, attempt N+1 runs and attempt N is a lost completion write.
+
+**On a throw at the sixth try, the submit layer fires the failure notice itself.** The engine's `runFinalizeEffects` throws on a database read error before its own `fireN2` has a chance to run. On tries 1 through 5 the submit layer swallows that thrown error silently and schedules the next try; on try 6 it calls `fireN2` once with the row's account, week and the truncated error text. A notice that itself fails is caught, logged without the address, and still leaves the give-up write in place. On a returned failure (the engine caught the inner post error and reported it) the engine already fired `fireN2` during the attempt, so the submit layer does nothing extra - the once-only discipline is observed on both paths.
+
+**`weekStart` must be a Monday.** Both `checkWeekSubmittable` and `submitWeek` throw if `weekStart` is not `YYYY-MM-DD` or does not equal `mondayOfWeek(weekStart)`. A non-Monday weekStart would make the span start on the wrong day and let two live rows for the same real week coexist (the unique index keys on the Monday; the engine's `loadLiveFinalizeRow` also keys on the Monday). It is a caller's mistake, not a reason to show a site, so it throws instead of returning a tenth block code.
+
+**v1 is the fallback.** This PR adds files only (plus the optional `supaArg` on `assertDaysUnlockedForWrite` for test injection, matching the pattern added to `isScLockOverrideDb` in part 2-A). v1's reminder job, calendar route and engine still read `sc_week_finalize` and continue to work. The 47 rows v1 made carry `submitted_via` null and are never touched by the V2 retry loop.
+
+**What is NOT built yet (comes with the first screen).**
+
+- No route exposing `submitWeek` / `checkWeekSubmittable`.
+- No scheduled job calling `findAndAttemptDuePushRows`.
+- No changes to `vercel.json`.
+- No real email / Slack / QuickBooks traffic from V2 - outbound stays inert in train 2.
+
+`requireAllDaysApproved` stays in `scReviewState.ts` unchanged and unused by the submit path (per the brief: no per-day approval is required).
+
 ## What V2 changed from v1
 
 Four rule changes land in train 2 part two-A, ruled by Kevin on 2026-11-16.
@@ -181,14 +222,18 @@ Counted from the syntax tree by Chat-Claude's `sc_engine_type_debt.mjs`, not by 
 | billing/recordCopyPdf.ts | 574 | 30 | 0 | 0 | 0 | 0 | 0 |
 | billing/variance.ts | 54 | 0 | 0 | 0 | 0 | 0 | 0 |
 | outbound.ts | 42 | 0 | 0 | 0 | 0 | 0 | 0 |
-| scPeriodLock.ts | 101 | 0 | 0 | 0 | 0 | 0 | 0 |
+| scPeriodLock.ts | 102 | 0 | 0 | 0 | 0 | 0 | 0 |
 | scReviewState.ts | 200 | 1 | 0 | 0 | 1 | 0 | 0 |
 | scWeekFinalize.ts | 1171 | 18 | 1 | 0 | 0 | 0 | 0 |
-| types.ts | 463 | 0 | 0 | 0 | 0 | 0 | 0 |
-| **Total** | 6636 | 156 | 5 | 1 | 7 | 1 | 12 |
+| submit/canSubmit.ts | 77 | 0 | 0 | 0 | 0 | 0 | 0 |
+| submit/checkSubmit.ts | 222 | 0 | 0 | 0 | 0 | 0 | 0 |
+| submit/push.ts | 337 | 0 | 4 | 0 | 0 | 0 | 0 |
+| submit/submit.ts | 112 | 0 | 1 | 0 | 0 | 0 | 0 |
+| types.ts | 544 | 0 | 0 | 0 | 0 | 0 | 0 |
+| **Total** | 7466 | 156 | 10 | 1 | 7 | 1 | 12 |
 
-Exported functions: 52. Every parameter typed for real: 52. Every parameter `any` or untyped: 0. Return type written: 52. Return type not written: 0.
-Parameters on exported functions: 88, of which `any`: 0, untyped: 0.
+Exported functions: 58. Every parameter typed for real: 58. Every parameter `any` or untyped: 0. Return type written: 58. Return type not written: 0.
+Parameters on exported functions: 102, of which `any`: 0, untyped: 0.
 
 ### New `!` in this PR (3 added, 4 kept from train 1)
 
@@ -203,6 +248,16 @@ The four non-null assertions carried from train 1 (every one on `rate!` after `r
 - `billing/qboAdapter.ts` at line 847, inside `postInvoiceDraft`: `stripInternalMarkers(marked) as unknown as QboInvoice`. `stripInternalMarkers` returns `Record<string, unknown> | null | undefined` because the destructuring strip throws away the two typed marker fields and TS loses the QBO shape. The cast asserts that every other QBO field stays in place on the stripped result, which is true by inspection of `stripInternalMarkers`'s body. Counts as one cast finding; two AST nodes because TS requires the double-step between non-overlapping object shapes.
 
 The three casts carried from train 1 (`billing/chaseNotifications.ts` + `billing/qboMode.ts` on the `as Record<string, string>` object-literal index, `scWeekFinalize.ts` on `as any[]`) stay unchanged.
+
+### New casts in train 2 part two-B (5)
+
+All in `src/lib/sc/submit/**`. Each is on a value the Supabase client returns as `any` (the client is generic, not a typed-schema client) where the submit code knows the real row shape. Types-only; each erases to zero at runtime.
+
+- `submit/push.ts:94` `beforeRaw as FinalizeRowWithRetry` on the pre-claim select.
+- `submit/push.ts:129` `claimedRows[0] as FinalizeRowWithRetry` on the compare-and-swap's returning row.
+- `submit/push.ts:168` `result.reason as "awaiting_pair_close" | "no_billable_actuals" | "already_invoiced"` - narrows the engine's `reason` string literal to the three finished-state codes the push layer answers.
+- `submit/push.ts:310` `beforeRaw as Pick<FinalizeRowWithRetry, "submitted_via" | "status" | "push_done_at" | "push_gave_up_at">` on the pushAgain pre-flight read; the select names exactly those four columns.
+- `submit/submit.ts:111` `inserted as FinalizeRowWithRetry` on the sc_week_finalize insert's returning row.
 
 ### `any` kept on code I touched (2)
 
@@ -227,11 +282,12 @@ The section below is the proof that nothing else from v1 drifted.
 Measured by Chat-Claude's `sc_engine_same_logic_check.mjs`: each V2 file has its types stripped and is compared with v1's file at `c3c1b902`, token by token.
 
 - Import path strings: 30 (29 changed, 1 new).
-- Other code tokens: 414. Every hunk belongs to one of the four rule changes (sc-60 through sc-63) or to the train 2 part one outbound seam / parentheses that were already there.
+- Other code tokens: 420. Train 2 part two-A took the number from 32 (train 2 part one baseline) to 414. Train 2 part two-B adds 6 more, all in `scPeriodLock.ts`, for the optional `supaArg?: SupabaseClient` parameter on `assertDaysUnlockedForWrite` plus the `supaArg || getServiceClient()` fallback at the call site. No other engine file moves. Every hunk belongs to one of the four rule changes (sc-60 through sc-63), the train 2 part one outbound seam / parentheses, or sc-64's optional supaArg.
   - `billing/buildInvoicePayload.ts`: 316 (sc-60 - `findUnpricedBillableLines`, `wouldProduceLine`, `UnpricedLine`, `UnpricedLinesError`, the guard call before the classify loop).
   - `scWeekFinalize.ts`: 41 in total: sc-60 adds the `UnpricedLinesError` import + `instanceof` branch + `FinalizeFailure` interface; sc-62 changes two string tokens on the `accounts.name` select.
   - `billing/recordCopyPdf.ts`: 25 (sc-63 - accept both `reviewedBy`/`reviewed_by` and `reviewedAt`/`reviewed_at`).
+  - `scPeriodLock.ts`: 6 (sc-64 - `supaArg?: SupabaseClient` optional parameter + `supaArg || getServiceClient()` + pass-through to `isScLockOverrideDb(email, supaArg)`).
   - `billing/getSalariedManagerEmails.ts` 4, `billing/qboAdapter.ts` 10, `billing/qboNotifications.ts` 10, `scReviewState.ts` 8: unchanged from train 2 part one.
   - Every other file: 0.
-- Comments: none of v1's lost or changed. 98 added since v1, of which 49 were in train 2 part one and 49 more land here with the rule changes.
-- Tests, helpers and fixtures: 18 of 18 byte for byte. The five new test files in `src/lib/sc/billing/__tests__/` are additions, not edits.
+- Comments: none of v1's lost or changed. 98 added since v1 (unchanged from part 2-A). Comments on the new submit files do not count here - they are additions, not edits to v1 engine files.
+- Tests, helpers and fixtures: 18 of 18 byte for byte. The new test files in `src/lib/sc/billing/__tests__/` and the new helper `_supa-mock-submit.mjs` are additions, not edits.
