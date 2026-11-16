@@ -39,7 +39,13 @@ export function PanelChipsRow({
   // uoms their packs state as sized packs. Chip reach is checked
   // from THIS set, not from EA/LB/FLOZ unconditionally.
   itemUnits?: readonly string[];
-  onAddForUom?: (uom: string) => void;
+  // T3 R3 T1 follow-up: a chip that names a specific target preselects
+  // it (pickUnit omitted / false). The `each` chip on a weight or
+  // volume ingredient has no sensible target (the measure writes from
+  // EA, to ???), so it passes pickUnit=true + uom="" meaning "open
+  // the add row blank, exactly as the local + Add a measure button
+  // opens it" - no preselected weight unit, which M2 ruled out.
+  onAddForUom?: (uom: string, pickUnit?: boolean) => void;
 }) {
   const baseCanonical = canonicalFromBaseUnit(ingredient.base_unit);
   // M2.1 fix 3: fold count-flavour pack uoms (CT, PC, PCS, DZ) into
@@ -112,12 +118,15 @@ export function PanelChipsRow({
                 </span>
               );
             }
-            // T1 R2-3: for a count target on a weight / volume base
-            // the add row is an inverted bridge: "1 each = [blank]
-            // <base>". The chip's TARGET is EA but the measure writes
-            // from EA and reads to the ingredient's own unit. Passing
-            // baseCanonical to onAddForUom opens the existing add row
-            // correctly; the chip renders dashed, not dead.
+            // T3 R3 T1 follow-up: a count target (each, dozen) on a
+            // weight or volume ingredient renders as a dashed "add a
+            // measure" button. Clicking it opens the add row BLANK -
+            // from `each`, to-unit empty, user picks. Round 2 had
+            // this chip preselect baseCanonical as the to-unit, so
+            // the add row showed "1 each = [blank] lb"; M2 ruled
+            // that a default is a decision (2.5 oz once saved as
+            // 2.5 lb). The dead "no path" chip was wrong too - the
+            // bridge is the most common measure in the app.
             const td = DIM_BY_UOM[u];
             const bd = baseCanonical ? DIM_BY_UOM[baseCanonical] : undefined;
             if (td === "count" && (bd === "weight" || bd === "volume") && baseCanonical) {
@@ -126,7 +135,7 @@ export function PanelChipsRow({
                   key={u}
                   type="button"
                   className="kf-chip kf-chip--dashed"
-                  onClick={() => onAddForUom?.(baseCanonical)}
+                  onClick={() => onAddForUom?.("", true)}
                   aria-label={`Add a measure to reach ${u}`}
                 >
                   {uomLabel(u)}: add a measure

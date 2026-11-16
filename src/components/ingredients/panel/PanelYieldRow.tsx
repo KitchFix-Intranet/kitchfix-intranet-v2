@@ -58,6 +58,20 @@ export function PanelYieldRow({
         toast(data.error ?? "Save failed");
         return;
       }
+      // T3 §3c: the local qtyStr / source held the pre-save values,
+      // so after a clear the box still read 95 and Save stayed live
+      // (dirty = pre-save qty !== n = null, i.e. 95 !== null). Reset
+      // the draft to the state that just landed on the server so the
+      // row's Save button goes back to its rest state. Clearing wipes
+      // the number and reverts the source dropdown to the default
+      // ("estimate"), matching the fresh-mount read of the API
+      // response.
+      if (toClear) {
+        setQtyStr("");
+        setSource("estimate");
+      } else if (n != null) {
+        setQtyStr(String(n));
+      }
       toast(toClear ? "Yield cleared" : "Yield saved");
       onDone();
     } catch (e) {

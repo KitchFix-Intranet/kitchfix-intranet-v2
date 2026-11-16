@@ -71,10 +71,18 @@ async function loadOverview(): Promise<{
         .from("pr_v_overview_by_account")
         .select("account_key,food,linked")
         .order("food", { ascending: false }),
+      // T3 §6: nulls last on food, and drop vendors with no food
+      // dollars. Before this fix PostgREST's default puts NULLs
+      // first on a DESC sort, so "Top 10 by 12-month dollars"
+      // opened with Evamor, Southern Eagle and 1st Phorm at zero
+      // and dropped the top three real food vendors off the end.
+      // .gt forces a positive food total; the ten that remain
+      // really are the top ten by spend.
       client
         .from("pr_v_overview_by_vendor")
         .select("vendor_id,vendor_name,food,linked")
-        .order("food", { ascending: false })
+        .gt("food", 0)
+        .order("food", { ascending: false, nullsFirst: false })
         .limit(10),
       client
         .from("pr_intake_runs")
@@ -384,9 +392,12 @@ export async function Overview() {
               <dt>{fmtCount(totals.twins_count)} twins</dt>
               <dd>-</dd>
             </div>
-            <div className="is-missing">
-              <dt>Packs parsed</dt>
-              <dd>Not read yet</dd>
+            {/* T3 §6: pr_v_overview_totals.packs_clean is already
+                read above (totals.packs_clean), so "Not read yet"
+                was a hardcoded lie. Show the number. */}
+            <div>
+              <dt>{fmtCount(totals.packs_clean)} packs parsed</dt>
+              <dd>-</dd>
             </div>
           </dl>
           <footer className="kf-card__foot kf-card__foot--split">

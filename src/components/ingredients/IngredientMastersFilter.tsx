@@ -262,10 +262,59 @@ export function IngredientMastersFilter({
     return out;
   }, [rows, trimmed, superCat, onlyFlagged, onlyUnreviewed, onlyEmpty, sort]);
 
-  const selected = useMemo(
-    () => filtered.find((r) => r.id === selId) ?? filtered[0] ?? null,
-    [filtered, selId]
-  );
+  // T3 R3-1: selection decided during render, no useEffect in the
+  // loop. Round 2's two-state model set the hold in a useEffect,
+  // which meant the render that first received the new rows had
+  // already painted `filtered[0]` before the effect ran - causing
+  // a "Salmon -> Beef -> Salmon" flicker, scrolling the pane back
+  // to the top and collapsing any open Merge / measures / history
+  // row on every save. R2 also only held when `selId` was set, so
+  // the default first row (never clicked) was not held at all.
+  //
+  // Architecture:
+  //   - selId: the user's last click. Stays across filter changes.
+  //   - lastShownRef: a ref storing "what we rendered last, under
+  //     which filter key". Written during render after `selected` is
+  //     computed. Writing a ref during render is allowed for this
+  //     "track previous render" pattern; see React docs on ref
+  //     cheatsheet. Idempotent within a render, so StrictMode's
+  //     double invoke is safe.
+  //
+  // Decision tree:
+  //   1. If the user has clicked a row and that row is in `filtered`,
+  //      show it. The click is the clearest signal.
+  //   2. Else look at lastShownRef:
+  //      a. filter key unchanged (rows changed = save): if last-shown
+  //         is still in `rows`, show it. Covers scenario 1 (clicked
+  //         then save-outside-filter) AND scenario 2 (default row
+  //         then save-outside-filter).
+  //      b. filter key changed (user reconfigured): show last-shown
+  //         only when it still matches the new filter; else fall
+  //         through to filtered[0]. Covers scenarios 3 + 4.
+  //   3. Fallback: filtered[0].
+  const filterKey = `${trimmed}|${superCat}|${onlyFlagged ? 1 : 0}|${onlyUnreviewed ? 1 : 0}|${onlyEmpty ? 1 : 0}|${sort}`;
+  const lastShownRef = useRef<{ filterKey: string; id: string | null }>({
+    filterKey: "",
+    id: null,
+  });
+  const selected: MasterRow | null = (() => {
+    if (selId) {
+      const inFiltered = filtered.find((r) => r.id === selId);
+      if (inFiltered) return inFiltered;
+    }
+    const prev = lastShownRef.current;
+    if (prev.id) {
+      if (prev.filterKey === filterKey) {
+        const inRows = rows.find((r) => r.id === prev.id);
+        if (inRows) return inRows;
+      } else {
+        const inFiltered = filtered.find((r) => r.id === prev.id);
+        if (inFiltered) return inFiltered;
+      }
+    }
+    return filtered[0] ?? null;
+  })();
+  lastShownRef.current = { filterKey, id: selected?.id ?? null };
   const matchedUsd = useMemo(() => filtered.reduce((s, r) => s + r.usd12m, 0), [filtered]);
   const needsCount = useMemo(() => rows.filter((r) => r.issues.length > 0).length, [rows]);
   const unreviewedCount = useMemo(
@@ -277,6 +326,11 @@ export function IngredientMastersFilter({
   const anyFilterActive =
     trimmed.length > 0 || superCat !== "all" || onlyFlagged || onlyUnreviewed || onlyEmpty;
 
+  // T3 R2-2: releaseSticky is gone. The hold is a separate state
+  // cleared by the filter-change effect above. Filter / sort handlers
+  // need no extra call; selId stays. clearAll resets filters and
+  // focuses the search - the effect's filterKey change clears the
+  // hold.
   function clearAll() {
     setQuery("");
     setSuperCat("all");
@@ -340,13 +394,21 @@ export function IngredientMastersFilter({
   // N12 §R2: lazy loader for Merge candidates. GET /api/review/
   // ingredient?id=<selected> returns { parents: ReviewCardIngredient[] }.
   // No fetch on selection; Merge row fires this on first expand.
+  //
+  // T3 R2-1: deps are `selected?.id`, not `selected`. After a
+  // router.refresh() the `selected` object identity flips (new row
+  // objects on the refreshed `rows` list), which pointlessly busted
+  // PanelClosedRows's downstream useEffect and emptied the Merge
+  // picker. Keying on id means the callback is stable across
+  // refreshes of the same ingredient.
+  const selectedId = selected?.id ?? null;
   const loadParents = useCallback(async (): Promise<ReviewCardIngredient[]> => {
-    if (!selected) return [];
-    const res = await fetch(`/api/review/ingredient?id=${encodeURIComponent(selected.id)}`);
+    if (!selectedId) return [];
+    const res = await fetch(`/api/review/ingredient?id=${encodeURIComponent(selectedId)}`);
     if (!res.ok) throw new Error(`fetch failed (${res.status})`);
     const data = (await res.json()) as { parents?: ReviewCardIngredient[] };
     return data.parents ?? [];
-  }, [selected]);
+  }, [selectedId]);
 
   return (
     <div className={`kf-ingp__workspace${paneOpen ? " kf-ingp__workspace--detail-open" : ""}`}>
@@ -361,6 +423,7 @@ export function IngredientMastersFilter({
             onChange={(e) => {
               const v = e.target.value;
               setQuery(v);
+              
             }}
             placeholder={
               mode === "resale"
@@ -389,7 +452,7 @@ export function IngredientMastersFilter({
               role="radio"
               aria-checked={superCat === "all"}
               className={`kf-chip${superCat === "all" ? " kf-chip--on" : ""}`}
-              onClick={() => setSuperCat("all")}
+              onClick={() => { setSuperCat("all") }}
             >
               All <span>{fmtCount(rows.length)}</span>
             </button>
@@ -403,7 +466,7 @@ export function IngredientMastersFilter({
                   role="radio"
                   aria-checked={superCat === cat}
                   className={`kf-chip${superCat === cat ? " kf-chip--on" : ""}`}
-                  onClick={() => setSuperCat(cat)}
+                  onClick={() => { setSuperCat(cat) }}
                 >
                   {cat} <span>{fmtCount(n)}</span>
                 </button>
@@ -417,7 +480,7 @@ export function IngredientMastersFilter({
               type="button"
               aria-pressed={onlyFlagged}
               className={`kf-chip kf-chip--warn${onlyFlagged ? " kf-chip--on" : ""}`}
-              onClick={() => setOnlyFlagged((v) => !v)}
+              onClick={() => { setOnlyFlagged((v) => !v) }}
               title="Ingredients with a spread, coverage, unit or outlier issue"
             >
               Needs attention <span>{fmtCount(needsCount)}</span>
@@ -426,7 +489,7 @@ export function IngredientMastersFilter({
               type="button"
               aria-pressed={onlyUnreviewed}
               className={`kf-chip${onlyUnreviewed ? " kf-chip--on" : ""}`}
-              onClick={() => setOnlyUnreviewed((v) => !v)}
+              onClick={() => { setOnlyUnreviewed((v) => !v) }}
               title="Ingredients whose Top 9 allergens have not been reviewed"
             >
               Allergens to check <span>{fmtCount(unreviewedCount)}</span>
@@ -435,7 +498,7 @@ export function IngredientMastersFilter({
               type="button"
               aria-pressed={onlyEmpty}
               className={`kf-chip${onlyEmpty ? " kf-chip--on" : ""}`}
-              onClick={() => setOnlyEmpty((v) => !v)}
+              onClick={() => { setOnlyEmpty((v) => !v) }}
               title="Ingredients with no live vendor items (candidates to retire)"
             >
               No items <span>{fmtCount(emptyCount)}</span>
@@ -480,6 +543,7 @@ export function IngredientMastersFilter({
               onChange={(e) => {
                 const v = e.target.value as SortMode;
                 setSort(v);
+                
               }}
               aria-label="Sort order"
             >
@@ -1235,6 +1299,20 @@ function LinkedItems({
                 </button>
                 <span className="kf-ingp__item-sub">
                   {li.vendor}
+                  {/* T3 §4: every row left out of the blend names why
+                      on the same sub-line, in the same style. Before
+                      this fix only needs_measure and outlier rows got
+                      a reason - sizes_differ rows read "0 of 6 priced
+                      - / each" above six rows showing prices with no
+                      explanation. */}
+                  {li.statusKind === "sizes_differ" ? (
+                    <>
+                      {" · "}
+                      <span className="kf-ingp__item-sub-warn">
+                        left out - pack sizes differ
+                      </span>
+                    </>
+                  ) : null}
                   {li.statusKind === "needs_measure" ? (
                     <>
                       {" · "}
