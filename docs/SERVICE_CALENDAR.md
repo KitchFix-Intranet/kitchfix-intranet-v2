@@ -148,18 +148,27 @@ Database functions:
 
 The engine does not read `sc_fee_schedule`. Prices reach it through the view `sc_daily_revenue`, which reads `sc_daily_actuals`, `sc_daily_projections`, `sc_day_metadata`, `sc_service_groups`, `sc_service_prices` and `sc_services`.
 
+## What V2 changed from v1
+
+Four rule changes land in train 2 part two-A, ruled by Kevin on 2026-11-16.
+
+1. **A billed line with no price - or a price of 0 - stops the invoice and names which service and which day.** V1 and train 2 part one billed the line at 0 in silence. The new pure `findUnpricedBillableLines(rows, serviceMap)` in `src/lib/sc/billing/buildInvoicePayload.ts` is the one source of truth for the rule; the builder calls it before any invoice is produced and throws `UnpricedLinesError` with the full list. `runFinalizeEffects` reports the outcome as failure code `"UNPRICED_LINES"`, with the list on the failure object, through the same path `BUILD_ERROR` takes. A row with no service mapping is skipped by the pure function; the builder's existing "unmapped service" throw continues to cover that case with its own more specific message.
+2. **The lock override needs an active person.** `isScLockOverrideDb` adds `.eq("status", "ACTIVE")` to the `people` query. A flag on a `TERMINATED` row no longer unlocks a period. Everything else about the function stays: lower-case and trim, exact match, any row, never throws.
+3. **The account label is read from the column that exists.** `scWeekFinalize.ts` now selects `accounts.name` on `team_key`, not `team_name`. The `AccountRow` type in `src/lib/sc/types.ts` follows. The lookup stays soft: a miss falls back to `null` as before.
+4. **The "approved by" names reach the email and the record copy.** `computeApproverPhrase` in `src/lib/sc/billing/recordCopyPdf.ts` now reads both snake_case (`reviewed_by`, `reviewed_at`) and camelCase (`reviewedBy`, `reviewedAt`). The real finalize path hands rows in snake_case from the `sc_day_metadata` select; existing fireN1 tests hand them in camelCase. Both are legitimate per the ruling.
+
 ## Type debt (measured, 2026-11-16)
 
-Every exported function now carries a real parameter type and a real return type. No `any` in any signature, no `any` inside any type a signature names. Row types in `src/lib/sc/types.ts` are keyed to the live schema per Kevin's Step 0 answer.
+Every exported function carries a real parameter type and a real return type. No `any` in any signature, no `any` inside any type a signature names. Row types in `src/lib/sc/types.ts` are keyed to the live schema.
 
 Counted from the syntax tree by Chat-Claude's `sc_engine_type_debt.mjs`, not by text search:
 
 | file | lines | `any` | casts | `as const` | `!` | `@ts-expect-error` | `declare` fields |
 |---|--:|--:|--:|--:|--:|--:|--:|
 | _seams.ts | 14 | 0 | 0 | 0 | 0 | 0 | 0 |
-| admin.ts | 44 | 0 | 0 | 0 | 0 | 0 | 0 |
+| admin.ts | 53 | 0 | 0 | 0 | 0 | 0 | 0 |
 | billing/billableTotal.ts | 54 | 0 | 0 | 0 | 0 | 0 | 0 |
-| billing/buildInvoicePayload.ts | 552 | 22 | 0 | 0 | 3 | 1 | 0 |
+| billing/buildInvoicePayload.ts | 644 | 22 | 0 | 0 | 3 | 1 | 0 |
 | billing/chaseNotifications.ts | 414 | 14 | 1 | 0 | 0 | 0 | 0 |
 | billing/chasePersonName.ts | 120 | 0 | 0 | 0 | 0 | 0 | 0 |
 | billing/getSalariedManagerEmails.ts | 113 | 0 | 0 | 0 | 2 | 0 | 0 |
@@ -169,17 +178,17 @@ Counted from the syntax tree by Chat-Claude's `sc_engine_type_debt.mjs`, not by 
 | billing/qboMode.ts | 102 | 0 | 1 | 0 | 0 | 0 | 0 |
 | billing/qboNotifications.ts | 928 | 30 | 0 | 1 | 0 | 0 | 0 |
 | billing/recipients.ts | 266 | 0 | 0 | 0 | 0 | 0 | 0 |
-| billing/recordCopyPdf.ts | 569 | 30 | 0 | 0 | 0 | 0 | 0 |
+| billing/recordCopyPdf.ts | 574 | 30 | 0 | 0 | 0 | 0 | 0 |
 | billing/variance.ts | 54 | 0 | 0 | 0 | 0 | 0 | 0 |
 | outbound.ts | 42 | 0 | 0 | 0 | 0 | 0 | 0 |
 | scPeriodLock.ts | 101 | 0 | 0 | 0 | 0 | 0 | 0 |
 | scReviewState.ts | 200 | 1 | 0 | 0 | 1 | 0 | 0 |
-| scWeekFinalize.ts | 1150 | 18 | 1 | 0 | 0 | 0 | 0 |
-| types.ts | 461 | 0 | 0 | 0 | 0 | 0 | 0 |
-| **Total** | 6507 | 156 | 5 | 1 | 7 | 1 | 12 |
+| scWeekFinalize.ts | 1171 | 18 | 1 | 0 | 0 | 0 | 0 |
+| types.ts | 463 | 0 | 0 | 0 | 0 | 0 | 0 |
+| **Total** | 6636 | 156 | 5 | 1 | 7 | 1 | 12 |
 
-Exported functions: 51. Every parameter typed for real: 51. Every parameter `any` or untyped: 0. Return type written: 51. Return type not written: 0.
-Parameters on exported functions: 85, of which `any`: 0, untyped: 0.
+Exported functions: 52. Every parameter typed for real: 52. Every parameter `any` or untyped: 0. Return type written: 52. Return type not written: 0.
+Parameters on exported functions: 88, of which `any`: 0, untyped: 0.
 
 ### New `!` in this PR (3 added, 4 kept from train 1)
 
@@ -207,23 +216,22 @@ The 154 other `any` locations sit on code this PR did not modify: `catch (e: any
 The one `@ts-expect-error` is in `billing/buildInvoicePayload.ts` on the date subtraction. v1's line is kept as it is.
 The 12 `declare` fields are on the four error classes in `billing/qboAdapter.ts`. They emit nothing.
 
-### Findings this PR surfaces for train 2 part two
+### Findings carried from train 2 part one
 
-- `scWeekFinalize.ts` queries `accounts.select("team_name")` - the `accounts` table has no `team_name` column (the column is `name`). The query silently returns an error and the account label is always null. Carried from v1; `AccountRow` types the result shape honestly (`team_name: string | null`), and the write-the-correct-column fix belongs to part two.
-- `recordCopyPdf.computeApproverPhrase` reads `r.reviewedBy` and `r.reviewedAt` on review rows that arrive as snake_case (`reviewed_by`, `reviewed_at`) from the `sc_day_metadata` select at `scWeekFinalize.ts` line 1076. V1 has the same mismatch; the record-copy PDF currently renders approvals with no name attached. `ReviewRow` types the reality (both forms permitted, both optional).
+The two v1 bugs flagged by part one (accounts `team_name` lookup and the approver snake_case / camelCase mismatch) are fixed in part two-A, see "What V2 changed from v1" above.
 
-None of this changes what runs. The section below is the proof.
+The section below is the proof that nothing else from v1 drifted.
 
-## What differs from v1 (measured, 2026-11-15)
+## What differs from v1 (measured, 2026-11-16)
 
 Measured by Chat-Claude's `sc_engine_same_logic_check.mjs`: each V2 file has its types stripped and is compared with v1's file at `c3c1b902`, token by token.
 
-- Import path strings: 21 (19 changed, 2 new).
-- Other code tokens: 32.
-  - 22 are the outbound seam: two new import lines (`billing/qboAdapter.ts` and `scReviewState.ts`, 6 tokens each), `networkFetch` added to the existing import in `billing/qboNotifications.ts` (2 tokens), and four call sites where `fetch` became `networkFetch` (2 tokens each).
-  - 10 are parentheses around five single arrow-function parameters, added so a type could be written: two in `billing/getSalariedManagerEmails.ts`, three in `billing/qboNotifications.ts`. `(r) => x` and `r => x` are the same function.
-  - By file: `billing/getSalariedManagerEmails.ts` 4, `billing/qboAdapter.ts` 10, `billing/qboNotifications.ts` 10, `scReviewState.ts` 8. The other twelve files: 0.
-- Comments: none of v1's lost or changed. 25 added, all about types.
-- Tests, helpers and fixtures: 18 of 18 byte for byte.
-
-A later types-only change must reproduce these numbers exactly.
+- Import path strings: 30 (29 changed, 1 new).
+- Other code tokens: 414. Every hunk belongs to one of the four rule changes (sc-60 through sc-63) or to the train 2 part one outbound seam / parentheses that were already there.
+  - `billing/buildInvoicePayload.ts`: 316 (sc-60 - `findUnpricedBillableLines`, `wouldProduceLine`, `UnpricedLine`, `UnpricedLinesError`, the guard call before the classify loop).
+  - `scWeekFinalize.ts`: 41 in total: sc-60 adds the `UnpricedLinesError` import + `instanceof` branch + `FinalizeFailure` interface; sc-62 changes two string tokens on the `accounts.name` select.
+  - `billing/recordCopyPdf.ts`: 25 (sc-63 - accept both `reviewedBy`/`reviewed_by` and `reviewedAt`/`reviewed_at`).
+  - `billing/getSalariedManagerEmails.ts` 4, `billing/qboAdapter.ts` 10, `billing/qboNotifications.ts` 10, `scReviewState.ts` 8: unchanged from train 2 part one.
+  - Every other file: 0.
+- Comments: none of v1's lost or changed. 98 added since v1, of which 49 were in train 2 part one and 49 more land here with the rule changes.
+- Tests, helpers and fixtures: 18 of 18 byte for byte. The five new test files in `src/lib/sc/billing/__tests__/` are additions, not edits.
