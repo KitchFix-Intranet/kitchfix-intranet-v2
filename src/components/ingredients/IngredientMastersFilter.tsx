@@ -43,6 +43,7 @@ import {
   reachableUnits,
   type Measure,
 } from "@/lib/ingredients/measures";
+import { SPREAD_RATIO_MAX } from "@/lib/ingredients/blend";
 import { RowSendBackButton } from "./RowSendBackButton";
 import { RowGradeToggle } from "./RowGradeToggle";
 import { PanelIngredientZone } from "./panel/PanelIngredientZone";
@@ -192,7 +193,7 @@ function rowPriceSub(row: MasterRow): { text: string; warn: boolean } | null {
   if (row.pricedCount < row.linkedCount) {
     return { text: `${fmtCount(row.pricedCount)} of ${fmtCount(row.linkedCount)} priced`, warn: true };
   }
-  if (row.spreadRatio != null && row.spreadRatio > 3) {
+  if (row.spreadRatio != null && row.spreadRatio > SPREAD_RATIO_MAX) {
     return { text: `${row.spreadRatio.toFixed(1)}x spread`, warn: true };
   }
   // M2 §4B amendment 4: the "in recipes" derived sub-line moved to
@@ -809,7 +810,7 @@ function DetailView({
   }, [active.minPerBase, active.maxPerBase, viewConvFactor]);
 
   const partial = active.linkedCount > 0 && active.pricedCount < active.linkedCount;
-  const spreadBad = active.spreadRatio != null && active.spreadRatio > 3;
+  const spreadBad = active.spreadRatio != null && active.spreadRatio > SPREAD_RATIO_MAX;
 
   const derivedForStrip = stripDerivedSub(row, active);
 
@@ -1037,7 +1038,7 @@ function IngredientAttention({ row, onDone }: { row: MasterRow; onDone: () => vo
 
   if (row.issues.includes("spread")) {
     // T5: the G3 flag rule fires on a populated grade subset whose
-    // own spreadRatio > 3, not on the blended figure. The banner was
+    // own spreadRatio > SPREAD_RATIO_MAX, not on the blended figure. The banner was
     // reading row.spreadRatio / row.minPerBase / row.maxPerBase, which
     // are the BLENDED numbers; for a two-bucket ingredient (Standard
     // over threshold, Premium under) that printed the Standard-floor-
@@ -1055,8 +1056,8 @@ function IngredientAttention({ row, onDone }: { row: MasterRow; onDone: () => vo
     const stdPopulated = std.linkedCount > 0;
     const premPopulated = prem.linkedCount > 0;
     const bothPopulated = stdPopulated && premPopulated;
-    const stdOver = stdPopulated && std.spreadRatio != null && std.spreadRatio > 3;
-    const premOver = premPopulated && prem.spreadRatio != null && prem.spreadRatio > 3;
+    const stdOver = stdPopulated && std.spreadRatio != null && std.spreadRatio > SPREAD_RATIO_MAX;
+    const premOver = premPopulated && prem.spreadRatio != null && prem.spreadRatio > SPREAD_RATIO_MAX;
     if (!bothPopulated) {
       issues.push({
         lead: `Spread is ${row.spreadRatio?.toFixed(1)}x.`,

@@ -12,6 +12,15 @@
 
 export const OUTLIER_RATIO = 3;
 export const OUTLIER_MIN = 3;
+// T5 tidy: one source of truth for the per-grade spread threshold.
+// Previously declared in IngredientMasters.tsx and the four comparison
+// sites in IngredientMastersFilter.tsx used a bare `> 3` literal; they
+// now all import this. IngredientMasters imports IngredientMastersFilter,
+// so the constant lives here (pure, isomorphic) to avoid an import
+// cycle. The copy in the attention bodies deliberately says "Over 3x";
+// it is not interpolated so that a future change to the threshold is
+// a deliberate second edit.
+export const SPREAD_RATIO_MAX = 3;
 
 export type Grade = "premium" | "standard";
 export type Lens = "blended" | "standard" | "premium";
