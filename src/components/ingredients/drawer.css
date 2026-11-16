@@ -276,14 +276,22 @@
  * 44x44 outlined square beside the name block (not sticky-floated).
  * The N7 kf-drawer__head rule above owns the sticky + ground; N8 adds
  * only the chip + eyebrow + close shaping for the render. */
+/* T8: the sticky pin is the wrapper around head + strip in
+ * DetailPanel.tsx. Head is a plain child of it so a sticky-inside-
+ * sticky doesn't double-draw the border. The opaque background +
+ * border-bottom stay here. */
+.kf-ipanel__pin {
+  flex: 0 0 auto;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--sp-card);
+}
 .kf-ipanel__head {
   padding: var(--sp-sp-5) var(--sp-sp-5) var(--sp-sp-3) var(--sp-sp-5);
   display: flex;
   align-items: flex-start;
   gap: var(--sp-sp-4);
-  position: sticky;
-  top: 0;
-  z-index: 1;
   background: var(--sp-card);
   border-bottom: 1px solid var(--sp-line);
 }
@@ -332,27 +340,6 @@
   font-size: var(--sp-t-micro);
   color: var(--sp-muted);
 }
-/* T7: four summary facts inside the sticky head so they survive a
- * scroll past PanelStrip. Mulish, micro, body colour - a running
- * sub-line, not a heading; it must not compete with the item name
- * above it. flex-wrap: wrap + overflow-wrap let the line break onto
- * a second row at narrow drawer widths rather than ellipsing - the
- * whole point is to not lose facts. */
-.kf-ipanel__head-facts {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  column-gap: var(--sp-sp-2);
-  row-gap: var(--sp-sp-1);
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-micro);
-  color: var(--sp-body);
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.kf-ipanel__head-facts-sep {
-  color: var(--sp-muted);
-}
 .kf-ipanel__close {
   width: 44px;
   height: 44px;
@@ -370,7 +357,17 @@
 
 /* --- Summary strip ---
  * Four cells, raise ground, Barlow labels 12px uppercase muted,
- * Barlow values 28px navy or ink, muted micro sub-line. */
+ * Barlow values 28px navy or ink, muted micro sub-line.
+ *
+ * T8 round 2: these classes are shared between the item panel's
+ * summary strip and the Ingredients tab's price tile
+ * (IngredientMastersFilter -> .kf-ipanel__strip.kf-ingp__dzone-strip,
+ * which renders .kf-ipanel__strip-sub lines for "45 priced", spread
+ * range, "all items priced", "45 linked items"). The item panel's
+ * variant is scoped through .kf-ipanel__pin. Anything unscoped
+ * changes both. The base rules below are what the tab's tile wants;
+ * the .kf-ipanel__pin overrides further down shrink the item panel
+ * for the pinned-header case. */
 .kf-ipanel__strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -418,6 +415,10 @@
   font-weight: 700;
   color: var(--sp-body);
 }
+/* T8 round 2: the item panel no longer emits .kf-ipanel__strip-sub
+ * in its markup, but the Ingredients tab's price tile still does
+ * (four lines: "N priced", spread range, "all items priced",
+ * "N linked items"). Keep the rule. */
 .kf-ipanel__strip-sub {
   font-family: var(--sp-ui);
   font-size: var(--sp-t-micro);
@@ -429,6 +430,34 @@
   min-width: 0;
 }
 .kf-ipanel__strip-sub--accent { color: var(--sp-navy); font-weight: 700; }
+
+/* T8: item-panel-only overrides. The pinned head + strip wrapper
+ * (.kf-ipanel__pin) scopes the shrink so the Ingredients tab's price
+ * tile keeps its full-height cells. Height math at 660 px drawer
+ * width: var(--sp-sp-2) (8) + label 12 + gap 4 + value 20 +
+ * var(--sp-sp-2) (8) = 52-54 px including the strip's 1 px top +
+ * bottom borders. */
+.kf-ipanel__pin .kf-ipanel__strip-cell {
+  padding: var(--sp-sp-2) var(--sp-sp-3);
+}
+/* T8 round 3: the shorthand above lands on the same specificity as
+ * the base .kf-ipanel__strip-cell:first-child / :last-child rules and
+ * wins on source order, so it overwrites the 24 px outer gutter. These
+ * two re-assert the 24 px inset INSIDE the pin scope so the strip's
+ * outer edges line up with the head's gutter above and the first
+ * .kf-ipanel__row gutter below. They must stay below the shorthand. */
+.kf-ipanel__pin .kf-ipanel__strip-cell:first-child { padding-left: var(--sp-sp-5); }
+.kf-ipanel__pin .kf-ipanel__strip-cell:last-child { padding-right: var(--sp-sp-5); }
+.kf-ipanel__pin .kf-ipanel__strip-label {
+  line-height: 1;
+  letter-spacing: 1.2px;
+}
+.kf-ipanel__pin .kf-ipanel__strip-value {
+  font-size: var(--sp-t-h3);
+}
+.kf-ipanel__pin .kf-ipanel__strip-value-unit {
+  font-size: var(--sp-t-label);
+}
 
 /* --- Attention sheet (§3c) ---
  * Warn-tinted rectangle: icon + head + body + action. Not a card grid;
@@ -1066,9 +1095,21 @@
  * Category stack full width and the link sits beneath. Stacked rows
  * keep the same vertical padding as item 2. */
 @media (max-width: 520px) {
-  .kf-ipanel__strip { grid-template-columns: repeat(2, 1fr); }
-  .kf-ipanel__strip-cell:nth-child(2) { border-right: none; }
-  .kf-ipanel__strip-cell:nth-child(-n+2) { border-bottom: 1px solid var(--sp-line-soft); }
+  /* T8: pre-T8 this was a 2x2 strip that pinned at about 96 px on
+   * phone, on top of the head - worse than the bug being fixed.
+   * The Ingredients tab's price tile has its OWN 2x2 scoped through
+   * .kf-ingp__dzone-strip in ingredients-tab.css (line 519+); that
+   * still fires. The item panel's four cells fit on one row at 390
+   * px in Barlow Condensed with sub-lines gone. Shrink padding +
+   * value font so the pinned strip stays near 64 px. 4 + 12 + 18
+   * + 4 = 38 px of content height. Overrides scoped to
+   * .kf-ipanel__pin so the tab's tile is untouched. */
+  .kf-ipanel__pin .kf-ipanel__strip-cell {
+    padding: var(--sp-sp-1) var(--sp-sp-2);
+  }
+  .kf-ipanel__pin .kf-ipanel__strip-cell:first-child { padding-left: var(--sp-sp-3); }
+  .kf-ipanel__pin .kf-ipanel__strip-cell:last-child { padding-right: var(--sp-sp-3); }
+  .kf-ipanel__pin .kf-ipanel__strip-value { font-size: var(--sp-t-item); }
   .kf-ipanel__row,
   .kf-ipanel__row--split {
     grid-template-columns: 1fr;

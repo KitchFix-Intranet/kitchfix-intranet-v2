@@ -17,12 +17,13 @@
 // goes on the row's muted micro sub-line beneath the summary.
 
 import { useEffect, useState } from "react";
-import { fmtPackNumber, fmtPackNumbersInText, fmtUsd } from "@/lib/fmt";
+import { fmtCount, fmtDate, fmtPackNumber, fmtPackNumbersInText, fmtUsd } from "@/lib/fmt";
 import { DIM_BY_UOM } from "@/lib/ingredients/pack";
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 import { ItemGradeBlock } from "./ItemGradeBlock";
 import { PackOverrideBlock } from "./PackOverrideBlock";
 import { PriceOverrideBlock } from "./PriceOverrideBlock";
+import { itemConfidenceWord, itemFacts } from "./itemFacts";
 // M2 §4B §2.7: ItemEachMeasureBlock is no longer mounted. The item-
 // side override is now CaseWeightBlock (case_weight_lb); the "One
 // each is" sentence lives on the ingredient zone's Measures block.
@@ -241,6 +242,21 @@ export function PanelItemZone({
           {sourceLabel ? (
             <div className="kf-ipanel__row-hint">{sourceLabel}</div>
           ) : null}
+          {/* T8 §3a: the confidence word used to live in PanelStrip's
+              Unit price sub-line. It explains how much to trust the
+              per-unit number; neither packSourceLabel nor
+              casePriceSegment says that. One source via itemFacts
+              so the string never drifts. Stored per-base appended
+              when the primary is shown in the ingredient's unit. */}
+          <div className="kf-ipanel__row-hint">
+            {itemConfidenceWord(item)}
+            {(() => {
+              const f = itemFacts(item, ingredient);
+              return f.storedValue != null && f.storedUnit != null
+                ? ` · ${f.storedValue} / ${f.storedUnit}`
+                : "";
+            })()}
+          </div>
           {item.packNote ? (
             <div className="kf-ipanel__row-hint">{fmtPackNumbersInText(item.packNote)}</div>
           ) : null}
@@ -293,6 +309,36 @@ export function PanelItemZone({
           <div className="kf-ipanel__row-action" />
         </div>
       ) : null}
+
+      {/* T8 §3c+d: the strip's Annual spend and Last bought
+          sub-lines (invoice-line count, first-bought date, site
+          pills / "no sites") moved here. No new primitive - same
+          .kf-ipanel__row shape every other row uses. Placed before
+          Grade so the "Bought" facts sit with the other read-only
+          context before the editable rows begin. */}
+      <div className="kf-ipanel__row">
+        <div className="kf-ipanel__row-label">Bought</div>
+        <div className="kf-ipanel__row-value">
+          <div>
+            {fmtCount(item.lines12m)} invoice line{item.lines12m === 1 ? "" : "s"}
+            {item.firstSeen ? (
+              <> · first bought {fmtDate(item.firstSeen)}</>
+            ) : null}
+          </div>
+          <div>
+            {item.accounts.length > 0 ? (
+              <span className="kf-site-pills">
+                {item.accounts.map((c) => (
+                  <span key={c} className="kf-site-pill">{c}</span>
+                ))}
+              </span>
+            ) : (
+              <span className="kf-ipanel__row-hint">no sites</span>
+            )}
+          </div>
+        </div>
+        <div className="kf-ipanel__row-action" />
+      </div>
 
       {/* Row 3: Grade -------------------------------------------- */}
       <div className="kf-ipanel__row">
