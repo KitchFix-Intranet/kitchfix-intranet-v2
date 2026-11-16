@@ -8,13 +8,12 @@
 // Lifted verbatim from DetailPanel.tsx in N7 commit 0.
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { toast } from "@/components/ui/Toaster";
 import { WEIGHT_UOMS, VOLUME_UOMS, uomLabel } from "@/lib/ingredients/pack";
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 import { SaveFlash } from "./SaveFlash";
-import { postJson, errMsg } from "./common";
+import { postJson } from "./common";
 import { ingredientBaseUom } from "./packHelpers";
+import { useSaveWithRefresh } from "./useSaveWithRefresh";
 
 export function PriceOverrideBlock({
   item,
@@ -28,7 +27,6 @@ export function PriceOverrideBlock({
   // N8 §1f: Cancel closes the row when the caller is a panel row.
   onCancel?: () => void;
 }) {
-  const router = useRouter();
   // Default baseUom to the ingredient's base_unit when there is one,
   // else to the item's existing perBaseUom, else LB. All three are
   // valid first picks; LB is the dominant case.
@@ -50,15 +48,16 @@ export function PriceOverrideBlock({
   // { per_base in LB/FLOZ/EA }.
   const [baseUom, setBaseUom] = useState<string>(seedBaseUom);
   const [reason, setReason] = useState<string>("");
-  const [busy, setBusy] = useState(false);
-  const [savedAt, setSavedAt] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // T4 §3: busy + savedAt + error all come from the shared hook; it
+  // keeps busy=true until the refresh has rendered so the Save primary
+  // reads "Saving..." while the new number is still mid-flight.
+  const { save: runSave, busy, savedAt, error, clearError } = useSaveWithRefresh();
 
   function resetDrafts() {
     setPerBaseStr(initialPerBaseStr);
     setBaseUom(seedBaseUom);
     setReason("");
-    setError(null);
+    clearError();
   }
   const dirty =
     perBaseStr !== initialPerBaseStr ||
@@ -72,26 +71,17 @@ export function PriceOverrideBlock({
 
   async function save() {
     if (busy || !readyToSave) return;
-    setBusy(true);
-    setError(null);
-    const r = await postJson("/api/review/set-price-override", {
-      itemId: item.id,
-      perBase: perBaseN,
-      baseUom,
-      reason: reason.trim(),
+    await runSave({
+      op: () =>
+        postJson("/api/review/set-price-override", {
+          itemId: item.id,
+          perBase: perBaseN,
+          baseUom,
+          reason: reason.trim(),
+        }),
+      successMessage: "Saved: price override",
+      onDone,
     });
-    if (!r.ok) {
-      const msg = errMsg(r.data, `Save failed (${r.status})`);
-      setError(msg);
-      toast(msg, { tone: "block" });
-      setBusy(false);
-      return;
-    }
-    toast("Saved: price override");
-    setSavedAt(Date.now());
-    setBusy(false);
-    onDone();
-    router.refresh();
   }
 
   return (

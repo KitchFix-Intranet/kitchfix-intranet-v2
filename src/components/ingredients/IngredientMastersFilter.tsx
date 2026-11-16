@@ -21,7 +21,6 @@
 // fact labels in IngredientMasters.tsx are a separate ask.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   Check,
@@ -31,6 +30,7 @@ import {
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtUsd, fmtUsdLong } from "@/lib/fmt";
 import { ItemPanelById } from "./ItemPanelById";
+import { loadParents as loadParentsFromStore } from "./parentsStore";
 import { SUPER_CATEGORIES } from "@/lib/ingredients/categories";
 import { canonicalFromBaseUnit, uomLabel } from "@/lib/ingredients/pack";
 // M2 §4B amendment 4 + part 3 fix 9: no screen imports deriveRecipePrice
@@ -252,7 +252,6 @@ export function IngredientMastersFilter({
   rows: MasterRow[];
   mode?: "recipe" | "resale";
 }) {
-  const router = useRouter();
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortMode>("spend");
   const [superCat, setSuperCat] = useState<string | "all">("all");
@@ -425,23 +424,19 @@ export function IngredientMastersFilter({
     };
   }, [selected]);
 
-  // N12 §R2: lazy loader for Merge candidates. GET /api/review/
-  // ingredient?id=<selected> returns { parents: ReviewCardIngredient[] }.
-  // No fetch on selection; Merge row fires this on first expand.
-  //
-  // T3 R2-1: deps are `selected?.id`, not `selected`. After a
-  // router.refresh() the `selected` object identity flips (new row
-  // objects on the refreshed `rows` list), which pointlessly busted
-  // PanelClosedRows's downstream useEffect and emptied the Merge
-  // picker. Keying on id means the callback is stable across
-  // refreshes of the same ingredient.
+  // T4 §2a + T3 R2-1: lazy loader for Merge candidates reads through
+  // the shared parentsStore cache (one fetch per page life across
+  // the drawer and this detail pane), and the useCallback is keyed
+  // on `selected?.id` rather than `selected`. The object identity
+  // of `selected` flips on every router.refresh (new MasterRow
+  // references), which was emptying the Merge picker through
+  // PanelClosedRows's downstream useEffect. Keying on the id keeps
+  // the callback reference stable across refreshes of the same
+  // ingredient, so the cache keeps hitting.
   const selectedId = selected?.id ?? null;
   const loadParents = useCallback(async (): Promise<ReviewCardIngredient[]> => {
     if (!selectedId) return [];
-    const res = await fetch(`/api/review/ingredient?id=${encodeURIComponent(selectedId)}`);
-    if (!res.ok) throw new Error(`fetch failed (${res.status})`);
-    const data = (await res.json()) as { parents?: ReviewCardIngredient[] };
-    return data.parents ?? [];
+    return loadParentsFromStore(selectedId);
   }, [selectedId]);
 
   return (
@@ -643,7 +638,13 @@ export function IngredientMastersFilter({
                   row={selected}
                   ingredient={selectedIngredient}
                   parentOptions={parentOptions}
-                  onDone={() => router.refresh()}
+                  // T4 §3: DetailView's descendants (PanelIngredientZone,
+                  // PanelClosedRows) now route their saves through
+                  // useSaveWithRefresh, which fires router.refresh()
+                  // inside a transition and keeps the control busy
+                  // until the refresh has rendered. Nothing left for
+                  // the parent to do on onDone.
+                  onDone={() => {}}
                   onLoadParents={loadParents}
                   onOpenItem={(id) => setOpenItemId(id)}
                 />

@@ -23,6 +23,7 @@ import { Tabs } from "./Tabs";
 import { IdentBand } from "@/components/ui/IdentBand";
 import { fmtCount } from "@/lib/fmt";
 import { readPerBase, type PriceEstimate } from "@/lib/ingredients/priceEstimate";
+import { startTimer, mark, endTimer } from "@/lib/timing";
 import { VendorItemsView, type VendorSeg, type SortKey, type VendorSegCounts, type VendorItemViewRow, type LinkCell } from "./VendorItemsView";
 import "./ingredients.css";
 import "./table.css";
@@ -234,6 +235,7 @@ export async function VendorItemsPage({
 }: {
   searchParams: Record<string, string | string[] | undefined>;
 }) {
+  const timer = startTimer("page:vendor-items");
   const p: Params = {
     vendor: toParam(searchParams.vendor),
     status: toParam(searchParams.status),
@@ -255,6 +257,7 @@ export async function VendorItemsPage({
     client.from("pr_vendors").select("id,name").order("name", { ascending: true }),
     readSegCounts(client, p.vendor),
   ]);
+  mark(timer, "batch1");
   const vendors = (vendorsRes.data ?? []) as Vendor[];
 
   let pageQuery = client
@@ -282,6 +285,7 @@ export async function VendorItemsPage({
 
   const { data: rows, error, count } = await pageQuery;
   if (error) {
+    endTimer(timer, { ok: false, stage: "items" });
     return (
       <div className="kf-ing">
         <Tabs active="vendor-items" />
@@ -292,6 +296,7 @@ export async function VendorItemsPage({
       </div>
     );
   }
+  mark(timer, "items");
 
   const items = (rows ?? []) as Row[];
   const total = count ?? 0;
@@ -341,6 +346,9 @@ export async function VendorItemsPage({
 
   const from = total === 0 ? 0 : page * pageSize + 1;
   const to = Math.min(total, (page + 1) * pageSize);
+
+  mark(timer, "shape");
+  endTimer(timer, { seg });
 
   return (
     <div className="kf-ing">

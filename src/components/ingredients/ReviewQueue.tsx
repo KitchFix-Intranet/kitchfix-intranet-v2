@@ -8,6 +8,7 @@ import { serviceClient } from "@/lib/supabase/service";
 import { COUNTABLE_OBSERVATIONS_VIEW, applyCountableFilter } from "@/lib/ingredients/countability";
 import { categoryForParent } from "@/lib/ingredients/categories";
 import { isMeasuresWorld, readAllMeasures } from "@/lib/ingredients/measuresRead";
+import { startTimer, mark, endTimer } from "@/lib/timing";
 // M2 §4B part 2: the each-measure shape helpers are no longer
 // imported by client or server components in the render tree. Nothing
 // on screen reads each_measure_* - the shape helpers were projecting
@@ -158,6 +159,7 @@ function parseReason(raw: string | null): { prefix: "ai" | "ai-new" | "ai-notfoo
 }
 
 async function loadReview() {
+  const timer = startTimer("page:review");
   const client = serviceClient();
 
   // M1 R2 fix 1: detect the migration world once for this request so
@@ -165,6 +167,7 @@ async function loadReview() {
   // ingredient + item each-measure shapes derive from the new tables
   // instead of the legacy columns.
   const measuresWorld = await isMeasuresWorld(client);
+  mark(timer, "world");
 
   // Paginated read of every proposed row (PostgREST cap 1000). dollar-ordered.
   // In measures-world we also carry case_weight_lb so the item's eachMeasure
@@ -216,6 +219,7 @@ async function loadReview() {
   ]);
   if (vendorsRes.error) throw vendorsRes.error;
   if (ingredientsRes.error) throw ingredientsRes.error;
+  mark(timer, "batch1");
 
   // M1 R3 fix 1: readAllMeasures pages the whole pr_ingredient_measures
   // table (tiny, bounded at 2 rows per ingredient) rather than issuing
@@ -767,6 +771,8 @@ async function loadReview() {
   const groupedUsd = groupList.reduce((s, g) => s + g.totalUsd12m, 0);
   const notFoodCount = notFoodCountRes.count ?? 0;
 
+  mark(timer, "shape");
+  endTimer(timer);
   return {
     groups: groupList,
     ingredients,

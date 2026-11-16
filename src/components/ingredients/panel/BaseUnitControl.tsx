@@ -9,12 +9,15 @@
 // mounts BaseUnitControl directly; the control only renders inside
 // PanelIngredientZone, where the row provides the label and the chrome.
 // Prop type narrowed to the three fields the control actually reads.
+//
+// T4 §3: save-and-refresh. The select stays disabled through POST +
+// refresh so the user cannot pick a second value while the first is
+// still mid-flight; the success toast fires at the moment the refreshed
+// data has rendered.
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { toast } from "@/components/ui/Toaster";
 import { WEIGHT_UOMS, VOLUME_UOMS, uomLabel } from "@/lib/ingredients/pack";
-import { postJson, errMsg } from "./common";
+import { postJson } from "./common";
+import { useSaveWithRefresh } from "./useSaveWithRefresh";
 
 export type BaseUnitControlRow = {
   id: string;
@@ -37,25 +40,19 @@ export function BaseUnitControl({
   row: BaseUnitControlRow;
   onSaved?: () => void;
 }) {
-  const router = useRouter();
-  const [busy, setBusy] = useState(false);
+  const { save: runSave, busy } = useSaveWithRefresh();
 
   async function save(next: string) {
     if (next === row.baseUnit || busy) return;
-    setBusy(true);
-    const r = await postJson("/api/review/set-base-unit", {
-      ingredientId: row.id,
-      baseUnit: next,
+    await runSave({
+      op: () =>
+        postJson("/api/review/set-base-unit", {
+          ingredientId: row.id,
+          baseUnit: next,
+        }),
+      successMessage: `${row.name} is now costed per ${next}`,
+      onDone: onSaved,
     });
-    if (!r.ok) {
-      toast(errMsg(r.data, `Save failed (${r.status})`), { tone: "block" });
-      setBusy(false);
-      return;
-    }
-    toast(`${row.name} is now costed per ${next}`);
-    setBusy(false);
-    if (onSaved) onSaved();
-    else router.refresh();
   }
 
   return (

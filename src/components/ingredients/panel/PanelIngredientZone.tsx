@@ -32,11 +32,13 @@ import {
 } from "../IngredientAllergens";
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 import { SaveFlash } from "./SaveFlash";
-import { postJson, errMsg } from "./common";
+import { postJson } from "./common";
 import { BaseUnitControl } from "./BaseUnitControl";
 import { PanelMeasuresBlock, type SuggestionCandidate } from "./PanelMeasuresBlock";
 import { PanelYieldRow } from "./PanelYieldRow";
 import { PanelChipsRow } from "./PanelChipsRow";
+import { useSaveWithRefresh } from "./useSaveWithRefresh";
+import { dropParents } from "../parentsStore";
 
 export function PanelIngredientZone({
   ingredient,
@@ -66,19 +68,21 @@ export function PanelIngredientZone({
   itemsReachBase?: boolean;
 }) {
   // --- Rename ----------------------------------------------------
+  // T4 §3: rename + category both drive the shared save-and-refresh
+  // helper so the Rename primary + the Category selects both stay
+  // busy until the refreshed server data has rendered. Rename also
+  // calls dropParents() on success because a renamed ingredient is a
+  // new string in the parents list (Merge picker + Sub-category
+  // dropdown both see the new name on their next open).
   const [renameDraft, setRenameDraft] = useState(ingredient.name);
-  const [renameBusy, setRenameBusy] = useState(false);
-  const [renameSavedAt, setRenameSavedAt] = useState<number | null>(null);
-  const [renameError, setRenameError] = useState<string | null>(null);
+  const { save: runRename, busy: renameBusy, savedAt: renameSavedAt, error: renameError } = useSaveWithRefresh();
 
   // --- Category --------------------------------------------------
   const [superDraft, setSuperDraft] = useState<string>(ingredient.category ?? "");
   const [subMode, setSubMode] = useState<"pick" | "new">("pick");
   const [subPick, setSubPick] = useState<string>(ingredient.parent ?? "");
   const [subNew, setSubNew] = useState("");
-  const [catBusy, setCatBusy] = useState(false);
-  const [catSavedAt, setCatSavedAt] = useState<number | null>(null);
-  const [catError, setCatError] = useState<string | null>(null);
+  const { save: runCategory, busy: catBusy, savedAt: catSavedAt, error: catError } = useSaveWithRefresh();
 
   // M2 §4B: wiring the new Measures + Chips + Yield blocks.
   //   - measuresForBlock: ingredient's measures list (M1 payload adds
@@ -147,37 +151,37 @@ export function PanelIngredientZone({
     const next = renameDraft.trim();
     if (renameBusy) return;
     if (next.length < 2) { toast("Name is too short", { tone: "block" }); return; }
+    // T3 §7: the server returns { changed, aliasWritten }. A
+    // capitals-only rename normalises the same but counts as changed
+    // (name only updates, no alias), so the toast says what was
+    // saved; literal-equal names short-circuit here or come back
+    // changed=false and both routes toast "No change". Wrapped in
+    // T4 §3's runRename so the button stays "Saving..." through the
+    // refresh + toast.
     if (next === ingredient.name) { toast("No change"); return; }
-    setRenameBusy(true);
-    setRenameError(null);
-    const r = await postJson("/api/review/rename-ingredient", {
-      ingredientId: ingredient.id,
-      newName: next,
+    await runRename({
+      op: () =>
+        postJson("/api/review/rename-ingredient", {
+          ingredientId: ingredient.id,
+          newName: next,
+        }),
+      successMessage: (d) => {
+        if (d && typeof d === "object") {
+          const rec = d as { changed?: unknown; aliasWritten?: unknown };
+          if (rec.changed === false) return "No change";
+          if (rec.aliasWritten === true) {
+            return "Saved - old name kept as an alias so links survive";
+          }
+        }
+        return "Saved: name";
+      },
+      errorFallback: "Rename failed",
+      // T4 §2a: a rename changes the string the Merge picker shows,
+      // and both pickers (Merge + Sub-category) read through the
+      // parents cache. Drop it so the next open re-fetches fresh.
+      onAfterSuccess: dropParents,
+      onDone,
     });
-    if (!r.ok) {
-      const msg = errMsg(r.data, `Rename failed (${r.status})`);
-      setRenameError(msg);
-      toast(msg, { tone: "block" });
-      setRenameBusy(false);
-      return;
-    }
-    // T3 §7: the server returns `changed` to distinguish a real save
-    // from a no-op (identical name). A capitals-only change counts
-    // as changed=true, so the toast says what was saved and the row
-    // actually updates; identical names toast "No change".
-    const d = r.data as { aliasWritten?: boolean; changed?: boolean };
-    if (d.changed === false) {
-      toast("No change");
-    } else {
-      toast(
-        d.aliasWritten
-          ? `Saved - old name kept as an alias so links survive`
-          : `Saved: name`
-      );
-    }
-    setRenameSavedAt(Date.now());
-    setRenameBusy(false);
-    onDone();
   }
 
   async function doCategory(opts: {
@@ -188,27 +192,29 @@ export function PanelIngredientZone({
     const current: SuperCategory | null = (ingredient.category as SuperCategory | null) ?? null;
     const currentSub = ingredient.parent ?? null;
     if (opts.nextSuper === current && opts.nextSub === currentSub) return;
-    setCatBusy(true);
-    setCatError(null);
-    const r = await postJson("/api/review/set-category", {
-      ingredientId: ingredient.id,
-      category: opts.nextSuper,
-      parent: opts.nextSub,
+    const r = await runCategory({
+      op: () =>
+        postJson("/api/review/set-category", {
+          ingredientId: ingredient.id,
+          category: opts.nextSuper,
+          parent: opts.nextSub,
+        }),
+      successMessage: opts.nextSuper
+        ? `Saved: category ${opts.nextSuper}`
+        : "Saved: Needs category",
+      // Category changes also affect the parents list the dropdowns
+      // read from (the new parent may not exist yet).
+      onAfterSuccess: dropParents,
+      onDone,
     });
     if (!r.ok) {
-      const msg = errMsg(r.data, `Save failed (${r.status})`);
-      setCatError(msg);
-      toast(msg, { tone: "block" });
+      // Error path still rolls the drafts back to the ingredient's
+      // current server values so the dropdowns stop echoing a
+      // picked-but-failed state.
       setSuperDraft(ingredient.category ?? "");
       setSubPick(ingredient.parent ?? "");
       setSubNew("");
-      setCatBusy(false);
-      return;
     }
-    toast(opts.nextSuper ? `Saved: category ${opts.nextSuper}` : "Saved: Needs category");
-    setCatSavedAt(Date.now());
-    setCatBusy(false);
-    onDone();
   }
 
   const renameDirty =

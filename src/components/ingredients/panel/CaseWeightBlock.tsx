@@ -7,13 +7,18 @@
 // the item back on the ingredient's measures.
 //
 // Writes through /api/review/set-case-weight.
+//
+// T4 §3: save + clear both route through the shared save-and-refresh
+// helper so the Save button stays "Saving..." until the refreshed
+// number has rendered; the success toast fires at that moment.
 
 import { useEffect, useState } from "react";
-import { toast } from "@/components/ui/Toaster";
 import { fmtUsd } from "@/lib/fmt";
 import { DIM_BY_UOM } from "@/lib/ingredients/pack";
 import { priceInUnit } from "@/lib/ingredients/measures";
 import type { ReviewGroupItem } from "../itemTypes";
+import { postJson } from "./common";
+import { useSaveWithRefresh } from "./useSaveWithRefresh";
 
 export function CaseWeightBlock({
   item,
@@ -42,7 +47,7 @@ export function CaseWeightBlock({
   const storedCw = localCw;
   const [open, setOpen] = useState<boolean>(forceOpen || storedCw != null);
   const [val, setVal] = useState<string>(storedCw != null ? String(storedCw) : "");
-  const [busy, setBusy] = useState(false);
+  const { save: runSave, busy } = useSaveWithRefresh();
 
   // Not shown at all for a weight case (pack_uom is weight). Those
   // items price per the pack's own weight; no override needed.
@@ -73,56 +78,33 @@ export function CaseWeightBlock({
   const dirty = (storedCw ?? null) !== (n ?? null);
 
   async function save() {
-    setBusy(true);
-    try {
-      const res = await fetch("/api/review/set-case-weight", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ itemId: item.id, caseWeightLb: n }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-        toast(data.error ?? "Save failed");
-        return;
-      }
-      // T3 §3b: optimistically reflect the saved value so the hint
-      // and Clear-button visibility flip without waiting for the
-      // refetch.
-      if (n != null) setLocalCw(n);
-      toast("Case weight saved");
-      onDone();
-    } catch (e) {
-      toast(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+    // T4 §3 wrapper keeps the Save button in "Saving..." until the
+    // refreshed data has rendered + the toast fires at that moment.
+    // T3 §3b optimistic flip rides INSIDE onAfterSuccess so the hint
+    // and Clear-button visibility move the instant the POST returns
+    // 200 - ItemPanelById's own nonce refetch still lags the strip
+    // header a tick, which is a race T4's useTransition does not
+    // close.
+    await runSave({
+      op: () => postJson("/api/review/set-case-weight", { itemId: item.id, caseWeightLb: n }),
+      successMessage: "Case weight saved",
+      errorFallback: "Save failed",
+      onAfterSuccess: () => { if (n != null) setLocalCw(n); },
+      onDone,
+    });
   }
   async function clear() {
-    setBusy(true);
-    try {
-      const res = await fetch("/api/review/set-case-weight", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ itemId: item.id, caseWeightLb: null }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-        toast(data.error ?? "Clear failed");
-        return;
-      }
-      setVal("");
-      // T3 §3b: flip the block's local view to "no case weight"
-      // immediately so the hint reads "Leave empty to use the
-      // ingredient's measures." and the Clear button disappears
-      // before the refetch resolves.
-      setLocalCw(null);
-      toast("Case weight cleared");
-      onDone();
-    } catch (e) {
-      toast(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+    const r = await runSave({
+      op: () => postJson("/api/review/set-case-weight", { itemId: item.id, caseWeightLb: null }),
+      successMessage: "Case weight cleared",
+      errorFallback: "Clear failed",
+      // T3 §3b: flip "no case weight" immediately on success so the
+      // hint reads "Leave empty to use the ingredient's measures."
+      // and the Clear button disappears before the refetch resolves.
+      onAfterSuccess: () => setLocalCw(null),
+      onDone,
+    });
+    if (r.ok) setVal("");
   }
 
   const hint =

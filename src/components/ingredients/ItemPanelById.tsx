@@ -5,15 +5,22 @@
 // items table (Prompt A1); the Review queue continues to pass items /
 // ingredient / parents from in-memory props. One <ItemPanelById> is
 // mounted at the island level, not one per row.
+//
+// T4 §2a: the /api/review/item response used to carry the full active-
+// ingredient list as `parents` (~249 KB). It now returns only the
+// distinct sub-category names as `parentOptions`. The full list is
+// loaded lazily by the Merge row via parentsStore (shared with
+// IngredientMastersFilter) when that row is first opened.
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { DetailPanel } from "./DetailPanel";
 import type { ReviewCardIngredient, ReviewGroupItem } from "./itemTypes";
+import { loadParents as loadParentsFromStore } from "./parentsStore";
 
 type Fetched = {
   item: ReviewGroupItem;
   ingredient: ReviewCardIngredient | null;
-  parents: ReviewCardIngredient[];
+  parentOptions: string[];
 };
 
 export function ItemPanelById({
@@ -85,17 +92,30 @@ export function ItemPanelById({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [itemId, nonce]);
 
+  // T4 §2a: shared parents loader. The full ingredient list is held
+  // in a module-level cache for the life of the page; the Merge row
+  // fires this on first expand, Relink + Sub-category do not need
+  // it (Relink is review-queue-only; Sub-category reads parentOptions
+  // directly from the item payload).
+  const loadParents = useCallback(async (): Promise<ReviewCardIngredient[]> => {
+    const ingredientId = state.phase === "ready" ? state.data.ingredient?.id ?? state.data.item.id : null;
+    if (!ingredientId) return [];
+    return loadParentsFromStore(ingredientId);
+  }, [state]);
+
   if (!itemId || state.phase === "idle") return null;
 
   if (state.phase === "ready") {
-    const { item, ingredient, parents } = state.data;
+    const { item, ingredient, parentOptions } = state.data;
     return (
       <DetailPanel
         open={{ kind: "item", itemId: item.id }}
         onClose={onClose}
         ingredient={ingredient}
         items={[item]}
-        parents={parents}
+        parents={[]}
+        parentOptions={parentOptions}
+        onLoadParents={loadParents}
         proposedName={null}
         proposedParent={null}
         onInvalidate={() => setNonce((n) => n + 1)}
