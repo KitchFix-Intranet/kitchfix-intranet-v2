@@ -45,7 +45,8 @@ import { isScLockOverrideDb } from "@/lib/sc/admin";
 export async function assertDaysUnlockedForWrite(
   accountKey: string,
   dates: string[],
-  email: string | null | undefined
+  email: string | null | undefined,
+  supaArg?: import("./types").SupabaseClient
 ): Promise<null | { code: "PERIOD_LOCKED"; lockedDates: string[]; message: string }> {
   if (!accountKey) {
     throw new Error("assertDaysUnlockedForWrite: accountKey required");
@@ -53,9 +54,9 @@ export async function assertDaysUnlockedForWrite(
   if (!Array.isArray(dates) || dates.length === 0) return null;
 
   // Override bypass. isScLockOverrideDb normalizes email casing + trims.
-  if (await isScLockOverrideDb(email)) return null;
+  if (await isScLockOverrideDb(email, supaArg)) return null;
 
-  const supa = getServiceClient();
+  const supa = supaArg || getServiceClient();
   const uniqueDates = [...new Set(dates)];
 
   // One RPC per unique date. Batch shape not natively supported by
