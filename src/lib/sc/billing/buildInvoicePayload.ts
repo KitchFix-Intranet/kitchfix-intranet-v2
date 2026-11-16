@@ -204,6 +204,85 @@ export interface BuildInvoicePayloadArgs {
   serviceMap: ServiceMapRow[]; // sc_qbo_service_map rows for accountKey
 }
 
+// ─── Unpriced-line guard (sc-60, Kevin ruling 2026-11-16) ──────────
+//
+// A billed line with no price - or a price of 0 - stops the build and
+// says which service and which day. Today the engine would bill at 0
+// in silence (roundToCent returns null for a null/non-finite input,
+// and the three `rate!` sites upstream of this change asserted "a
+// null here throws on toFixed exactly as it does in v1"). The guard
+// catches it before any invoice is produced.
+//
+// What counts as unpriced:
+//   - The row would become, or add to, an invoice line (see
+//     `wouldProduceLine` below).
+//   - Its price for the date is missing, not a finite number, or 0.
+// The price is the one the engine already uses: actual_price_at_date
+// when set, else price_at_date, else null.
+//
+// What is NOT unpriced:
+//   - A non-revenue row at 0 (dropped at wouldProduceLine).
+//   - A row with actual_count of 0 (meal rows do not produce a line
+//     at zero count; FF rows still do, so their price is checked).
+//   - An export-excluded row (dropped at wouldProduceLine).
+//   - A row with no mapping: skipped here. The builder's existing
+//     unmapped-service error covers these and carries the more
+//     specific "add to sc_qbo_service_map before finalize" message
+//     plus the exact row details.
+
+export interface UnpricedLine {
+  service_id: string;
+  service_name: string;
+  service_date: string;
+}
+
+export class UnpricedLinesError extends Error {
+  readonly code = "UNPRICED_LINES";
+  readonly lines: UnpricedLine[];
+  constructor(lines: UnpricedLine[]) {
+    super(
+      `buildInvoicePayload: ${lines.length} billable line${lines.length === 1 ? "" : "s"} with no price. ` +
+      lines.map((l) => `${l.service_name} (${l.service_id}) on ${l.service_date}`).join("; ")
+    );
+    this.name = "UnpricedLinesError";
+    this.lines = lines;
+    Object.setPrototypeOf(this, UnpricedLinesError.prototype);
+  }
+}
+
+// Does this row produce (or contribute to) an invoice line? Shared
+// predicate so findUnpricedBillableLines and the builder cannot
+// disagree about what counts.
+function wouldProduceLine(r: DailyRevenueRow, serviceMap: readonly ServiceMapRow[]): boolean {
+  if (r.is_non_revenue) return false;
+  if (r.actual_count == null) return false;
+  const mapping = serviceMap.find((s) => s.service_id === r.service_id);
+  if (!mapping) return false;                 // unmapped: builder's own throw covers it
+  if (mapping.export_excluded) return false;
+  if (r.is_flat_fee) return true;             // FF: any actuals row -> weekly line
+  return Number(r.actual_count) > 0;
+}
+
+export function findUnpricedBillableLines(
+  rows: readonly DailyRevenueRow[],
+  serviceMap: readonly ServiceMapRow[]
+): UnpricedLine[] {
+  const out: UnpricedLine[] = [];
+  for (const r of rows || []) {
+    if (!wouldProduceLine(r, serviceMap)) continue;
+    const priceRaw = r.actual_price_at_date ?? r.price_at_date ?? null;
+    const price = priceRaw == null ? NaN : Number(priceRaw);
+    if (!isFinite(price) || price === 0) {
+      out.push({
+        service_id: r.service_id,
+        service_name: r.service_name,
+        service_date: String(r.service_date).slice(0, 10),
+      });
+    }
+  }
+  return out;
+}
+
 export function buildInvoicePayload({
   accountKey,
   weekStart,       // ISO Monday
@@ -242,6 +321,16 @@ export function buildInvoicePayload({
     const d = String(r.service_date).slice(0, 10);
     return d >= weekStart && d <= lastDate;
   });
+
+  // ─── Unpriced-line guard (sc-60, Kevin ruling 2026-11-16) ──────
+  // One source of truth: findUnpricedBillableLines runs on the same
+  // in-span rows the builder loops below, and uses the same
+  // wouldProduceLine predicate. If the function and the loop ever
+  // disagreed, the parity test proves it.
+  const unpricedLines = findUnpricedBillableLines(inSpan, serviceMap);
+  if (unpricedLines.length > 0) {
+    throw new UnpricedLinesError(unpricedLines);
+  }
 
   // ─── Biweekly period alignment (owner amendment 2026-08-06) ────
   if (isBiweekly) {
@@ -390,8 +479,9 @@ export function buildInvoicePayload({
     const rate = roundToCent(r.price);
     const grp = r.mapping.aggregate_group || `__solo__${r.service_id}`;
     // TS18047: rate is null when the price is not a finite number.
-    // The `!` is types only: nothing upstream filters such a price,
-    // and a null here throws on toFixed exactly as it does in v1.
+    // The `!` is types only: findUnpricedBillableLines above has
+    // already thrown UnpricedLinesError for any such row, so a null
+    // rate is unreachable from the builder from sc-60 onward.
     return `${r.date}|${r.mapping.invoice_slot}|${r.mapping.qbo_item_id}|${grp}|${rate!.toFixed(2)}`;
   };
   const grouped = new Map();
@@ -406,7 +496,8 @@ export function buildInvoicePayload({
     const slot = first.mapping.invoice_slot;
     const rate = roundToCent(first.price);
     const totalQty = bucket.reduce((s: any, r: any) => s + r.qty, 0);
-    // TS18047: `!` is types only, as at groupKey. A null rate gives 0, as in v1.
+    // TS18047: `!` is types only, as at groupKey. Unreachable: the
+    // sc-60 guard refused non-finite and zero prices before this line.
     const amount = roundToCent(rate! * totalQty);
 
     // Description composition:
@@ -451,7 +542,8 @@ export function buildInvoicePayload({
     for (const ff of svcMap.values()) {
       const rate = roundToCent(ff.price);
       // Amount for FF = qty (1) * rate.
-      // TS18047: `!` is types only, as at groupKey. A null rate gives 0, as in v1.
+      // TS18047: `!` is types only, as at groupKey. Unreachable: the
+      // sc-60 guard refused non-finite and zero prices before this line.
       const amount = roundToCent(rate! * 1);
       // ServiceDate for the FF line: the FIRST day of that week
       // (Monday of week 1 for weekly, or the first Monday of week 2

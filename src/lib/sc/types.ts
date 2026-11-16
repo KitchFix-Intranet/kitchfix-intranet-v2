@@ -31,12 +31,13 @@ export type { SupabaseClient };
 // Database row types - columns the engine reads
 // ─────────────────────────────────────────────────────────────────
 
-// accounts - scWeekFinalize.ts selects "team_name" from accounts, but
-// that column does not exist in the schema. The select returns null.
-// Typed as nullable; the mismatch is a part-two finding, not a
-// train-2-part-one edit.
+// accounts - scWeekFinalize.ts selects `name` from accounts, matched
+// on `team_key`. Nullable because the lookup is soft (fireN1 carries
+// sensible fallbacks). Changed 2026-11-16 from `team_name` to `name`
+// per Kevin ruling - the `team_name` column does not exist in the
+// schema; v1 and train 2 part one both silently fetched null.
 export interface AccountRow {
-  team_name: string | null;
+  name: string | null;
 }
 
 // contacts - scWeekFinalize.ts reads name for submitter lookup.
@@ -260,16 +261,15 @@ export interface InvoiceRecord {
   lineItems?: LineItem[];
 }
 
-// A row describing one reviewer's approval. The snake_case fields
-// come from the sc_day_metadata select at scWeekFinalize line 1076
-// (`reviewed_by, reviewed_at, service_date`). The camelCase fields
-// are what recordCopyPdf.computeApproverPhrase reads (line 499 and
-// line 502). The two forms do not line up at runtime: v1 and the
-// train 1 port both read camelCase on a snake_case row, which gives
-// undefined and renders as "approved" with no name attached. The
-// shape below types that reality honestly - both forms permitted,
-// both optional. Reconciling the field names is a train 2 part two
-// finding.
+// A row describing one reviewer's approval. Two shapes are
+// legitimate inputs:
+//   - snake_case: the sc_day_metadata select at scWeekFinalize line
+//     1076 (`reviewed_by, reviewed_at, service_date`). On the real
+//     finalize path, `reviewed_by` carries a display name (confirmed
+//     on 303 rows against the live database on 2026-11-16).
+//   - camelCase: existing fireN1 tests and some early callers.
+// computeApproverPhrase reads either form per Kevin ruling
+// 2026-11-16, so both are accepted here.
 export interface ReviewRow {
   reviewed_by?: string | null;
   reviewed_at?: string | null;

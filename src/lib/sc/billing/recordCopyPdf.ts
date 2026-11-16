@@ -496,13 +496,18 @@ export function computeApproverPhrase(
   const counts = new Map();
   const earliestTs = new Map();
   for (const r of reviewRows || []) {
-    const name = (r?.reviewedBy || "").trim();
+    // Accept both naming conventions. The real finalize path hands
+    // rows in snake_case from the sc_day_metadata select; existing
+    // fireN1 tests and some early callers hand rows in camelCase.
+    // Both are legitimate per Kevin ruling 2026-11-16.
+    const name = (r?.reviewedBy || r?.reviewed_by || "").trim();
     if (!name) continue;
     counts.set(name, (counts.get(name) || 0) + 1);
-    if (r.reviewedAt) {
+    const ts = r.reviewedAt || r.reviewed_at;
+    if (ts) {
       const prev = earliestTs.get(name);
-      if (!prev || String(r.reviewedAt) < String(prev)) {
-        earliestTs.set(name, r.reviewedAt);
+      if (!prev || String(ts) < String(prev)) {
+        earliestTs.set(name, ts);
       }
     }
   }

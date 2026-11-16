@@ -29,7 +29,7 @@
 
 import { getServiceClient } from "@/lib/sc/_seams";
 import { isScLockOverrideDb } from "@/lib/sc/admin";
-import { buildInvoicePayload } from "@/lib/sc/billing/buildInvoicePayload";
+import { buildInvoicePayload, UnpricedLinesError } from "@/lib/sc/billing/buildInvoicePayload";
 import { postInvoiceDraft, NotAllowlistedError, QboPostError } from "@/lib/sc/billing/qboAdapter";
 import { fireN1, fireN2, fireNoOpAlert } from "@/lib/sc/billing/qboNotifications";
 import type { SupabaseClient, FinalizeRow, InvoiceRecord } from "@/lib/sc/types";
@@ -587,7 +587,18 @@ export interface FinalizeDeps {
 export type FinalizeResult =
   | { pushed: true; invoiceRecords: InvoiceRecord[]; n1?: unknown }
   | { pushed: false; reason: "awaiting_pair_close" | "no_billable_actuals" | "already_invoiced"; [key: string]: unknown }
-  | { pushed: false; failure: { code: string; message: string; n2?: unknown }; [key: string]: unknown };
+  | { pushed: false; failure: FinalizeFailure; [key: string]: unknown };
+
+// Shape of the `failure` object a finalize failure carries. Per-code
+// extra fields (`unpricedLines`, `missingSlots`) are listed here so
+// the caller can discriminate on `code` without casting.
+export interface FinalizeFailure {
+  code: string;
+  message: string;
+  n2?: unknown;
+  unpricedLines?: import("./billing/buildInvoicePayload").UnpricedLine[];
+  missingSlots?: string[];
+}
 
 export async function runFinalizeEffects(ctx: FinalizeCtx, deps: FinalizeDeps = {}): Promise<FinalizeResult> {
   const supa   = deps.supa || getServiceClient();
@@ -746,6 +757,16 @@ export async function runFinalizeEffects(ctx: FinalizeCtx, deps: FinalizeDeps = 
       accountMap: resolverAccountMap,
     });
     log.info("[N2 fired]", { subject: n2.subject, to: n2.recipients?.to, slackSent: n2.slack?.result?.sent });
+    // sc-60 (Kevin ruling 2026-11-16): the UnpricedLinesError path
+    // reports as its own failure code so operators see which lines
+    // are at price 0 or missing a price. Everything else on this
+    // catch block stays: push_failed transition, N2, log line.
+    if (err instanceof UnpricedLinesError) {
+      return {
+        pushed: false,
+        failure: { code: "UNPRICED_LINES", message: err.message, n2, unpricedLines: err.lines },
+      };
+    }
     return {
       pushed: false,
       failure: { code: "BUILD_ERROR", message: err.message, n2 },
@@ -1071,7 +1092,7 @@ export async function runFinalizeEffects(ctx: FinalizeCtx, deps: FinalizeDeps = 
     { data: reviewRows },
     { data: submitterRow },
   ] = await Promise.all([
-    supa.from("accounts").select("team_name").eq("team_key", accountKey).maybeSingle(),
+    supa.from("accounts").select("name").eq("team_key", accountKey).maybeSingle(),
     supa.from("sc_day_metadata")
       .select("reviewed_by, reviewed_at, service_date")
       .eq("account_key", accountKey)
@@ -1082,7 +1103,7 @@ export async function runFinalizeEffects(ctx: FinalizeCtx, deps: FinalizeDeps = 
       ? supa.from("contacts").select("name").ilike("email", submitterEmail).maybeSingle()
       : Promise.resolve({ data: null }),
   ]);
-  const accountLabel     = accountMeta?.team_name || null;
+  const accountLabel     = accountMeta?.name || null;
   const submitterName    = submitterRow?.name || null;
   const finalizedDateISO = finalizedRow.finalized_at
     ? String(finalizedRow.finalized_at).slice(0, 10)
