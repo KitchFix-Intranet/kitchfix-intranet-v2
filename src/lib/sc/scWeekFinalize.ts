@@ -1,0 +1,1089 @@
+// ═══════════════════════════════════════════════════════════════════
+// Week-finalize permission helper + completeness rule + effects seam
+// (2026-08-06, sc-30, PR-A of the SC -> QBO billing arc).
+// ═══════════════════════════════════════════════════════════════════
+//
+// Spec authority: docs/SC_QBO_SHAPE_SPEC.md §3 (state machine) + §6
+// (data model). Kevin signed the spec v1.0 on 2026-08-06.
+//
+// SISTER FILE to src/lib/scPeriodLock.js. Same discipline: one
+// swappable predicate function, no business logic in the SQL layer,
+// override lives here not in the DB.
+//
+// LOCK STACK (per spec §3, K-1): the week-finalize lock sits INSIDE
+// the period lock. Both signals stack independently.
+//   - Period lock (sc-25): the period end date + grace window. Whole
+//     periods freeze for AP.
+//   - Week finalize (sc-30, this file): a completed billing week
+//     freezes AS SOON AS the site leader presses Finalize, well
+//     before the period closes. Once BILLED (PR-C), the week is a
+//     one-way door (K-3).
+//
+// Both use the same override group: SC_LOCK_OVERRIDE (Kevin + Joe +
+// Sebastian, K-10). See src/lib/admin.js.
+//
+// Contract (matches assertDaysUnlockedForWrite exactly for grep parity):
+//   returns null            -> caller may write
+//   returns { code, ... }   -> refuse, return the object as-is in
+//                              the response body with 403 status
+
+import { getServiceClient } from "@/lib/sc/_seams";
+import { isScLockOverrideDb } from "@/lib/sc/admin";
+import { buildInvoicePayload } from "@/lib/sc/billing/buildInvoicePayload";
+import { postInvoiceDraft, NotAllowlistedError, QboPostError } from "@/lib/sc/billing/qboAdapter";
+import { fireN1, fireN2, fireNoOpAlert } from "@/lib/sc/billing/qboNotifications";
+import { getSalariedManagerEmails } from "@/lib/sc/billing/getSalariedManagerEmails";
+
+// ─────────────────────────────────────────────────────────────────
+// Mon-Sun week derivation (banned from `week_label` per C-3).
+// ─────────────────────────────────────────────────────────────────
+//
+// Week identity ALWAYS derives from `service_date` here.
+// sc_daily_revenue.week_label is period-relative (resets to Week 1
+// at every period boundary) and is banned from billing-week logic
+// per C-3 / C-12 in the billing recon.
+//
+// Input: an ISO YYYY-MM-DD string (server-side dates are stored as
+// PG DATE, so no timezone drama). Output: ISO YYYY-MM-DD for the
+// Monday of the same ISO week.
+//
+// Implementation uses UTC arithmetic so the calculation is
+// timezone-independent (matches PG's extract(isodow ...) evaluated
+// on the same date value).
+export function mondayOfWeek(isoDate: any) {
+  if (typeof isoDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) {
+    throw new Error(`mondayOfWeek: expected YYYY-MM-DD, got ${JSON.stringify(isoDate)}`);
+  }
+  const d = new Date(`${isoDate}T12:00:00Z`);
+  // getUTCDay: 0=Sunday..6=Saturday. Convert to ISO (Monday=0..Sunday=6).
+  const isoIdx = (d.getUTCDay() + 6) % 7;
+  d.setUTCDate(d.getUTCDate() - isoIdx);
+  return d.toISOString().slice(0, 10);
+}
+
+// Return the 7 ISO-week dates (Mon..Sun) as YYYY-MM-DD strings.
+export function weekDates(weekStartMonday: any) {
+  const monday = mondayOfWeek(weekStartMonday);
+  const out = [];
+  const base = new Date(`${monday}T12:00:00Z`);
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(base);
+    d.setUTCDate(d.getUTCDate() + i);
+    out.push(d.toISOString().slice(0, 10));
+  }
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Completeness rule: `entered || no-service` for all 7 days.
+// ─────────────────────────────────────────────────────────────────
+//
+// Spec §3, verbatim: "the completeness rule holds for all 7 days:
+// `entered || no-service` (the shipped rule, reused verbatim)."
+//
+// Shipped rule cited: src/app/service-calendar/season/dayPredicates.js
+// lines 43-49 (NON_ACTIONABLE_STATUSES) + the atom-status derivation
+// in src/lib/dataStore/serviceCalendar.js `classifyDayStatus`
+// lines 259-337. Per-meal accounts (this pipeline's scope) classify
+// as follows:
+//   - entered   : `sc_daily_actuals` row exists with a non-zero
+//                 actual_count somewhere in the day
+//   - no-service: `sc_daily_actuals` row exists with ALL zero
+//                 actual_counts (line 326)
+//               : OR `sc_daily_projections` rows exist for the day
+//                 with ALL zero projected_counts and NO actuals
+//                 (line 333 - the planned off-day, PR #167 shape)
+//
+// This function collapses both `entered` and `no-service` into
+// "complete" via two structural predicates:
+//   hasActualsRow  = at least one sc_daily_actuals row for (acct, date)
+//   plannedOffDay  = at least one sc_daily_projections row exists AND
+//                    all projected_counts for (acct, date) are 0
+//
+// A day is complete when either predicate holds; incomplete
+// otherwise. This matches classifyDayStatus for per-meal accounts on
+// the finalize-relevant path exactly.
+//
+// AWAY / EXHIBITION / OFF-SEASON / PREP: per-meal accounts do not
+// emit these statuses in the shipped code (they belong to fee/MLB
+// paths). This function does NOT check for them because a per-meal
+// account cannot produce them. Fee accounts are structurally
+// excluded from the finalize pipeline (see
+// v2/billing/perMealAccounts.js).
+export async function computeWeekCompleteness(accountKey: any, weekStartMonday: any) {
+  const supa = getServiceClient();
+  const dates = weekDates(weekStartMonday);
+
+  // Fetch actuals + projections for the 7 dates. Two round trips,
+  // paginated shape optional (14 dates x N services per account is
+  // well under the 1000-row page even for the fattest catalog).
+  const [actualsRes, projectionsRes] = await Promise.all([
+    supa
+      .from("sc_daily_actuals")
+      .select("service_date, actual_count")
+      .eq("account_key", accountKey)
+      .in("service_date", dates),
+    supa
+      .from("sc_daily_projections")
+      .select("service_date, projected_count")
+      .eq("account_key", accountKey)
+      .in("service_date", dates),
+  ]);
+  if (actualsRes.error) {
+    throw new Error(`computeWeekCompleteness actuals: ${actualsRes.error.message}`);
+  }
+  if (projectionsRes.error) {
+    throw new Error(`computeWeekCompleteness projections: ${projectionsRes.error.message}`);
+  }
+
+  // PR-G1 (2026-08-17): actualsByDate now tracks anyNonZero too so the
+  // per-day service classification agrees with dataStore/serviceCalendar.js
+  // classifyDayStatus:326 ("if s.hasAct && !s.anyNonZeroAct return no-service").
+  // Needed so the chase resolver reports "1 of 6" instead of "1 of 7" on
+  // TXR - AZ, which has zero-projection Sundays.
+  const actualsByDate = new Map();  // date -> { hasRow, anyNonZero }
+  for (const r of actualsRes.data || []) {
+    const d = String(r.service_date).slice(0, 10);
+    const cur = actualsByDate.get(d) || { hasRow: false, anyNonZero: false };
+    cur.hasRow = true;
+    if (Number(r.actual_count) > 0) cur.anyNonZero = true;
+    actualsByDate.set(d, cur);
+  }
+
+  // Per date: does a projection row exist? Are all projections zero?
+  const projByDate = new Map();     // date -> { hasRow: bool, anyNonZero: bool }
+  for (const r of projectionsRes.data || []) {
+    const d = String(r.service_date).slice(0, 10);
+    const cur = projByDate.get(d) || { hasRow: false, anyNonZero: false };
+    cur.hasRow = true;
+    if (Number(r.projected_count) > 0) cur.anyNonZero = true;
+    projByDate.set(d, cur);
+  }
+
+  const missingDates = [];
+  let serviceDays = 0;
+  let serviceDaysEntered = 0;
+  for (const d of dates) {
+    const act  = actualsByDate.get(d) || { hasRow: false, anyNonZero: false };
+    const proj = projByDate.get(d)    || { hasRow: false, anyNonZero: false };
+    const plannedOffDay     = proj.hasRow && !proj.anyNonZero;
+    const manualNoServiceDay = act.hasRow && !act.anyNonZero;
+    const isServiceDay      = !plannedOffDay && !manualNoServiceDay;
+    // A service day is "entered" when actuals carry any non-zero count.
+    // (A manual-no-service day is already excluded from isServiceDay.)
+    const isServiceDayEntered = isServiceDay && act.anyNonZero;
+    if (isServiceDay)         serviceDays++;
+    if (isServiceDayEntered)  serviceDaysEntered++;
+    // Completeness / missing predicate is unchanged from PR-A: a day
+    // is complete when it has actuals OR is a planned-off day. Missing
+    // = neither. Downstream consumers relying on the boolean or the
+    // missingDates array are byte-identical.
+    const isComplete = act.hasRow || plannedOffDay;
+    if (!isComplete) missingDates.push(d);
+  }
+
+  return {
+    complete: missingDates.length === 0,
+    missingDates,
+    // PR-G1 (2026-08-17): service-day denominator + numerator. Mirrors
+    // ServiceCalendar.js aggregateFromDays :248-253 so chase templates,
+    // sc-finalize-states weeks map, and the finalize control's future
+    // "N of M" surfaces converge on one server-authoritative number.
+    serviceDays,
+    serviceDaysEntered,
+    weekStart: dates[0],
+    weekEnd: dates[6],
+    reason: missingDates.length === 0
+      ? null
+      : `${missingDates.length} day${missingDates.length === 1 ? "" : "s"} still need entry or no-service`,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Live-row lookup for (account, week).
+// ─────────────────────────────────────────────────────────────────
+//
+// Returns the current live row for (accountKey, mondayOfWeek(date))
+// OR null if the week is OPEN. LIVE = status != 'reverted' (matches
+// sc-30's partial unique index).
+export async function loadLiveFinalizeRow(accountKey: any, dateInWeek: any) {
+  const supa = getServiceClient();
+  const weekStart = mondayOfWeek(dateInWeek);
+  const { data, error } = await supa
+    .from("sc_week_finalize")
+    .select("id, account_key, week_start, status, finalized_by, finalized_at")
+    .eq("account_key", accountKey)
+    .eq("week_start", weekStart)
+    .neq("status", "reverted")
+    .maybeSingle();
+  if (error) {
+    throw new Error(`loadLiveFinalizeRow(${accountKey}, ${dateInWeek}): ${error.message}`);
+  }
+  return data || null;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// resolveFinalizeReviewSpan (2026-09-08, week-review feature)
+// ─────────────────────────────────────────────────────────────────
+//
+// Returns the ISO date span the review + approval gate must cover
+// for a finalize action anchored at `weekStart`:
+//   - weekly account       -> 7 dates (Mon..Sun of weekStart)
+//   - biweekly close-week  -> 14 dates (partner Mon .. Sun of weekStart)
+//   - biweekly first-week  -> 7 dates (defensive - client already
+//                             suppresses the button on first-week per
+//                             addendum §A4; server returns the own
+//                             week so a stray POST doesn't crash the
+//                             gate)
+//
+// Same biweekly detection code path that runFinalizeEffects uses
+// at line 458-475: cadence from sc_qbo_account_map, weekIndex from
+// sc_day_metadata.week_label. Kept as its own helper so the sc-
+// finalize-week completeness + approval gates can compute the span
+// BEFORE the sc_week_finalize insert, and so sc-revert-finalize can
+// compute the same span for the review-state clear.
+//
+// Returns { dates, isBiweekly, weekIndex, spanStart, spanEnd } or
+// throws on a DB error. Never null; a missing cadence row defaults
+// to weekly (matches sc-finalize-states line 666).
+//
+// 2026-09-23: optional `supa` parameter for test injection. Existing
+// callers unchanged. checkLiveInvoiceForRevert below passes its
+// own supa through so it can be mocked in unit tests.
+export async function resolveFinalizeReviewSpan(accountKey: any, weekStart: any, supaArg = null) {
+  const supa = supaArg || getServiceClient();
+  const monday = mondayOfWeek(weekStart);
+  const { data: accountMap, error: amErr } = await supa
+    .from("sc_qbo_account_map")
+    .select("cadence")
+    .eq("account_key", accountKey)
+    .maybeSingle();
+  if (amErr) throw new Error(`resolveFinalizeReviewSpan account_map: ${amErr.message}`);
+  const isBiweekly = accountMap?.cadence === "biweekly";
+  let spanStart = monday;
+  let weekIndex = null;
+  if (isBiweekly) {
+    const { data: meta, error: mErr } = await supa
+      .from("sc_day_metadata")
+      .select("week_label")
+      .eq("account_key", accountKey)
+      .eq("service_date", monday)
+      .maybeSingle();
+    if (mErr) throw new Error(`resolveFinalizeReviewSpan day_metadata: ${mErr.message}`);
+    weekIndex = parseWeekIndex(meta?.week_label);
+    if (weekIndex === 2 || weekIndex === 4) {
+      // Close-week: expand span to include the partner (first) week.
+      spanStart = addDaysIso(monday, -7);
+    }
+  }
+  const spanLength = (isBiweekly && (weekIndex === 2 || weekIndex === 4)) ? 14 : 7;
+  const spanEnd = addDaysIso(spanStart, spanLength - 1);
+  const dates = [];
+  for (let i = 0; i < spanLength; i++) {
+    dates.push(addDaysIso(spanStart, i));
+  }
+  return { dates, isBiweekly, weekIndex, spanStart, spanEnd };
+}
+
+// ─────────────────────────────────────────────────────────────────
+// checkLiveInvoiceForRevert (2026-09-23)
+// ─────────────────────────────────────────────────────────────────
+//
+// Guard for sc-revert-finalize. Refuses the revert when a live
+// invoice (status='created', is_test=false) still exists in
+// sc_export_ledger for the (account, week) pair.
+//
+// The live incident this closes: TXR - AZ week 2026-09-14, finalized
+// as KF000000001, then reverted, then AP deleted the invoice in QBO
+// but nobody superseded the ledger row. Re-finalize hit the
+// idempotency short-circuit in qboAdapter.postInvoiceDraft, returned
+// wasNoOp with the STALE ledger row, and never pushed - N1 fired
+// anyway and everyone was told the invoice was sent. Nothing existed
+// in QuickBooks.
+//
+// Where this helper fits: called from the sc-revert-finalize route
+// AFTER the status checks (finalized|push_failed) and BEFORE the
+// UPDATE that flips the row to reverted. Route constructs the 403
+// response from the returned info.
+//
+// Biweekly-safety: resolveFinalizeReviewSpan translates the caller's
+// week (a close-week Monday for weekIndex 2 or 4) to the pair-start
+// Monday. That is the week the ledger row is keyed on. Reverting
+// week two of a CIN - AZ pair still finds the pair's invoice.
+//
+// Returns:
+//   null      => allowed to revert (no live invoice for this week)
+//   { code, invoices, spanStart, reviewSpan } => refuse; caller uses
+//     invoices[] to name the KF numbers and spanStart / reviewSpan
+//     to reuse the resolved span for the subsequent review-clear step
+//     (avoids a second resolveFinalizeReviewSpan call).
+export async function checkLiveInvoiceForRevert(accountKey: any, weekStart: any, supaArg: any = null) {
+  const supa = supaArg || getServiceClient();
+  const reviewSpan = await resolveFinalizeReviewSpan(accountKey, weekStart, supa);
+  const { data, error } = await supa
+    .from("sc_export_ledger")
+    .select("qbo_doc_number, qbo_invoice_id, invoice_slot")
+    .eq("account_key", accountKey)
+    .eq("week_start", reviewSpan.spanStart)
+    .eq("status", "created")
+    .eq("is_test", false);
+  if (error) throw new Error(`checkLiveInvoiceForRevert: ${error.message}`);
+  const rows = data || [];
+  if (rows.length === 0) return null;
+  return {
+    code: "WEEK_HAS_LIVE_INVOICE",
+    invoices: rows,
+    spanStart: reviewSpan.spanStart,
+    reviewSpan,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────
+// The write-path predicate (matches assertDaysUnlockedForWrite).
+// ─────────────────────────────────────────────────────────────────
+//
+// Wired into the SAME four write paths that carry the sc-25 period
+// lock (sc-submit-day, sc-reset-day, sc-bulk-submit,
+// sc-submit-closeout). If a day's week has a live row with status
+// finalized / push_failed / billed, the write is refused for
+// non-override callers.
+//
+// Override group: SC_LOCK_OVERRIDE (K-10) - Kevin + Joe + Sebastian.
+// Same override that bypasses the period lock. Rationale: whoever
+// can reach into a closed period should also be who can reach into
+// a finalized week; two nested locks with the same escape hatch.
+//
+// For an array of dates, checks each unique Mon-Sun week once (not
+// per-date) - the week key is derived server-side so the caller
+// cannot bypass by rounding dates.
+export async function assertWeekOpenForWrite(accountKey: any, dates: any, email: any) {
+  if (!accountKey) {
+    throw new Error("assertWeekOpenForWrite: accountKey required");
+  }
+  if (!Array.isArray(dates) || dates.length === 0) return null;
+
+  // Override bypass. Same identity check as assertDaysUnlockedForWrite.
+  if (await isScLockOverrideDb(email)) return null;
+
+  // Collapse to unique week starts. A 30-day bulk write touches at
+  // most 5-6 weeks; the loop below is bounded by that.
+  const uniqueWeekStarts = new Set();
+  for (const d of dates) {
+    uniqueWeekStarts.add(mondayOfWeek(d));
+  }
+
+  // One SELECT per unique week. supabase-js .rpc isn't necessary
+  // here - a table SELECT with equal predicates is simpler and
+  // hits the partial unique index cleanly.
+  const results = await Promise.all(
+    [...uniqueWeekStarts].map((ws) =>
+      // eslint-disable-next-line no-async-promise-executor
+      new Promise(async (resolve, reject) => {
+        try {
+          const supa = getServiceClient();
+          const { data, error } = await supa
+            .from("sc_week_finalize")
+            .select("week_start, status")
+            .eq("account_key", accountKey)
+            .eq("week_start", ws)
+            .neq("status", "reverted")
+            .maybeSingle();
+          if (error) return reject(error);
+          resolve({ weekStart: ws, live: data || null });
+        } catch (err: any) {
+          reject(err);
+        }
+      })
+    )
+  );
+
+  const finalizedWeeks: any[] = [];
+  for (const r of results as any[]) {
+    if (r.live) {
+      finalizedWeeks.push({ weekStart: r.weekStart, status: r.live.status });
+    }
+  }
+
+  if (finalizedWeeks.length === 0) return null;
+
+  finalizedWeeks.sort((a, b) => a.weekStart.localeCompare(b.weekStart));
+
+  // Message text placeholder pending UI copy ruling in the same
+  // shape as scPeriodLock.js. The code + finalizedWeeks array are
+  // load-bearing; the message is fallback copy for probes / logs.
+  const message =
+    finalizedWeeks.length === 1
+      ? `Cannot save - week ${finalizedWeeks[0].weekStart} is ${finalizedWeeks[0].status}. Ask leadership if this needs to change.`
+      : `Cannot save - ${finalizedWeeks.length} weeks are locked (finalized or billed). Ask leadership if this needs to change.`;
+
+  return {
+    code: "WEEK_FINALIZED",
+    finalizedWeeks,
+    message,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────
+// runFinalizeEffects - build -> post -> ledger -> notify (PR-C).
+// ─────────────────────────────────────────────────────────────────
+//
+// PR-A: state-only stub.
+// PR-C (this): full effects chain. Order matters, and is preserved
+// verbatim below:
+//   1. Load account_map + service_map.
+//   2. Determine cadence span (weekly = 7d, biweekly = wait-for-pair
+//      OR 14d ending on the current weekStart).
+//   3. Load sc_daily_revenue for the span.
+//   4. Build payload via buildInvoicePayload.
+//   5. For each invoice slot: postInvoiceDraft(isTest=false). The
+//      adapter enforces the customer allow-list; real customers get
+//      REFUSED here and land in the ledger as `failed` rows. That
+//      failure is the expected path from finalize in PR-C.
+//   6. Any post failure -> UPDATE sc_week_finalize.status =
+//      'push_failed', render N2 (dry-run), return failure summary.
+//      The finalize row is NEVER unwound; the week stays frozen with
+//      the override group's Retry as the only unlock path.
+//   7. All posts succeed (only reachable in test paths this PR):
+//      render N1 (dry-run), return the invoice records.
+//
+// PR-C is fenced. Every payload's CustomerRef gets checked against
+// qboAdapter's ALLOWED_CUSTOMER_IDS; only 22463 (ZZ TEST) passes.
+// A real production finalize will fail at that fence, cleanly, with
+// a NotAllowlistedError -> ledger + N2 + push_failed.
+//
+// Contract:
+//   Input:  { accountKey, weekStart, finalizedRow }
+//   Output on success:
+//     { pushed: true, invoiceRecords: [...], n1: {...} }
+//   Output on failure:
+//     { pushed: false, failure: { code, message, ... } }
+//   Output on waiting-for-biweekly-pair:
+//     { pushed: false, reason: 'awaiting_pair_close' }
+//   Output on no-billable-actuals:
+//     { pushed: false, reason: 'no_billable_actuals' }
+//   Output on adapter idempotency short-circuit (2026-09-23, FIX 1):
+//     { pushed: false, reason: 'already_invoiced',
+//       priorInvoiceRecords: [...], kevinAlert: {...} }
+//     The ledger already holds a `created` row for this (account,
+//     week, slot). Nothing was pushed. Operator N1 is suppressed
+//     entirely; Kevin gets an email + Slack alert instead. The
+//     sc_week_finalize row still transitions to 'finalized' (the
+//     operator did press finalize; the row records their action).
+//
+// deps is an injection seam for tests. Every external call is
+// swappable so unit tests never touch the DB or the network.
+//   deps.fireN1        - override the N1 sender (happy path)
+//   deps.fireN2        - override the N2 sender (failure path)
+//   deps.fireNoOpAlert - override the Kevin-alert sender (no-op path)
+//   deps.postInvoiceDraft - override the QBO adapter
+
+const REVENUE_COLS =
+  "service_date, service_id, service_name, account_key, is_flat_fee, is_tax_free, is_non_revenue, actual_count, actual_price_at_date, price_at_date, projected_count, period, week_label, has_actuals, has_projection";
+
+function addDaysIso(iso: any, n: any) {
+  const d = new Date(`${iso}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+function parseWeekIndex(label: any) {
+  if (typeof label !== "string") return null;
+  const m = label.match(/^Week\s+(\d+)$/i);
+  return m ? Number(m[1]) : null;
+}
+
+function sumCentsFromLines(lines: any) {
+  let cents = 0;
+  for (const l of (lines || [])) {
+    if (l.DetailType !== "SalesItemLineDetail") continue;
+    cents += Math.round(Number(l.Amount) * 100);
+  }
+  return cents;
+}
+
+function buildRetryLink(accountKey: any, weekStart: any) {
+  const base = process.env.NEXT_PUBLIC_APP_BASE_URL || "";
+  const q = new URLSearchParams({ account: accountKey, week: weekStart, action: "retry-push" });
+  return `${base}/admin/service-calendar/finalize?${q.toString()}`;
+}
+
+function buildScWeekLink(accountKey: any, weekStart: any) {
+  const base = process.env.NEXT_PUBLIC_APP_BASE_URL || "";
+  const q = new URLSearchParams({ account: accountKey, week: weekStart });
+  return `${base}/service-calendar/season?${q.toString()}`;
+}
+
+function buildQboInvoiceLink(qboInvoiceId: any) {
+  if (!qboInvoiceId) return "";
+  return `https://app.qbo.intuit.com/app/invoice?txnId=${encodeURIComponent(qboInvoiceId)}`;
+}
+
+async function transitionFinalizeRowToPushFailed(supa: any, finalizeRowId: any) {
+  const { error } = await supa
+    .from("sc_week_finalize")
+    .update({ status: "push_failed" })
+    .eq("id", finalizeRowId);
+  if (error) {
+    throw new Error(`transitionFinalizeRowToPushFailed: ${error.message}`);
+  }
+}
+
+export async function runFinalizeEffects(ctx: any, deps: any = {}) {
+  const supa   = deps.supa || getServiceClient();
+  const build  = deps.buildInvoicePayload || buildInvoicePayload;
+  const post   = deps.postInvoiceDraft   || postInvoiceDraft;
+  // PR-F: fireN1 / fireN2 replace the render-only stubs. Both are
+  // async and (in test mode) dispatch email to Kevin + Slack to
+  // #service-calendar-invoices with [TEST] markers. Dep-injectable
+  // for unit tests that swap in a fake sender.
+  const doN1   = deps.fireN1 || fireN1;
+  const doN2   = deps.fireN2 || fireN2;
+  const doNoOpAlert = deps.fireNoOpAlert || fireNoOpAlert;
+  const log    = deps.logger || console;
+
+  if (!ctx?.accountKey || !ctx?.weekStart || !ctx?.finalizedRow) {
+    throw new Error("runFinalizeEffects: accountKey, weekStart, finalizedRow required");
+  }
+  const { accountKey, weekStart, finalizedRow } = ctx;
+  const finalizeRowId = finalizedRow.id;
+  const submitterEmail = finalizedRow.finalized_by;
+
+  // 1. Load account map.
+  const { data: accountMap, error: amErr } = await supa
+    .from("sc_qbo_account_map")
+    .select("*")
+    .eq("account_key", accountKey)
+    .maybeSingle();
+  if (amErr) {
+    throw new Error(`load sc_qbo_account_map: ${amErr.message}`);
+  }
+  if (!accountMap) {
+    await transitionFinalizeRowToPushFailed(supa, finalizeRowId);
+    const errText = `No sc_qbo_account_map row for ${accountKey}. Configure the account map before finalize can post.`;
+    // Config-missing implies we cannot read qbo_mode - default to
+    // 'test' so the missing-config N2 stays inside the test fence
+    // regardless of the account's intended mode.
+    const n2 = await doN2({
+      qboMode: "test",
+      accountKey, weekStart, weekEnd: addDaysIso(weekStart, 6),
+      errorText: errText, retryLink: buildRetryLink(accountKey, weekStart),
+      scWeekLink: buildScWeekLink(accountKey, weekStart),
+      attempt: 1,
+    });
+    log.info("[N2 fired]", { subject: n2.subject, to: n2.recipients?.to, slackSent: n2.slack?.result?.sent });
+    return { pushed: false, failure: { code: "CONFIG_MISSING", message: errText, n2 } };
+  }
+
+  // PR-F: qbo_mode is authoritative from sc_qbo_account_map (sc-35).
+  // Missing column falls back to 'test' so a partially-applied
+  // migration cannot silently flip to live-mode behaviour.
+  const qboMode = accountMap.qbo_mode === "live" ? "live" : "test";
+  // salariedManagerEmails derived live from `people` (Kevin ruling
+  // 2026-09-17). Same predicate + ordering everywhere - see
+  // src/lib/billing/getSalariedManagerEmails.js. Replaces the read
+  // of sc_qbo_account_map.salaried_manager_emails, which was hand-
+  // maintained and had drifted on two of four accounts. Column drop
+  // ships as a follow-on PR after this soaks.
+  const salariedManagerEmails = await getSalariedManagerEmails(supa, accountKey);
+  // Map DB snake_case columns to camelCase for the resolver contract.
+  // notify_operators (sc-45): default TRUE preserved by `!== false` -
+  // an accountMap missing the column (pre-migration row cache, dev
+  // stub) resolves as notify=true rather than accidentally silencing.
+  const resolverAccountMap = {
+    salariedManagerEmails,
+    rdoEmail: accountMap.rdo_email || null,
+    notifyOperators: accountMap.notify_operators !== false,
+  };
+
+  // 2. Cadence span (biweekly requires pair-close alignment).
+  //
+  // 2026-09-16 fix. This query originally read:
+  //
+  //   const { data: meta } = await supa
+  //     .from("sc_day_metadata")
+  //     .select("period, week_label")
+  //     .eq("service_date", weekStart)
+  //     .maybeSingle();
+  //
+  // Two bugs, both silent:
+  //
+  //   (a) No account_key filter. sc_day_metadata is per-account and
+  //       every account carries a row for the same service_date. So
+  //       for weekStart=2026-08-17, the query matches 11 rows across
+  //       CIN-AZ, TXR-AZ, STL-FL, TBJ-FL, TBR-FL, etc. .maybeSingle()
+  //       errors on >1 rows.
+  //
+  //   (b) The destructure dropped `error`. .maybeSingle() with
+  //       multiple matches returns { data: null, error: PGRST116 }.
+  //       Without checking error, the code sees meta=null and
+  //       parseWeekIndex(null?.week_label) returns null. Neither the
+  //       weekIdx=1|3 nor the weekIdx=2|4 branch fires. pairStart
+  //       stays as weekStart. The downstream sc_daily_revenue load
+  //       spans the WRONG 14 days (close-week Mon + 13 days forward)
+  //       and buildInvoicePayload throws on the mis-aligned pair
+  //       because the rows span two fiscal weeks that aren't a valid
+  //       biweekly pair.
+  //
+  // Biweekly finalize had never actually worked in production. CIN-AZ
+  // is the only biweekly account and this was the first time anyone
+  // finalized a biweekly close-week. The first real use surfaced the
+  // defect that had been latent in the code since the biweekly branch
+  // was written. Fix: scope by account_key (matches the equivalent
+  // query in resolveFinalizeReviewSpan at line 261-267 which was
+  // written correctly) and surface metaErr so a future breakage of
+  // this shape cannot hide.
+  const isBiweekly = accountMap.cadence === "biweekly";
+  let pairStart = weekStart;
+  if (isBiweekly) {
+    const { data: meta, error: metaErr } = await supa
+      .from("sc_day_metadata")
+      .select("period, week_label")
+      .eq("account_key", accountKey)
+      .eq("service_date", weekStart)
+      .maybeSingle();
+    if (metaErr) {
+      throw new Error(`load sc_day_metadata for pair alignment: ${metaErr.message}`);
+    }
+    const weekIdx = parseWeekIndex(meta?.week_label);
+    if (weekIdx === 1 || weekIdx === 3) {
+      return { pushed: false, reason: "awaiting_pair_close", weekIndex: weekIdx };
+    }
+    if (weekIdx === 2 || weekIdx === 4) {
+      pairStart = addDaysIso(weekStart, -7);
+    }
+  }
+  const pairEnd = addDaysIso(pairStart, isBiweekly ? 13 : 6);
+
+  // 3. Service map + revenue rows.
+  const { data: serviceMap, error: smErr } = await supa
+    .from("sc_qbo_service_map")
+    .select("*")
+    .eq("account_key", accountKey)
+    .eq("active", true);
+  if (smErr) throw new Error(`load sc_qbo_service_map: ${smErr.message}`);
+
+  const { data: rows, error: rvErr } = await supa
+    .from("sc_daily_revenue")
+    .select(REVENUE_COLS)
+    .eq("account_key", accountKey)
+    .gte("service_date", pairStart)
+    .lte("service_date", pairEnd);
+  if (rvErr) throw new Error(`load sc_daily_revenue: ${rvErr.message}`);
+
+  // 4. Build payload.
+  let payload;
+  try {
+    payload = build({ accountKey, weekStart: pairStart, rows, accountMap, serviceMap });
+  } catch (err: any) {
+    await transitionFinalizeRowToPushFailed(supa, finalizeRowId);
+    const n2 = await doN2({
+      qboMode,
+      accountKey, weekStart: pairStart, weekEnd: pairEnd,
+      errorText: err.message, retryLink: buildRetryLink(accountKey, weekStart),
+      scWeekLink: buildScWeekLink(accountKey, weekStart),
+      attempt: 1,
+      accountMap: resolverAccountMap,
+    });
+    log.info("[N2 fired]", { subject: n2.subject, to: n2.recipients?.to, slackSent: n2.slack?.result?.sent });
+    return {
+      pushed: false,
+      failure: { code: "BUILD_ERROR", message: err.message, n2 },
+    };
+  }
+  if (payload.invoices.length === 0) {
+    return { pushed: false, reason: "no_billable_actuals" };
+  }
+
+  // 4b. Confirm-vs-payload pretax guard (2026-09-16).
+  //
+  // The number the operator saw in the confirm overlay (passed in as
+  // ctx.confirmedPretaxCents) must equal the built payload's pretax
+  // total. Two independently-computed totals; mismatch throws. Same
+  // shape as the record-copy PDF guard in qboNotifications.js:418-423.
+  //
+  // Soft rollout: skip the assertion when ctx.confirmedPretaxCents is
+  // null / undefined (older client). The client that passes the value
+  // is the one whose overlay was just fixed; a mismatch here means
+  // the display and the payload drifted, which is exactly the
+  // regression this guard exists to catch.
+  //
+  // Failure shape mirrors the BUILD_ERROR path: transition the finalize
+  // row to push_failed, fire N2, return a failure record. Message is
+  // in operator language rather than variable=value - a chef reads
+  // "the amount on screen did not match the amount about to bill; the
+  // week is finalized but not sent; Kevin or Sebastian can unlock."
+  if (ctx.confirmedPretaxCents != null && Number.isFinite(ctx.confirmedPretaxCents)) {
+    let payloadPretaxCents = 0;
+    for (const inv of payload.invoices) {
+      payloadPretaxCents += sumCentsFromLines(inv.Line);
+    }
+    if (payloadPretaxCents !== ctx.confirmedPretaxCents) {
+      await transitionFinalizeRowToPushFailed(supa, finalizeRowId);
+      const operatorMessage =
+        "The week is finalized but not sent to QuickBooks because the amount on screen did not match the amount about to bill. Kevin or Sebastian needs to unlock this before it can be retried.";
+      const diagnosticText =
+        `${operatorMessage}\n\nDiagnostic: confirmed=${ctx.confirmedPretaxCents} cents, payload=${payloadPretaxCents} cents, delta=${payloadPretaxCents - ctx.confirmedPretaxCents} cents, account=${accountKey}, span=${pairStart}..${pairEnd}.`;
+      const n2 = await doN2({
+        qboMode,
+        accountKey, weekStart: pairStart, weekEnd: pairEnd,
+        errorText: diagnosticText,
+        retryLink: buildRetryLink(accountKey, weekStart),
+        scWeekLink: buildScWeekLink(accountKey, weekStart),
+        attempt: 1,
+        accountMap: resolverAccountMap,
+      });
+      log.warn("[N2 fired][PRETAX_MISMATCH]", {
+        subject: n2.subject,
+        to: n2.recipients?.to,
+        slackSent: n2.slack?.result?.sent,
+        confirmedCents: ctx.confirmedPretaxCents,
+        payloadCents: payloadPretaxCents,
+      });
+      return {
+        pushed: false,
+        failure: {
+          code: "PRETAX_MISMATCH",
+          message: operatorMessage,
+          diagnostic: {
+            confirmedCents: ctx.confirmedPretaxCents,
+            payloadCents: payloadPretaxCents,
+            deltaCents: payloadPretaxCents - ctx.confirmedPretaxCents,
+            pairStart,
+            pairEnd,
+          },
+          n2,
+        },
+      };
+    }
+  }
+
+  // 4c. sc-49 (Kevin ruling 2026-09-26): resolve slot_code + revision
+  // for every invoice slot ONCE, before the post loop. Passed into
+  // postInvoiceDraft via ctx so the adapter's reservation seam does
+  // no I/O (that discipline is what keeps failures upstream of the
+  // seam cheap).
+  //
+  // slot_code lives on sc_invoice_slot_codes (sc-49b, 2026-09-26).
+  // The first attempt put it on sc_qbo_service_map; that table is
+  // per-service, not per-slot (9 rows for TXR-AZ 'main', 4 for
+  // CIN-AZ 'rehab', etc.), so the PK there could not express the
+  // one-code-per-slot invariant. See docs/GOTCHAS.md entry
+  // "slot_code lives on sc_invoice_slot_codes, not sc_qbo_service_map".
+  //
+  // Fail loudly on missing slot_code: same posture as
+  // buildInvoicePayload's "unmapped service" error - a slot without
+  // a code cannot be invoiced deterministically, and papering over
+  // it here would reintroduce exactly the class of gap sc-49 exists
+  // to close. Test mode skips both lookups (KFT remains counter-based
+  // via sc_invoice_test_number_seq).
+  const slotCodeByInvoiceSlot = new Map();
+  const revisionByInvoiceSlot = new Map();
+  if (qboMode === "live") {
+    const { data: codeRows, error: codeErr } = await supa
+      .from("sc_invoice_slot_codes")
+      .select("invoice_slot, slot_code")
+      .eq("account_key", accountKey);
+    if (codeErr) throw new Error(`load sc_invoice_slot_codes: ${codeErr.message}`);
+    // No dedupe branch: the PK (account_key, invoice_slot) guarantees
+    // one row per slot. A .has() guard here would be dead code hiding
+    // a broken invariant if the PK ever slipped.
+    for (const row of codeRows || []) {
+      slotCodeByInvoiceSlot.set(row.invoice_slot, row.slot_code);
+    }
+    const missingSlots = [];
+    for (const invoice of payload.invoices) {
+      const slot = invoice._slot || "main";
+      if (!slotCodeByInvoiceSlot.has(slot)) missingSlots.push(slot);
+    }
+    if (missingSlots.length > 0) {
+      const uniqueMissing = [...new Set(missingSlots)];
+      const opMessage =
+        `The week is finalized but not sent to QuickBooks because ${uniqueMissing.map(s => `slot "${s}"`).join(", ")} on ${accountKey} has no slot_code in sc_invoice_slot_codes. Kevin or Sebastian must assign a code before it can be retried.`;
+      await transitionFinalizeRowToPushFailed(supa, finalizeRowId);
+      const n2 = await doN2({
+        qboMode,
+        accountKey, weekStart: pairStart, weekEnd: pairEnd,
+        errorText: `${opMessage}\n\nDiagnostic: missing slot_code for [${uniqueMissing.join(", ")}] on ${accountKey}. sc-49 refuses the push. Add a row to sc_invoice_slot_codes in Studio (2-3 uppercase letters, unique per account).`,
+        retryLink: buildRetryLink(accountKey, weekStart),
+        scWeekLink: buildScWeekLink(accountKey, weekStart),
+        attempt: 1,
+        accountMap: resolverAccountMap,
+      });
+      log.warn("[N2 fired][MISSING_SLOT_CODE]", { subject: n2.subject, to: n2.recipients?.to, slackSent: n2.slack?.result?.sent, missingSlots: uniqueMissing });
+      return {
+        pushed: false,
+        failure: { code: "MISSING_SLOT_CODE", message: opMessage, missingSlots: uniqueMissing, n2 },
+      };
+    }
+    // Revision = 1 + count of superseded ledger rows for
+    // (account_key, week_start, invoice_slot). ONLY `superseded`
+    // bumps: a `failed` row must not bump (re-sending the same
+    // number is exactly what makes retry-after-lost-response safe),
+    // and a `created` row cannot be reached because the adapter's
+    // idempotency guard short-circuits before the number is built.
+    const { data: supRows, error: supErr } = await supa
+      .from("sc_export_ledger")
+      .select("invoice_slot")
+      .eq("account_key", accountKey)
+      .eq("week_start", pairStart)
+      .eq("status", "superseded")
+      .eq("is_test", false);
+    if (supErr) throw new Error(`load sc_export_ledger for revision count: ${supErr.message}`);
+    const supCount = new Map();
+    for (const r of supRows || []) {
+      supCount.set(r.invoice_slot, (supCount.get(r.invoice_slot) || 0) + 1);
+    }
+    for (const invoice of payload.invoices) {
+      const slot = invoice._slot || "main";
+      revisionByInvoiceSlot.set(slot, 1 + (supCount.get(slot) || 0));
+    }
+  }
+
+  // 5. Post each invoice slot. PR-F: qboMode read from
+  // accountMap.qbo_mode drives the per-mode fence. Test mode routes
+  // to 22463 with markers; live mode routes to the account's mapped
+  // customer id. Neither mode can silently reach the wrong customer.
+  //
+  // 2026-09-23 (FIX 1): wasNoOp: true from the adapter means the
+  // idempotency short-circuit fired - the ledger already holds a
+  // `created` row for this (account, week, slot) and nothing was
+  // pushed. Segregate those results from invoiceRecords so we do not
+  // fire N1 to the operator on a no-op. Kevin gets a dedicated alert
+  // instead. See the "Output on adapter idempotency short-circuit"
+  // contract line above for the return shape.
+  const invoiceRecords = [];
+  const priorInvoiceRecords = [];
+  const errors = [];
+  const isTest = qboMode === "test";
+  for (const invoice of payload.invoices) {
+    try {
+      const invoiceSlot = invoice._slot || "main";
+      const result = await post(invoice, {
+        qboMode,
+        accountKey,
+        accountMap,
+        weekStart:   pairStart,
+        weekEnd:     pairEnd,
+        cadenceUnit: accountMap.cadence,
+        createdBy:   submitterEmail || "sc-finalize",
+        // sc-49: live-only. Test mode ignores these; the adapter
+        // requires slotCode on live pushes and throws otherwise
+        // (last-defense fence - this loop should have surfaced any
+        // missing code above).
+        slotCode:    qboMode === "live" ? slotCodeByInvoiceSlot.get(invoiceSlot) : undefined,
+        revision:    qboMode === "live" ? revisionByInvoiceSlot.get(invoiceSlot) : undefined,
+        deps:        { supa },
+      });
+      // 2026-09-23 (FIX 1): no-op branch. The adapter honestly
+      // returned wasNoOp: true; capture the prior ledger's identity
+      // so Kevin's alert can name it. Do NOT push into
+      // invoiceRecords - that array feeds N1's "Sent to billing"
+      // language and would tell the operator we did something we
+      // did not. Kevin ruling 2026-09-23 (D1): suppress operator N1
+      // entirely; Kevin alone gets email + Slack.
+      if (result.wasNoOp === true) {
+        priorInvoiceRecords.push({
+          invoice_slot:   invoice._slot,
+          qbo_invoice_id: result.qboInvoiceId,
+          qbo_doc_number: result.qboDocNumber,
+          ledger_row_id:  result.ledgerRowId,
+        });
+        continue;
+      }
+      // 2026-09-16: attach per-line detail so fireN1's record-copy PDF
+      // has the data it needs to render + total. Prior to this fix
+      // invoiceRecords carried only summary fields (slot / qboIds /
+      // pretaxTotalCents / lineCount / isTest / qboLink / ledgerRowId).
+      // recordCopyPdf.js:flattenLines reads rec.lineItems[]; when
+      // absent it produced an empty PDF with pretaxCents=0, the guard
+      // at qboNotifications.js:419-423 threw on the (0 !== real total)
+      // mismatch, and every finalize since PR #1096 killed BOTH the
+      // email AND Slack channels because the guard runs before
+      // dispatch. The record-copy PDF was the load-bearing failure but
+      // the guard on it turned a soft failure into a total silence.
+      //
+      // Shape matches recordCopyPdf.js:flattenLines exactly. Filter
+      // to SalesItemLineDetail so tax lines / subtotals / discounts
+      // do not pollute the record copy. UnitPrice + Amount are dollars
+      // in QBO; ×100 rounded to cents matches how sumCentsFromLines
+      // computes pretaxTotalCents so both totals derive from the same
+      // source and cannot drift.
+      const lineItems = (invoice.Line || [])
+        .filter((ln: any) => ln.DetailType === "SalesItemLineDetail")
+        .map((ln: any) => {
+          const det = ln.SalesItemLineDetail || {};
+          return {
+            serviceName: det.ItemRef?.name || ln.Description || "",
+            serviceDate: det.ServiceDate || "",
+            qty:         Number(det.Qty || 0),
+            rateCents:   Math.round(Number(det.UnitPrice || 0) * 100),
+            amountCents: Math.round(Number(ln.Amount || 0) * 100),
+          };
+        });
+      invoiceRecords.push({
+        invoiceSlot:      invoice._slot,
+        qboInvoiceId:     result.qboInvoiceId,
+        qboDocNumber:     result.qboDocNumber,
+        pretaxTotalCents: sumCentsFromLines(invoice.Line),
+        lineCount:        invoice.Line.length,
+        lineItems,
+        isTest,
+        qboLink:          buildQboInvoiceLink(result.qboInvoiceId),
+        ledgerRowId:      result.ledgerRowId,
+      });
+    } catch (err: any) {
+      const code = err instanceof NotAllowlistedError
+        ? "NOT_ALLOWLISTED"
+        : err instanceof QboPostError
+          ? "QBO_POST_ERROR"
+          : "UNKNOWN_ERROR";
+      errors.push({ slot: invoice._slot, code, message: err.message, ledgerRowId: err.ledgerRowId });
+    }
+  }
+
+  // 6. Any failure -> push_failed + N2 (live send).
+  if (errors.length > 0) {
+    await transitionFinalizeRowToPushFailed(supa, finalizeRowId);
+    const errText = errors.map((e) => `${e.slot} [${e.code}]: ${e.message}`).join("\n");
+    const n2 = await doN2({
+      qboMode,
+      accountKey, weekStart: pairStart, weekEnd: pairEnd,
+      errorText: errText, retryLink: buildRetryLink(accountKey, weekStart),
+      scWeekLink: buildScWeekLink(accountKey, weekStart),
+      attempt: 1,
+      accountMap: resolverAccountMap,
+    });
+    log.info("[N2 fired]", {
+      subject: n2.subject, to: n2.recipients?.to,
+      slackSent: n2.slack?.result?.sent,
+      errorCount: errors.length,
+    });
+    return {
+      pushed: false,
+      failure: { code: errors[0].code, message: errText, errors, n2 },
+    };
+  }
+
+  // 6b. No-op branch (FIX 1, Kevin ruling 2026-09-23). If ANY slot
+  // short-circuited on adapter idempotency, treat the whole finalize
+  // as a no-op: do NOT fire operator N1, fire fireNoOpAlert to Kevin
+  // alone (email + Slack), return the shape that matches the two
+  // sibling `pushed: false` outcomes (`awaiting_pair_close`,
+  // `no_billable_actuals`). The sc_week_finalize row stays
+  // 'finalized' - the operator did press finalize and the row
+  // records their action (D3 ruling).
+  //
+  // Mixed case (some slots wasNoOp, some pushed fresh) is treated as
+  // no-op for the purpose of the operator N1 suppression: if any
+  // slot short-circuited, the operator cannot trust the resubmission
+  // was a fresh send, and Kevin must reconcile the mixed state.
+  if (priorInvoiceRecords.length > 0) {
+    const kevinAlert = await doNoOpAlert({
+      accountKey,
+      weekStart:     pairStart,
+      weekEnd:       pairEnd,
+      submitterEmail,
+      finalizedAt:   finalizedRow?.finalized_at || null,
+      priorInvoices: priorInvoiceRecords,
+    });
+    log.warn("[no-op alert fired]", {
+      subject: kevinAlert.subject,
+      to: kevinAlert.recipients?.to,
+      slackSent: kevinAlert.slack?.result?.sent,
+      priorCount: priorInvoiceRecords.length,
+      freshCount: invoiceRecords.length,
+    });
+    return {
+      pushed: false,
+      reason: "already_invoiced",
+      priorInvoiceRecords,
+      kevinAlert,
+    };
+  }
+
+  // 7a. Gather N1 confirmation-email context (2026-09-09 rebuild).
+  // These lookups are soft: fireN1 has sensible fallbacks so a
+  // missed lookup does not block the send. Small parallel batch to
+  // keep the finalize latency budget stable.
+  const [
+    { data: accountMeta },
+    { data: reviewRows },
+    { data: submitterRow },
+  ] = await Promise.all([
+    supa.from("accounts").select("team_name").eq("team_key", accountKey).maybeSingle(),
+    supa.from("sc_day_metadata")
+      .select("reviewed_by, reviewed_at, service_date")
+      .eq("account_key", accountKey)
+      .gte("service_date", pairStart)
+      .lte("service_date", pairEnd)
+      .eq("review_status", "approved"),
+    submitterEmail
+      ? supa.from("contacts").select("name").ilike("email", submitterEmail).maybeSingle()
+      : Promise.resolve({ data: null }),
+  ]);
+  const accountLabel     = accountMeta?.team_name || null;
+  const submitterName    = submitterRow?.name || null;
+  const finalizedDateISO = finalizedRow.finalized_at
+    ? String(finalizedRow.finalized_at).slice(0, 10)
+    : null;
+  const daysInWeek = isBiweekly ? 14 : 7;
+
+  // 7b. N1 (live send + record-copy PDF attachment).
+  const n1 = await doN1({
+    qboMode,
+    accountKey,
+    accountLabel,
+    weekStart: pairStart,
+    weekEnd:   pairEnd,
+    submitterEmail,
+    submitterName,
+    invoiceRecords,
+    scWeekLink: buildScWeekLink(accountKey, weekStart),
+    accountMap: resolverAccountMap,
+    finalizedDateISO,
+    reviewRows: reviewRows || [],
+    daysInWeek,
+  });
+  // Ruling 2 (2026-09-03): warn on ANY delivery failure so a silent
+  // Gmail SA break surfaces in operator logs. Both channels sent =>
+  // info. Either failed => warn with both channels' status in the
+  // payload for post-hoc grep. The redundant Slack channel means one
+  // silent-fail still gets the operator a signal, but log tier still
+  // flags the underlying broken path.
+  const n1EmailOk = n1.email?.result === "sent";
+  const n1SlackOk = n1.slack?.result?.sent === true;
+  const n1Payload = {
+    subject: n1.subject,
+    to: n1.recipients?.to,
+    invoices: invoiceRecords.length,
+    email: n1.email?.result,
+    slack: n1.slack?.result,
+  };
+  if (n1EmailOk && n1SlackOk) {
+    log.info("[N1 fired]", n1Payload);
+  } else {
+    log.warn("[N1 delivery incomplete]", n1Payload);
+  }
+  // 2026-09-16: PDF failures now degrade to send-without-attachment
+  // rather than kill the send. Log at warn tier so ops has a signal
+  // that the record copy needs looking at, independent of whether
+  // the notification channels themselves succeeded.
+  if (n1.pdfError) {
+    log.warn("[N1 record-copy PDF failed]", {
+      subject: n1.subject,
+      accountKey,
+      weekStart: pairStart,
+      weekEnd: pairEnd,
+      pdfError: n1.pdfError,
+    });
+  }
+
+  return { pushed: true, invoiceRecords, n1 };
+}
+
+// Exposed for tests only.
+export const _internals = {
+  addDaysIso, parseWeekIndex, sumCentsFromLines,
+  buildRetryLink, buildScWeekLink, buildQboInvoiceLink,
+  transitionFinalizeRowToPushFailed,
+};
