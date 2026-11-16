@@ -14,52 +14,6 @@ import { fmtCount, fmtDate, fmtPackNumbersInText, fmtUsd, fmtUsdLong } from "@/l
 import { canonicalFromBaseUnit, uomLabel } from "@/lib/ingredients/pack";
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 
-// T7: the sticky item-panel head reuses these four values so that
-// what the strip prints at scroll 0 matches what the head carries
-// at scroll N. Two places computing the same thing is how the
-// spread bug happened - keep one source. PanelStrip's JSX below
-// derives the same four values inline (deliberately not rewired to
-// call the helper, to avoid any JSX reshape touching the strip's
-// big-number layout); the helper mirrors that logic verbatim.
-export type ItemHeadFacts = {
-  // fmtUsd + unit; ingredient-unit preferred, stored falls back, "-" when
-  // neither is available.
-  unitPrice: string;
-  // fmtPackNumbersInText(packNormalized ?? pack ?? "-").
-  pack: string;
-  // fmtUsdLong(item.usd12m) + " a year" - same figure the strip's
-  // Annual spend cell renders.
-  annualSpend: string;
-  // "last bought {fmtDate(lastSeen)}" or "last bought -".
-  lastBought: string;
-};
-export function itemHeadFacts(
-  item: ReviewGroupItem,
-  ingredient: ReviewCardIngredient | null,
-): ItemHeadFacts {
-  const perBaseUomLower = item.perBaseUom
-    ? item.perBaseUom === "LB" ? "lb"
-      : item.perBaseUom === "FLOZ" ? "fl oz"
-      : item.perBaseUom === "EA" ? "each"
-      : item.perBaseUom.toLowerCase()
-    : null;
-  const ingUnitLabel = ingredient ? uomLabel(canonicalFromBaseUnit(ingredient.base_unit) ?? "") : "";
-  const primaryPer = item.perBaseInIngUnit ?? null;
-  const showIngUnitAsPrimary =
-    primaryPer != null && Number.isFinite(primaryPer) && primaryPer > 0 && Boolean(ingUnitLabel);
-  const unitPrice = showIngUnitAsPrimary
-    ? `${fmtUsd(primaryPer as number)} / ${ingUnitLabel}`
-    : item.perBase != null && perBaseUomLower
-      ? `${fmtUsd(item.perBase)} / ${perBaseUomLower}`
-      : "-";
-  const pack = fmtPackNumbersInText(item.packNormalized ?? item.pack ?? "-");
-  // Strip uses `$${fmtUsdLong(x).replace(/^\$/, "")}` - fmtUsdLong
-  // always begins with "$", so this reduces to fmtUsdLong(x).
-  const annualSpend = `${fmtUsdLong(item.usd12m)} a year`;
-  const lastBought = item.lastSeen ? `last bought ${fmtDate(item.lastSeen)}` : "last bought -";
-  return { unitPrice, pack, annualSpend, lastBought };
-}
-
 export function PanelStrip({
   item,
   ingredient,
