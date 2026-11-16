@@ -222,10 +222,15 @@ function casePriceFromPerBase(
   const ps = Number(packSize ?? NaN);
   if (!pu || !bu || !Number.isFinite(pq) || !Number.isFinite(ps) || pq <= 0 || ps <= 0) return null;
   if (DIM_BY_UOM[pu] !== DIM_BY_UOM[bu]) return null;
+  // T1 fix 1: TO_BASE.DZ is already 12, so `ratio` converts a DZ pack
+  // to its EA total. The former `mult = pu === "DZ" ? 12 : 1` applied
+  // the dozen factor a second time and pushed every dozen pack's case
+  // price 12x too high. statedTotals() still carries its own "x 12"
+  // because its pq * ps is already in EA; this function's pq * ps is
+  // in the pack's uom and must only be converted once via `ratio`.
   const ratio = TO_BASE[pu] / TO_BASE[bu];
   if (!Number.isFinite(ratio) || ratio <= 0) return null;
-  const mult = pu === "DZ" ? 12 : 1;
-  const caseInBase = pq * ps * mult * ratio;
+  const caseInBase = pq * ps * ratio;
   if (!(caseInBase > 0)) return null;
   return perBase * caseInBase;
 }

@@ -291,6 +291,13 @@ export function PanelMeasuresBlock({
     setAddUom("");
     setAddToDim(null);
     setAddError(null);
+    // T3 §after-R3: tell the parent the add row is closed so it
+    // clears addForUom / addPrefillQty / addPickUnit. Without this,
+    // clicking the same chip after a Cancel changed no state and the
+    // open-effect (deps on those three) never re-ran - the row
+    // silently refused to re-open. A successful add already calls
+    // onAfterAdd for the same reset; Cancel now does too.
+    onAfterAdd?.();
   }
   function commitAdd() {
     if (!candidateForRejection) return;

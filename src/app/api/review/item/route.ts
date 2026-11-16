@@ -257,6 +257,15 @@ export async function GET(req: NextRequest) {
     pack: packDisplay,
     packNormalized: normalizedPack,
     packUom: it.pack_uom ?? null,
+    // T1 R2-1: priceInUnit needs packQty + packSize to pick the
+    // stated-weight route. When they were omitted every panel opened
+    // by id fell through to the measure-fallback shape, so "How we
+    // got there" printed the fallback sentence, the case weight line
+    // ran on 1 x 1 x perBase, and a saved case weight collapsed to
+    // "Prices out at $X / lb via the measures". ReviewQueue already
+    // sends these two fields; this route is the one that did not.
+    packQty: it.pack_qty != null ? Number(it.pack_qty) : null,
+    packSize: it.pack_size != null ? Number(it.pack_size) : null,
     packState: it.pack_state,
     packSource,
     packManualOverride: hasManualOverride,
