@@ -2,6 +2,27 @@
 // recipients - the SC billing notification recipient resolver.
 // PR-F of the SC -> QBO billing arc (2026-08-13).
 // ═══════════════════════════════════════════════════════════════════
+// Types (train 2 part one):
+import type { NotificationType, Recipients } from "../types";
+
+export interface ResolveRecipientsArgs {
+  // The string identifying which notification. The hand-written union
+  // matches the five values of NOTIFICATION_TYPES below, read from
+  // the keys written on the Object.freeze call. If a value is added
+  // to the frozen object, add it here too.
+  notification: NotificationType | string;
+  accountKey?: string;
+  // mode is sc_qbo_account_map.qbo_mode text. Treated as "test"
+  // vs non-"test" at the first branch of resolveRecipients.
+  mode?: string;
+  submitterEmail?: string | null;
+  accountMap?: {
+    salariedManagerEmails?: string[] | null;
+    rdoEmail?: string | null;
+    notifyOperators?: boolean;
+  };
+  adjusterEmail?: string | null;
+}
 //
 // Spec authority: docs/SC_QBO_SHAPE_SPEC_ADDENDUM_A.md §A5 (test/live)
 // + §A6 (matrix). Every billing notification's recipient list comes
@@ -100,9 +121,9 @@ export const NOTIFICATION_TYPES = Object.freeze({
 
 // Deduplicate while preserving order + case-folded key so
 // "Kevin@Kitchfix.com" and "kevin@kitchfix.com" collapse.
-function dedup(list: any) {
-  const seen = new Set();
-  const out = [];
+function dedup(list: Iterable<string | null | undefined> | null | undefined): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
   for (const raw of list || []) {
     const key = String(raw || "").trim().toLowerCase();
     if (!key || seen.has(key)) continue;
@@ -129,7 +150,7 @@ function dedup(list: any) {
  * @param {string} [args.adjusterEmail] N4 only.
  * @returns {{ to: string[], cc: string[] }}
  */
-export function resolveRecipients(args: any) {
+export function resolveRecipients(args: ResolveRecipientsArgs): Recipients {
   // ─── FIRST BRANCH: structural test-mode override ────────────────
   // Do not touch args.notification, args.accountKey, or anything else
   // in test mode. Kevin's address, immediately. See docs/SC_QBO_SHAPE_SPEC_

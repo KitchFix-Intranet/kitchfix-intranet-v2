@@ -148,9 +148,9 @@ Database functions:
 
 The engine does not read `sc_fee_schedule`. Prices reach it through the view `sc_daily_revenue`, which reads `sc_daily_actuals`, `sc_daily_projections`, `sc_day_metadata`, `sc_service_groups`, `sc_service_prices` and `sc_services`.
 
-## Type debt (measured, 2026-11-15)
+## Type debt (measured, 2026-11-16)
 
-The engine is TypeScript by file name and compiles under `strict`, but it is not typed yet. The step 0 answer asked for real parameter and return types on exported functions. That was not done in train 1. It is the first step of train 2, as a types-only PR, before any V2 code calls the engine.
+Every exported function now carries a real parameter type and a real return type. No `any` in any signature, no `any` inside any type a signature names. Row types in `src/lib/sc/types.ts` are keyed to the live schema per Kevin's Step 0 answer.
 
 Counted from the syntax tree by Chat-Claude's `sc_engine_type_debt.mjs`, not by text search:
 
@@ -158,40 +158,59 @@ Counted from the syntax tree by Chat-Claude's `sc_engine_type_debt.mjs`, not by 
 |---|--:|--:|--:|--:|--:|--:|--:|
 | _seams.ts | 14 | 0 | 0 | 0 | 0 | 0 | 0 |
 | admin.ts | 44 | 0 | 0 | 0 | 0 | 0 | 0 |
-| billing/billableTotal.ts | 49 | 2 | 0 | 0 | 0 | 0 | 0 |
-| billing/buildInvoicePayload.ts | 535 | 23 | 0 | 0 | 3 | 1 | 0 |
-| billing/chaseNotifications.ts | 388 | 15 | 1 | 0 | 0 | 0 | 0 |
-| billing/chasePersonName.ts | 113 | 2 | 0 | 0 | 0 | 0 | 0 |
-| billing/getSalariedManagerEmails.ts | 101 | 6 | 0 | 0 | 1 | 0 | 0 |
-| billing/invoiceMemo.ts | 91 | 6 | 0 | 0 | 0 | 0 | 0 |
+| billing/billableTotal.ts | 54 | 0 | 0 | 0 | 0 | 0 | 0 |
+| billing/buildInvoicePayload.ts | 552 | 22 | 0 | 0 | 3 | 1 | 0 |
+| billing/chaseNotifications.ts | 414 | 14 | 1 | 0 | 0 | 0 | 0 |
+| billing/chasePersonName.ts | 120 | 0 | 0 | 0 | 0 | 0 | 0 |
+| billing/getSalariedManagerEmails.ts | 113 | 0 | 0 | 0 | 2 | 0 | 0 |
+| billing/invoiceMemo.ts | 93 | 0 | 0 | 0 | 0 | 0 | 0 |
 | billing/pfsLogoBase64.ts | 17 | 0 | 0 | 0 | 0 | 0 | 0 |
-| billing/qboAdapter.ts | 1161 | 64 | 0 | 0 | 0 | 0 | 12 |
-| billing/qboMode.ts | 102 | 3 | 1 | 0 | 0 | 0 | 0 |
-| billing/qboNotifications.ts | 825 | 35 | 0 | 1 | 0 | 0 | 0 |
-| billing/recipients.ts | 245 | 2 | 0 | 0 | 0 | 0 | 0 |
-| billing/recordCopyPdf.ts | 543 | 34 | 0 | 0 | 0 | 0 | 0 |
-| billing/variance.ts | 52 | 1 | 0 | 0 | 0 | 0 | 0 |
+| billing/qboAdapter.ts | 1213 | 41 | 2 | 0 | 1 | 0 | 12 |
+| billing/qboMode.ts | 102 | 0 | 1 | 0 | 0 | 0 | 0 |
+| billing/qboNotifications.ts | 928 | 30 | 0 | 1 | 0 | 0 | 0 |
+| billing/recipients.ts | 266 | 0 | 0 | 0 | 0 | 0 | 0 |
+| billing/recordCopyPdf.ts | 569 | 30 | 0 | 0 | 0 | 0 | 0 |
+| billing/variance.ts | 54 | 0 | 0 | 0 | 0 | 0 | 0 |
 | outbound.ts | 42 | 0 | 0 | 0 | 0 | 0 | 0 |
-| scPeriodLock.ts | 97 | 3 | 0 | 0 | 0 | 0 | 0 |
-| scReviewState.ts | 179 | 11 | 0 | 0 | 0 | 0 | 0 |
-| scWeekFinalize.ts | 1089 | 34 | 1 | 0 | 0 | 0 | 0 |
-| **Total** | 5687 | 241 | 3 | 1 | 4 | 1 | 12 |
+| scPeriodLock.ts | 101 | 0 | 0 | 0 | 0 | 0 | 0 |
+| scReviewState.ts | 200 | 1 | 0 | 0 | 1 | 0 | 0 |
+| scWeekFinalize.ts | 1150 | 18 | 1 | 0 | 0 | 0 | 0 |
+| types.ts | 461 | 0 | 0 | 0 | 0 | 0 | 0 |
+| **Total** | 6507 | 156 | 5 | 1 | 7 | 1 | 12 |
 
-Exported functions: 51. Every parameter typed for real: 3. Every parameter `any` or untyped: 48. Return type written: 3. Return type not written: 48.
-Parameters on exported functions: 85, of which `any`: 80, untyped: 1.
+Exported functions: 51. Every parameter typed for real: 51. Every parameter `any` or untyped: 0. Return type written: 51. Return type not written: 0.
+Parameters on exported functions: 85, of which `any`: 0, untyped: 0.
 
-- The one `@ts-expect-error` is in `billing/buildInvoicePayload.ts`, on the date subtraction. v1's line is kept as it is.
-- The three casts, the four non-null assertions and their line numbers:
-  - Every cast (not counting as const):
-    - `billing/chaseNotifications.ts:326` - `as Record<string, string>`
-    - `billing/qboMode.ts:101` - `as Record<string, string>`
-    - `scWeekFinalize.ts:401` - `as any[]`
-  - Every non-null assertion:
-    - `billing/buildInvoicePayload.ts:378` - `rate!`
-    - `billing/buildInvoicePayload.ts:393` - `rate!`
-    - `billing/buildInvoicePayload.ts:438` - `rate!`
-    - `billing/getSalariedManagerEmails.ts:98` - `byAccount.get(r.account_key)!`
-- The 12 `declare` fields are on the four error classes in `billing/qboAdapter.ts`. They emit nothing.
+### New `!` in this PR (3 added, 4 kept from train 1)
+
+- `billing/getSalariedManagerEmails.ts` on `r.work_email!` inside `getSalariedManagerEmails` - `PersonManagerRow.work_email` is `string | null` because the column is nullable at the schema level; the query's `.not("work_email", "is", null)` filter ensures non-null at result level.
+- `src/lib/sc/scReviewState.ts` on `read.rows!` inside `requireAllDaysApproved` - `rows` is optional in `readReviewStateForDays`'s return; the preceding `if (!read.success) return` guard guarantees it is set on the path that reads it.
+- `billing/qboAdapter.ts` on `ctx.slotCode!` inside `postInvoiceDraft` - slotCode is optional on the ctx type because test-mode calls do not carry one; the live-mode branch is the only site that reads it, and the `isTest ? ... : ...` ternary guarantees the invariant.
+
+The four non-null assertions carried from train 1 (every one on `rate!` after `roundToCent` in `billing/buildInvoicePayload.ts` and on `byAccount.get(r.account_key)!` in `billing/getSalariedManagerEmails.ts`) stay unchanged.
+
+### New casts in this PR (1 logical cast, 2 AST nodes)
+
+- `billing/qboAdapter.ts` at line 847, inside `postInvoiceDraft`: `stripInternalMarkers(marked) as unknown as QboInvoice`. `stripInternalMarkers` returns `Record<string, unknown> | null | undefined` because the destructuring strip throws away the two typed marker fields and TS loses the QBO shape. The cast asserts that every other QBO field stays in place on the stripped result, which is true by inspection of `stripInternalMarkers`'s body. Counts as one cast finding; two AST nodes because TS requires the double-step between non-overlapping object shapes.
+
+The three casts carried from train 1 (`billing/chaseNotifications.ts` + `billing/qboMode.ts` on the `as Record<string, string>` object-literal index, `scWeekFinalize.ts` on `as any[]`) stay unchanged.
+
+### `any` kept on code I touched (2)
+
+Reducing these would require a change at run time, which the brief forbids:
+
+- `src/lib/sc/scReviewState.ts` in `alertReviewClearFailure`'s catch block: `catch (e: any)`. Strict mode types a bare `catch (e)` as `unknown`; the two reads inside (`e?.message` and `String(e)`) then fail. V1's bare `catch (e)` runs as-is; keeping `e: any` is the one-token change that lets the two reads continue to work without adding an `instanceof Error` or `typeof === "string"` guard.
+- `src/lib/sc/scPeriodLock.ts` arrow callback inside `.map`: `(d) => supa.rpc(...)`. The implicit `d` type is `any` because `new Set(dates)` resolves to `Set<any>` from the untyped `dates`. Annotating `d: string` would need `new Set<string>(dates)`, which is type-only, but adding the generic here would require the same discipline across every Set use in the engine - outside this PR's scope.
+
+The 154 other `any` locations sit on code this PR did not modify: `catch (e: any)` blocks ported from v1, QBO payload-shape locals inside `qboAdapter.ts`, HTML-builder locals inside `qboNotifications.ts`, PDF-layout locals inside `recordCopyPdf.ts`. Reducing them is train 2 part two carry.
+
+The one `@ts-expect-error` is in `billing/buildInvoicePayload.ts` on the date subtraction. v1's line is kept as it is.
+The 12 `declare` fields are on the four error classes in `billing/qboAdapter.ts`. They emit nothing.
+
+### Findings this PR surfaces for train 2 part two
+
+- `scWeekFinalize.ts` queries `accounts.select("team_name")` - the `accounts` table has no `team_name` column (the column is `name`). The query silently returns an error and the account label is always null. Carried from v1; `AccountRow` types the result shape honestly (`team_name: string | null`), and the write-the-correct-column fix belongs to part two.
+- `recordCopyPdf.computeApproverPhrase` reads `r.reviewedBy` and `r.reviewedAt` on review rows that arrive as snake_case (`reviewed_by`, `reviewed_at`) from the `sc_day_metadata` select at `scWeekFinalize.ts` line 1076. V1 has the same mismatch; the record-copy PDF currently renders approvals with no name attached. `ReviewRow` types the reality (both forms permitted, both optional).
 
 None of this changes what runs. The section below is the proof.
 

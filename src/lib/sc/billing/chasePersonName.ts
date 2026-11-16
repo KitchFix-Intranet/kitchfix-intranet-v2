@@ -44,7 +44,14 @@ import { getServiceClient } from "@/lib/sc/_seams";
  * @param {string[]} args.salariedManagerEmails  fallback list
  * @returns {Promise<{ email: string, displayName: string, source: string } | null>}
  */
-export async function resolveChasePersonName({ accountKey, weekStart, weekEnd, salariedManagerEmails = [] }: any) {
+export async function resolveChasePersonName(
+  { accountKey, weekStart, weekEnd, salariedManagerEmails = [] }: {
+    accountKey: string;
+    weekStart: string;
+    weekEnd: string;
+    salariedManagerEmails?: string[];
+  }
+): Promise<{ email: string; displayName: string; source: string } | null> {
   const supa = getServiceClient();
 
   // Pull the two person-shaped tables in parallel:
@@ -98,7 +105,7 @@ export async function resolveChasePersonName({ accountKey, weekStart, weekEnd, s
   }
 
   // Step 3 - first ACTIVE-validated entry in the salaried list.
-  const salariedLower = (salariedManagerEmails || []).map((e: any) => String(e).toLowerCase());
+  const salariedLower = (salariedManagerEmails || []).map((e: string) => String(e).toLowerCase());
   for (const email of salariedLower) {
     if (activeByEmail.has(email)) {
       const p = activeByEmail.get(email);

@@ -171,6 +171,7 @@ import crypto from "node:crypto";
 import { getServiceClient } from "@/lib/sc/_seams";
 import { SEBASTIAN_EMAIL, AR_EMAIL } from "@/lib/sc/billing/recipients";
 import { networkFetch } from "@/lib/sc/outbound";
+import type { SupabaseClient, AccountMapRow, NetworkResponse, QboInvoice } from "@/lib/sc/types";
 // sc-52 (Kevin ruling 2026-10-05): every live SC invoice Bccs the KitchFix
 // billing pair. These are the same two addresses QBO auto-fills on manually
 // created invoices, so an SC invoice and a hand-made one now carry the same
@@ -193,7 +194,7 @@ export const TEST_MEMO =
 // mode returns the account's own customer id and refuses if it is
 // missing (guards against a partially-populated account_map row
 // slipping through as "any customer").
-export function allowedCustomerIdsFor(mode: any, accountMap: any) {
+export function allowedCustomerIdsFor(mode: string, accountMap: AccountMapRow | null | undefined): ReadonlySet<string> {
   if (mode === "test") return Object.freeze(new Set([TEST_CUSTOMER_ID]));
   if (mode === "live") {
     const id = accountMap?.qbo_customer_id ? String(accountMap.qbo_customer_id) : null;
@@ -219,7 +220,7 @@ export const ALLOWED_CUSTOMER_IDS = Object.freeze(new Set([TEST_CUSTOMER_ID]));
 // Composing here from two env vars means Josh can rotate proxy
 // hosting without touching realm, and vice versa. See
 // `composeInvoiceUrl` below for the exact assembly.
-export function composeInvoiceUrl(proxyBase: any, realmId: any) {
+export function composeInvoiceUrl(proxyBase: string, realmId: string | number): string {
   if (!proxyBase) throw new Error("composeInvoiceUrl: proxyBase required");
   if (!realmId)   throw new Error("composeInvoiceUrl: realmId required");
   const stripped = String(proxyBase).replace(/\/+$/, "");
@@ -231,7 +232,7 @@ export function composeInvoiceUrl(proxyBase: any, realmId: any) {
 // could send. Read the customer's PrimaryEmailAddr from QBO at push
 // time and copy it onto BillEmail. Same shape as composeInvoiceUrl but
 // against /customer/<id>.
-export function composeCustomerUrl(proxyBase: any, realmId: any, customerId: any) {
+export function composeCustomerUrl(proxyBase: string, realmId: string | number, customerId: string): string {
   if (!proxyBase) throw new Error("composeCustomerUrl: proxyBase required");
   if (!realmId)   throw new Error("composeCustomerUrl: realmId required");
   if (!customerId) throw new Error("composeCustomerUrl: customerId required");
@@ -243,7 +244,7 @@ export function composeCustomerUrl(proxyBase: any, realmId: any, customerId: any
 // holds a DocNumber when we hit a 6140 duplicate fault, and to
 // answer the audit question "which invoice does this DocNumber
 // belong to" without adding another entity endpoint.
-export function composeQueryUrl(proxyBase: any, realmId: any, queryText: any) {
+export function composeQueryUrl(proxyBase: string, realmId: string | number, queryText: string): string {
   if (!proxyBase) throw new Error("composeQueryUrl: proxyBase required");
   if (!realmId)   throw new Error("composeQueryUrl: realmId required");
   if (!queryText) throw new Error("composeQueryUrl: queryText required");
@@ -314,7 +315,7 @@ export class DocNumberEchoMismatchError extends Error {
 // serialize in insertion order in JSON.stringify; we accept that
 // because the payload builder produces keys in a stable order.
 // Result is 64 lowercase hex chars (matches sc_export_ledger CHECK).
-export function payloadHash(payload: any) {
+export function payloadHash(payload: object): string {
   const json = JSON.stringify(payload);
   return crypto.createHash("sha256").update(json).digest("hex");
 }
@@ -322,7 +323,7 @@ export function payloadHash(payload: any) {
 // Shift an ISO date to the same weekday in 2029. Keeps the test
 // invoice's TxnDate structurally recognizable AND makes sure it is
 // nowhere near any real accounting period.
-export function shiftTxnDateToTestYear(iso: any) {
+export function shiftTxnDateToTestYear(iso: string): string {
   if (typeof iso !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
     throw new Error(`shiftTxnDateToTestYear: bad ISO ${iso}`);
   }
@@ -341,7 +342,9 @@ export function shiftTxnDateToTestYear(iso: any) {
 // property with a 400 - verified 2026-08-11 on the second C7 attempt.
 // _slot is read into the ledger via ctx; _preTaxSubtotal is
 // recomputed from Line[] via sumPretaxCents.
-export function stripInternalMarkers(payload: any) {
+export function stripInternalMarkers(
+  payload: QboInvoice | Record<string, unknown> | null | undefined
+): Record<string, unknown> | null | undefined {
   if (!payload || typeof payload !== "object") return payload;
   const { _slot, _preTaxSubtotal, ...clean } = payload;
   return clean;
@@ -349,7 +352,10 @@ export function stripInternalMarkers(payload: any) {
 
 // Rewrite a payload for test posting. Returns a deep-cloned payload
 // with all test markers applied.
-export function markPayloadAsTest(payload: any, { accountKey, weekStart, weekEnd }: any) {
+export function markPayloadAsTest(
+  payload: QboInvoice,
+  { accountKey, weekStart, weekEnd }: { accountKey: string; weekStart: string; weekEnd: string }
+): QboInvoice {
   // Deep clone via JSON. Adequate for the payload shape (no
   // functions, no circular refs, no Date instances).
   const clone = JSON.parse(JSON.stringify(payload));
@@ -434,7 +440,7 @@ async function writeLedgerRow(supa: any, row: any) {
 // for the sc-48 live sequence (uniqueness under duplicate-refuse);
 // for the test path it just means the ledger sees monotonically-
 // increasing KFT numbers.
-export async function reserveInvoiceDocNumber(supa: any, isTest: any) {
+export async function reserveInvoiceDocNumber(supa: SupabaseClient, isTest: boolean): Promise<string> {
   if (!isTest) {
     throw new Error(
       "reserveInvoiceDocNumber: live path retired at sc-49; use buildInvoiceDocNumber for live pushes."
@@ -492,7 +498,7 @@ export class BuildDocNumberError extends Error {
   }
 }
 
-export function computeAccountCode(accountKey: any) {
+export function computeAccountCode(accountKey: string): string {
   if (typeof accountKey !== "string" || !accountKey.trim()) {
     throw new BuildDocNumberError(`accountKey required (got ${JSON.stringify(accountKey)})`, "accountKey");
   }
@@ -503,14 +509,21 @@ export function computeAccountCode(accountKey: any) {
   return code;
 }
 
-export function formatWeekStartYYMMDD(weekStart: any) {
+export function formatWeekStartYYMMDD(weekStart: string): string {
   if (typeof weekStart !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) {
     throw new BuildDocNumberError(`weekStart must be ISO YYYY-MM-DD (got ${JSON.stringify(weekStart)})`, "weekStart");
   }
   return weekStart.slice(2, 4) + weekStart.slice(5, 7) + weekStart.slice(8, 10);
 }
 
-export function buildInvoiceDocNumber({ accountKey, weekStart, slotCode, revision }: any) {
+export function buildInvoiceDocNumber(
+  { accountKey, weekStart, slotCode, revision }: {
+    accountKey: string;
+    weekStart: string;
+    slotCode: string;
+    revision?: number;
+  }
+): string {
   const code = computeAccountCode(accountKey);
   const yy   = formatWeekStartYYMMDD(weekStart);
   if (typeof slotCode !== "string" || !/^[A-Z]{2,3}$/.test(slotCode)) {
@@ -613,7 +626,9 @@ async function readCustomerBillEmail({ proxyBase, realmId, apiKey, customerId, a
 //   { Fault: { Error: [{ code: "6140", Message: "...", Detail: "..." }] } }
 // on rejection. Returns { code, message, detail } or null if the body
 // is not a parseable QBO fault. Never throws.
-export function parseQboFaultCode(body: any) {
+export function parseQboFaultCode(
+  body: string | null | undefined
+): { code: string | null; message: string | null; detail: string | null } | null {
   if (body == null) return null;
   const text = typeof body === "string" ? body : String(body);
   if (!text.trim().startsWith("{")) return null;
@@ -711,7 +726,37 @@ function sleep(ms: any) {
  *   adopted?: boolean
  * }>}
  */
-export async function postInvoiceDraft(payload: any, ctx: any) {
+export interface PostInvoiceDraftCtx {
+  qboMode: string;
+  accountKey: string;
+  weekStart: string;
+  weekEnd: string;
+  cadenceUnit: string;
+  createdBy: string;
+  accountMap: AccountMapRow;
+  slotCode?: string;
+  revision?: number;
+  deps?: {
+    supa?: SupabaseClient;
+    fetchImpl?: (url: string, apiKey: string, payload: QboInvoice) => Promise<NetworkResponse>;
+    fetchCustomerImpl?: (url: string, apiKey: string, opts?: { timeoutMs?: number }) => Promise<NetworkResponse>;
+    fetchInvoiceQueryImpl?: (url: string, apiKey: string) => Promise<NetworkResponse>;
+  };
+}
+
+export interface PostInvoiceDraftResult {
+  wasNoOp: boolean;
+  ledgerRowId: string;
+  qboInvoiceId?: string;
+  qboDocNumber?: string;
+  status: string;
+  adopted?: boolean;
+}
+
+export async function postInvoiceDraft(
+  payload: QboInvoice,
+  ctx: PostInvoiceDraftCtx
+): Promise<PostInvoiceDraftResult> {
   if (!payload) throw new Error("postInvoiceDraft: payload required");
   if (!ctx?.accountKey) throw new Error("postInvoiceDraft: accountKey required");
   if (!ctx?.weekStart)  throw new Error("postInvoiceDraft: weekStart required");
@@ -794,7 +839,12 @@ export async function postInvoiceDraft(payload: any, ctx: any) {
   // stored in the ledger is a fingerprint of the actual wire bytes,
   // and (c) QBO never sees any underscore-prefixed key (spec §7
   // rule 1: unknown property -> 400, verified 2026-08-11).
-  const outgoing = stripInternalMarkers(marked);
+  // outgoing is the QboInvoice after stripInternalMarkers (which
+  // returns an untyped shape). Cast to QboInvoice: the strip only
+  // removes `_slot` + `_preTaxSubtotal` and leaves every QBO field
+  // in place, so the cast is truthful. Types-only; counted as one
+  // new cast.
+  const outgoing = stripInternalMarkers(marked) as unknown as QboInvoice;
 
   // ─── Fence: per-mode allow-list ────────────────────────────────
   // Test mode: only 22463 (structural override applied above already
@@ -932,10 +982,12 @@ export async function postInvoiceDraft(payload: any, ctx: any) {
   // attempt.
   const docNumber = isTest
     ? await reserveInvoiceDocNumber(supa, true)
+    // Live-mode invariant: ctx.slotCode is set (per the fence above).
+    // `!` narrows for the compiler. Types-only; counted as one new `!`.
     : buildInvoiceDocNumber({
         accountKey: ctx.accountKey,
         weekStart:  ctx.weekStart,
-        slotCode:   ctx.slotCode,
+        slotCode:   ctx.slotCode!,
         revision:   ctx.revision == null ? 1 : ctx.revision,
       });
   outgoing.DocNumber = docNumber;

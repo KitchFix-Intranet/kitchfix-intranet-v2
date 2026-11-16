@@ -32,6 +32,7 @@ import { isScLockOverrideDb } from "@/lib/sc/admin";
 import { buildInvoicePayload } from "@/lib/sc/billing/buildInvoicePayload";
 import { postInvoiceDraft, NotAllowlistedError, QboPostError } from "@/lib/sc/billing/qboAdapter";
 import { fireN1, fireN2, fireNoOpAlert } from "@/lib/sc/billing/qboNotifications";
+import type { SupabaseClient, FinalizeRow, InvoiceRecord } from "@/lib/sc/types";
 import { getSalariedManagerEmails } from "@/lib/sc/billing/getSalariedManagerEmails";
 
 // ─────────────────────────────────────────────────────────────────
@@ -50,7 +51,7 @@ import { getSalariedManagerEmails } from "@/lib/sc/billing/getSalariedManagerEma
 // Implementation uses UTC arithmetic so the calculation is
 // timezone-independent (matches PG's extract(isodow ...) evaluated
 // on the same date value).
-export function mondayOfWeek(isoDate: any) {
+export function mondayOfWeek(isoDate: string): string {
   if (typeof isoDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) {
     throw new Error(`mondayOfWeek: expected YYYY-MM-DD, got ${JSON.stringify(isoDate)}`);
   }
@@ -62,7 +63,7 @@ export function mondayOfWeek(isoDate: any) {
 }
 
 // Return the 7 ISO-week dates (Mon..Sun) as YYYY-MM-DD strings.
-export function weekDates(weekStartMonday: any) {
+export function weekDates(weekStartMonday: string): string[] {
   const monday = mondayOfWeek(weekStartMonday);
   const out = [];
   const base = new Date(`${monday}T12:00:00Z`);
@@ -110,7 +111,18 @@ export function weekDates(weekStartMonday: any) {
 // account cannot produce them. Fee accounts are structurally
 // excluded from the finalize pipeline (see
 // v2/billing/perMealAccounts.js).
-export async function computeWeekCompleteness(accountKey: any, weekStartMonday: any) {
+export async function computeWeekCompleteness(
+  accountKey: string,
+  weekStartMonday: string
+): Promise<{
+  complete: boolean;
+  missingDates: string[];
+  serviceDays: number;
+  serviceDaysEntered: number;
+  weekStart: string;
+  weekEnd: string;
+  reason: string | null;
+}> {
   const supa = getServiceClient();
   const dates = weekDates(weekStartMonday);
 
@@ -206,7 +218,7 @@ export async function computeWeekCompleteness(accountKey: any, weekStartMonday: 
 // Returns the current live row for (accountKey, mondayOfWeek(date))
 // OR null if the week is OPEN. LIVE = status != 'reverted' (matches
 // sc-30's partial unique index).
-export async function loadLiveFinalizeRow(accountKey: any, dateInWeek: any) {
+export async function loadLiveFinalizeRow(accountKey: string, dateInWeek: string): Promise<FinalizeRow | null> {
   const supa = getServiceClient();
   const weekStart = mondayOfWeek(dateInWeek);
   const { data, error } = await supa
@@ -250,7 +262,17 @@ export async function loadLiveFinalizeRow(accountKey: any, dateInWeek: any) {
 // 2026-09-23: optional `supa` parameter for test injection. Existing
 // callers unchanged. checkLiveInvoiceForRevert below passes its
 // own supa through so it can be mocked in unit tests.
-export async function resolveFinalizeReviewSpan(accountKey: any, weekStart: any, supaArg = null) {
+export async function resolveFinalizeReviewSpan(
+  accountKey: string,
+  weekStart: string,
+  supaArg: SupabaseClient | null = null
+): Promise<{
+  dates: string[];
+  isBiweekly: boolean;
+  weekIndex: number | null;
+  spanStart: string;
+  spanEnd: string;
+}> {
   const supa = supaArg || getServiceClient();
   const monday = mondayOfWeek(weekStart);
   const { data: accountMap, error: amErr } = await supa
@@ -317,7 +339,16 @@ export async function resolveFinalizeReviewSpan(accountKey: any, weekStart: any,
 //     invoices[] to name the KF numbers and spanStart / reviewSpan
 //     to reuse the resolved span for the subsequent review-clear step
 //     (avoids a second resolveFinalizeReviewSpan call).
-export async function checkLiveInvoiceForRevert(accountKey: any, weekStart: any, supaArg: any = null) {
+export async function checkLiveInvoiceForRevert(
+  accountKey: string,
+  weekStart: string,
+  supaArg: SupabaseClient | null = null
+): Promise<null | {
+  code: "WEEK_HAS_LIVE_INVOICE";
+  invoices: Array<{ qbo_doc_number: string; qbo_invoice_id: string; invoice_slot: string }>;
+  spanStart: string;
+  reviewSpan: { dates: string[]; isBiweekly: boolean; weekIndex: number | null; spanStart: string; spanEnd: string };
+}> {
   const supa = supaArg || getServiceClient();
   const reviewSpan = await resolveFinalizeReviewSpan(accountKey, weekStart, supa);
   const { data, error } = await supa
@@ -356,7 +387,15 @@ export async function checkLiveInvoiceForRevert(accountKey: any, weekStart: any,
 // For an array of dates, checks each unique Mon-Sun week once (not
 // per-date) - the week key is derived server-side so the caller
 // cannot bypass by rounding dates.
-export async function assertWeekOpenForWrite(accountKey: any, dates: any, email: any) {
+export async function assertWeekOpenForWrite(
+  accountKey: string,
+  dates: string[],
+  email: string | null | undefined
+): Promise<null | {
+  code: "WEEK_FINALIZED";
+  finalizedWeeks: Array<{ weekStart: string; status: string }>;
+  message: string;
+}> {
   if (!accountKey) {
     throw new Error("assertWeekOpenForWrite: accountKey required");
   }
@@ -528,7 +567,29 @@ async function transitionFinalizeRowToPushFailed(supa: any, finalizeRowId: any) 
   }
 }
 
-export async function runFinalizeEffects(ctx: any, deps: any = {}) {
+export interface FinalizeCtx {
+  accountKey: string;
+  weekStart: string;
+  finalizedRow: { id: string; finalized_by: string; finalized_at?: string };
+  confirmedPretaxCents?: number;
+}
+
+export interface FinalizeDeps {
+  supa?: SupabaseClient;
+  buildInvoicePayload?: typeof buildInvoicePayload;
+  postInvoiceDraft?: typeof postInvoiceDraft;
+  fireN1?: typeof fireN1;
+  fireN2?: typeof fireN2;
+  fireNoOpAlert?: typeof fireNoOpAlert;
+  logger?: { info: (...a: unknown[]) => void; warn: (...a: unknown[]) => void };
+}
+
+export type FinalizeResult =
+  | { pushed: true; invoiceRecords: InvoiceRecord[]; n1?: unknown }
+  | { pushed: false; reason: "awaiting_pair_close" | "no_billable_actuals" | "already_invoiced"; [key: string]: unknown }
+  | { pushed: false; failure: { code: string; message: string; n2?: unknown }; [key: string]: unknown };
+
+export async function runFinalizeEffects(ctx: FinalizeCtx, deps: FinalizeDeps = {}): Promise<FinalizeResult> {
   const supa   = deps.supa || getServiceClient();
   const build  = deps.buildInvoicePayload || buildInvoicePayload;
   const post   = deps.postInvoiceDraft   || postInvoiceDraft;

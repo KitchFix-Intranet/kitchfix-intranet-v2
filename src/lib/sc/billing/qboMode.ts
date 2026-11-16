@@ -66,7 +66,7 @@ const LIVE_ACCOUNTS = new Set([
  * @param {string} accountKey  e.g. "TBJ - FL"
  * @returns {"test" | "live"}  Cosmetic badge signal only.
  */
-export function getQboMode(accountKey: any) {
+export function getQboMode(accountKey: string): "test" | "live" {
   if (typeof accountKey !== "string" || accountKey.length === 0) return "test";
   if (LIVE_ACCOUNTS.has(accountKey)) return "live";
   // Default-deny discipline: anything not on the live allowlist reads
@@ -95,7 +95,7 @@ const LIVE_DESTINATIONS = {
  * supplied name if present, else the mapped live customer name, else the
  * account key (never ZZ TEST).
  */
-export function getInvoiceDestination(accountKey: any, liveCustomerName: any) {
+export function getInvoiceDestination(accountKey: string, liveCustomerName: string | undefined): string {
   if (getQboMode(accountKey) === "test") return TEST_DESTINATION;
   // TS7053: index by computed key on object-literal type. Types-only cast.
   return liveCustomerName || (LIVE_DESTINATIONS as Record<string, string>)[accountKey] || accountKey;

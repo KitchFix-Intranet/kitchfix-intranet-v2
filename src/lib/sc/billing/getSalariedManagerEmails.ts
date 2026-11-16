@@ -33,6 +33,8 @@
 //   accountable for the site sorts first). display_name is the tie
 //   breaker so the order is deterministic across runs.
 
+import type { SupabaseClient, PersonManagerRow } from "../types";
+
 /**
  * Emails of salaried managers at ONE account, ordered.
  *
@@ -41,7 +43,10 @@
  * @returns {Promise<string[]>} lowercased-order preserved as stored
  * @throws on DB error - never returns an empty array to mask a fault
  */
-export async function getSalariedManagerEmails(supa: any, accountKey: any) {
+export async function getSalariedManagerEmails(
+  supa: SupabaseClient,
+  accountKey: string
+): Promise<string[]> {
   const { data, error } = await supa
     .from("people")
     .select("work_email, is_site_leader, display_name")
@@ -54,7 +59,11 @@ export async function getSalariedManagerEmails(supa: any, accountKey: any) {
   if (error) {
     throw new Error(`getSalariedManagerEmails(${accountKey}): ${error.message}`);
   }
-  return (data || []).map((r: any) => r.work_email);
+  // The select filter `.not("work_email", "is", null)` ensures every
+  // returned row carries a non-null work_email. PersonManagerRow types
+  // work_email as nullable to match the schema; `!` is the types-only
+  // narrowing that the filter justifies. Counted as one new `!`.
+  return (data || []).map((r: PersonManagerRow) => r.work_email!);
 }
 
 /**
@@ -72,11 +81,14 @@ export async function getSalariedManagerEmails(supa: any, accountKey: any) {
  * @returns {Promise<Map<string, string[]>>}
  * @throws on DB error
  */
-export async function getSalariedManagerEmailsBatch(supa: any, accountKeys: any) {
+export async function getSalariedManagerEmailsBatch(
+  supa: SupabaseClient,
+  accountKeys: string[]
+): Promise<Map<string, string[]>> {
   const keys = [...(accountKeys || [])].filter(Boolean);
   // TS2532/TS2345: without the type parameter the value slot narrows
   // to `never[]` and the later .push rejects. Types-only annotation.
-  const byAccount = new Map<string, string[]>(keys.map((k: any) => [k, []]));
+  const byAccount = new Map<string, string[]>(keys.map((k: string) => [k, []]));
   if (keys.length === 0) return byAccount;
   const { data, error } = await supa
     .from("people")

@@ -60,6 +60,7 @@
 import { resolveRecipients, NOTIFICATION_TYPES } from "./recipients";
 import { sendEmailSA } from "../outbound";
 import { _internals as qboInternals, TEST_SLACK_FOOTER } from "./qboNotifications";
+import type { FireN3Result } from "@/lib/sc/types";
 
 const { emailShell, escapeHtml, sendSlack, fmtWeekRange } = qboInternals;
 
@@ -287,7 +288,32 @@ function subjectFor(stage: any, accountKey: any, weekStart: any, weekEnd: any, i
  * @param {Object} [args.deps]        { emailSender, sendSlack, slackWebhookUrl } for tests
  * @returns {Promise<{recipients, subject, preheader, html, email:{result}, slack:{text,result}, noSiteRecipient:boolean}>}
  */
-export async function fireN3(args: any) {
+export interface FireN3Args {
+  stage: string;
+  qboMode: string;
+  accountKey: string;
+  weekStart: string;
+  weekEnd: string;
+  complete: number;
+  total: number;
+  missingDates?: string[];
+  scWeekLink?: string;
+  accountMap?: {
+    salariedManagerEmails?: string[] | null;
+    rdoEmail?: string | null;
+    notifyOperators?: boolean;
+  };
+  chasedPersonName?: string;
+  rdoFirstName?: string;
+  send?: boolean;
+  deps?: {
+    emailSender?: (args: Record<string, unknown>) => Promise<string>;
+    sendSlack?: (args: Record<string, unknown>) => Promise<import("@/lib/sc/types").SlackResult>;
+    slackWebhookUrl?: string;
+  };
+}
+
+export async function fireN3(args: FireN3Args): Promise<FireN3Result> {
   const {
     stage, qboMode, accountKey, weekStart, weekEnd,
     complete, total, missingDates, scWeekLink,
@@ -296,7 +322,7 @@ export async function fireN3(args: any) {
   } = args;
 
   const isTest = qboMode === "test";
-  const stageKeys = [NOTIFICATION_TYPES.N3_REMINDER, NOTIFICATION_TYPES.N3_URGENT];
+  const stageKeys: string[] = [NOTIFICATION_TYPES.N3_REMINDER, NOTIFICATION_TYPES.N3_URGENT];
   if (!stageKeys.includes(stage)) {
     throw new Error(`fireN3: stage must be one of ${stageKeys.join("/")}, got ${JSON.stringify(stage)}`);
   }
@@ -337,8 +363,8 @@ export async function fireN3(args: any) {
     : urgentSlackText  ({ accountKey, weekStart, weekEnd, missingDates, chasedPersonName, isTest }));
 
   // Send.
-  let emailResult = "not_sent";
-  let slackOut = null;
+  let emailResult: string = "not_sent";
+  let slackOut: { text: string; result: import("@/lib/sc/types").SlackResult } | null = null;
   if (send) {
     // Email only fires when there is at least one TO address.
     // noSiteRecipient=true means we deliberately skip (Sunday +
