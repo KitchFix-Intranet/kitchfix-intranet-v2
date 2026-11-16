@@ -211,18 +211,21 @@ function rowPriceSub(row: MasterRow): { text: string; warn: boolean } | null {
       return { text: `${(row.spreadRatio ?? 0).toFixed(1)}x spread`, warn: true };
     }
     // Two-grade: name the subset. When both are over, name the worse.
+    // Drop "spread" here - the 116 px price column ellipses
+    // "4.3x Standard spread" (126 px at 800 12 px Mulish). The
+    // single-grade branch above keeps "${ratio}x spread" verbatim.
     if (stdOver && premOver) {
       const stdR = std.spreadRatio!;
       const premR = prem.spreadRatio!;
       if (stdR >= premR) {
-        return { text: `${stdR.toFixed(1)}x Standard spread`, warn: true };
+        return { text: `${stdR.toFixed(1)}x Standard`, warn: true };
       }
-      return { text: `${premR.toFixed(1)}x Premium spread`, warn: true };
+      return { text: `${premR.toFixed(1)}x Premium`, warn: true };
     }
     if (stdOver) {
-      return { text: `${std.spreadRatio!.toFixed(1)}x Standard spread`, warn: true };
+      return { text: `${std.spreadRatio!.toFixed(1)}x Standard`, warn: true };
     }
-    return { text: `${prem.spreadRatio!.toFixed(1)}x Premium spread`, warn: true };
+    return { text: `${prem.spreadRatio!.toFixed(1)}x Premium`, warn: true };
   }
   // M2 §4B amendment 4: the "in recipes" derived sub-line moved to
   // the expand's chip view switch. Row header shows the base_unit
