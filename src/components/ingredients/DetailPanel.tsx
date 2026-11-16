@@ -204,20 +204,29 @@ export function DetailPanel({
         aria-modal="true"
         aria-labelledby={labelId}
       >
-        <PanelHead
-          ref={closeBtnRef}
-          labelId={labelId}
-          kind={open.kind}
-          item={item}
-          ingredient={ingredient}
-          proposedName={proposedName}
-          attentionCount={attentionCounts.total}
-          onClose={close}
-        />
+        {/* T8: PanelHead and PanelStrip share one sticky wrapper so
+            the four summary cells stay on screen during a scroll.
+            Costs about 48 px of pinned real estate (head + strip).
+            T7's thin facts line was removed; it was a workaround
+            for this same problem and reads worse than the labelled
+            block. The wrapper is item-mode-aware through the strip's
+            own render guard: ingredient mode gets a head-only wrapper. */}
+        <div className="kf-ipanel__pin">
+          <PanelHead
+            ref={closeBtnRef}
+            labelId={labelId}
+            kind={open.kind}
+            item={item}
+            ingredient={ingredient}
+            proposedName={proposedName}
+            attentionCount={attentionCounts.total}
+            onClose={close}
+          />
 
-        {open.kind === "item" && item ? (
-          <PanelStrip item={item} ingredient={ingredient} />
-        ) : null}
+          {open.kind === "item" && item ? (
+            <PanelStrip item={item} ingredient={ingredient} />
+          ) : null}
+        </div>
 
         {open.kind === "item" && item ? (
           <PanelAttention

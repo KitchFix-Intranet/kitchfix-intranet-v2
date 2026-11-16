@@ -276,14 +276,22 @@
  * 44x44 outlined square beside the name block (not sticky-floated).
  * The N7 kf-drawer__head rule above owns the sticky + ground; N8 adds
  * only the chip + eyebrow + close shaping for the render. */
+/* T8: the sticky pin is the wrapper around head + strip in
+ * DetailPanel.tsx. Head is a plain child of it so a sticky-inside-
+ * sticky doesn't double-draw the border. The opaque background +
+ * border-bottom stay here. */
+.kf-ipanel__pin {
+  flex: 0 0 auto;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--sp-card);
+}
 .kf-ipanel__head {
   padding: var(--sp-sp-5) var(--sp-sp-5) var(--sp-sp-3) var(--sp-sp-5);
   display: flex;
   align-items: flex-start;
   gap: var(--sp-sp-4);
-  position: sticky;
-  top: 0;
-  z-index: 1;
   background: var(--sp-card);
   border-bottom: 1px solid var(--sp-line);
 }
@@ -332,27 +340,6 @@
   font-size: var(--sp-t-micro);
   color: var(--sp-muted);
 }
-/* T7: four summary facts inside the sticky head so they survive a
- * scroll past PanelStrip. Mulish, micro, body colour - a running
- * sub-line, not a heading; it must not compete with the item name
- * above it. flex-wrap: wrap + overflow-wrap let the line break onto
- * a second row at narrow drawer widths rather than ellipsing - the
- * whole point is to not lose facts. */
-.kf-ipanel__head-facts {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  column-gap: var(--sp-sp-2);
-  row-gap: var(--sp-sp-1);
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-micro);
-  color: var(--sp-body);
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.kf-ipanel__head-facts-sep {
-  color: var(--sp-muted);
-}
 .kf-ipanel__close {
   width: 44px;
   height: 44px;
@@ -369,8 +356,15 @@
 .kf-ipanel__close:hover { background: var(--sp-sky-tint); }
 
 /* --- Summary strip ---
- * Four cells, raise ground, Barlow labels 12px uppercase muted,
- * Barlow values 28px navy or ink, muted micro sub-line. */
+ * T8: four cells, raise ground, one label line + one value line per
+ * cell. The sub-line markup is gone - the confidence word moved to
+ * the Pack and price row's hints; invoice lines / first bought /
+ * sites moved to a new "Bought" row in PanelItemZone (same
+ * PanelItemZone row primitive). The strip is now pinned by its
+ * wrapper (.kf-ipanel__pin), and its contents shrank so the pin
+ * costs about 48 px of real estate at the normal 660 px drawer
+ * width. Height math: var(--sp-sp-2) (8) top + 12 label + 20 value
+ * + var(--sp-sp-2) (8) bottom = 48. */
 .kf-ipanel__strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -380,7 +374,7 @@
   border-bottom: 1px solid var(--sp-line);
 }
 .kf-ipanel__strip-cell {
-  padding: 14px var(--sp-sp-3) 14px var(--sp-sp-3);
+  padding: var(--sp-sp-2) var(--sp-sp-3);
   border-right: 1px solid var(--sp-line-soft);
   display: flex;
   flex-direction: column;
@@ -393,13 +387,14 @@
   font-family: var(--sp-disp);
   font-weight: 700;
   font-size: var(--sp-t-micro);
-  letter-spacing: 1.5px;
+  line-height: 1;
+  letter-spacing: 1.2px;
   text-transform: uppercase;
   color: var(--sp-body);
 }
 .kf-ipanel__strip-value {
   font-family: var(--sp-disp);
-  font-size: var(--sp-t-num);
+  font-size: var(--sp-t-h3);
   font-weight: 800;
   line-height: 1;
   color: var(--sp-ink);
@@ -414,21 +409,10 @@
 }
 .kf-ipanel__strip-value--accent { color: var(--sp-navy); }
 .kf-ipanel__strip-value-unit {
-  font-size: var(--sp-t-body);
+  font-size: var(--sp-t-label);
   font-weight: 700;
   color: var(--sp-body);
 }
-.kf-ipanel__strip-sub {
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-micro);
-  color: var(--sp-body);
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-sp-1);
-  align-items: baseline;
-  min-width: 0;
-}
-.kf-ipanel__strip-sub--accent { color: var(--sp-navy); font-weight: 700; }
 
 /* --- Attention sheet (§3c) ---
  * Warn-tinted rectangle: icon + head + body + action. Not a card grid;
@@ -1066,9 +1050,18 @@
  * Category stack full width and the link sits beneath. Stacked rows
  * keep the same vertical padding as item 2. */
 @media (max-width: 520px) {
-  .kf-ipanel__strip { grid-template-columns: repeat(2, 1fr); }
-  .kf-ipanel__strip-cell:nth-child(2) { border-right: none; }
-  .kf-ipanel__strip-cell:nth-child(-n+2) { border-bottom: 1px solid var(--sp-line-soft); }
+  /* T8: pre-T8 this was a 2x2 strip that pinned at about 96 px on
+   * phone, on top of the head - worse than the bug being fixed.
+   * With the sub-lines gone, four cells of label + value fit on
+   * one row at 390 px in Barlow Condensed. Shrink padding and the
+   * value font so the pinned strip stays near 64 px. 4 + 12 + 18
+   * + 4 = 38 px of content height. */
+  .kf-ipanel__strip-cell {
+    padding: var(--sp-sp-1) var(--sp-sp-2);
+  }
+  .kf-ipanel__strip-cell:first-child { padding-left: var(--sp-sp-3); }
+  .kf-ipanel__strip-cell:last-child { padding-right: var(--sp-sp-3); }
+  .kf-ipanel__strip-value { font-size: var(--sp-t-item); }
   .kf-ipanel__row,
   .kf-ipanel__row--split {
     grid-template-columns: 1fr;

@@ -3,13 +3,17 @@
 // N8 §3a: head. Red Barlow eyebrow + navy Barlow name (uppercase) +
 // status line ("Linked to {name}" as text + attention pill). Close
 // button is a 44x44 outlined square inside the head (to the right of
-// the name block). Sticky-opaque so the summary strip is never
-// clipped at scroll 0.
+// the name block).
+//
+// T8: the sticky wrapper moved up to DetailPanel (.kf-ipanel__pin
+// wraps head + strip so the four grey summary cells stay on screen).
+// Head is no longer sticky itself; its opaque background +
+// border-bottom stay. The T7 facts sub-line was removed as part of
+// the same change - the pinned strip replaces it.
 
 import { forwardRef } from "react";
 import { X } from "lucide-react";
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
-import { itemFacts } from "./itemFacts";
 
 export const PanelHead = forwardRef<HTMLButtonElement, {
   labelId: string;
@@ -110,34 +114,6 @@ export const PanelHead = forwardRef<HTMLButtonElement, {
             ) : null}
           </div>
         ) : null}
-        {/* T7: sticky-head sub-line carrying the four summary facts
-            PanelStrip prints at scroll 0. The head is position:
-            sticky, so this line is always on screen; PanelStrip
-            slides under it as the user scrolls down. Item mode only
-            - kind="ingredient" gains nothing. Known trade: at
-            scroll-top the four facts appear twice (here as running
-            text, below in the labelled strip). Values come from the
-            same itemFacts helper PanelStrip uses. */}
-        {kind === "item" && item ? (() => {
-          const facts = itemFacts(item, ingredient);
-          const unitPrice =
-            facts.primaryValue != null && facts.primaryUnit != null
-              ? `${facts.primaryValue} / ${facts.primaryUnit}`
-              : "-";
-          const annualSpend = `${facts.annualSpend} a year`;
-          const lastBought = facts.lastBought ? `last bought ${facts.lastBought}` : "last bought -";
-          return (
-            <div className="kf-ipanel__head-facts" aria-label="Item at a glance">
-              <span>{unitPrice}</span>
-              <span className="kf-ipanel__head-facts-sep" aria-hidden>·</span>
-              <span>{facts.pack}</span>
-              <span className="kf-ipanel__head-facts-sep" aria-hidden>·</span>
-              <span>{annualSpend}</span>
-              <span className="kf-ipanel__head-facts-sep" aria-hidden>·</span>
-              <span>{lastBought}</span>
-            </div>
-          );
-        })() : null}
       </div>
       <button
         ref={closeRef}

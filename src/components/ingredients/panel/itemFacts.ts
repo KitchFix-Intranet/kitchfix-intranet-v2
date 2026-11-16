@@ -1,10 +1,10 @@
-// T7: one place that derives the four summary values the item-panel
-// head and the strip both show. PanelStrip renders them as labelled
-// big numbers at scroll 0; PanelHead's sticky sub-line shows the
-// same four as running text so they survive a scroll past the strip.
-// Neither component owns the other - both import from here. Any
-// change to how "unit price" is picked must happen in this file
-// and nowhere else.
+// T7 + T8: one place that derives the item-panel's shared values.
+// PanelStrip renders the four summary values as labelled big
+// numbers; PanelItemZone's Pack and price row reads the confidence
+// word from `itemConfidenceWord` so there is one source for "how
+// much to trust the per-unit number". Any change to how "unit
+// price" is picked or how that confidence maps to a word must
+// happen in this file and nowhere else.
 
 import { fmtDate, fmtPackNumbersInText, fmtUsd, fmtUsdLong } from "@/lib/fmt";
 import { canonicalFromBaseUnit, uomLabel } from "@/lib/ingredients/pack";
@@ -34,6 +34,21 @@ export type ItemFacts = {
   // prints the date directly; PanelHead wraps with "last bought ".
   lastBought: string | null;
 };
+
+// T8 §3a: the short phrase describing how the per-unit price was
+// derived. Used to live inside PanelStrip's Unit price sub-line;
+// moves to PanelItemZone's Pack and price row with the sub-lines'
+// deletion. Keyed off item.perBaseConfidence + presence of perBase
+// / perBaseUom, same ternary chain PanelStrip once had.
+export function itemConfidenceWord(item: ReviewGroupItem): string {
+  if (item.perBase == null || !item.perBaseUom || !item.perBaseConfidence) {
+    return "needs pack";
+  }
+  if (item.perBaseConfidence === "override") return "override";
+  if (item.perBaseConfidence === "derived") return "from spend";
+  if (item.perBaseConfidence === "high") return "per-unit (high)";
+  return "est. (low)";
+}
 
 export function itemFacts(
   item: ReviewGroupItem,
