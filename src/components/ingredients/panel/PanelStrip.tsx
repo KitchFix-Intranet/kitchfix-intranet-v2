@@ -10,9 +10,9 @@
 // recipe price appends after when present. perBaseNote belongs on the
 // Pack and price row at rest, not here.
 
-import { fmtCount, fmtDate, fmtPackNumbersInText, fmtUsd, fmtUsdLong } from "@/lib/fmt";
-import { canonicalFromBaseUnit, uomLabel } from "@/lib/ingredients/pack";
+import { fmtCount, fmtDate } from "@/lib/fmt";
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
+import { itemFacts } from "./itemFacts";
 
 export function PanelStrip({
   item,
@@ -21,7 +21,6 @@ export function PanelStrip({
   item: ReviewGroupItem;
   ingredient: ReviewCardIngredient | null;
 }) {
-  const pack = fmtPackNumbersInText(item.packNormalized ?? item.pack ?? "-");
   const isCheck = item.packState === "check";
   const confidenceWord =
     item.perBase == null || !item.perBaseUom || !item.perBaseConfidence
@@ -33,35 +32,21 @@ export function PanelStrip({
           : item.perBaseConfidence === "high"
             ? "per-unit (high)"
             : "est. (low)";
-  const perBaseUomLower = item.perBaseUom
-    ? item.perBaseUom === "LB" ? "lb"
-      : item.perBaseUom === "FLOZ" ? "fl oz"
-      : item.perBaseUom === "EA" ? "each"
-      : item.perBaseUom.toLowerCase()
-    : null;
-  // M2 §2.7 + §4B: the strip's unit price shows the price in the
-  // ingredient's base_unit when the item reaches it, with the stored
-  // price as the sub-line; today's stored price alone when it does
-  // not. perBaseInIngUnit is computed server-side via priceInUnit.
-  const ingUnitLabel = ingredient ? uomLabel(canonicalFromBaseUnit(ingredient.base_unit) ?? "") : "";
-  const primaryPer = item.perBaseInIngUnit ?? null;
-  const showIngUnitAsPrimary =
-    primaryPer != null && Number.isFinite(primaryPer) && primaryPer > 0 && ingUnitLabel;
+  // T7: the four summary values come from one helper so the sticky
+  // head sub-line and this strip stay in agreement. The JSX below
+  // keeps every span and every class from pre-T7 unchanged; only
+  // the inputs are now derived through itemFacts().
+  const facts = itemFacts(item, ingredient);
 
   return (
     <div className="kf-ipanel__strip" aria-label="Item summary">
       <div className="kf-ipanel__strip-cell">
         <span className="kf-ipanel__strip-label">Unit price</span>
         <span className="kf-ipanel__strip-value kf-ipanel__strip-value--accent">
-          {showIngUnitAsPrimary ? (
+          {facts.primaryValue != null && facts.primaryUnit != null ? (
             <>
-              {fmtUsd(primaryPer)}{" "}
-              <span className="kf-ipanel__strip-value-unit">/ {ingUnitLabel}</span>
-            </>
-          ) : item.perBase != null && perBaseUomLower ? (
-            <>
-              {fmtUsd(item.perBase)}{" "}
-              <span className="kf-ipanel__strip-value-unit">/ {perBaseUomLower}</span>
+              {facts.primaryValue}{" "}
+              <span className="kf-ipanel__strip-value-unit">/ {facts.primaryUnit}</span>
             </>
           ) : (
             <span className="kf-ipanel__strip-value-unit">- / unit</span>
@@ -69,10 +54,10 @@ export function PanelStrip({
         </span>
         <span className="kf-ipanel__strip-sub kf-ipanel__strip-sub--accent">
           <span>{confidenceWord}</span>
-          {showIngUnitAsPrimary && item.perBase != null && perBaseUomLower ? (
+          {facts.storedValue != null && facts.storedUnit != null ? (
             <>
               <span>·</span>
-              <span>{fmtUsd(item.perBase)} / {perBaseUomLower}</span>
+              <span>{facts.storedValue} / {facts.storedUnit}</span>
             </>
           ) : null}
         </span>
@@ -80,7 +65,7 @@ export function PanelStrip({
 
       <div className="kf-ipanel__strip-cell">
         <span className="kf-ipanel__strip-label">Pack</span>
-        <span className="kf-ipanel__strip-value">{pack}</span>
+        <span className="kf-ipanel__strip-value">{facts.pack}</span>
         <span className="kf-ipanel__strip-sub">
           <span>billed by the {item.billedUnit ?? "-"}</span>
           {isCheck ? (
@@ -91,7 +76,7 @@ export function PanelStrip({
 
       <div className="kf-ipanel__strip-cell">
         <span className="kf-ipanel__strip-label">Annual spend</span>
-        <span className="kf-ipanel__strip-value">${fmtUsdLong(item.usd12m).replace(/^\$/, "")}</span>
+        <span className="kf-ipanel__strip-value">{facts.annualSpend}</span>
         <span className="kf-ipanel__strip-sub">
           <span>{fmtCount(item.lines12m)} invoice lines</span>
         </span>
@@ -100,7 +85,7 @@ export function PanelStrip({
       <div className="kf-ipanel__strip-cell">
         <span className="kf-ipanel__strip-label">Last bought</span>
         <span className="kf-ipanel__strip-value">
-          {item.lastSeen ? fmtDate(item.lastSeen) : <span className="kf-ipanel__strip-value-unit">-</span>}
+          {facts.lastBought ? facts.lastBought : <span className="kf-ipanel__strip-value-unit">-</span>}
         </span>
         {/* N13 R4: first-bought micro sits below the sites pills,
             quiet unless the item has ever been bought. Null on

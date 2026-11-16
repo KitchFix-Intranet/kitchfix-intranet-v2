@@ -9,6 +9,7 @@
 import { forwardRef } from "react";
 import { X } from "lucide-react";
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
+import { itemFacts } from "./itemFacts";
 
 export const PanelHead = forwardRef<HTMLButtonElement, {
   labelId: string;
@@ -109,6 +110,34 @@ export const PanelHead = forwardRef<HTMLButtonElement, {
             ) : null}
           </div>
         ) : null}
+        {/* T7: sticky-head sub-line carrying the four summary facts
+            PanelStrip prints at scroll 0. The head is position:
+            sticky, so this line is always on screen; PanelStrip
+            slides under it as the user scrolls down. Item mode only
+            - kind="ingredient" gains nothing. Known trade: at
+            scroll-top the four facts appear twice (here as running
+            text, below in the labelled strip). Values come from the
+            same itemFacts helper PanelStrip uses. */}
+        {kind === "item" && item ? (() => {
+          const facts = itemFacts(item, ingredient);
+          const unitPrice =
+            facts.primaryValue != null && facts.primaryUnit != null
+              ? `${facts.primaryValue} / ${facts.primaryUnit}`
+              : "-";
+          const annualSpend = `${facts.annualSpend} a year`;
+          const lastBought = facts.lastBought ? `last bought ${facts.lastBought}` : "last bought -";
+          return (
+            <div className="kf-ipanel__head-facts" aria-label="Item at a glance">
+              <span>{unitPrice}</span>
+              <span className="kf-ipanel__head-facts-sep" aria-hidden>·</span>
+              <span>{facts.pack}</span>
+              <span className="kf-ipanel__head-facts-sep" aria-hidden>·</span>
+              <span>{annualSpend}</span>
+              <span className="kf-ipanel__head-facts-sep" aria-hidden>·</span>
+              <span>{lastBought}</span>
+            </div>
+          );
+        })() : null}
       </div>
       <button
         ref={closeRef}
