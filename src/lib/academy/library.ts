@@ -9,6 +9,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { serviceClient } from "@/lib/supabase/service";
 import { resolveAcademyIdentity } from "./identity";
+import { resolveReaderLevel, canReadDocument } from "./access";
 
 export type LibraryResult =
   | { ok: false; status: 500; error: string; scope: string }
@@ -91,7 +92,9 @@ export async function loadLibrary(email: string, supaIn?: SupabaseClient): Promi
   const [docsQ, obQ] = await Promise.all([
     supa
       .from("documents")
-      .select("id, title, card_line, version, shelf, doc_class, updated_at, effective_date")
+      .select(
+        "id, title, card_line, version, shelf, doc_class, updated_at, effective_date, access_level",
+      )
       .eq("status", "Live")
       .not("shelf", "is", null)
       .order("shelf", { ascending: true })
@@ -118,10 +121,16 @@ export async function loadLibrary(email: string, supaIn?: SupabaseClient): Promi
     doc_class: string | null;
     updated_at: string | null;
     effective_date: string | null;
+    access_level: string | null;
   };
   type ObRow = { doc_id: string; applies_to: unknown };
 
-  const docs = (docsQ.data as DocRow[]) || [];
+  // Access gate: filter server-side. A restricted row never reaches
+  // the client payload for a viewer whose level is reads_unrestricted.
+  // See src/lib/academy/access.ts for the rule.
+  const level = resolveReaderLevel(email, identity);
+  const allDocs = (docsQ.data as DocRow[]) || [];
+  const docs = allDocs.filter((d) => canReadDocument(level, d.access_level));
   const obligations = (obQ.data as ObRow[]) || [];
 
   const viewerIsSalaried = !!(identity && identity.isSalaried);
@@ -260,7 +269,9 @@ export async function loadLibraryIndex(
   const [docsQ, obQ] = await Promise.all([
     supa
       .from("documents")
-      .select("id, title, card_line, summary, keywords, shelf, doc_class, version, updated_at")
+      .select(
+        "id, title, card_line, summary, keywords, shelf, doc_class, version, updated_at, access_level",
+      )
       .eq("status", "Live")
       .not("shelf", "is", null)
       .order("shelf", { ascending: true })
@@ -288,10 +299,15 @@ export async function loadLibraryIndex(
     doc_class: string | null;
     version: string | number | null;
     updated_at: string | null;
+    access_level: string | null;
   };
   type ObRow = { doc_id: string; applies_to: unknown };
 
-  const docs = (docsQ.data as DocRow[]) || [];
+  // Access gate: filter server-side. A restricted row never reaches
+  // the Find index payload for a viewer whose level is reads_unrestricted.
+  const level = resolveReaderLevel(email, identity);
+  const allDocs = (docsQ.data as DocRow[]) || [];
+  const docs = allDocs.filter((d) => canReadDocument(level, d.access_level));
   const obligations = (obQ.data as ObRow[]) || [];
 
   const viewerIsSalaried = !!(identity && identity.isSalaried);

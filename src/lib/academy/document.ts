@@ -19,9 +19,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { serviceClient } from "@/lib/supabase/service";
 import { resolveAcademyIdentity } from "./identity";
+import { resolveReaderLevel, canReadDocument } from "./access";
 
 export type DocumentResult =
   | { ok: false; status: 404 | 500; error: string; detail?: string }
+  | { ok: false; status: 403; error: "restricted"; docId: string }
   | ({ ok: true } & DocumentBody);
 
 export interface DocumentBody {
@@ -93,6 +95,57 @@ export async function loadDocument(
 ): Promise<DocumentResult> {
   const supa = supaIn || serviceClient();
 
+  // Stage 1: minimal lookup. Fetch only the fields needed to decide
+  // "does this exist, is it Live, and may this viewer read it" - no
+  // title, no card_line, no summary, no content. A restricted row
+  // never has its display fields read for a viewer who cannot read
+  // it.
+  const docGateQ = await supa
+    .from("documents")
+    .select("id, status, access_level")
+    .eq("id", docId)
+    .maybeSingle();
+  if (docGateQ.error) {
+    console.error("[academy/loadDocument] document lookup:", docGateQ.error.message);
+    return { ok: false, status: 500, error: "server_error" };
+  }
+  if (!docGateQ.data) {
+    return { ok: false, status: 404, error: "not_found" };
+  }
+  type DocGateRow = { id: string; status: string; access_level: string | null };
+  const gateRow = docGateQ.data as DocGateRow;
+
+  // Live-only. GOTCHA 17 - the status value is title-case; match it
+  // exactly. Non-Live docs 404 (indistinguishable from "doesn't
+  // exist" so the catalog surface cannot be used to probe which
+  // docs are in build).
+  if (gateRow.status !== "Live") {
+    return { ok: false, status: 404, error: "not_found" };
+  }
+
+  // Identity (viewer). Legitimately null for anyone off the roster;
+  // the viewer still gets to read the document, they just do not
+  // get a "trains you" marker or signed-attestation line.
+  let identity: Awaited<ReturnType<typeof resolveAcademyIdentity>> = null;
+  try {
+    identity = await resolveAcademyIdentity(email, { supa });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[academy/loadDocument] identity resolve threw:", msg);
+    identity = null;
+  }
+
+  // Access gate: refuse a restricted document to a reads_unrestricted
+  // viewer before any body fetch. The caller renders the kept-for
+  // state from the docId alone - title, card_line, summary, owner,
+  // approver, dates, content and sibling languages are never fetched
+  // and never returned.
+  const level = resolveReaderLevel(email, identity);
+  if (!canReadDocument(level, gateRow.access_level)) {
+    return { ok: false, status: 403, error: "restricted", docId: gateRow.id };
+  }
+
+  // Stage 2: now safe to pull the display fields.
   const docQ = await supa
     .from("documents")
     .select(
@@ -101,10 +154,11 @@ export async function loadDocument(
     .eq("id", docId)
     .maybeSingle();
   if (docQ.error) {
-    console.error("[academy/loadDocument] document lookup:", docQ.error.message);
+    console.error("[academy/loadDocument] document detail lookup:", docQ.error.message);
     return { ok: false, status: 500, error: "server_error" };
   }
   if (!docQ.data) {
+    // Row vanished between stage 1 and stage 2 - treat as not found.
     return { ok: false, status: 404, error: "not_found" };
   }
   type DocRow = {
@@ -124,26 +178,6 @@ export async function loadDocument(
     summary: string | null;
   };
   const docRow = docQ.data as DocRow;
-
-  // Live-only. GOTCHA 17 - the status value is title-case; match it
-  // exactly. Non-Live docs 404 (indistinguishable from "doesn't
-  // exist" so the catalog surface cannot be used to probe which
-  // docs are in build).
-  if (docRow.status !== "Live") {
-    return { ok: false, status: 404, error: "not_found" };
-  }
-
-  // Identity (viewer). Legitimately null for anyone off the roster;
-  // the viewer still gets to read the document, they just do not
-  // get a "trains you" marker or signed-attestation line.
-  let identity: Awaited<ReturnType<typeof resolveAcademyIdentity>> = null;
-  try {
-    identity = await resolveAcademyIdentity(email, { supa });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[academy/loadDocument] identity resolve threw:", msg);
-    identity = null;
-  }
 
   // Content, obligations-for-this-doc, viewer's attestations-for-this-doc,
   // sibling docs for language detection. All parallel; all small.
@@ -171,9 +205,11 @@ export async function loadDocument(
     // Sibling doc_ids: POL-006 vs POL-006-ES. We look at any doc whose
     // id matches `${docId}-ES` or `${docId}` prefix if this is itself
     // the -ES variant. Narrow probe - not an index into every doc.
+    // Also carries access_level so a restricted sibling is filtered
+    // out before the languages hint is built.
     supa
       .from("documents")
-      .select("id")
+      .select("id, access_level")
       .in("id", [docId, `${docId}-ES`, docId.replace(/-ES$/, "")])
       .eq("status", "Live"),
   ]);
@@ -203,12 +239,16 @@ export async function loadDocument(
     signed_at: string | null;
     certificate_serial: string | null;
   };
-  type LangRow = { id: string };
+  type LangRow = { id: string; access_level: string | null };
 
   const contentRow = (contentQ.data as ContentRow | null) || null;
   const obs = (obQ.data as ObRow[]) || [];
   const att = (attQ.data as AttRow | null) || null;
-  const langRows = (langDocQ.data as LangRow[]) || [];
+  const langRowsAll = (langDocQ.data as LangRow[]) || [];
+  // A sibling the viewer may not read must not surface as a language
+  // hint, or the page would leak the existence of a restricted ES
+  // (or EN) variant.
+  const langRows = langRowsAll.filter((r) => canReadDocument(level, r.access_level));
 
   // Does this doc train the viewer? Scan obligations whose applies_to
   // matches the viewer's class. Mirror of library.ts's trains-you.

@@ -41,6 +41,76 @@ import { resolveAcademyIdentity, type AcademyIdentity } from "./identity";
 
 export type ViewerRole = "owner" | "lead" | "learner" | "denied";
 
+// ---------------------------------------------------------------------
+// Document reader levels - the "may this viewer read this document"
+// rule, in one place.
+//
+// Levels (coarse to fine, so a third one below can slot in later
+// without touching callers):
+//
+//   reads_all           - every live document, restricted or not.
+//                         Owners, region leads, library_admin /
+//                         academy_admin grant holders.
+//
+//   reads_unrestricted  - only live documents whose access_level is
+//                         exactly 'unrestricted'. Every other signed-
+//                         in person the app gate lets in.
+//
+// Future: a third, lower level will sit beneath reads_unrestricted
+// for the phone-link audience once that train lands. Callers do not
+// need to change; only the enum widens and resolveReaderLevel grows
+// one branch.
+// ---------------------------------------------------------------------
+
+export type ReaderLevel = "reads_all" | "reads_unrestricted";
+
+/**
+ * Decide the viewer's reader level from the identity the Academy
+ * resolver already returns. The rule reuses the gate's identity
+ * resolution rather than running a parallel one. See
+ * src/lib/academy/identity.ts for the resolver.
+ *
+ *   reads_all when:
+ *     - email is in OWNER_EMAILS, OR
+ *     - identity.scope.kind === 'region' (a row in
+ *       academy_region_leads keyed on their email), OR
+ *     - identity.grants includes 'library_admin' or 'academy_admin'.
+ *
+ *   reads_unrestricted otherwise.
+ *
+ * A null identity for a non-owner still returns reads_unrestricted;
+ * the upstream gate would have refused such a viewer at
+ * requireAppAccess, so in practice this branch is a defensive
+ * default rather than a reachable path.
+ */
+export function resolveReaderLevel(
+  email: string,
+  identity: AcademyIdentity | null,
+): ReaderLevel {
+  const e = String(email || "").trim().toLowerCase();
+  if (e && ownerEmails().has(e)) return "reads_all";
+  if (!identity) return "reads_unrestricted";
+  if (identity.scope?.kind === "region") return "reads_all";
+  const grants = identity.grants ?? [];
+  if (grants.includes("library_admin") || grants.includes("academy_admin")) {
+    return "reads_all";
+  }
+  return "reads_unrestricted";
+}
+
+/**
+ * The one rule, in one place. Fails closed - a null or unknown
+ * access_level counts as restricted. Callers pass the viewer's
+ * level and the document's stored access_level string.
+ */
+export function canReadDocument(
+  level: ReaderLevel,
+  access_level: string | null | undefined,
+): boolean {
+  if (level === "reads_all") return true;
+  return access_level === "unrestricted";
+}
+
 export interface ViewerAccess {
   email: string;
   role: ViewerRole;

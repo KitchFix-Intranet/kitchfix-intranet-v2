@@ -130,3 +130,45 @@ fields: `last_seen_at`, `started_at`, `rendered_at`, `issued_at`,
 `attempted_at`, and `module.questions[*].options` order (shuffled
 server-side per request). Any other difference between v1 and v2 on
 the same email is a port error.
+
+## Library: the may-read rule
+
+Every Library read path answers "may this viewer read this document?"
+through one function in `src/lib/academy/access.ts`:
+
+    resolveReaderLevel(email, identity) -> "reads_all" | "reads_unrestricted"
+    canReadDocument(level, access_level) -> boolean
+
+Reader levels (coarse to fine, so a third one can slot in below
+without touching callers):
+
+- `reads_all`          - owner, region lead (row in
+                         `academy_region_leads` for their email), or
+                         holder of the `library_admin` or
+                         `academy_admin` grant. "Management and above"
+                         for now, per Kevin's ruling 2026-11-17.
+- `reads_unrestricted` - every other signed-in person the app gate
+                         lets in. Fails closed: a null or unknown
+                         `access_level` is treated as restricted.
+
+`loadLibrary`, `loadLibraryIndex` and `loadDocument` all enforce it
+server-side; a restricted row never reaches the client payload for a
+viewer whose level is `reads_unrestricted`. `loadDocument` runs a
+stage-1 gate fetch (`id, status, access_level` only) before fetching
+title / card_line / summary / content / siblings / attestations, so a
+restricted doc's row and content are never read for a viewer who may
+not read it. For such a viewer, `/library/<id>` serves the kept-for
+state built from the shared `.kf-empty` primitive - the number only,
+no title, card_line, summary, owner, approver, dates, contents list
+or body.
+
+A future `reads_operator` level will sit below `reads_unrestricted`
+for the `audience='operator'` documents once the phone link ships;
+callers do not change, only the enum widens and `resolveReaderLevel`
+grows one branch.
+
+The Academy readers (`room`, `records`, `module`, `sign`, the
+certificate route) do not yet filter by `access_level`; a restricted
+doc can surface to a non-owner through the requirement-assignment
+channel if one is ever assigned. An access-level gate at
+cycle-publish time (or per-surface) is a follow-up train.
