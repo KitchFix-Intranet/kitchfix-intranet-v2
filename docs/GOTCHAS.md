@@ -244,6 +244,18 @@ Rules:
    and prove that neither pass changes any curation column on an
    existing row. A clean build / clean grep is not enough.
 
+## 19. A live region must be in the document before its message arrives
+
+An `aria-live` region (`role="status"` / `role="alert"`) must exist in
+the DOM at the first paint for screen readers to notice content
+inserted into it. A Toaster that `return null` when no toast is on
+screen adds the region and its first message at the same moment, and
+some screen readers miss the announcement. Render the region (or
+regions) on the server too, empty, and insert the message into an
+already-mounted container. For tone-switched regions, use two
+persistent siblings - one polite, one assertive - and route each
+toast to the one that matches.
+
 Branch-specific items we have already lived through on
 `step-1-shell-and-ingredients`:
 

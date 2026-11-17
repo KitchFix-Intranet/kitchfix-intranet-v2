@@ -1,23 +1,27 @@
-// The plain Next.js 404. Rendered when:
-//   - a signed-in non-owner hits any protected route (via notFound() in the
-//     shared gate helper), or
+// Plain Next.js 404. Rendered when:
+//   - a signed-in non-owner hits any protected route (via notFound() in
+//     the shared gate helper), or
 //   - any legitimate 404 happens.
 //
-// No styling. No KitchFix tokens. No favicon. The dark-phase page must not
-// hint at the app's existence or match any branded chrome. This is the
-// carve-out from the "no raw hex outside tokens.css" rule because it is
-// intentionally not a KitchFix surface.
+// No logo, no tool names, no link into any tool, no class from
+// components.css. The gate answers "not found" to anyone outside the
+// owner list on purpose, so they learn nothing about the tools. Do not
+// style this with KitchFix tokens. The "Go back" island is a tiny
+// client component; the page itself is a server component.
+
+import { NotFoundActions } from "@/components/shell/NotFoundActions";
 
 export const metadata = {
-  title: "404 Not Found",
+  title: "Page not available",
   robots: { index: false, follow: false },
 };
 
 export default function NotFound() {
   return (
     <main>
-      <h1>404</h1>
-      <p>This page could not be found.</p>
+      <h1>This page is not available</h1>
+      <p>It may not exist, or your account may not have access to it.</p>
+      <NotFoundActions />
     </main>
   );
 }

@@ -12,14 +12,15 @@ export default function ShellError({
   useEffect(() => {
     if (typeof console !== "undefined") console.error(error);
   }, [error]);
-  const message = error.message || "Something went wrong.";
   return (
     <div className="kf-error" role="alert">
-      <h3 className="kf-error__title">We couldn&rsquo;t load this page</h3>
-      <p className="kf-error__body">{message}</p>
+      <h3 className="kf-error__title">This page did not load</h3>
+      <p className="kf-error__body">
+        Your data is safe. This is usually a dropped connection. Check it, then try again.
+      </p>
       <div>
         <button type="button" className="kf-btn kf-btn--line kf-btn--sm" onClick={() => reset()}>
-          Retry
+          Try again
         </button>
       </div>
     </div>

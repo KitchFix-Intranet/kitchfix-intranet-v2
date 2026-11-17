@@ -16,7 +16,7 @@ import {
 import { IdentBand } from "@/components/ui/IdentBand";
 import { serviceClient } from "@/lib/supabase/service";
 import { currentPeriod } from "@/lib/fiscalPeriod";
-import { fmtDate } from "@/lib/fmt";
+import { fmtDate, nameFromEmail } from "@/lib/fmt";
 import "./home.css";
 
 type Door = {
@@ -92,16 +92,6 @@ const TOTAL_COUNT = DOORS.length;
 const MORE_TOOLS = DOORS.filter((d) =>
   ["Service Calendar", "KPI Dashboard", "Academy"].includes(d.name)
 );
-
-function nameFromEmail(email: string): string {
-  const local = email.split("@")[0] ?? "";
-  if (!local) return "there";
-  return local
-    .split(".")
-    .filter((p) => p.length > 0)
-    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
-    .join(" ");
-}
 
 export async function Home({ email }: { email: string }) {
   const client = serviceClient();

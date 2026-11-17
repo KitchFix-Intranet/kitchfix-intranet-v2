@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import {
   Home as HomeIcon,
@@ -33,6 +33,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { AccountMenu } from "./AccountMenu";
+import { TabTitle } from "./TabTitle";
 import { titleFor } from "./routeTitles";
 import "./shell.css";
 
@@ -165,7 +166,6 @@ function isActive(pathname: string, href: string): boolean {
 type Props = {
   children: ReactNode;
   topbar: ReactNode;
-  email: string;
   name: string;
   // Shell patch 3 (2026-11-12): title + crumb are no longer props.
   // Shell computes both from usePathname() + titleFor(), so client
@@ -194,7 +194,6 @@ type Props = {
 export function Shell({
   children,
   topbar,
-  email,
   name,
   dateLong,
   periodTag,
@@ -239,6 +238,29 @@ export function Shell({
             : SHELL_NAV;
   // R-AC5: phone tabbar stays shell-level even inside Academy / Library.
   const phoneTabs = inStockpot ? PHONE_STOCKPOT_TABS : PHONE_SHELL_TABS;
+
+  // Skip-link landing. The <main> gets tabIndex -1 so this focus() moves
+  // keyboard focus to the page without putting #main in the URL. .kf-canvas
+  // has outline:none so no ring draws around the whole canvas when it lands.
+  const canvasRef = useRef<HTMLElement>(null);
+  const handleSkip = useCallback((e: React.MouseEvent<HTMLAnchorElement>) => {
+    e.preventDefault();
+    canvasRef.current?.focus();
+  }, []);
+
+  // Rail nav aria-label. "All tools" at the top level; the section name at
+  // level 2. The outer <aside> keeps "Main navigation" below.
+  const railNavLabel = inStockpot
+    ? "Stockpot"
+    : inPeople
+      ? "People"
+      : inAdmin
+        ? "Admin"
+        : inAcademy
+          ? "Academy"
+          : inLibrary
+            ? "Library"
+            : "All tools";
 
   const [collapsed, setCollapsed] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -295,6 +317,14 @@ export function Shell({
 
   return (
     <div className={`kf-shell${collapsed ? " kf-shell--slim" : ""}`}>
+      <TabTitle />
+      <a
+        href="#main"
+        className="kf-btn kf-btn--primary kf-btn--sm kf-skiplink"
+        onClick={handleSkip}
+      >
+        Skip to the page
+      </a>
       <aside
         className={`kf-rail${drawerOpen ? " kf-rail--open" : ""}`}
         aria-label="Main navigation"
@@ -349,7 +379,7 @@ export function Shell({
           </>
         ) : null}
 
-        <nav className="kf-rail__nav">
+        <nav className="kf-rail__nav" aria-label={railNavLabel}>
           <ul>
             {nav.map((item, idx) => {
               // Divider slot (People rail). Class lives in shell.css
@@ -401,6 +431,7 @@ export function Shell({
                     href={href}
                     className={`kf-rail__item${active ? " kf-rail__item--active" : ""}`}
                     title={label}
+                    aria-current={active ? "page" : undefined}
                     onClick={() => markNavStart(href)}
                   >
                     <Icon size={20} strokeWidth={1.5} />
@@ -419,7 +450,7 @@ export function Shell({
         </nav>
 
         <div className="kf-rail__foot">
-          <AccountMenu email={email} name={name} slim={collapsed} />
+          <AccountMenu name={name} role={role} slim={collapsed} />
         </div>
       </aside>
 
@@ -454,7 +485,9 @@ export function Shell({
           <div className="kf-topbar__actions">{topbar}</div>
           <div className="kf-topbar__progress" aria-hidden />
         </header>
-        <main className="kf-canvas">{children}</main>
+        <main className="kf-canvas" id="main" tabIndex={-1} ref={canvasRef}>
+          {children}
+        </main>
       </div>
 
       <nav className="kf-tabbar kf-only-phone" aria-label="Section">
@@ -475,6 +508,7 @@ export function Shell({
               key={t.href}
               href={t.href}
               className={`kf-tabbar__item${isActive(pathname, t.href) ? " kf-tabbar__item--active" : ""}`}
+              aria-current={isActive(pathname, t.href) ? "page" : undefined}
               onClick={() => markNavStart(t.href)}
             >
               <t.Icon size={20} strokeWidth={1.5} />

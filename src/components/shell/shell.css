@@ -106,8 +106,8 @@
   padding: 0 var(--sp-sp-4);
   color: var(--sp-on-navy-dim);
   font-family: var(--sp-ui);
-  font-weight: 500;
-  font-size: 13px;
+  font-weight: var(--sp-w-regular);
+  font-size: var(--sp-t-label);
   text-decoration: none;
 }
 .kf-rail__back:hover {
@@ -136,7 +136,7 @@
   color: var(--sp-on-navy-dim);
   font-family: var(--sp-disp);
   font-weight: 700;
-  font-size: 12px;
+  font-size: var(--sp-t-micro);
   letter-spacing: 2px;
   text-transform: uppercase;
 }
@@ -259,7 +259,7 @@
   min-width: 18px;
   height: 18px;
   padding: 0 5px;
-  font-size: 11px;
+  font-size: var(--sp-t-micro);
 }
 
 /* -------- Account row -------- */
@@ -292,7 +292,7 @@
   border-radius: var(--sp-r-pill);
   font-family: var(--sp-ui);
   font-weight: 700;
-  font-size: 13px;
+  font-size: var(--sp-t-label);
   flex: 0 0 32px;
 }
 .kf-account__who {
@@ -305,16 +305,16 @@
 .kf-account__name {
   font-family: var(--sp-ui);
   font-weight: 700;
-  font-size: 14px;
+  font-size: var(--sp-t-label);
   color: var(--sp-on-navy);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.kf-account__email {
+.kf-account__role {
   color: var(--sp-on-navy-dim);
   font-family: var(--sp-ui);
-  font-size: 12px;
+  font-size: var(--sp-t-micro);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -459,6 +459,7 @@
     z-index: calc(var(--sp-z-rail-phone) - 1);
   }
   .kf-topbar { padding: 0 var(--sp-sp-4); min-height: 56px; }
+  /* phone top-bar h1 sits one step down from desktop --sp-t-title (24) */
   /* The h1 does not shrink in the flex row. Basis is its intrinsic
    * width (flex-shrink: 0) so the crumb absorbs all shrinkage and
    * the title stays whole wherever there is space to hold it. The
@@ -466,7 +467,7 @@
    * wrapper - when the h1 alone cannot fit beside the actions, it
    * ellipses against its own box rather than overlapping anything. */
   .kf-topbar__title h1 {
-    font-size: 20px;
+    font-size: var(--sp-t-h3);
     flex: 0 0 auto;
     max-width: 100%;
     min-width: 0;
@@ -507,7 +508,7 @@
   gap: var(--sp-sp-1);
   text-decoration: none;
   font-family: var(--sp-ui);
-  font-size: 11px;
+  font-size: var(--sp-t-micro);
   font-weight: 700;
   min-height: var(--sp-floor-chef);
   padding: var(--sp-sp-1) var(--sp-sp-1);
@@ -527,3 +528,18 @@
   justify-content: center;
 }
 .kf-rail__close:hover { background: color-mix(in srgb, white 7%, transparent); }
+
+/* Skip-link landing. The <main> that receives focus from .kf-skiplink is
+   tabIndex -1; without this the browser would draw a ring around the whole
+   canvas on programmatic focus. */
+.kf-canvas:focus { outline: none; }
+
+/* Phone-floor overrides for the rail chrome. Placed AFTER the base
+   .kf-rail__close + .kf-rail__back rules deliberately: same specificity,
+   so source order decides. Dropping these inside the earlier
+   @media (max-width: 860px) block would lose to the base width/height
+   and min-height declarations below it. See docs/GOTCHAS.md T8. */
+@media (max-width: 860px) {
+  .kf-rail__close { width: var(--sp-floor-chef); height: var(--sp-floor-chef); }
+  .kf-rail__back { min-height: var(--sp-floor-chef); }
+}
