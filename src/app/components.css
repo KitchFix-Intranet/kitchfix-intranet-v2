@@ -300,6 +300,14 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--sp-navy); }
   animation: kf-toast-in var(--sp-base) var(--sp-ease);
   max-width: min(560px, calc(100vw - var(--sp-sp-5) * 2));
 }
+/* The message is the only part of the toast that wraps. Without
+ * flex-basis 0 + min-width 0 on the message span, every flex child
+ * stays at its content width and the row grows past the toast's
+ * max-width; the browser then shrinks the buttons (default
+ * flex-shrink: 1) to make room, so at 390 wide the close button
+ * measured 28 x 44. Pin the two buttons at their content size and
+ * let the message take the leftover width. */
+.kf-toast > span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .kf-toast--block { background: var(--sp-block); }
 .kf-toast--good { background: var(--sp-navy); }
 .kf-toast--good > svg { flex: 0 0 auto; color: var(--sp-good-on-navy); }
@@ -309,6 +317,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--sp-navy); }
   to   { opacity: 0; transform: translateY(8px); }
 }
 .kf-toast__undo {
+  flex: 0 0 auto;
   min-height: var(--sp-floor-corp);
   padding: 0 14px;
   background: color-mix(in srgb, white 10%, transparent);
@@ -323,6 +332,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--sp-navy); }
 .kf-toast__undo:hover { background: color-mix(in srgb, white 18%, transparent); }
 .kf-toast__undo:disabled { opacity: 0.6; cursor: not-allowed; }
 .kf-toast__x {
+  flex: 0 0 var(--sp-floor-corp);
   width: var(--sp-floor-corp);
   min-height: var(--sp-floor-corp);
   display: inline-flex;
