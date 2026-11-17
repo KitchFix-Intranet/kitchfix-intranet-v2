@@ -9,7 +9,8 @@
     "lint": "next lint",
     "intake": "node --env-file=.env.local --import tsx scripts/intake.ts",
     "match": "node --env-file=.env.local --import tsx scripts/match.ts",
-    "test:sc": "node --import tsx --test 'src/lib/sc/billing/__tests__/*.test.mjs' 'src/lib/sc/billing/*.test.mjs'"
+    "test:sc": "node --import tsx --test 'src/lib/sc/billing/__tests__/*.test.mjs' 'src/lib/sc/billing/*.test.mjs'",
+    "test:invoices": "node --import tsx --test 'src/lib/invoices/__tests__/*.test.mjs'"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
