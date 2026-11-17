@@ -24,7 +24,7 @@ import { fmtDate } from "@/lib/fmt";
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 export function PeriodStage({
-  period, isBilled, siteToday, prevPeriodHref, nextPeriodHref, thisPeriodHref,
+  period, isBilled, siteToday, prevPeriodHref, nextPeriodHref, thisPeriodHref, dayHrefs,
 }: {
   period: PeriodView;
   isBilled: boolean;
@@ -34,6 +34,9 @@ export function PeriodStage({
   prevPeriodHref: string | null;
   nextPeriodHref: string | null;
   thisPeriodHref: string;
+  // Per-day open link, pre-built as a Record so the client child
+  // takes no function prop. iso -> href.
+  dayHrefs: Record<string, string>;
 }) {
   const todayIsInPeriod = siteToday >= period.startIso && siteToday <= period.endIso;
 
@@ -112,6 +115,7 @@ export function PeriodStage({
                 isBilled={isBilled}
                 foldableShort={foldableShort}
                 foldablePhone={foldablePhone}
+                dayHrefs={dayHrefs}
               />
             </li>
           );
