@@ -10,7 +10,7 @@ export type BandFact = {
   label: string;
   value: string;
   note?: string;
-  tone?: "ok" | "running" | "warn" | "muted";
+  tone?: "ok" | "running" | "warn" | "muted" | "good" | "bad";
 };
 
 export type BandCta = { label: string; href: string };
@@ -19,7 +19,12 @@ export type BandStatus = "ok" | "failed" | "running";
 
 type Props = {
   eyebrow: string;
-  title: string;
+  // Headline. A plain string is the historical shape and every caller
+  // today passes one. KPI's headline carries a coloured figure inside
+  // the words, so this now accepts a node too. The failed-state branch
+  // still substitutes pageName (a string) when title is not a string,
+  // so legacy string handling is preserved for that path.
+  title: React.ReactNode;
   // Polish 6: optional. The Overview still passes a kick; the Review
   // queue / Ingredients / Vendor items tabs omit it (Kevin's "no
   // description line at all" rule). An empty or missing kick skips
@@ -44,6 +49,8 @@ function factToneClass(tone?: BandFact["tone"]): string {
     case "running": return "kf-band-fact--running";
     case "warn":    return "kf-band-fact--warn";
     case "muted":   return "kf-band-fact--muted";
+    case "good":    return "kf-band-fact--good";
+    case "bad":     return "kf-band-fact--bad";
     default:        return "";
   }
 }
@@ -67,12 +74,14 @@ export function IdentBand({
   // Polish 6: dropped the slice(0, 2) cap - Ingredients needs four
   // cells (Masters / Linked items / Linked spend / Needs attention).
   // Overview passes exactly 2 facts so its render is unchanged.
-  let resolvedTitle = title;
+  let resolvedTitle: React.ReactNode = title;
   let resolvedFacts: BandFact[] = facts ?? [];
   const extraWatch = status === "running";
   let stalled = false;
 
   if (status === "failed") {
+    // Failed state prefers pageName (a plain string) when provided,
+    // otherwise falls through to the passed title node verbatim.
     resolvedTitle = pageName ?? title;
     resolvedFacts = [
       { label: "Status", value: "Unavailable", note: "Couldn't read intake status", tone: "warn" },
