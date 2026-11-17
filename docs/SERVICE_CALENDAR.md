@@ -189,6 +189,62 @@ No V2 path writes `status='billed'`. v1 uses that word to mean "cannot be revert
 
 `requireAllDaysApproved` stays in `scReviewState.ts` unchanged and unused by the submit path (per the brief: no per-day approval is required).
 
+## The calendar home screen (train 1, 2026-11-16)
+
+`/service` stops being the reserved door. It is the Service Calendar's home for one site: the current fiscal period as four weeks of seven days, each day with its meal number and its state in a word, each week with what it comes to and where it stands, and the thirteen periods of the year underneath. It reads the live database. **It writes nothing.** The day form comes in train 2 and the week check and submit in train 3; this is the read side they will both stand on.
+
+Owner-only (`requireOwnerPage()`). The People lane's `resolveViewer` is reused as-is - no second resolver - and `?as=<worker_id>` previews work through the same path.
+
+**Who sees which sites.** Three paths, in this order (the two regional directors on file carry `is_corp` too, and the order is load-bearing):
+
+1. `is_regional_director` -> every calendar account in `accounts.region = viewer.region`, and only those.
+2. `is_corp` -> every calendar account.
+3. `is_salaried` -> the viewer's own account.
+
+Anything else: the no-access state. A calendar account for this train is active, has at least one active service, and its `level` is not `MLB` (the four big league clubhouses get their own simple calendar later).
+
+**Address.** `/service?site=<slug>&fy=<year>&p=<period>&as=<worker_id>`. The slug is the account key lower-cased with ` - ` as `-` (`TBR - FL` is `tbr-fl`). No `site`: a viewer with one site lands on it; a viewer with several gets a plain list of their sites, by region. A `site` the viewer does not have: `notFound()`. No `fy` or `p`: the fiscal period that holds the site's own today, read from `sc_site_today(p_account_key)`.
+
+**Where the rules live (`src/lib/sc/calendar/**`).** Pure functions in their own files, plus one loader:
+
+- `types.ts` - `DayStateCode`, `WeekStateCode`, `DayView`, `WeekView`, `PeriodView`, `YearPeriodCard`, `CalendarView`. `WeekView` carries `submittedAt` (a timestamptz) but no `submittedBy`: `sc_week_finalize.finalized_by` is a work email and no address leaves the server.
+- `dayState.ts` - `resolveDayState(input)` -> the day's word, tone and icon. Pin 7, first-match-wins, nine codes.
+- `weekState.ts` - `resolveWeekState(input)` -> the week's word, tone and icon. Pin 8. The `push_failed` override reads `isCorpViewer`; non-corp viewers always see "Submitted".
+- `billable.ts` - `shortDollarsFromCents(cents)` rounds to the nearest hundred and reads a dollar sign plus either a three-digit figure or an N-point-N kilo figure. The label "before tax" is added at the call site.
+- `accessList.ts` - `visibleSites(viewer, calendarAccounts)` and `siteInfoFrom(acc, qboMap)`. The three-path order lives here.
+- `slug.ts` - `accountKeyToSlug("TBR - FL") = "tbr-fl"` and `slugToAccountKey(slug, keys)` for the inverse.
+- `periodWindow.ts` - 28-day Monday-first window from `fiscal_periods`, UTC-only arithmetic. A fiscal period that does not come out to 28 days throws.
+- `inScopeAdapter.ts` - a thin supa-shape adapter. `resolveFinalizeReviewSpan(accountKey, weekStart, adapter)` serves its two reads from the already-loaded `sc_qbo_account_map` row and `sc_day_metadata` rows. Any other call shape throws loud so a shape change in the engine helper fails in tests before production.
+- `load.ts` - the one loader. Ten round trips per page load.
+
+**The ten round trips.** Every big read is bounded, and `sc_daily_revenue` is paged.
+
+1. `rpc('sc_site_today', { p_account_key })`.
+2. `fiscal_periods` for the fiscal year (13 rows).
+3. `accounts` row for this site (name, region, level, timezone).
+4. `sc_services` - every row the site has ever had, active or not, so a switched-off service still carries its unit (~20 rows).
+5. `sc_qbo_account_map` - one row or none (not-billed site).
+6. `sc_qbo_service_map` - the service ids this site excludes from export.
+7. `sc_daily_revenue` over the fiscal year, **paged with `.range(start, end)`** ordered by `(service_date, service_id)`. The first page carries `{ count: 'exact' }`; the loader asserts that the number of rows it holds equals the count. A mismatch is thrown, never a silent short calendar. One site's fiscal 2026 can run past the 1000-row cap, so paging is load-bearing.
+8. `sc_day_metadata` over the fiscal year (357 to 366 rows a site, one page - throws if it ever reaches the 1000-row cap).
+9. `sc_week_finalize` over the fiscal year, `status <> 'reverted'`.
+10. `rpc('sc_is_period_closed_fy', ...)` - one call per period, in parallel. There is no raw SQL path and no new database function.
+11. `sc_phase_calendar` for this site (<= 48 rows total in the DB).
+
+`resolveFinalizeReviewSpan` is called for every submitted row, through the in-memory adapter, so biweekly span resolution adds zero network trips.
+
+**What the screen draws.** Approved preview, repo tokens and shared components only. Day cells are NOT buttons in this train: a day's reading (dow, date, number, state, home game) is in real text inside a list item (visually hidden where the visible parts do not already say it), so a screen reader meets every fact in order. The week row's fold toggle on narrow screens IS a button. Period step, "This period" and the 2026/2027 segmented control are 48px links. The band holds one headline built from data; **no button sits in the band this train** (nothing opens yet).
+
+**Games, phases, and labels.**
+
+- Home games on the calendar come from `sc_day_metadata.game_type` **when the value is `DAY` or `NIGHT`** and from Louisville and Buffalo only. The five complexes (`CIN - AZ`, `TXR - AZ`, `TBJ - FL`, `TBR - FL`, `STL - FL`) carry no `game_type` on any day and show no home-game mark here. The four big league clubhouses are not in this train.
+- `game_type = 'OFF'` draws nothing. The day's state word already says what it is.
+- `sc_day_metadata.event_label` is not drawn on a day cell. It is free text written by site users and sometimes spans multiple rows; a hover-only `title` is forbidden (DESIGN §11), and a chip would mislead.
+- The camp phase comes from `sc_phase_calendar` (48 rows, the five complexes). It sits in the week column while the week is open; it is not read from `event_label`.
+- **Not read in this train:** Dunedin and Palm Beach home games (they come from a schedule we do not touch yet). Their days render by state only. A follow-up train brings the schedule in.
+
+**Tests (`calendar-*.test.mjs`, 40 new).** `calendar-dayState` (11), `calendar-weekState` (7), `calendar-accessList` (5 including an RD-flagged-corp case), `calendar-slug` (3), `calendar-billable` (5), `calendar-load-paging` (2), `calendar-adapter-parity` (7).
+
 ## What V2 changed from v1
 
 Four rule changes land in train 2 part two-A, ruled by Kevin on 2026-11-16.
