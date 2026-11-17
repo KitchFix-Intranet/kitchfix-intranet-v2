@@ -20,12 +20,14 @@ import { SiteList } from "@/components/service/SiteList";
 import { NoAccess, NoRosterRow, TwentySeven } from "@/components/service/CalendarEmpty";
 import { IdentBand } from "@/components/ui/IdentBand";
 import { OwnerPreviewBanner } from "@/components/service/OwnerPreviewBanner";
+import { DayDrawer } from "@/components/service/DayDrawer";
+import { loadDayDrawer } from "@/lib/sc/dayActuals/loadDrawer";
 import "./service.css";
 
 export default async function Page({
   searchParams,
 }: {
-  searchParams: Promise<{ site?: string | string[]; fy?: string | string[]; p?: string | string[]; as?: string | string[] }>;
+  searchParams: Promise<{ site?: string | string[]; fy?: string | string[]; p?: string | string[]; as?: string | string[]; day?: string | string[]; moved?: string | string[] }>;
 }) {
   const { email: ownerEmail } = await requireOwnerPage();
   const sp = await searchParams;
@@ -33,6 +35,8 @@ export default async function Page({
   const fyRaw = pickOne(sp.fy);
   const pRaw = pickOne(sp.p);
   const asWorkerId = pickOne(sp.as);
+  const dayRaw = pickOne(sp.day);
+  const movedRaw = pickOne(sp.moved);
 
   const sb = serviceClient();
   const { viewer } = await resolveViewer(sb, ownerEmail, asWorkerId, /* isOwner */ true);
@@ -141,13 +145,38 @@ export default async function Page({
   const previewName = viewer.previewOf?.display_name ?? null;
   const asQ = asWorkerId ? `&as=${encodeURIComponent(asWorkerId)}` : "";
 
+  // Day drawer open-by-URL. The ?day=YYYY-MM-DD param opens the
+  // drawer on top of the calendar; Back closes it (rule 17).
+  let drawer: Awaited<ReturnType<typeof loadDayDrawer>> | null = null;
+  if (dayRaw && /^\d{4}-\d{2}-\d{2}$/.test(dayRaw)) {
+    drawer = await loadDayDrawer(sb, viewerLite, siteInfo, dayRaw);
+  }
+
+  // Close-href for the drawer: the current page URL minus ?day=.
+  const periodQuery = periodNo ? `&fy=${fy}&p=${periodNo}` : "";
+  const closeHref = `/service?site=${siteInfo.slug}${periodQuery}${asQ}`;
+
   return (
-    <CalendarPage
-      view={view}
-      basePath="/service"
-      asQuery={asQ}
-      previewName={previewName}
-    />
+    <>
+      <CalendarPage
+        view={view}
+        basePath="/service"
+        asQuery={asQ}
+        previewName={previewName}
+      />
+      {drawer ? (
+        <DayDrawer
+          view={drawer}
+          basePath="/service"
+          closeHref={closeHref}
+          movedFromDow={(() => {
+            if (!movedRaw) return null;
+            const n = Number(movedRaw);
+            return Number.isInteger(n) && n >= 0 && n <= 6 ? n : null;
+          })()}
+        />
+      ) : null}
+    </>
   );
 }
 

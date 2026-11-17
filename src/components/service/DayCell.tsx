@@ -1,17 +1,13 @@
-// One day on the calendar. Not a button this train, not focusable,
-// not labelled by aria-label alone. The full reading sits in real
-// text (visibly where the cell has room, visually hidden otherwise),
-// inside an <li>, so a screen reader meets it in order.
+// One day on the calendar. Train 2: now a navigation link to
+// /service?...&day=YYYY-MM-DD; the drawer opens on arrival (open-by-
+// URL per rule 17 so Back closes it).
 //
 // The cell has two shapes driven by CSS:
 //   - wide:   a stacked card, number as the big thing, state at the foot
 //   - narrow: a 56px row, day+date | number | state, one line (home
 //             game adds one more line below)
-//
-// The small square that used to sit at the top of the cell is gone -
-// it read as an empty tick box (Chat-Claude note Nov 16). The cell's
-// ground + the state's icon and word carry the state.
 
+import Link from "next/link";
 import { Icon } from "./Icon";
 import { StatusWord } from "./StatusWord";
 import type { DayView } from "@/lib/sc/calendar/types";
@@ -20,10 +16,11 @@ import { fmtDate } from "@/lib/fmt";
 const DOW_LONG = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const DOW_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-export function DayCell({ day }: { day: DayView }) {
+export function DayCell({ day, openHref }: { day: DayView; openHref: string | null }) {
   const classes = ["kf-sc-cell", `is-${toneClass(day.state)}`];
   if (day.isToday) classes.push("is-today");
   if (day.home) classes.push("is-home");
+  if (openHref) classes.push("is-link");
 
   const dateLong = fmtDate(day.iso, "long");
   const reading = buildReading(day, dateLong);
@@ -36,10 +33,9 @@ export function DayCell({ day }: { day: DayView }) {
     ? (numberIsGhost ? "projected" : (day.meals === 1 ? "meal" : "meals"))
     : "";
 
-  return (
-    <li className={classes.join(" ")}>
-      <div className="kf-sc-cell__inner">
-        <span className="kf-sc-sr">{reading}</span>
+  const inner = (
+    <>
+      <span className="kf-sc-sr">{reading}</span>
 
         {/* The dow + date line. "Today" sits inline when the cell is
          * wide enough, else wraps under the date. The ring on the cell
@@ -69,7 +65,16 @@ export function DayCell({ day }: { day: DayView }) {
             <span>{day.home.kind === "night" ? "Night game" : "Day game"}{day.home.time ? ` · ${day.home.time}` : ""}</span>
           </span>
         ) : null}
-      </div>
+    </>
+  );
+
+  return (
+    <li className={classes.join(" ")}>
+      {openHref ? (
+        <Link className="kf-sc-cell__link" href={openHref}>{inner}</Link>
+      ) : (
+        <div className="kf-sc-cell__inner">{inner}</div>
+      )}
     </li>
   );
 }

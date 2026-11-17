@@ -38,6 +38,15 @@ export function CalendarPage({
   const nextPeriodHref = view.period.periodNo < 13 ? periodHrefs[view.period.periodNo + 1] : null;
   const previewExitHref = thisPeriodHref.replace(/[&?]as=[^&]+/, "") || thisPeriodHref;
 
+  // Per-day open link (train 2). iso -> `/service?...&day=iso`. Built
+  // server-side so no function crosses into WeekRow (client).
+  const dayHrefs: Record<string, string> = {};
+  for (const w of view.period.weeks) {
+    for (const iso of w.dates) {
+      dayHrefs[iso] = `${basePath}?site=${view.site.slug}&fy=${view.period.fiscalYear}&p=${view.period.periodNo}${asQuery}&day=${iso}`;
+    }
+  }
+
   // The band: the one thing the site needs first.
   const band = bandContent(view);
 
@@ -66,6 +75,7 @@ export function CalendarPage({
         prevPeriodHref={prevPeriodHref}
         nextPeriodHref={nextPeriodHref}
         thisPeriodHref={thisPeriodHref}
+        dayHrefs={dayHrefs}
       />
 
       <YearSection
