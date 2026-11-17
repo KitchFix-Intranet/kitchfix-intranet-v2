@@ -11,11 +11,14 @@ type Props = {
   slim: boolean;
 };
 
+// A `denied` viewer never reaches the shell (the access gate calls
+// notFound() first). If one ever did, give them no word rather than
+// mislabelling them "Learner".
 const ROLE_WORDS: Record<Role, string> = {
   owner: "Owner",
   lead: "Lead",
   learner: "Learner",
-  denied: "Learner",
+  denied: "",
 };
 
 function initials(name: string): string {
