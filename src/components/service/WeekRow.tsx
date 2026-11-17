@@ -1,8 +1,17 @@
-// One row: the seven day cells under Mon to Sun, and a week column
-// beside them (dates, meals + short dollars, where it stands).
-// Nothing in this row is a button in this train. On a short screen a
-// finished week folds to a line that opens on tap; that toggle is a
-// button, and lives on the column.
+// A week on the calendar.
+//
+// Shape:
+//   Row 1: dates + optional chip                              [fold]
+//   Row 2: meta line - meals + dollars + phase - state word   [fold]
+//   Days grid (hidden when folded)
+//
+// The state word sits on row 2 to the right of the meta facts, never
+// stacked on top of the dates on row 1. No ellipsis anywhere; narrow
+// wide widths drop the phase to make room, and the phone's meta is
+// one line that reads "N meals · State".
+//
+// Nothing in this row is a button in this train. The fold toggle on a
+// foldable week IS a button.
 
 "use client";
 
@@ -10,26 +19,28 @@ import { useState } from "react";
 import { DayCell } from "./DayCell";
 import { StatusWord } from "./StatusWord";
 import { Icon } from "./Icon";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import type { WeekView } from "@/lib/sc/calendar/types";
 import { shortDollarsFromCents } from "@/lib/sc/calendar/billable";
 import { fmtDate, fmtCount } from "@/lib/fmt";
 
 export function WeekRow({
-  week, isCurrent, isBilled, foldable,
+  week, isCurrent, isBilled, foldableShort, foldablePhone,
 }: {
   week: WeekView;
   isCurrent: boolean;
   isBilled: boolean;
-  // true: the week is a finished one that sits above the current week
-  // on a short screen (<= 959px tall), so it starts folded.
-  foldable: boolean;
+  foldableShort: boolean;
+  foldablePhone: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const foldable = foldableShort || foldablePhone;
 
   const classes = ["kf-sc-wkrow", `st-${week.state}`];
   if (isCurrent) classes.push("is-now");
-  if (foldable) classes.push("is-foldable");
-  if (foldable && !open) classes.push("is-folded");
+  if (foldableShort) classes.push("is-foldable-short");
+  if (foldablePhone) classes.push("is-foldable-phone");
+  if (foldable && open) classes.push("is-open");
 
   const datesLabel = `${fmtDate(week.dates[0], "short")} - ${fmtDate(week.dates[6], "short")}`;
   const mealsLabel = week.meals !== null
@@ -42,39 +53,84 @@ export function WeekRow({
     ? week.phase
     : "";
 
+  // Wide meta: meals + dollars + (phase only when >= 1280 wide; CSS
+  // hides `.kf-sc-wkrow__phase` at narrower widths so the sub never
+  // needs to ellipsize).
+  const metaBits: { text: string; cls: string }[] = [];
+  if (mealsLabel) metaBits.push({ text: mealsLabel, cls: "kf-sc-wkrow__sub-meals" });
+  if (dollarsLabel) metaBits.push({ text: dollarsLabel, cls: "kf-sc-wkrow__sub-dollars" });
+  if (phaseLabel) metaBits.push({ text: phaseLabel, cls: "kf-sc-wkrow__sub-phase" });
+
+  // Phone short-form word (icon + "Submitted" vs "Submitted Fri, Nov 13").
+  const phoneWord = week.state === "submitted" ? "Submitted" : week.word;
+
   return (
     <article className={classes.join(" ")} aria-label={`Week of ${datesLabel}`}>
-      <ol className="kf-sc-wkrow__days" role="list">
-        {week.days.map((d) => <DayCell key={d.iso} day={d} />)}
-      </ol>
-      <div className="kf-sc-wkrow__col">
-        <div className="kf-sc-wkrow__dates">
-          <h3>
-            {datesLabel}
-            {isCurrent ? <span className="kf-sc-chip kf-sc-chip--now">This week</span> : null}
-          </h3>
+      <div className="kf-sc-wkrow__line">
+        {/* Row 1: dates + chip (fold spans both rows on the right). */}
+        <h3 className="kf-sc-wkrow__dates">
+          {datesLabel}
+          {isCurrent ? <span className="kf-sc-chip kf-sc-chip--now">This week</span> : null}
+        </h3>
+
+        {/* Row 2: meta on the left (meals, dollars, phase), state word
+         * on the right. No overlap because each lives in its own grid
+         * cell and the row sits BELOW the dates. */}
+        <div className="kf-sc-wkrow__meta">
+          {metaBits.length > 0 ? (
+            <p className="kf-sc-wkrow__sub kf-sc-only-wide">
+              {metaBits.map((b, i) => (
+                <span key={b.cls} className={b.cls}>
+                  {i > 0 ? <span className="kf-sc-wkrow__sep" aria-hidden> · </span> : null}
+                  {b.text}
+                </span>
+              ))}
+            </p>
+          ) : null}
+          {/* Phone meta: "N meals · <icon> State" on one line. The
+           * state's icon sits inline so the visual signal is preserved. */}
+          {mealsLabel || phoneWord ? (
+            <p className="kf-sc-wkrow__sub-phone kf-sc-only-narrow">
+              {mealsLabel ? <span className="kf-sc-wkrow__sub-meals">{mealsLabel}</span> : null}
+              {mealsLabel && phoneWord ? <span className="kf-sc-wkrow__sep" aria-hidden> · </span> : null}
+              {phoneWord ? (
+                <span className={`kf-sc-state kf-sc-state--${week.tone}`}>
+                  <Icon name={week.icon} size={14} />
+                  <span>{phoneWord}</span>
+                </span>
+              ) : null}
+            </p>
+          ) : null}
+          {/* Wide state word on its own box, right-aligned. */}
+          <div className="kf-sc-wkrow__state kf-sc-only-wide">
+            <StatusWord tone={week.tone} icon={week.icon} word={week.word} />
+          </div>
         </div>
-        {mealsLabel || dollarsLabel ? (
-          <p className="kf-sc-wkrow__meals">
-            {mealsLabel}{dollarsLabel ? <><span className="kf-sc-sep" aria-hidden> · </span>{dollarsLabel}</> : null}
-          </p>
-        ) : null}
-        {phaseLabel ? <p className="kf-sc-wkrow__phase">{phaseLabel}</p> : null}
-        <div className="kf-sc-wkrow__state">
-          <StatusWord tone={week.tone} icon={week.icon} word={week.word} size={14} />
-        </div>
+
         {foldable ? (
           <button
             type="button"
             className="kf-sc-wkrow__fold"
             aria-expanded={open}
+            aria-label={open ? "Hide the days" : "Show the days"}
             onClick={() => setOpen((v) => !v)}
           >
-            <span>{open ? "Hide the days" : "Show the days"}</span>
-            <Icon name={open ? "circle-dashed" : "circle-dashed"} size={14} />
+            <span className="kf-sc-wkrow__fold-text">{open ? "Hide the days" : "Show the days"}</span>
+            {open ? <ChevronUp size={16} strokeWidth={1.75} aria-hidden /> : <ChevronDown size={16} strokeWidth={1.75} aria-hidden />}
           </button>
         ) : null}
       </div>
+
+      {/* Phone open-week summary line: dollars + phase, under the line. */}
+      {(dollarsLabel || phaseLabel) ? (
+        <p className="kf-sc-wkrow__phone-open-sub">
+          {[dollarsLabel, phaseLabel].filter(Boolean).join(" · ")}
+        </p>
+      ) : null}
+
+      <ol className="kf-sc-wkrow__days" role="list">
+        {week.days.map((d) => <DayCell key={d.iso} day={d} />)}
+      </ol>
     </article>
   );
 }

@@ -327,13 +327,14 @@ export async function loadCalendar(input: LoadCalendarInput): Promise<CalendarVi
         unitEndIso,
       });
       squares.push(sq);
-      // "Days entered" counts only days that actually have a meal or a
-      // line above zero. A not-served day inside a submitted or closed
-      // week does not count as entered.
-      if (sq.meals > 0) {
-        anyEntered += 1;
-        cardMeals += sq.meals;
-      }
+      // "Days entered" counts a day with any line above 0, whether it
+      // counted in meals or not. A not-served day does not count.
+      // (Chat-Claude ruling 2026-11-16 train 1b §6.)
+      if (sq.hasAnyEnteredValue) anyEntered += 1;
+      // Meals in the card total, however, still count only meal-unit
+      // lines, so the period cards continue to agree with the year
+      // total.
+      if (sq.meals > 0) cardMeals += sq.meals;
       if (sq.state === "needs_actuals") needsCount += 1;
     }
     yearEntered += anyEntered;
@@ -646,12 +647,26 @@ function squareFor(x: SquareInputs): YearSquare {
     isPeriodClosed: x.isPeriodClosed,
     unitEndIso: x.unitEndIso,
   });
+  // "Any entered value" is "any actuals row above 0" on this day,
+  // whether or not that row counts in meals. A not-served day (every
+  // projected line answered with 0) does NOT set this; a day with only
+  // non-meal lines (pans, each, days) DOES.
+  let hasAnyEnteredValue = false;
+  for (const r of x.revenue) {
+    const svc = x.serviceById.get(r.service_id);
+    if (svc && svc.unit === "dollars") continue;
+    if (r.has_actuals && Number(r.actual_count ?? 0) > 0) {
+      hasAnyEnteredValue = true;
+      break;
+    }
+  }
   return {
     iso: x.iso,
     meals: d.meals ?? 0,
     state: d.state,
     isToday: d.isToday,
     isHome: d.home !== null,
+    hasAnyEnteredValue,
   };
 }
 

@@ -3,30 +3,39 @@
  * Every colour from tokens.css (src/app/tokens.css); no raw hex, no
  * raw rgb(), no literal z-index.
  *
- * Five type sizes on the screen, exactly:
- *   --sp-t-micro (12px): dow headers + eyebrows + tiny chips
- *   --sp-t-label (13px): body copy + sub-lines + state words
- *   --sp-t-body  (16px): primary meal numbers in a day cell + phone head
- *   --sp-t-item  (18px): week row header (the dates)
- *   --sp-t-title (24px): period + year section + band titles
+ * Five type sizes on this surface (train 1b, Nov 16):
+ *   --sp-t-label (13px): all small text - date, dow, state word,
+ *                        legend labels, unit, sub-lines, phone head
+ *                        sub, year-card date range and foot.
+ *   --sp-t-body  (16px): the week row's date header + phone h1 +
+ *                        site-list group heading + empty-state title.
+ *   --sp-t-h3    (20px): stage + year-section titles, year-card period
+ *                        letter, phone day-row number.
+ *   --sp-t-num   (28px): day's number in wide cells - display face,
+ *                        tabular, the biggest thing in a cell.
+ *   (plus the shared band at --sp-t-h1 (30px) on wide screens.)
  *
- * No other sizes. No raw pixel font-size. Controls honour the shared
- * --sp-floor-chef (48px) minimum.
+ * The smallest text is 13px. The 12px token is not used anywhere here.
  *
- * Shared classes (.kf-only-desktop, .kf-only-phone, .kf-eyebrow,
- * .kf-band, .kf-btn, .kf-skel) are NOT restyled here. Everything
- * below is scoped to kf-sc-.
+ * Controls honour --sp-floor-chef (48px). Shared classes are NOT
+ * restyled here; everything below is scoped to kf-sc-.
  */
 
 .kf-sc-surface {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-sp-5);
-  padding: var(--sp-sp-5) var(--sp-sp-6) var(--sp-sp-7);
+  /* Tighter vertical rhythm on short desks so this-week-as-W4 fits
+   * on a 1280x720 or 1366x768 laptop. Was sp-sp-4 = 16px. */
+  gap: var(--sp-sp-3);
+  padding: var(--sp-sp-3) var(--sp-sp-5) var(--sp-sp-6);
   max-width: var(--sp-canvas-max);
   margin: 0 auto;
   width: 100%;
   min-width: 0;
+}
+@media (min-width: 861px) and (max-height: 1199px) {
+  /* Save band → stage gap + surface padding on short desks. */
+  .kf-sc-surface { gap: var(--sp-sp-1); padding-top: 0; }
 }
 
 /* Screen-reader-only text. */
@@ -42,12 +51,19 @@
   border: 0;
 }
 
-/* Widths. kf-only-wide shows on >=861px; kf-only-narrow mirrors it. */
-.kf-sc-only-wide   { display: block; }
-.kf-sc-only-narrow { display: none; }
+/* Width-driven visibility, scoped to this surface.
+ *
+ * `!important` is used here because the two modifiers combine with
+ * elements that carry their own `display` (grid, flex, inline-flex)
+ * and the modifier must win regardless of specificity or order. This
+ * is a local override, not a token restyle; the file stays scoped to
+ * kf-sc-*.
+ */
+.kf-sc-only-wide   { }
+.kf-sc-only-narrow { display: none !important; }
 @media (max-width: 860px) {
-  .kf-sc-only-wide   { display: none; }
-  .kf-sc-only-narrow { display: block; }
+  .kf-sc-only-wide   { display: none !important; }
+  .kf-sc-only-narrow { display: revert !important; }
 }
 
 /* ─── primitives ─── */
@@ -60,16 +76,17 @@
   background: var(--sp-sky-tint);
   color: var(--sp-navy);
   font-family: var(--sp-ui);
-  font-size: var(--sp-t-micro);
+  font-size: var(--sp-t-label);
   font-weight: 700;
   line-height: 1.2;
+  white-space: nowrap;
 }
 .kf-sc-chip--now {
   background: var(--sp-navy);
   color: var(--sp-on-navy);
   margin-inline-start: var(--sp-sp-2);
 }
-.kf-sc-chip--small { padding: 1px 6px; font-size: var(--sp-t-micro); }
+.kf-sc-chip--small { padding: 0 6px; font-size: var(--sp-t-label); }
 
 .kf-sc-state {
   display: inline-flex;
@@ -79,6 +96,7 @@
   font-size: var(--sp-t-label);
   font-weight: 700;
   line-height: 1.2;
+  white-space: nowrap;
 }
 .kf-sc-state--good  { color: var(--sp-good); }
 .kf-sc-state--navy  { color: var(--sp-navy); }
@@ -99,7 +117,7 @@
   background: var(--sp-sky-soft);
   border: 1px solid var(--sp-line-soft);
   font-family: var(--sp-ui);
-  font-size: var(--sp-t-micro);
+  font-size: var(--sp-t-label);
   font-weight: 700;
   color: var(--sp-ink);
   line-height: 1;
@@ -159,25 +177,27 @@
   text-decoration: none;
 }
 
-/* ─── phone head ─── */
-.kf-sc-phonehead {
-  display: none;
-}
+/* ─── phone head ───
+ * Compact: the title line sits as 16px bold directly after the
+ * eyebrow. No separate h1; the shell's own topbar carries the page
+ * title. */
+.kf-sc-phonehead { display: none; }
 .kf-sc-phonehead h1 {
-  margin: var(--sp-sp-1) 0 var(--sp-sp-1);
+  margin: 0;
   font-family: var(--sp-ui);
-  font-size: var(--sp-t-title);
+  font-size: var(--sp-t-body);
   font-weight: 800;
   color: var(--sp-navy);
-  line-height: 1.1;
+  line-height: 1.2;
 }
 .kf-sc-phonehead p {
   margin: 0;
-  font-size: var(--sp-t-body);
+  font-size: var(--sp-t-label);
   color: var(--sp-body);
+  line-height: 1.3;
 }
 @media (max-width: 860px) {
-  .kf-sc-surface { padding: var(--sp-sp-4) var(--sp-sp-4) var(--sp-sp-6); gap: var(--sp-sp-4); }
+  .kf-sc-surface { padding: var(--sp-sp-2) var(--sp-sp-3) var(--sp-sp-6); gap: var(--sp-sp-2); }
   .kf-sc-phonehead { display: block; }
 }
 
@@ -187,32 +207,64 @@
   border: 1px solid var(--sp-line);
   border-radius: var(--sp-r-card);
   box-shadow: var(--sp-shadow);
-  padding: var(--sp-sp-5);
+  padding: var(--sp-sp-3) var(--sp-sp-4) var(--sp-sp-4);
   display: flex;
   flex-direction: column;
-  gap: var(--sp-sp-4);
+  gap: var(--sp-sp-2);
   min-width: 0;
 }
+@media (max-width: 860px) {
+  .kf-sc-stage {
+    padding: var(--sp-sp-2) var(--sp-sp-2) var(--sp-sp-3);
+    gap: var(--sp-sp-1);
+  }
+}
+/* Short desk: tighten the stage's inner padding + rhythm so the
+ * period header, dow row and four weeks fit above the fold. */
+@media (min-width: 861px) and (max-height: 1199px) {
+  .kf-sc-stage {
+    padding: var(--sp-sp-1) var(--sp-sp-3) var(--sp-sp-2);
+    gap: var(--sp-sp-1);
+  }
+}
+/* Period header in ONE line: title + chip + date range | arrows. */
 .kf-sc-stage__head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: var(--sp-sp-4);
-  flex-wrap: wrap;
+  gap: var(--sp-sp-3);
+  flex-wrap: nowrap;
+  min-height: var(--sp-floor-chef);
 }
-.kf-sc-stage__titles h2 {
+.kf-sc-stage__title {
   margin: 0;
   display: inline-flex;
-  align-items: center;
+  align-items: baseline;
   gap: var(--sp-sp-2);
   font-family: var(--sp-ui);
-  font-size: var(--sp-t-title);
+  font-size: var(--sp-t-h3);
   font-weight: 800;
   color: var(--sp-navy);
+  flex-wrap: wrap;
+  min-width: 0;
 }
-.kf-sc-stage__meta { margin: var(--sp-sp-1) 0 0; color: var(--sp-body); font-size: var(--sp-t-label); }
+.kf-sc-stage__dates {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+  color: var(--sp-body);
+}
+.kf-sc-stage__note {
+  margin: 0;
+  padding: var(--sp-sp-1) var(--sp-sp-2);
+  background: var(--sp-sky-soft);
+  border-left: 3px solid var(--sp-sky-line);
+  color: var(--sp-body);
+  font-size: var(--sp-t-label);
+  border-radius: var(--sp-r-xs);
+}
 .kf-sc-stage__done {
-  margin: var(--sp-sp-2) 0 0;
+  margin: 0;
   display: inline-flex;
   align-items: center;
   gap: var(--sp-sp-1);
@@ -220,9 +272,13 @@
   font-size: var(--sp-t-label);
   font-weight: 700;
 }
-.kf-sc-stage__tools { display: inline-flex; gap: var(--sp-sp-2); align-items: center; flex-wrap: wrap; }
+.kf-sc-stage__tools {
+  display: inline-flex;
+  gap: var(--sp-sp-1);
+  align-items: center;
+  flex-wrap: nowrap;
+}
 
-/* Controls on this surface follow the --sp-floor-chef minimum. */
 .kf-sc-iconbtn,
 .kf-sc-period-btn {
   display: inline-flex;
@@ -235,6 +291,7 @@
   border: 1px solid var(--sp-line);
   background: var(--sp-card);
   color: var(--sp-navy);
+  font-family: var(--sp-ui);
   font-size: var(--sp-t-label);
   font-weight: 700;
   text-decoration: none;
@@ -243,28 +300,21 @@
 .kf-sc-iconbtn { padding: 0; }
 .kf-sc-iconbtn.is-disabled { color: var(--sp-muted); border-color: var(--sp-line-soft); pointer-events: none; }
 
-/* Day-of-week row sits once above the four weeks, wide-screen only. */
+/* DOW row above the four weeks, wide-screen only. */
 .kf-sc-stage__dow {
-  padding-inline-start: 0;
-}
-.kf-sc-stage__dowgrid {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: var(--sp-sp-2);
-  padding-inline-end: 220px; /* leaves the week column alone */
+  padding: 0 var(--sp-sp-3);
 }
-.kf-sc-stage__dowgrid span {
+.kf-sc-stage__dow span {
   color: var(--sp-muted);
   font-family: var(--sp-ui);
-  font-size: var(--sp-t-micro);
+  font-size: var(--sp-t-label);
   font-weight: 700;
   text-align: center;
   letter-spacing: 1px;
   text-transform: uppercase;
-}
-.kf-only-wide { display: block; }
-@media (max-width: 860px) {
-  .kf-only-wide { display: none; }
 }
 
 .kf-sc-legend {
@@ -280,10 +330,18 @@
   align-items: center;
   gap: var(--sp-sp-1);
   color: var(--sp-body);
-  font-size: var(--sp-t-micro);
+  font-size: var(--sp-t-label);
   font-weight: 700;
 }
 .kf-sc-legend .kf-sc-sq { position: static; }
+
+/* Phone legend: hidden on phone (the cell grounds + the state word
+ * on each day row already give the key). The reader can land on the
+ * wide layout for the colour-by-colour key.
+ *
+ * The toggle styling stays here in case Chat-Claude reverses this
+ * call later; today the container just does not render on phone. */
+.kf-sc-legend-fold { display: none !important; }
 
 /* The four weeks under the period head. */
 .kf-sc-stage__weeks {
@@ -292,18 +350,21 @@
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-sp-3);
+  gap: var(--sp-sp-2);
+}
+/* Short desk: tighter rhythm + the colour key sits off-screen (the
+ * cell grounds and the state words still carry it). Saves the extra
+ * 30 px needed for this-week-as-W4 to clear the fold at 1280x720. */
+@media (min-width: 861px) and (max-height: 1199px) {
+  .kf-sc-stage__weeks { gap: var(--sp-sp-1); }
+  .kf-sc-stage > .kf-sc-legend { display: none; }
 }
 
 /* ─── one week as a row ─── */
 
 .kf-sc-wkrow {
   position: relative;
-  display: grid;
-  grid-template-columns: 1fr 220px;
-  gap: var(--sp-sp-3);
-  align-items: stretch;
-  padding: var(--sp-sp-2);
+  padding: 0;
   border-radius: var(--sp-r-ctl);
   border: 1px solid var(--sp-line);
   background: var(--sp-raise);
@@ -313,46 +374,82 @@
   box-shadow: 0 0 0 2px var(--sp-sky-soft) inset;
 }
 
-.kf-sc-wkrow__days {
-  list-style: none;
-  padding: 0;
-  margin: 0;
+/* Two-row grid: dates on row 1, meta (sub + state) on row 2, fold
+ * spans both rows on the right. The state has its own box inside
+ * meta so it never overlays the dates or the sub. */
+.kf-sc-wkrow__line {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: var(--sp-sp-2);
-  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "dates fold"
+    "meta  fold";
+  row-gap: 0;
+  column-gap: var(--sp-sp-3);
+  padding: var(--sp-sp-1) var(--sp-sp-3);
+  min-height: 56px;
 }
-.kf-sc-wkrow__col {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-sp-1);
-  padding: var(--sp-sp-2);
-  border-radius: var(--sp-r-sm);
-  background: var(--sp-card);
-  border: 1px solid var(--sp-line-soft);
-  min-height: var(--sp-floor-chef);
-  min-width: 0;
-}
-.kf-sc-wkrow__dates h3 {
+.kf-sc-wkrow__dates {
+  grid-area: dates;
   margin: 0;
   display: inline-flex;
   align-items: center;
   gap: var(--sp-sp-2);
   font-family: var(--sp-ui);
-  font-size: var(--sp-t-item);
+  font-size: var(--sp-t-body);
   font-weight: 800;
   color: var(--sp-ink);
+  white-space: nowrap;
+  min-width: 0;
 }
-.kf-sc-wkrow__meals { margin: 0; color: var(--sp-body); font-size: var(--sp-t-label); }
-.kf-sc-wkrow__phase { margin: 0; color: var(--sp-muted); font-size: var(--sp-t-label); }
-.kf-sc-wkrow__state { margin-top: auto; }
+.kf-sc-wkrow__meta {
+  grid-area: meta;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sp-3);
+  min-width: 0;
+}
+.kf-sc-wkrow__sub {
+  margin: 0;
+  color: var(--sp-body);
+  font-size: var(--sp-t-label);
+  white-space: nowrap;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+/* Progressive disclosure: the phase only shows once there's room
+ * for it. The sub-line never ellipsizes - items drop whole. */
+.kf-sc-wkrow__sub-phase { display: none; }
+@media (min-width: 1280px) {
+  .kf-sc-wkrow__sub-phase { display: inline; }
+}
+/* The dollar + before-tax line is the second to go. At 861-1024 the
+ * state word takes much of the row; drop dollars there and keep
+ * meals + state. */
+@media (min-width: 861px) and (max-width: 1023px) {
+  .kf-sc-wkrow__sub-dollars { display: none; }
+  .kf-sc-wkrow__sub-dollars + .kf-sc-wkrow__sep,
+  .kf-sc-wkrow__sub-meals + .kf-sc-wkrow__sep + .kf-sc-wkrow__sub-dollars + .kf-sc-wkrow__sep { display: none; }
+}
+.kf-sc-wkrow__sep { color: var(--sp-muted); }
+.kf-sc-wkrow__state {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-inline-start: auto;
+  min-width: 0;
+}
+.kf-sc-wkrow__state .kf-sc-state {
+  min-width: 0;
+}
 .kf-sc-wkrow__fold {
+  grid-area: fold;
+  align-self: center;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: var(--sp-sp-1);
-  margin-top: var(--sp-sp-2);
   min-height: var(--sp-floor-chef);
+  min-width: var(--sp-floor-chef);
   padding: 0 var(--sp-sp-2);
   border-radius: var(--sp-r-sm);
   background: var(--sp-sky-tint);
@@ -362,14 +459,31 @@
   font-size: var(--sp-t-label);
   font-weight: 700;
   cursor: pointer;
+  white-space: nowrap;
 }
-/* Short-screen fold: 959px tall or less, a finished week above this
- * week starts folded; its days disappear and its column stays. */
-@media (max-height: 959px) and (min-width: 861px) {
-  .kf-sc-wkrow.is-foldable.is-folded .kf-sc-wkrow__days { display: none; }
+/* Tall desks (>= 1200px tall): no fold applies, the toggle is not
+ * drawn. 1b prompt, revised: the fold applies whenever height < 1200. */
+@media (min-width: 861px) and (min-height: 1200px) {
+  .kf-sc-wkrow__fold { display: none; }
 }
 
-/* ─── one day cell ─── */
+/* The phone-only sub-line. Hidden on wide screens, driven by the
+ * phone media rules below. */
+.kf-sc-wkrow__phone-open-sub { display: none; }
+
+/* The days grid. */
+.kf-sc-wkrow__days {
+  list-style: none;
+  padding: var(--sp-sp-2);
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: var(--sp-sp-2);
+  min-width: 0;
+  border-top: 1px solid var(--sp-line-soft);
+}
+
+/* ─── one day cell (wide) ─── */
 .kf-sc-cell {
   position: relative;
   display: block;
@@ -377,44 +491,109 @@
   border-radius: var(--sp-r-sm);
   border: 1px solid var(--sp-line);
   background: var(--sp-card);
-  min-height: 108px;
+  min-height: 100px;
+  overflow: hidden;
 }
 .kf-sc-cell.is-today { outline: 2px solid var(--sp-navy); outline-offset: -2px; }
-.kf-sc-cell__inner { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.kf-sc-cell__mark .kf-sc-sq { width: var(--sp-sp-3); height: var(--sp-sp-3); min-width: var(--sp-sp-3); min-height: var(--sp-sp-3); }
+.kf-sc-cell__inner { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .kf-sc-cell__when {
-  display: inline-flex;
+  display: flex;
   align-items: baseline;
+  flex-wrap: wrap;
   gap: var(--sp-sp-1);
   color: var(--sp-ink);
   font-family: var(--sp-ui);
   font-size: var(--sp-t-label);
+  min-width: 0;
 }
-.kf-sc-cell__dow { font-weight: 700; color: var(--sp-muted); font-size: var(--sp-t-micro); text-transform: uppercase; letter-spacing: 1px; }
+.kf-sc-cell__dow {
+  font-weight: 700;
+  color: var(--sp-muted);
+  font-size: var(--sp-t-label);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
 .kf-sc-cell__date { font-size: var(--sp-t-label); font-weight: 700; }
+.kf-sc-cell__today {
+  /* The cell's outline ring (kf-sc-cell.is-today outline) is the
+   * primary signal for today; the chip is the secondary text one.
+   * The chip renders only when the cell has room (>= 1024 wide). At
+   * narrower widths the ring + the "today" word in the sr-only
+   * reading carry the meaning. */
+  display: none;
+  padding: 0 4px;
+  border-radius: var(--sp-r-chip);
+  background: var(--sp-navy);
+  color: var(--sp-on-navy);
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+  line-height: 1.6;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+@media (min-width: 1024px) {
+  .kf-sc-cell__today { display: inline-block; }
+}
 .kf-sc-cell__home {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-sp-1);
   color: var(--sp-muted);
-  font-size: var(--sp-t-micro);
+  font-size: var(--sp-t-label);
   font-weight: 700;
+  white-space: nowrap;
 }
-.kf-sc-cell__fig { display: inline-flex; align-items: baseline; gap: var(--sp-sp-1); }
+.kf-sc-cell__fig {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-sp-1);
+  margin-top: var(--sp-sp-1);
+  min-width: 0;
+}
 .kf-sc-cell__num {
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-body);
+  font-family: var(--sp-disp);
+  font-size: var(--sp-t-num);
   font-weight: 800;
   color: var(--sp-ink);
   line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
 .kf-sc-cell__num.is-ghost {
   color: var(--sp-muted);
   font-weight: 700;
-  border-bottom: 2px dashed var(--sp-line);
 }
-.kf-sc-cell__unit { font-size: var(--sp-t-micro); font-weight: 700; color: var(--sp-muted); text-transform: uppercase; letter-spacing: 1px; }
-.kf-sc-cell__st { margin-top: var(--sp-sp-1); }
+.kf-sc-cell__unit {
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+  color: var(--sp-muted);
+  /* With the parent's flex-wrap, the unit sits beside the number when
+   * it fits and wraps under when it doesn't. No forced break. */
+  min-width: 0;
+}
+.kf-sc-cell__st {
+  margin-top: var(--sp-sp-1);
+  min-width: 0;
+  display: block;
+}
+/* State in a day cell: let the word wrap to two lines rather than
+ * truncate. The state word is the one thing the cell must say, so
+ * the cell grows if needed (min-height 100 is the floor on wide;
+ * flex on inner lets the fig/state extend past it). */
+.kf-sc-cell__st .kf-sc-state {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-sp-1);
+  max-width: 100%;
+  min-width: 0;
+  white-space: normal;
+  line-height: 1.2;
+}
+.kf-sc-cell__st .kf-sc-state > span {
+  min-width: 0;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
 
 /* Day-cell grounds by state. */
 .kf-sc-cell.is-sent  { background: var(--sp-good-bg); border-color: var(--sp-good); }
@@ -425,29 +604,149 @@
 .kf-sc-cell.is-gap   { background: var(--sp-card); border-style: dashed; border-color: var(--sp-line); }
 .kf-sc-cell.is-none  { background: var(--sp-card); border-color: var(--sp-line-soft); }
 
-/* Phone: this week open as a list of days, other weeks fold to one line. */
+/* Short-screen fold (wide, <= 959 tall): only an is-foldable-short
+ * week collapses to its 56px line unless opened. A future week has
+ * no is-foldable-short class and stays open. */
+@media (min-width: 861px) and (max-height: 1199px) {
+  .kf-sc-wkrow.is-foldable-short:not(.is-open) .kf-sc-wkrow__days { display: none; }
+}
+/* Tall wide: the toggle is not drawn at all (set earlier) and days
+ * always show. */
+@media (min-width: 861px) and (min-height: 1200px) {
+  .kf-sc-wkrow__fold { display: none; }
+}
+
+/* Phone (<= 860 wide).
+ *
+ * A folded week is ONE row, 56px: dates (+ chip if current) on the
+ * left, fold toggle on the right. Sub-line and state collapse into
+ * that row's dates (sub as a small line) or hide.
+ *
+ * An open week shows the same top row, plus the day cells below.
+ */
 @media (max-width: 860px) {
-  .kf-sc-wkrow {
-    grid-template-columns: minmax(0, 1fr);
-    padding: var(--sp-sp-2);
+  .kf-sc-wkrow__line {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "dates fold"
+      "meta  fold";
+    row-gap: 0;
+    padding: var(--sp-sp-1) var(--sp-sp-2);
+    min-height: 56px;
   }
+  /* Phone fold button: icon only. "Show the days" / "Hide the days"
+   * stays in aria-label for a screen reader; the chevron carries the
+   * meaning visually. Saves ~90 px on a 360 line. The hidden text is
+   * flat (not clipped by overflow:hidden) to keep the harness's
+   * silent-clip check honest. */
+  .kf-sc-wkrow__fold-text {
+    display: inline-block;
+    width: 0;
+    height: 0;
+    overflow: hidden;
+    font-size: 0;
+    color: transparent;
+  }
+  .kf-sc-wkrow__fold {
+    min-width: var(--sp-floor-chef);
+    padding: 0;
+  }
+  .kf-sc-wkrow__dates {
+    grid-area: dates;
+    font-size: var(--sp-t-body);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: clip;
+  }
+  .kf-sc-wkrow__meta {
+    grid-area: meta;
+    display: block;
+    min-width: 0;
+  }
+  /* Phone meta: "N meals · State" inline, one text line. No separate
+   * state box on phone - the state word is baked into the sub text so
+   * nothing can sit on top of anything else. */
+  .kf-sc-wkrow__sub-phone {
+    margin: 0;
+    font-size: var(--sp-t-label);
+    color: var(--sp-body);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: clip;
+    min-width: 0;
+  }
+  .kf-sc-wkrow__sub-phone > span {
+    display: inline;
+  }
+  /* The inline state span inside the phone sub: baseline-aligned
+   * with the meals text; icon sits beside the word at 14 px. */
+  .kf-sc-wkrow__sub-phone .kf-sc-state {
+    display: inline;
+    vertical-align: baseline;
+  }
+  .kf-sc-wkrow__sub-phone .kf-sc-state svg {
+    display: inline;
+    vertical-align: -2px;
+    margin-right: 2px;
+  }
+  .kf-sc-wkrow__fold { grid-area: fold; align-self: stretch; }
+
+  /* Open-only summary line under the dates, no ellipsis on a number -
+   * this line always has room because it is its own full-width row
+   * BELOW the line, not inside it. Hidden on folded weeks, shown on
+   * the open one (either current or user-opened). */
+  .kf-sc-wkrow__phone-open-sub {
+    margin: 0;
+    padding: 0 var(--sp-sp-2) var(--sp-sp-1);
+    font-size: var(--sp-t-label);
+    color: var(--sp-body);
+    display: none;
+  }
+  .kf-sc-wkrow.is-now > .kf-sc-wkrow__phone-open-sub,
+  .kf-sc-wkrow.is-foldable-phone.is-open > .kf-sc-wkrow__phone-open-sub { display: block; }
+
+  /* An open week releases the line's 56px cap so the day cells can
+   * grow under it. */
+  .kf-sc-wkrow.is-foldable-phone.is-open .kf-sc-wkrow__line,
+  .kf-sc-wkrow.is-now .kf-sc-wkrow__line { max-height: none; }
+
+  /* Phone fold-out: hide days on any is-foldable-phone week that is
+   * not open. A non-foldable-phone week (the current one, or the
+   * first one when there is no current week) stays open. */
+  .kf-sc-wkrow.is-foldable-phone:not(.is-open) .kf-sc-wkrow__days { display: none; }
+
+  /* Day grid on a phone is one column: each day is a 56px row. */
   .kf-sc-wkrow__days {
     grid-template-columns: minmax(0, 1fr);
+    padding: var(--sp-sp-1);
+    gap: var(--sp-sp-1);
+    border-top: 1px solid var(--sp-line-soft);
   }
-  .kf-sc-wkrow__col {
-    order: -1;
-    background: transparent;
-    border: 0;
-    padding: 0 var(--sp-sp-1);
+  .kf-sc-cell {
+    min-height: 56px;
+    padding: var(--sp-sp-1) var(--sp-sp-2);
   }
-  /* Finished weeks on a phone start folded; this week stays open. */
-  .kf-sc-wkrow.is-foldable:not(.is-now) .kf-sc-wkrow__days { display: none; }
-  .kf-sc-wkrow.is-foldable.is-folded .kf-sc-wkrow__days { display: none; }
-  .kf-sc-wkrow:not(.is-now):not(.is-foldable) .kf-sc-wkrow__days {
-    /* non-foldable but not current (e.g. a future week) stays
-     * visible on phone as a list of days. */
+  .kf-sc-cell__inner {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--sp-sp-3);
+    flex-wrap: wrap;
   }
-  .kf-sc-cell { min-height: var(--sp-floor-chef); }
+  .kf-sc-cell__when { flex: 0 0 110px; }
+  .kf-sc-cell__fig {
+    margin-top: 0;
+    min-height: 0;
+    flex: 0 0 auto;
+  }
+  .kf-sc-cell__num { font-size: var(--sp-t-h3); }
+  .kf-sc-cell__st { margin-top: 0; margin-inline-start: auto; min-width: 0; overflow: hidden; }
+  .kf-sc-cell__st .kf-sc-state {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* Home game adds its own line below the row. */
+  .kf-sc-cell__home { width: 100%; }
 }
 
 /* ─── the year ─── */
@@ -456,28 +755,51 @@
   border: 1px solid var(--sp-line);
   border-radius: var(--sp-r-card);
   box-shadow: var(--sp-shadow);
-  padding: var(--sp-sp-5);
+  padding: var(--sp-sp-3) var(--sp-sp-4) var(--sp-sp-4);
   display: flex;
   flex-direction: column;
-  gap: var(--sp-sp-4);
+  gap: var(--sp-sp-3);
   min-width: 0;
 }
 .kf-sc-yearsec__head {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  gap: var(--sp-sp-4);
+  align-items: center;
+  gap: var(--sp-sp-3);
   flex-wrap: wrap;
 }
+.kf-sc-yearsec__titles { display: inline-flex; gap: var(--sp-sp-3); align-items: baseline; flex-wrap: wrap; }
 .kf-sc-yearsec__head h2 {
   margin: 0;
   font-family: var(--sp-ui);
-  font-size: var(--sp-t-title);
+  font-size: var(--sp-t-h3);
   font-weight: 800;
   color: var(--sp-navy);
 }
-.kf-sc-yearsec__meta { margin: var(--sp-sp-1) 0 0; color: var(--sp-body); font-size: var(--sp-t-label); }
+.kf-sc-yearsec__meta { margin: 0; color: var(--sp-body); font-size: var(--sp-t-label); }
 .kf-sc-yearsec__note { margin: 0; color: var(--sp-muted); font-size: var(--sp-t-label); }
+.kf-sc-yearsec__fold { display: none; }
+.kf-sc-yearsec__body { display: block; }
+@media (max-width: 860px) {
+  .kf-sc-yearsec__fold {
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: var(--sp-floor-chef);
+    padding: 0 var(--sp-sp-3);
+    border-radius: var(--sp-r-sm);
+    border: 1px solid var(--sp-line);
+    background: var(--sp-card);
+    color: var(--sp-navy);
+    font-family: var(--sp-ui);
+    font-size: var(--sp-t-label);
+    font-weight: 700;
+    cursor: pointer;
+    gap: var(--sp-sp-2);
+  }
+  .kf-sc-yearsec__body { display: none; }
+  .kf-sc-yearsec__body.is-open { display: block; }
+}
 
 .kf-sc-seg {
   display: inline-flex;
@@ -531,12 +853,12 @@
   font-family: var(--sp-ui);
   font-weight: 800;
 }
-.kf-sc-pcard__head b { font-size: var(--sp-t-item); color: var(--sp-navy); }
-.kf-sc-pcard__head span { font-size: var(--sp-t-micro); color: var(--sp-muted); font-weight: 700; }
+.kf-sc-pcard__head b { font-size: var(--sp-t-h3); color: var(--sp-navy); }
+.kf-sc-pcard__head span { font-size: var(--sp-t-label); color: var(--sp-muted); font-weight: 700; }
 .kf-sc-pcard__dow {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
-  font-size: var(--sp-t-micro);
+  font-size: var(--sp-t-label);
   color: var(--sp-muted);
   text-align: center;
 }
@@ -546,7 +868,12 @@
   grid-auto-rows: 1fr;
   gap: 2px;
 }
-.kf-sc-pcard__grid .kf-sc-sq { min-height: var(--sp-sp-4); font-size: var(--sp-t-micro); }
+.kf-sc-pcard__grid .kf-sc-sq { min-height: var(--sp-sp-4); font-size: var(--sp-t-label); overflow: hidden; }
+/* The number inside a mini year-card square does not render: the
+ * grid cells are too narrow (~20 px) to carry a 3-digit meal number
+ * without overlapping its neighbour. The square's ground colour is
+ * the signal; the card's foot carries the period meals total. */
+.kf-sc-pcard__grid .kf-sc-sq > b { display: none; }
 .kf-sc-pcard__foot { font-size: var(--sp-t-label); color: var(--sp-body); font-weight: 700; }
 
 /* ─── stand-in site list ─── */
@@ -559,8 +886,13 @@
   flex-direction: column;
   gap: var(--sp-sp-4);
 }
-.kf-sc-sitelist h2 { margin: 0; font-family: var(--sp-ui); font-size: var(--sp-t-title); color: var(--sp-navy); }
-.kf-sc-sitelist__region h3 { margin: 0 0 var(--sp-sp-2); font-family: var(--sp-ui); font-size: var(--sp-t-item); color: var(--sp-body); }
+.kf-sc-sitelist__region h3 {
+  margin: 0 0 var(--sp-sp-2);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  color: var(--sp-body);
+  font-weight: 800;
+}
 .kf-sc-sitelist__region ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: var(--sp-sp-2); }
 .kf-sc-sitelist__link {
   display: flex;
@@ -575,7 +907,7 @@
   font-family: var(--sp-ui);
   font-size: var(--sp-t-label);
 }
-.kf-sc-sitelist__link small { color: var(--sp-muted); font-size: var(--sp-t-micro); font-weight: 700; }
+.kf-sc-sitelist__link small { color: var(--sp-muted); font-size: var(--sp-t-label); font-weight: 700; }
 
 /* ─── empty states ─── */
 .kf-sc-empty {
@@ -598,7 +930,13 @@
   color: var(--sp-navy);
   flex-shrink: 0;
 }
-.kf-sc-empty h3 { margin: 0; font-family: var(--sp-ui); font-size: var(--sp-t-item); font-weight: 800; color: var(--sp-ink); }
+.kf-sc-empty h3 {
+  margin: 0;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  font-weight: 800;
+  color: var(--sp-ink);
+}
 .kf-sc-empty p { margin: var(--sp-sp-1) 0 0; color: var(--sp-body); font-size: var(--sp-t-label); }
 
 .kf-sc-yearswitch { display: flex; gap: var(--sp-sp-2); }

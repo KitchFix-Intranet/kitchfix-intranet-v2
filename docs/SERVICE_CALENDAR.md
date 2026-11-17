@@ -189,6 +189,28 @@ No V2 path writes `status='billed'`. v1 uses that word to mean "cannot be revert
 
 `requireAllDaysApproved` stays in `scReviewState.ts` unchanged and unused by the submit path (per the brief: no per-day approval is required).
 
+## The calendar home screen - train 1b fit (2026-11-16)
+
+Train 1 (PR #61) is live. Train 1b is a fit-only pass against the live measurement Chat-Claude took at 18 widths that night. **No change to the read model's rules except one, named at the bottom of this section.**
+
+**Type scale.** Five sizes on the whole screen, including the shared band's 30px: 13px (small text everywhere), 16px (phone h1, week-row dates, site-list headings, empty-state titles), 20px (period + year-section titles, year-card period letter, phone day-row number), 28px (the day's number in a wide cell, display face, tabular). `--sp-t-micro` (12px) is not used on this surface; the smallest text is 13px.
+
+**Short-screen fold.** On a wide viewport under 1200px tall, a finished week above the current week folds to a 58px line (dates + sub-line + state + a "Show the days" toggle). On a viewport at 1200px tall or more the toggle is not drawn and every week shows its days. The toggle reads "Show the days" or "Hide the days" and carries `aria-expanded`. The threshold moved from 959 to 1199 on 2026-11-17 so laptops up to 1680x1050 fold their finished weeks and keep this-week visible above the fold.
+
+**Colour key.** The ring of coloured squares with their names ("Submitted / Entered / Projected / Needs actuals / No service / Today") renders only on viewports at least 1200px tall and wider than a phone. On short desks and phones the key hides: each cell carries its state word in full, and the cell's ground colour is the second signal.
+
+**Phone layout.** At viewport ≤ 860px wide the surface rebuilds: the period header is one line (title + Now + dates + arrows); a "What the colours mean" fold does not render on this surface - the cell grounds carry the colour; this week is open as seven 56px rows (dow + date, number, state, home-game adds one more line below); every other week sits folded as a 56px line; the year sits behind one line ("Show the year").
+
+**What read wrong before.**
+
+- The small coloured square at the top of each day cell is gone - it looked like an empty tick box. The cell's ground + the state's icon and word carry the state. Squares still sit in the colour key and in the year's small grids.
+- Chips never wrap: `.kf-sc-chip` has `white-space: nowrap`. Week dates stay on one line at every width from 360 to 1920.
+- Today reads as the navy "Today" chip next to the date in a wide cell, with a ring on the cell. It does not squeeze the date onto a second line.
+- The site-list uses only the band's heading; the "Open a calendar" + "Pick a site." lines are gone.
+- A site with no `sc_qbo_account_map` row carries "Not billed through the service calendar." as one plain line near the period header, on every period, wide and narrow.
+
+**Rule change.** `src/lib/sc/calendar/load.ts` now counts a day in the year's "days entered" total when the day has any actuals line above zero - not only a meal line. A day with only non-meal lines (pans, each, days) counts; a not-served day (every projected line answered with 0) does not. Expected: the Reds' 263 for 2026 reads 265 after the fix. `calendar-year-entered.test.mjs` covers the three branches. This is the only rule change in this train.
+
 ## The calendar home screen (train 1, 2026-11-16)
 
 `/service` stops being the reserved door. It is the Service Calendar's home for one site: the current fiscal period as four weeks of seven days, each day with its meal number and its state in a word, each week with what it comes to and where it stands, and the thirteen periods of the year underneath. It reads the live database. **It writes nothing.** The day form comes in train 2 and the week check and submit in train 3; this is the read side they will both stand on.

@@ -142,10 +142,15 @@ export interface PeriodView {
 
 export interface YearSquare {
   iso: string;
-  meals: number;              // 0 when blank-no-service
+  meals: number;              // 0 when blank-no-service, or when every entered
+                              // line is a non-meal unit (pans/each/days)
   state: DayStateCode;
   isToday: boolean;
   isHome: boolean;
+  // "Any line above 0": the day has at least one actuals row above zero,
+  // whether or not it counts in meals. A not-served day (every projected
+  // line answered with 0) does NOT set this.
+  hasAnyEnteredValue: boolean;
 }
 
 export interface YearPeriodCard {

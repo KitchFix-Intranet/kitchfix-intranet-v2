@@ -98,19 +98,20 @@ function bandContent(view: CalendarView): { eyebrow: string; title: string; kick
       return { eyebrow, title: "No service this week", kick: `Period ${view.period.periodNo}` };
     }
     const unentered = cur.days.filter((d) => d.state === "projected" || d.state === "needs_actuals" || d.state === "part_entered").length;
+    // The band kick stays short (reads inside the IdentBand's 60-char
+    // soft cap; at 1024 wide it still has to fit beside the facts). The
+    // numbers live on the week row, not here.
     if (unentered > 0) {
       return {
         eyebrow,
         title: `${unentered} day${unentered === 1 ? "" : "s"} to enter this week`,
-        kick: cur.billableCents !== null
-          ? `Period ${view.period.periodNo} · entered so far: ${cur.meals ?? 0} meals · ${shortDollarsFromCents(cur.billableCents)} before tax`
-          : `Period ${view.period.periodNo} · entered so far: ${cur.meals ?? 0} meals`,
+        kick: `Period ${view.period.periodNo}`,
       };
     }
     return {
       eyebrow,
       title: "This week is entered",
-      kick: `Period ${view.period.periodNo} · ${cur.meals ?? 0} meals${cur.billableCents !== null ? ` · ${shortDollarsFromCents(cur.billableCents)} before tax` : ""}`,
+      kick: `Period ${view.period.periodNo}`,
     };
   }
   // Viewing a period the site's today is not in.
