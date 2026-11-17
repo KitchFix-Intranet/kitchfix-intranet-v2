@@ -49,52 +49,45 @@ export type ViewerRole = "owner" | "lead" | "learner" | "denied";
 // without touching callers):
 //
 //   reads_all           - every live document, restricted or not.
-//                         Owners, region leads, library_admin /
-//                         academy_admin grant holders.
+//                         Owners only, per Kevin's ruling for L1.
 //
 //   reads_unrestricted  - only live documents whose access_level is
 //                         exactly 'unrestricted'. Every other signed-
-//                         in person the app gate lets in.
+//                         in person the app gate lets in - region
+//                         leads and library_admin / academy_admin
+//                         grant holders included. Lifting them back
+//                         to reads_all is a later ruling, not L1.
 //
 // Future: a third, lower level will sit beneath reads_unrestricted
 // for the phone-link audience once that train lands. Callers do not
 // need to change; only the enum widens and resolveReaderLevel grows
-// one branch.
+// one branch. The same shape lets a later ruling lift region leads
+// or grant holders back into reads_all without touching the loaders.
 // ---------------------------------------------------------------------
 
 export type ReaderLevel = "reads_all" | "reads_unrestricted";
 
 /**
- * Decide the viewer's reader level from the identity the Academy
- * resolver already returns. The rule reuses the gate's identity
- * resolution rather than running a parallel one. See
- * src/lib/academy/identity.ts for the resolver.
+ * Decide the viewer's reader level.
  *
  *   reads_all when:
- *     - email is in OWNER_EMAILS, OR
- *     - identity.scope.kind === 'region' (a row in
- *       academy_region_leads keyed on their email), OR
- *     - identity.grants includes 'library_admin' or 'academy_admin'.
+ *     - email is in OWNER_EMAILS.
  *
  *   reads_unrestricted otherwise.
  *
- * A null identity for a non-owner still returns reads_unrestricted;
- * the upstream gate would have refused such a viewer at
- * requireAppAccess, so in practice this branch is a defensive
- * default rather than a reachable path.
+ * `identity` is accepted (and still typed) so a later ruling can
+ * widen the rule - lifting region leads (identity.scope.kind ===
+ * "region") or library_admin / academy_admin grant holders
+ * (identity.grants) back into reads_all - without changing callers.
+ * For L1 the identity parameter is intentionally unused on the
+ * non-owner path.
  */
 export function resolveReaderLevel(
   email: string,
-  identity: AcademyIdentity | null,
+  _identity: AcademyIdentity | null,
 ): ReaderLevel {
   const e = String(email || "").trim().toLowerCase();
   if (e && ownerEmails().has(e)) return "reads_all";
-  if (!identity) return "reads_unrestricted";
-  if (identity.scope?.kind === "region") return "reads_all";
-  const grants = identity.grants ?? [];
-  if (grants.includes("library_admin") || grants.includes("academy_admin")) {
-    return "reads_all";
-  }
   return "reads_unrestricted";
 }
 

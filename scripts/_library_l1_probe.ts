@@ -7,13 +7,21 @@
 //   node --env-file=.env.local --import tsx scripts/_library_l1_probe.ts
 //
 // Picks one email of each viewer kind programmatically:
-//   reads-all/owner         - an OWNER_EMAILS entry
-//   reads-all/library_admin - a non-owner with library_admin or
-//                             academy_admin in academy_grants
-//   reads-all/region_lead   - a non-owner in academy_region_leads
-//                             with no admin grant
-//   reads-unrestricted      - a non-owner on the ACTIVE roster with
-//                             no admin grant and no region-lead row
+//   owner         - an OWNER_EMAILS entry
+//   library_admin - a non-owner with library_admin or academy_admin
+//                   in academy_grants
+//   region_lead   - a non-owner in academy_region_leads with no
+//                   admin grant
+//   learner       - a non-owner on the ACTIVE roster with no admin
+//                   grant and no region-lead row
+//
+// Under Kevin's L1 ruling (2026-11-17) only the owner is reads_all;
+// library_admin, region_lead and learner are all reads_unrestricted.
+// Expected, against today's database:
+//   owner:          82 / 82 / 82, restricted doc opens, unknown 404
+//   library_admin:  70 / 70 / 70, restricted doc kept_for, unknown 404
+//   region_lead:    70 / 70 / 70, restricted doc kept_for, unknown 404
+//   learner:        70 / 70 / 70, restricted doc kept_for, unknown 404
 //
 // Picks one restricted and one unrestricted docId from today's
 // `documents` table. Then calls the three loaders for each viewer

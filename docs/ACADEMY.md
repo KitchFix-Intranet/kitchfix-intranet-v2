@@ -142,14 +142,17 @@ through one function in `src/lib/academy/access.ts`:
 Reader levels (coarse to fine, so a third one can slot in below
 without touching callers):
 
-- `reads_all`          - owner, region lead (row in
-                         `academy_region_leads` for their email), or
-                         holder of the `library_admin` or
-                         `academy_admin` grant. "Management and above"
-                         for now, per Kevin's ruling 2026-11-17.
+- `reads_all`          - owner only, per Kevin's ruling 2026-11-17.
+                         Region leads and `library_admin` /
+                         `academy_admin` grant holders read the 70
+                         unrestricted documents like everyone else.
+                         Lifting them back to reads_all is a later
+                         ruling, not L1.
 - `reads_unrestricted` - every other signed-in person the app gate
-                         lets in. Fails closed: a null or unknown
-                         `access_level` is treated as restricted.
+                         lets in - region leads and the two admin
+                         grant holders included. Fails closed: a
+                         null or unknown `access_level` is treated
+                         as restricted.
 
 `loadLibrary`, `loadLibraryIndex` and `loadDocument` all enforce it
 server-side; a restricted row never reaches the client payload for a
@@ -162,10 +165,13 @@ state built from the shared `.kf-empty` primitive - the number only,
 no title, card_line, summary, owner, approver, dates, contents list
 or body.
 
-A future `reads_operator` level will sit below `reads_unrestricted`
-for the `audience='operator'` documents once the phone link ships;
-callers do not change, only the enum widens and `resolveReaderLevel`
-grows one branch.
+`resolveReaderLevel` still accepts `identity` so a later ruling can
+widen the rule without changing callers: lifting
+`identity.scope.kind === "region"` or `library_admin` /
+`academy_admin` grant holders into `reads_all` is a one-branch edit
+inside this file. A future `reads_operator` level will sit below
+`reads_unrestricted` for `audience='operator'` documents once the
+phone link ships; the enum widens, callers do not.
 
 The Academy readers (`room`, `records`, `module`, `sign`, the
 certificate route) do not yet filter by `access_level`; a restricted
