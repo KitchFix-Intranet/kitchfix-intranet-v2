@@ -1,0 +1,641 @@
+/* Invoices V2 - train 1 surface CSS. Tokens only.
+ * All lane-specific rules live behind `.kf-invoices-surface`.
+ *
+ * Two lane-scoped choices (listed in PR body as pending the
+ * shared-foundation lane's nod):
+ *   1. Status pills at --sp-t-label (13px); the shared pill is 12px.
+ *   2. Field edges (select, input) use --sp-line-field (not --sp-line).
+ */
+
+.kf-sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+/* ─── Surface ─────────────────────────────────────────────────── */
+
+.kf-invoices-surface {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-5);
+  padding: var(--sp-sp-5) var(--sp-sp-6);
+  max-width: var(--sp-canvas-max);
+  margin: 0 auto;
+  width: 100%;
+}
+@media (max-width: 860px) {
+  .kf-invoices-surface {
+    padding: var(--sp-sp-4);
+    gap: var(--sp-sp-4);
+    padding-bottom: calc(var(--sp-sp-5) + var(--sp-tabbar));
+  }
+}
+
+/* ─── Two lane-scoped choices ─────────────────────────────────── */
+
+.kf-invoices-surface .kf-pill {
+  font-size: var(--sp-t-label);
+}
+.kf-invoices-surface select,
+.kf-invoices-surface input[type="search"] {
+  border: 1px solid var(--sp-line-field);
+  border-radius: var(--sp-r-ctl);
+  background: var(--sp-card);
+  color: var(--sp-ink);
+  min-height: var(--sp-floor-chef);
+  padding: 0 var(--sp-sp-3);
+  font: inherit;
+}
+.kf-invoices-surface select:focus-visible,
+.kf-invoices-surface input[type="search"]:focus-visible {
+  outline: 2px solid var(--sp-navy);
+  outline-offset: 2px;
+}
+
+/* ─── Owner preview banner ────────────────────────────────────── */
+
+.kf-invoices-preview {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sp-3);
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  background: var(--sp-info-bg);
+  border: 1px solid var(--sp-sky-line);
+  border-radius: var(--sp-r-ctl);
+  font-size: var(--sp-t-label);
+}
+.kf-invoices-preview__label {
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  color: var(--sp-link);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+.kf-invoices-preview__name {
+  flex: 1 1 0%;
+  color: var(--sp-body);
+}
+
+/* ─── Phone head ──────────────────────────────────────────────── */
+
+.kf-invoices-phonehead {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+}
+.kf-invoices-phonehead__title {
+  font-family: var(--sp-disp);
+  font-weight: 800;
+  font-size: var(--sp-t-h1);
+  color: var(--sp-navy);
+  text-transform: uppercase;
+  line-height: 1;
+  letter-spacing: .2px;
+  margin: 0;
+  position: relative;
+  padding-bottom: var(--sp-sp-2);
+}
+.kf-invoices-phonehead__tick {
+  position: absolute;
+  left: 0;
+  bottom: -2px;
+  display: block;
+  width: 56px;
+  height: 5px;
+  background: var(--sp-red);
+  transform: skewX(-30deg);
+}
+.kf-invoices-phonehead__kick {
+  margin: 0;
+  color: var(--sp-body);
+  font-size: var(--sp-t-body);
+  line-height: 1.4;
+}
+
+/* ─── Toolbar ─────────────────────────────────────────────────── */
+
+.kf-invoices-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-sp-4);
+  align-items: center;
+  padding: var(--sp-sp-3) 0;
+  border-bottom: 1px solid var(--sp-line);
+  position: relative;
+}
+.kf-invoices-toolbar__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-sp-2);
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.kf-invoices-toolbar__right {
+  display: flex;
+  gap: var(--sp-sp-3);
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.kf-invoices-toolbar__site {
+  display: flex;
+  align-items: center;
+}
+.kf-invoices-toolbar__search {
+  display: flex;
+}
+.kf-invoices-toolbar__help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--sp-floor-chef);
+  height: var(--sp-floor-chef);
+  border-radius: var(--sp-r-pill);
+  border: 1px solid var(--sp-line);
+  background: var(--sp-card);
+  color: var(--sp-body);
+  cursor: pointer;
+}
+.kf-invoices-toolbar__help:hover { background: var(--sp-sky-tint); }
+.kf-invoices-toolbar__help:focus-visible {
+  outline: 2px solid var(--sp-navy);
+  outline-offset: 2px;
+}
+
+/* ─── Filter chip ─────────────────────────────────────────────── */
+
+.kf-invoices-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  height: var(--sp-floor-chef);
+  min-width: var(--sp-floor-chef);
+  padding: 0 var(--sp-sp-4);
+  border-radius: var(--sp-r-pill);
+  border: 1px solid var(--sp-line);
+  background: var(--sp-card);
+  color: var(--sp-ink);
+  font: inherit;
+  font-size: var(--sp-t-label);
+  cursor: pointer;
+}
+.kf-invoices-chip:hover { background: var(--sp-sky-tint); }
+.kf-invoices-chip:focus-visible {
+  outline: 2px solid var(--sp-navy);
+  outline-offset: 2px;
+}
+.kf-invoices-chip.is-selected {
+  background: var(--sp-sky-tint);
+  border-color: var(--sp-navy);
+  color: var(--sp-navy);
+  font-weight: 700;
+}
+.kf-invoices-chip__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  padding: 2px 6px;
+  border-radius: var(--sp-r-pill);
+  background: var(--sp-ground);
+  color: var(--sp-body);
+  font-size: var(--sp-t-micro);
+  font-variant-numeric: tabular-nums;
+}
+.kf-invoices-chip.is-selected .kf-invoices-chip__count {
+  background: var(--sp-card);
+  color: var(--sp-navy);
+}
+
+.kf-invoices-search {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  padding-left: var(--sp-sp-3);
+  border: 1px solid var(--sp-line-field);
+  border-radius: var(--sp-r-ctl);
+  background: var(--sp-card);
+  min-height: var(--sp-floor-chef);
+}
+.kf-invoices-search input {
+  border: 0 !important;
+  min-height: auto !important;
+  padding: 0 var(--sp-sp-3) 0 0 !important;
+  background: transparent;
+  width: 200px;
+  max-width: 100%;
+}
+.kf-invoices-search input:focus { outline: none; }
+.kf-invoices-search:focus-within {
+  outline: 2px solid var(--sp-navy);
+  outline-offset: 2px;
+}
+
+/* ─── List container with container queries ───────────────────── */
+
+.kf-invoices-list {
+  container-type: inline-size;
+  container-name: invlist;
+}
+
+/* Baseline: cards visible, table hidden. CSS container queries
+ * swap to the table at the right width per surface mode. Hidden
+ * side is display:none so it stays out of the tab order and the
+ * accessibility tree. */
+.kf-invoices-tablewrap { display: none; }
+.kf-invoices-cards     { display: block; }
+
+/* One-site surface switches at 1000px. */
+.kf-invoices-surface.is-onesite .kf-invoices-list {
+  --invlist-threshold: 1000px;
+}
+/* Many-site surface switches at 1100px. */
+.kf-invoices-surface.is-manysites .kf-invoices-list {
+  --invlist-threshold: 1100px;
+}
+
+@container invlist (min-width: 1000px) {
+  .kf-invoices-surface.is-onesite .kf-invoices-tablewrap { display: block; }
+  .kf-invoices-surface.is-onesite .kf-invoices-cards     { display: none; }
+}
+@container invlist (min-width: 1100px) {
+  .kf-invoices-surface.is-manysites .kf-invoices-tablewrap { display: block; }
+  .kf-invoices-surface.is-manysites .kf-invoices-cards     { display: none; }
+}
+
+/* On phones (<=860px) the Shell canvas is narrower than either
+ * container threshold; the container query above never matches,
+ * so cards show and the table is permanently display:none. We
+ * still ship the table in the DOM only on desktop widths where a
+ * viewer resizing their browser crosses the breakpoint on the
+ * one surface where that matters (ingredients already uses this
+ * exact pattern). */
+
+/* ─── Table ───────────────────────────────────────────────────── */
+
+.kf-invoices-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  overflow: hidden;
+  font-size: var(--sp-t-table);
+}
+.kf-invoices-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--sp-sky-soft);
+  text-align: left;
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: 12.5px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--sp-ink);
+  padding: 0 var(--sp-sp-4);
+  height: var(--sp-row);
+  border-bottom: 1px solid var(--sp-line);
+}
+.kf-invoices-th--num { text-align: right; }
+
+.kf-invoices-trow {
+  cursor: pointer;
+  height: var(--sp-row);
+}
+.kf-invoices-trow:hover { background: var(--sp-raise); }
+.kf-invoices-trow.is-odd { background: var(--sp-raise); }
+.kf-invoices-trow.is-odd:hover { background: var(--sp-ground); }
+.kf-invoices-trow.is-returned {
+  box-shadow: inset 4px 0 0 var(--sp-red);
+}
+
+.kf-invoices-tcell {
+  padding: 0 var(--sp-sp-4);
+  color: var(--sp-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 1px solid var(--sp-line-soft);
+  vertical-align: middle;
+}
+.kf-invoices-tcell--num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.kf-invoices-tcell--invnum { font-family: var(--sp-ui); }
+.kf-invoices-tcell--status { text-align: left; }
+.kf-invoices-tcell__sub { color: var(--sp-muted); }
+
+.kf-invoices-row__vendorbtn {
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  color: var(--sp-ink);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+  min-height: var(--sp-floor-corp);
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+}
+.kf-invoices-row__vendorbtn:hover { color: var(--sp-navy); text-decoration: underline; }
+.kf-invoices-row__vendorbtn:focus-visible {
+  outline: 2px solid var(--sp-navy);
+  outline-offset: 2px;
+  border-radius: var(--sp-r-xs);
+}
+
+/* ─── Stacked cards ───────────────────────────────────────────── */
+
+.kf-invoices-cards__group {
+  margin-top: var(--sp-sp-5);
+}
+.kf-invoices-cards__group:first-child { margin-top: 0; }
+.kf-invoices-cards__groupheading {
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-label);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--sp-body);
+  margin: 0 0 var(--sp-sp-3);
+}
+.kf-invoices-cards__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+}
+.kf-invoices-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+  padding: var(--sp-sp-4);
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  cursor: pointer;
+  min-height: var(--sp-floor-chef);
+}
+.kf-invoices-card:hover { box-shadow: var(--sp-shadow); }
+.kf-invoices-card:focus-visible {
+  outline: 2px solid var(--sp-navy);
+  outline-offset: 2px;
+}
+.kf-invoices-card.is-returned {
+  box-shadow: inset 4px 0 0 var(--sp-red);
+}
+.kf-invoices-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-sp-3);
+}
+.kf-invoices-card__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  color: var(--sp-muted);
+  font-size: var(--sp-t-label);
+}
+.kf-invoices-card__dot {
+  width: 3px; height: 3px; border-radius: var(--sp-r-pill);
+  background: var(--sp-muted);
+  display: inline-block;
+}
+.kf-invoices-card__row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-sp-3);
+  color: var(--sp-ink);
+  font-size: var(--sp-t-body);
+  font-variant-numeric: tabular-nums;
+}
+.kf-invoices-card__key {
+  color: var(--sp-muted);
+  font-size: var(--sp-t-label);
+}
+.kf-invoices-card__val { font-weight: 700; }
+
+/* ─── Paging ──────────────────────────────────────────────────── */
+
+.kf-invoices-paging {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--sp-sp-4);
+  padding: var(--sp-sp-3) 0;
+}
+.kf-invoices-paging__status {
+  margin: 0;
+  color: var(--sp-muted);
+  font-size: var(--sp-t-label);
+}
+.kf-invoices-paging__hint {
+  margin: 0;
+  color: var(--sp-body);
+  font-size: var(--sp-t-label);
+  max-width: 420px;
+  text-align: right;
+}
+
+/* ─── Empty state ─────────────────────────────────────────────── */
+
+.kf-invoices-empty__cta { margin-top: var(--sp-sp-3); }
+
+/* ─── Drawer ──────────────────────────────────────────────────── */
+
+.kf-invoices-drawer__backdrop {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--sp-navy-deep) 25%, transparent);
+  z-index: var(--sp-z-drawer);
+  animation: kf-invoices-fadein var(--sp-base) var(--sp-ease);
+}
+.kf-invoices-drawer__backdrop.is-exiting {
+  animation: kf-invoices-fadeout var(--sp-slow) var(--sp-ease) forwards;
+}
+
+.kf-invoices-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(480px, 100%);
+  background: var(--sp-card);
+  box-shadow: var(--sp-shadow-lift);
+  z-index: var(--sp-z-drawer);
+  display: flex;
+  flex-direction: column;
+  animation: kf-invoices-slidein var(--sp-base) var(--sp-ease-io);
+}
+.kf-invoices-drawer.is-exiting {
+  animation: kf-invoices-slideout var(--sp-slow) var(--sp-ease-io) forwards;
+}
+.kf-invoices-drawer__head {
+  padding: var(--sp-sp-5);
+  border-bottom: 1px solid var(--sp-line);
+  position: relative;
+}
+.kf-invoices-drawer__close {
+  position: absolute;
+  top: var(--sp-sp-3);
+  right: var(--sp-sp-3);
+  width: var(--sp-floor-chef);
+  height: var(--sp-floor-chef);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--sp-body);
+  border-radius: var(--sp-r-pill);
+  cursor: pointer;
+}
+.kf-invoices-drawer__close:hover { background: var(--sp-sky-tint); color: var(--sp-navy); }
+.kf-invoices-drawer__close:focus-visible {
+  outline: 2px solid var(--sp-navy);
+  outline-offset: 2px;
+}
+.kf-invoices-drawer__title {
+  margin: 0;
+  font-family: var(--sp-disp);
+  font-weight: 800;
+  font-size: var(--sp-t-title);
+  color: var(--sp-navy);
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: .2px;
+  padding-right: var(--sp-sp-7);
+}
+.kf-invoices-drawer__subtitle {
+  margin: var(--sp-sp-2) 0 0;
+  color: var(--sp-muted);
+  font-size: var(--sp-t-label);
+}
+.kf-invoices-drawer__body {
+  padding: var(--sp-sp-5);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-5);
+}
+.kf-invoices-drawer__block h3 {
+  font-family: var(--sp-disp);
+  font-weight: 700;
+  font-size: var(--sp-t-label);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--sp-ink);
+  margin: 0 0 var(--sp-sp-3);
+}
+.kf-invoices-drawer__block p { margin: 0 0 var(--sp-sp-2); }
+.kf-invoices-drawer__block--sentback {
+  background: var(--sp-block-bg);
+  border: 1px solid var(--sp-block-line);
+  color: var(--sp-block);
+  padding: var(--sp-sp-4);
+  border-radius: var(--sp-r-ctl);
+}
+.kf-invoices-drawer__block--sentback h3 { color: var(--sp-block); }
+.kf-invoices-drawer__reason { font-weight: 700; color: var(--sp-ink); }
+.kf-invoices-drawer__note { color: var(--sp-ink); white-space: pre-wrap; }
+.kf-invoices-drawer__amber { color: var(--sp-warn-strong); }
+
+.kf-invoices-drawer__kv {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--sp-sp-2) var(--sp-sp-4);
+  margin: 0;
+}
+.kf-invoices-drawer__kv dt {
+  color: var(--sp-muted);
+  font-size: var(--sp-t-label);
+}
+.kf-invoices-drawer__kv dd {
+  margin: 0;
+  color: var(--sp-ink);
+  font-size: var(--sp-t-body);
+}
+.kf-invoices-drawer__kv-num { font-variant-numeric: tabular-nums; }
+.kf-invoices-drawer__kv-pair { display: contents; }
+.kf-invoices-drawer__lines { color: var(--sp-muted); font-size: var(--sp-t-label); }
+
+/* Animations */
+@keyframes kf-invoices-slidein {
+  from { transform: translateX(16px); opacity: 0; }
+  to   { transform: translateX(0); opacity: 1; }
+}
+@keyframes kf-invoices-slideout {
+  from { transform: translateX(0); opacity: 1; }
+  to   { transform: translateX(16px); opacity: 0; }
+}
+@keyframes kf-invoices-fadein {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes kf-invoices-fadeout {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+/* Reduced motion: zero the local animations. */
+@media (prefers-reduced-motion: reduce) {
+  .kf-invoices-drawer,
+  .kf-invoices-drawer.is-exiting,
+  .kf-invoices-drawer__backdrop,
+  .kf-invoices-drawer__backdrop.is-exiting {
+    animation-duration: 0ms !important;
+  }
+}
+
+/* ─── Status help dialog ──────────────────────────────────────── */
+
+.kf-invoices-help__backdrop {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-sp-5);
+  background: color-mix(in srgb, var(--sp-navy-deep) 35%, transparent);
+  z-index: var(--sp-z-drawer);
+}
+.kf-invoices-help__panel {
+  width: 100%;
+  max-width: 360px;
+  background: var(--sp-card);
+  border-radius: var(--sp-r-card);
+  box-shadow: var(--sp-shadow-float);
+  padding: var(--sp-sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+}
+.kf-invoices-help__panel h3 {
+  margin: 0;
+  font-family: var(--sp-disp);
+  font-weight: 800;
+  font-size: var(--sp-t-h3);
+  color: var(--sp-navy);
+  text-transform: uppercase;
+  letter-spacing: .2px;
+}
+.kf-invoices-help__panel dl { margin: 0; display: grid; grid-template-columns: 1fr; gap: var(--sp-sp-2); }
+.kf-invoices-help__panel dt {
+  font-weight: 700;
+  color: var(--sp-ink);
+  font-size: var(--sp-t-body);
+}
+.kf-invoices-help__panel dd {
+  margin: 0;
+  color: var(--sp-body);
+  font-size: var(--sp-t-body);
+}
