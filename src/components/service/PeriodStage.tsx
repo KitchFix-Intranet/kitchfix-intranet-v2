@@ -2,37 +2,40 @@
 //
 // Wide layout: four week rows under one row of day-of-week headers
 // and a colour key. A finished week above this week folds to a line
-// on a short screen (<= 959px tall); the server renders the fold
-// toggle on foldable weeks, and CSS hides the toggle entirely on
-// tall screens so nothing redundant appears.
+// on a short screen; the server renders the fold toggle on foldable
+// weeks, and CSS hides the toggle entirely on tall screens so
+// nothing redundant appears.
 //
-// Narrow layout: this week is open as seven rows; every other week is
-// a line that opens on tap. When the period on show does not hold
-// today, the first week is the open one.
-
-"use client";
+// Narrow layout: this week is open as seven rows; every other week
+// is a line that opens on tap.
+//
+// This file is a SERVER component. The small bit of state (phone
+// colour-key disclosure) lives in its own `"use client"` component
+// LegendDisclosure, imported here. No function props cross the
+// server/client boundary.
 
 import Link from "next/link";
-import { useState } from "react";
-import { ChevronLeft, ChevronRight, Check, ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronLeft, ChevronRight, Check } from "lucide-react";
 import { WeekRow } from "./WeekRow";
+import { LegendDisclosure } from "./LegendDisclosure";
 import type { PeriodView } from "@/lib/sc/calendar/types";
 import { fmtDate } from "@/lib/fmt";
 
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 export function PeriodStage({
-  period, isBilled, siteToday, hrefForPeriod, hrefForThisPeriod,
+  period, isBilled, siteToday, prevPeriodHref, nextPeriodHref, thisPeriodHref,
 }: {
   period: PeriodView;
   isBilled: boolean;
   siteToday: string;
-  hrefForPeriod: (periodNo: number) => string;
-  hrefForThisPeriod: string;
+  // Precomputed strings so this server tree hands nothing but
+  // serializable data to its client children (WeekRow, LegendDisclosure).
+  prevPeriodHref: string | null;
+  nextPeriodHref: string | null;
+  thisPeriodHref: string;
 }) {
   const todayIsInPeriod = siteToday >= period.startIso && siteToday <= period.endIso;
-  const prevHref = period.periodNo > 1 ? hrefForPeriod(period.periodNo - 1) : null;
-  const nextHref = period.periodNo < 13 ? hrefForPeriod(period.periodNo + 1) : null;
 
   const periodLabel = `Period ${period.periodNo}, ${fmtDate(period.startIso, "short")} to ${fmtDate(period.endIso, "short")}`;
   const closedNote = period.isClosed ? " · closed" : "";
@@ -53,20 +56,20 @@ export function PeriodStage({
         </h2>
         <nav className="kf-sc-stage__tools" aria-label="Period navigation">
           {!todayIsInPeriod ? (
-            <Link href={hrefForThisPeriod} className="kf-sc-period-btn">
+            <Link href={thisPeriodHref} className="kf-sc-period-btn">
               <Check size={16} strokeWidth={1.75} aria-hidden />
               <span>This period</span>
             </Link>
           ) : null}
-          {prevHref ? (
-            <Link href={prevHref} className="kf-sc-iconbtn" aria-label="Period before">
+          {prevPeriodHref ? (
+            <Link href={prevPeriodHref} className="kf-sc-iconbtn" aria-label="Period before">
               <ChevronLeft size={20} strokeWidth={1.5} aria-hidden />
             </Link>
           ) : (
             <span className="kf-sc-iconbtn is-disabled" aria-hidden><ChevronLeft size={20} strokeWidth={1.5} /></span>
           )}
-          {nextHref ? (
-            <Link href={nextHref} className="kf-sc-iconbtn" aria-label="Period after">
+          {nextPeriodHref ? (
+            <Link href={nextPeriodHref} className="kf-sc-iconbtn" aria-label="Period after">
               <ChevronRight size={20} strokeWidth={1.5} aria-hidden />
             </Link>
           ) : (
@@ -90,7 +93,7 @@ export function PeriodStage({
         {DOW.map((d) => <span key={d}>{d}</span>)}
       </div>
 
-      <LegendFold hasClosed={period.isClosed || period.weeks.some((w) => w.state === "period_closed")} />
+      <LegendDisclosure hasClosed={period.isClosed || period.weeks.some((w) => w.state === "period_closed")} />
 
       <ol className="kf-sc-stage__weeks" role="list">
         {period.weeks.map((w, i) => {
@@ -118,51 +121,5 @@ export function PeriodStage({
   );
 }
 
-function LegendFold({ hasClosed }: { hasClosed: boolean }) {
-  const [open, setOpen] = useState(false);
-  const items: { key: string; word: string }[] = [
-    { key: "sent",  word: "Submitted" },
-    { key: "ent",   word: "Entered" },
-    { key: "proj",  word: "Projected" },
-    { key: "need",  word: "Needs actuals" },
-    ...(hasClosed ? [{ key: "shut", word: "Closed" }] : []),
-    { key: "none",  word: "No service" },
-    { key: "today", word: "Today" },
-  ];
-  // On a wide screen the key always sits in one line under the DOW.
-  // On a phone the key folds behind "What the colours mean" so the
-  // period header + colour key together take one line each.
-  return (
-    <>
-      <ul className="kf-sc-legend kf-sc-only-wide" aria-label="Day colour key">
-        {items.map((it) => (
-          <li key={it.key}>
-            <span className={`kf-sc-sq kf-sc-sq--key is-${it.key}`} aria-hidden />
-            <span>{it.word}</span>
-          </li>
-        ))}
-      </ul>
-      <div className="kf-sc-legend-fold kf-sc-only-narrow">
-        <button
-          type="button"
-          className="kf-sc-legend-fold__btn"
-          aria-expanded={open}
-          onClick={() => setOpen((v) => !v)}
-        >
-          <span>What the colours mean</span>
-          {open ? <ChevronUp size={16} strokeWidth={1.75} aria-hidden /> : <ChevronDown size={16} strokeWidth={1.75} aria-hidden />}
-        </button>
-        {open ? (
-          <ul className="kf-sc-legend" aria-label="Day colour key">
-            {items.map((it) => (
-              <li key={it.key}>
-                <span className={`kf-sc-sq kf-sc-sq--key is-${it.key}`} aria-hidden />
-                <span>{it.word}</span>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-      </div>
-    </>
-  );
-}
+// LegendFold moved to its own file (LegendDisclosure.tsx) so the
+// useState does not force this parent to be a client component.

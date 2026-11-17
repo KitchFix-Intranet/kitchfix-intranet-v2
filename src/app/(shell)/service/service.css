@@ -359,6 +359,11 @@
   .kf-sc-stage__weeks { gap: var(--sp-sp-1); }
   .kf-sc-stage > .kf-sc-legend { display: none; }
 }
+/* Very tight transition (861-1023 wide, short desk): one more tier
+ * of rhythm so this-week-as-W4 clears the fold at 861x768. */
+@media (min-width: 861px) and (max-width: 1023px) and (max-height: 900px) {
+  .kf-sc-stage__weeks { gap: 0; }
+}
 
 /* ─── one week as a row ─── */
 
