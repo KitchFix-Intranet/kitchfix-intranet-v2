@@ -102,7 +102,38 @@ export default async function Page({
   const result = await loadDocument(email, docId);
 
   if (!result.ok) {
-    if (result.status === 404) notFound();
+    if (result.status === 403) {
+      // The kept-for state. The loader returns only the document id
+      // for this branch - no title, card_line, summary, owner,
+      // approver, dates, contents list or body is fetched, so none
+      // can leak into this render. Built from the shared .kf-empty
+      // primitive + existing button class; no new tokens or colours.
+      return (
+        <div className="kf-library">
+          <section
+            className="kf-empty"
+            role="status"
+            aria-label="Kept for management and above"
+          >
+            <div className="kf-empty__icon" aria-hidden />
+            <div>
+              <h1 className="kf-empty__title">
+                {result.docId} is kept for management and above
+              </h1>
+              <p className="kf-empty__body">
+                It is not on your shelves. If you need something from it,
+                ask your regional director.
+              </p>
+            </div>
+            <Link href="/library" className="kf-btn kf-btn--primary">
+              Go to the Library
+            </Link>
+          </section>
+        </div>
+      );
+    }
+    // An unknown docId, a non-Live doc, or a 500 all collapse to the
+    // app's existing 404 - indistinguishable from "doesn't exist".
     notFound();
   }
 
