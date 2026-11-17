@@ -48,6 +48,8 @@ import { RowSendBackButton } from "./RowSendBackButton";
 import { RowGradeToggle } from "./RowGradeToggle";
 import { PanelIngredientZone } from "./panel/PanelIngredientZone";
 import { PanelClosedRows } from "./panel/PanelClosedRows";
+import { postJson, saveErrorSentence } from "./panel/common";
+import { useSaveWithRefresh } from "./panel/useSaveWithRefresh";
 import type { ReviewCardIngredient } from "./itemTypes";
 import "./ingredients-tab.css";
 
@@ -1309,38 +1311,58 @@ function SuggestBaseUnitLink({
   suggestedLabel: string;
   onDone: () => void;
 }) {
-  const [busy, setBusy] = useState(false);
+  // T2 §1 + ruling 3: route through the shared save path (dropped
+  // connection caught, one wording vocabulary) and carry the same
+  // 10 s Undo the menu writer carries so this button is the menu's
+  // equal, not a shortcut with fewer undos.
+  const { save: runSave, busy, error } = useSaveWithRefresh();
   const next = row.suggestedBaseUnit;
   if (!next) return null;
 
   async function apply() {
     if (busy || !next) return;
-    setBusy(true);
-    const res = await fetch("/api/review/set-base-unit", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ingredientId: row.id, baseUnit: next }),
+    const prev = row.baseUnit;
+    const id = row.id;
+    const label = suggestedLabel;
+    await runSave({
+      op: () =>
+        postJson("/api/review/set-base-unit", {
+          ingredientId: id,
+          baseUnit: next,
+        }),
+      successMessage: `Switched to ${label}`,
+      onDone,
+      fireSuccessToast: (_d, message) => {
+        toast(message, {
+          undo: async () => {
+            const u = await postJson("/api/review/set-base-unit", {
+              ingredientId: id,
+              baseUnit: prev,
+            });
+            if (!u.ok) throw new Error(saveErrorSentence(u) ?? "Nothing was saved.");
+            onDone();
+          },
+        });
+      },
     });
-    const data = (await res.json().catch(() => null)) as { error?: string } | null;
-    if (!res.ok) {
-      toast(data?.error ?? `Save failed (${res.status})`, { tone: "block" });
-      setBusy(false);
-      return;
-    }
-    toast(`Switched to ${suggestedLabel}`);
-    setBusy(false);
-    onDone();
   }
 
   return (
-    <button
-      type="button"
-      className="kf-ingp__attn-fix"
-      onClick={apply}
-      disabled={busy}
-    >
-      {busy ? "Switching..." : `Cost this per ${suggestedLabel} instead`}
-    </button>
+    <>
+      <button
+        type="button"
+        className="kf-ingp__attn-fix"
+        onClick={apply}
+        disabled={busy}
+      >
+        {busy ? "Switching..." : `Cost this per ${suggestedLabel} instead`}
+      </button>
+      {error ? (
+        <span className="kf-dpn__flash kf-dpn__flash--err" role="alert">
+          {error}
+        </span>
+      ) : null}
+    </>
   );
 }
 

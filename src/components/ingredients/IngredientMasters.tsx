@@ -161,6 +161,7 @@ const LIVE_STATUSES = PIPELINE_LIVE_STATUSES;
 // mismatch classification (an orthogonal use the item panel does not share).
 import { DIM_BY_UOM, BASE_BY_DIM, normUom, convertPer, canonicalFromBaseUnit } from "@/lib/ingredients/pack";
 import { isMeasuresWorld, readAllMeasures } from "@/lib/ingredients/measuresRead";
+import { readActiveIngredients, type MinimalSupabase } from "@/lib/ingredients/readIngredients";
 // M2 §4B part 2: shape helpers removed (nothing on screen reads
 // each_measure_*). The legacy fields stay on MasterRow /
 // MasterLinkedItem for type-level back-compat.
@@ -191,18 +192,19 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
   const timer = startTimer(mode === "resale" ? "page:retail" : "page:ingredients");
   const client = serviceClient();
 
-  // Masters. Server-side split on `resale` - one list per tab; the
-  // combined count of recipe + resale masters equals the previous
-  // combined total (every master has `resale` set, defaults to false).
-  const { data: ingData, error: ingErr } = await client
-    .from("pr_ingredients")
-    // N6: swap N5's avg_weight_lb/source for the N6 each-measure trio.
-    .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source,yield_pct,yield_source")
-    .eq("status", "active")
-    .eq("resale", mode === "resale")
-    .order("name");
-  if (ingErr) throw ingErr;
-  const rawIngredients = (ingData ?? []) as Ingredient[];
+  // Masters. T2 §2: the paged reader fails loudly if the list comes
+  // back short so a 1,000-row cap can never show as a partial list.
+  // Server-side split on `resale` - one list per tab; the combined
+  // count of recipe + resale masters equals the previous combined
+  // total (every master has `resale` set, defaults to false).
+  const rawIngredients = await readActiveIngredients<Ingredient>(
+    client as unknown as MinimalSupabase,
+    {
+      columns:
+        "id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source,yield_pct,yield_source",
+      equals: [["resale", mode === "resale"]],
+    }
+  );
   mark(timer, "ingredients");
 
   // M1 R2 fix 1: detect the migration world once. In measures-world

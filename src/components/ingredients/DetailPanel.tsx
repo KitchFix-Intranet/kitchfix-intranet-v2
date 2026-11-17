@@ -19,6 +19,8 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/ui/Toaster";
+import { postJson, saveErrorSentence } from "./panel/common";
+import { anyDirty, clearAll, discardAll } from "./panel/dirty";
 import type { ReviewCardIngredient, ReviewGroupItem } from "./itemTypes";
 import { PanelHead } from "./panel/PanelHead";
 import { PanelStrip } from "./panel/PanelStrip";
@@ -137,11 +139,38 @@ export function DetailPanel({
     if (onInvalidate) onInvalidate();
   };
 
+  // T2 §3: the discard-what-you-typed ask. Opened by any of the three
+  // doors (Esc, close button, backdrop click) when at least one editor
+  // under the panel reports a changed value. Keep editing is the
+  // default (focus lands on it); Discard resets every dirty editor to
+  // its baseline and closes the panel.
+  const [discardAskOpen, setDiscardAskOpen] = useState(false);
+  const keepEditingRef = useRef<HTMLButtonElement>(null);
+
   const close = () => {
     if (closing) return;
     setClosing(true);
+    // Flush any still-registered editors so a re-open starts clean.
+    clearAll();
     window.setTimeout(onClose, EXIT_MS);
   };
+
+  const tryClose = () => {
+    if (anyDirty()) {
+      setDiscardAskOpen(true);
+      return;
+    }
+    close();
+  };
+
+  useEffect(() => {
+    if (discardAskOpen) {
+      // Focus Keep editing after the ask renders so Enter commits the
+      // safe choice.
+      const t = window.setTimeout(() => keepEditingRef.current?.focus(), 0);
+      return () => window.clearTimeout(t);
+    }
+  }, [discardAskOpen]);
 
   useEffect(() => {
     closeBtnRef.current?.focus();
@@ -150,7 +179,10 @@ export function DetailPanel({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        close();
+        // If a pick-list (typeahead etc.) already handled Esc it will
+        // have called preventDefault + stopPropagation; this listener
+        // is at document and only fires for unhandled Esc.
+        tryClose();
         return;
       }
       if (e.key === "Tab" && asideRef.current) {
@@ -194,7 +226,7 @@ export function DetailPanel({
     <>
       <div
         className={`kf-drawer__backdrop${closing ? " is-closing" : ""}`}
-        onClick={close}
+        onClick={tryClose}
         aria-hidden
       />
       <aside
@@ -220,7 +252,7 @@ export function DetailPanel({
             ingredient={ingredient}
             proposedName={proposedName}
             attentionCount={attentionCounts.total}
-            onClose={close}
+            onClose={tryClose}
           />
 
           {open.kind === "item" && item ? (
@@ -299,6 +331,41 @@ export function DetailPanel({
             if (onInvalidate) onInvalidate();
           }} />
         ) : null}
+
+        {discardAskOpen ? (
+          <div
+            className="kf-dpn__discard-ask"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby={`${labelId}-discard`}
+          >
+            <div className="kf-dpn__discard-ask-inner">
+              <h4 id={`${labelId}-discard`}>Discard what you typed?</h4>
+              <p>Your changes have not been saved.</p>
+              <div className="kf-dpn__discard-ask-actions">
+                <button
+                  ref={keepEditingRef}
+                  type="button"
+                  className="kf-btn kf-btn--primary kf-btn--sm"
+                  onClick={() => setDiscardAskOpen(false)}
+                >
+                  Keep editing
+                </button>
+                <button
+                  type="button"
+                  className="kf-btn kf-btn--line kf-btn--sm"
+                  onClick={() => {
+                    discardAll();
+                    setDiscardAskOpen(false);
+                    close();
+                  }}
+                >
+                  Discard
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </aside>
     </>
   );
@@ -310,41 +377,31 @@ export function DetailPanel({
 // is opened from the Vendor items tab (showStatusActions prop).
 function ItemStatusFooter({ item, onDone }: { item: ReviewGroupItem; onDone: () => void }) {
   const [busy, setBusy] = useState<null | "archived" | "one_off">(null);
-  async function post(next: string): Promise<string | null> {
-    const res = await fetch(`/api/vendor-items/${item.id}/status`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ status: next }),
-    });
-    if (res.ok) return null;
-    try {
-      const body = await res.text();
-      return body || `Status ${res.status}`;
-    } catch {
-      return `Status ${res.status}`;
-    }
-  }
+  const [error, setError] = useState<string | null>(null);
+
   async function set(next: "archived" | "one_off", successCopy: string) {
     if (busy) return;
     setBusy(next);
+    setError(null);
     const prior = item.status ?? "active";
-    const err = await post(next);
-    if (err) {
-      toast(err, { tone: "block" });
+    const r = await postJson(`/api/vendor-items/${item.id}/status`, { status: next });
+    if (!r.ok) {
+      setError(saveErrorSentence(r) ?? "Nothing was saved.");
       setBusy(null);
       return;
     }
     toast(successCopy, {
       undo: async () => {
-        const errUndo = await post(prior);
-        if (errUndo) {
-          toast(errUndo, { tone: "block" });
-          return;
-        }
+        // T2 §1 + ruling 9: an Undo that fails is announced by the
+        // toaster (T1 §4). Throw from the undo callback so the toast
+        // layer reports it.
+        const u = await postJson(`/api/vendor-items/${item.id}/status`, { status: prior });
+        if (!u.ok) throw new Error(saveErrorSentence(u) ?? "Nothing was saved.");
         onDone();
       },
     });
     onDone();
+    setBusy(null);
   }
   return (
     <div className="kf-ipanel__footer-strip">
@@ -366,6 +423,11 @@ function ItemStatusFooter({ item, onDone }: { item: ReviewGroupItem; onDone: () 
         >
           Mark one-off
         </button>
+        {error ? (
+          <span className="kf-dpn__flash kf-dpn__flash--err" role="alert">
+            {error}
+          </span>
+        ) : null}
       </div>
     </div>
   );

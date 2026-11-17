@@ -12,6 +12,8 @@ import { useState } from "react";
 import type { ReviewCardIngredient } from "../itemTypes";
 import { postJson } from "./common";
 import { useSaveWithRefresh } from "./useSaveWithRefresh";
+import { SaveFlash } from "./SaveFlash";
+import { useDirtyEditor } from "./dirty";
 
 const YIELD_SOURCES = [
   { v: "house_test", label: "house test" },
@@ -33,12 +35,21 @@ export function PanelYieldRow({
 }) {
   const [qtyStr, setQtyStr] = useState<string>(yieldPct != null ? String(yieldPct) : "");
   const [source, setSource] = useState<string>(yieldSource ?? "estimate");
-  const { save: runSave, busy } = useSaveWithRefresh();
+  const { save: runSave, busy, savedAt, error } = useSaveWithRefresh();
 
   const trimmed = qtyStr.trim();
   const n = trimmed ? Number(trimmed) : null;
   const valid = n == null || (Number.isFinite(n) && n > 0 && n <= 100);
   const dirty = (yieldPct ?? null) !== (n ?? null) || (yieldSource ?? "estimate") !== source;
+  // T2 §3: panel Discard ask -> reset qty + source to the server row.
+  useDirtyEditor(
+    `yield-${ingredient.id}`,
+    dirty && !busy,
+    () => {
+      setQtyStr(yieldPct != null ? String(yieldPct) : "");
+      setSource(yieldSource ?? "estimate");
+    }
+  );
 
   const echo = (() => {
     if (n == null) return "Nothing is lost in prep";
@@ -136,6 +147,7 @@ export function PanelYieldRow({
             Clear
           </button>
         ) : null}
+        <SaveFlash savedAt={savedAt} error={error} />
       </div>
     </div>
   );

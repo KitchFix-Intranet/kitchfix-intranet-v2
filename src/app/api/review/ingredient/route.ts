@@ -22,6 +22,7 @@ import {
   readMeasuresForIngredient,
   legacyEachMeasureToMeasures,
 } from "@/lib/ingredients/measuresRead";
+import { readActiveIngredients, type MinimalSupabase } from "@/lib/ingredients/readIngredients";
 import { startTimer, mark, endTimer } from "@/lib/timing";
 // M2 §4B part 2: shape helper no longer called here. Nothing on
 // screen reads each_measure_*.
@@ -52,29 +53,36 @@ export async function GET(req: NextRequest) {
   const client = serviceClient();
 
   // The ingredient's own row + the full active-parents list for the
-  // panel's sub-category and merge dropdowns, in parallel.
-  const [ingRes, parentsRes] = await Promise.all([
+  // panel's sub-category and merge dropdowns, in parallel. T2 §2:
+  // the parents list goes through readActiveIngredients, which pages
+  // past PostgREST's 1,000-row cap and fails loudly on a short read.
+  const PARENT_COLS =
+    "id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source,yield_pct,yield_source";
+  let parents: ReviewCardIngredient[];
+  const [ingRes, parentsOrErr] = await Promise.all([
     client
       .from("pr_ingredients")
       // N6 + M1: each_measure_* trio stays (read path §2.6 fallback);
       // yield_pct/yield_source added for the panel's Yield row (M1
       // amendment 7).
-      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source,yield_pct,yield_source")
+      .select(PARENT_COLS)
       .eq("id", id)
       .maybeSingle(),
-    client
-      .from("pr_ingredients")
-      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source,yield_pct,yield_source")
-      .eq("status", "active")
-      .order("name"),
+    readActiveIngredients<ReviewCardIngredient>(
+      client as unknown as MinimalSupabase,
+      { columns: PARENT_COLS }
+    ).then(
+      (rows) => ({ data: rows, error: null as Error | null }),
+      (error: Error) => ({ data: null, error })
+    ),
   ]);
   if (ingRes.error) { endTimer(timer, { ok: false, stage: "ingredient" }); return NextResponse.json({ error: ingRes.error.message }, { status: 500 }); }
   if (!ingRes.data) { endTimer(timer, { ok: false, stage: "ingredient" }); return NextResponse.json({ error: "Ingredient not found" }, { status: 404 }); }
-  if (parentsRes.error) { endTimer(timer, { ok: false, stage: "parents" }); return NextResponse.json({ error: parentsRes.error.message }, { status: 500 }); }
+  if (parentsOrErr.error) { endTimer(timer, { ok: false, stage: "parents" }); return NextResponse.json({ error: parentsOrErr.error.message }, { status: 500 }); }
   mark(timer, "batch1");
 
   const rawIngredient = ingRes.data as ReviewCardIngredient;
-  const parents = (parentsRes.data ?? []) as ReviewCardIngredient[];
+  parents = parentsOrErr.data ?? [];
 
   // M1 R2 fix 1 + amendment 4: one world per request. In measures-
   // world rewrite the legacy each_measure_* triple on the ingredient

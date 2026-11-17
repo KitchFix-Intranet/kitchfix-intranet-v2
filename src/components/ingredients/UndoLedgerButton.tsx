@@ -10,6 +10,7 @@ import { useRouter } from "next/navigation";
 import { Undo2 } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount } from "@/lib/fmt";
+import { postJson, errMsg, saveErrorSentence } from "./panel/common";
 
 type Props = {
   itemIds: string[];
@@ -27,22 +28,19 @@ export function UndoLedgerButton({ itemIds, label = "Undo" }: Props) {
     let skipped = 0;
     const errors: string[] = [];
     for (const id of itemIds) {
-      try {
-        const res = await fetch("/api/review/undo", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ itemId: id }),
-        });
-        if (res.ok) {
-          ok += 1;
+      const r = await postJson("/api/review/undo", { itemId: id });
+      if (r.ok) {
+        ok += 1;
+      } else {
+        // Match the "already undone" case on the explicit server
+        // reason only; a dropped connection or 5xx goes into errors
+        // with the plain sentence.
+        const explicit = errMsg(r.data, "");
+        if (r.kind === "refused" && /not confirmed/i.test(explicit)) {
+          skipped += 1;
         } else {
-          const data = (await res.json().catch(() => null)) as { error?: string } | null;
-          const msg = data?.error ?? `Undo ${res.status}`;
-          if (/not confirmed/i.test(msg)) skipped += 1;
-          else errors.push(msg);
+          errors.push(saveErrorSentence(r) ?? "Nothing was saved.");
         }
-      } catch (e) {
-        errors.push(e instanceof Error ? e.message : String(e));
       }
     }
     if (errors.length > 0) {

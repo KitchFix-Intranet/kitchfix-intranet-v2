@@ -21,6 +21,8 @@ import {
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/ui/Toaster";
 import { ALLERGENS, type Allergen } from "@/lib/ingredients/allergens";
+import { postJson, saveErrorSentence } from "./panel/common";
+import { useDirtyEditor } from "./panel/dirty";
 // N13.1 R2: own the sheet. Mounted only by PanelIngredientZone today,
 // so the panel reaches the grid + toggle rules through this import on
 // every surface including Vendor items (where review.css is absent).
@@ -45,24 +47,6 @@ type Props = {
   // renders in the row's action column.
   onStateChange?: (s: AllergensState) => void;
 };
-
-async function postJson(url: string, body: unknown): Promise<{ ok: boolean; status: number; data: unknown }> {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  let data: unknown = null;
-  try { data = await res.json(); } catch { /* ignore */ }
-  return { ok: res.ok, status: res.status, data };
-}
-
-function errMsg(data: unknown, fallback: string): string {
-  if (data && typeof data === "object" && "error" in data && typeof (data as { error?: unknown }).error === "string") {
-    return (data as { error: string }).error;
-  }
-  return fallback;
-}
 
 export const IngredientAllergens = forwardRef<AllergensHandle, Props>(function IngredientAllergens(
   { ingredientId, allergens, reviewedBy: _reviewedBy, reviewedAt, onSaved, onStateChange },
@@ -95,6 +79,18 @@ export const IngredientAllergens = forwardRef<AllergensHandle, Props>(function I
     return true;
   }, [selected, savedSet]);
   const canConfirm = unreviewed || !selectionMatchesSaved;
+  // T2 §3 + holding note: a changed tick-box grid is a changed editor.
+  // The Discard ask resets the selection + confirm-none to what is
+  // stored and the Confirm button goes quiet again.
+  useDirtyEditor(
+    `allergens-${ingredientId}`,
+    !selectionMatchesSaved && !busy,
+    () => {
+      setSelected(new Set<string>((allergens ?? []).filter((a) => (ALLERGENS as readonly string[]).includes(a))));
+      setConfirmNone(reviewedAt != null && (allergens ?? []).length === 0);
+      setError(null);
+    }
+  );
 
   function togglePill(a: Allergen) {
     setConfirmNone(false);
@@ -123,9 +119,11 @@ export const IngredientAllergens = forwardRef<AllergensHandle, Props>(function I
       allergens: payload,
     });
     if (!r.ok) {
-      const msg = errMsg(r.data, `Save failed (${r.status})`);
+      // T2 §1: one vocabulary for the failure sentence; no status
+      // number on the page. The parent reflects `error` beside the
+      // Confirm button via onStateChange; no block toast needed.
+      const msg = saveErrorSentence(r) ?? "Nothing was saved.";
       setError(msg);
-      toast(msg, { tone: "block" });
       setBusy(false);
       return;
     }

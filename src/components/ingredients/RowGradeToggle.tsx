@@ -15,6 +15,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/ui/Toaster";
+import { postJson, saveErrorSentence } from "./panel/common";
 
 export function RowGradeToggle({
   itemId,
@@ -33,28 +34,17 @@ export function RowGradeToggle({
   async function onClick() {
     if (busy) return;
     setBusy(true);
-    try {
-      const res = await fetch("/api/review/set-grade", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          itemId,
-          // Server narrows to the sanctioned two-value space.
-          grade: next === "premium" ? "premium" : null,
-        }),
-      });
-      const data = (await res.json().catch(() => null)) as { error?: string } | null;
-      if (!res.ok) {
-        toast(data?.error ?? `Save failed (${res.status})`, { tone: "block" });
-        setBusy(false);
-        return;
-      }
-      toast(next === "premium" ? "Marked premium" : "Cleared to standard", { tone: "good" });
-    } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), { tone: "block" });
+    const r = await postJson("/api/review/set-grade", {
+      itemId,
+      // Server narrows to the sanctioned two-value space.
+      grade: next === "premium" ? "premium" : null,
+    });
+    if (!r.ok) {
+      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
       setBusy(false);
       return;
     }
+    toast(next === "premium" ? "Marked premium" : "Cleared to standard", { tone: "good" });
     setBusy(false);
     router.refresh();
   }

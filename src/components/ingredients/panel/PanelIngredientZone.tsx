@@ -38,6 +38,7 @@ import { PanelMeasuresBlock, type SuggestionCandidate } from "./PanelMeasuresBlo
 import { PanelYieldRow } from "./PanelYieldRow";
 import { PanelChipsRow } from "./PanelChipsRow";
 import { useSaveWithRefresh } from "./useSaveWithRefresh";
+import { useDirtyEditor } from "./dirty";
 import { dropParents } from "../parentsStore";
 
 export function PanelIngredientZone({
@@ -76,6 +77,12 @@ export function PanelIngredientZone({
   // dropdown both see the new name on their next open).
   const [renameDraft, setRenameDraft] = useState(ingredient.name);
   const { save: runRename, busy: renameBusy, savedAt: renameSavedAt, error: renameError } = useSaveWithRefresh();
+  // T2 §3: register the rename draft with the panel's Discard ask.
+  useDirtyEditor(
+    `rename-${ingredient.id}`,
+    renameDraft.trim() !== ingredient.name && !renameBusy,
+    () => setRenameDraft(ingredient.name)
+  );
 
   // --- Category --------------------------------------------------
   const [superDraft, setSuperDraft] = useState<string>(ingredient.category ?? "");
@@ -83,6 +90,21 @@ export function PanelIngredientZone({
   const [subPick, setSubPick] = useState<string>(ingredient.parent ?? "");
   const [subNew, setSubNew] = useState("");
   const { save: runCategory, busy: catBusy, savedAt: catSavedAt, error: catError } = useSaveWithRefresh();
+  // T2 §3: register the category draft.
+  const categoryDirty =
+    superDraft !== (ingredient.category ?? "") ||
+    (subMode === "pick" && subPick !== (ingredient.parent ?? "")) ||
+    (subMode === "new" && subNew.trim().length > 0);
+  useDirtyEditor(
+    `category-${ingredient.id}`,
+    categoryDirty && !catBusy,
+    () => {
+      setSuperDraft(ingredient.category ?? "");
+      setSubPick(ingredient.parent ?? "");
+      setSubNew("");
+      setSubMode("pick");
+    }
+  );
 
   // M2 §4B: wiring the new Measures + Chips + Yield blocks.
   //   - measuresForBlock: ingredient's measures list (M1 payload adds
@@ -484,6 +506,7 @@ export function PanelIngredientZone({
           >
             {allergenCtl.busy ? "Saving..." : "Confirm"}
           </button>
+          <SaveFlash savedAt={allergenCtl.savedAt} error={allergenCtl.error} />
         </div>
       </div>
     </section>

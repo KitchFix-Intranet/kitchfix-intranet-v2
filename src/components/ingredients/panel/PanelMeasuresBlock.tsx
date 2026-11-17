@@ -22,6 +22,8 @@ import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { postJson } from "./common";
 import { useSaveWithRefresh } from "./useSaveWithRefresh";
+import { SaveFlash } from "./SaveFlash";
+import { useDirtyEditor } from "./dirty";
 import {
   rejectReason,
   factor,
@@ -200,7 +202,9 @@ export function PanelMeasuresBlock({
   const [addError, setAddError] = useState<string | null>(null);
   // T4 §3: Save bar stays busy through POST + refresh so the measures
   // list reads the new row(s) before the chrome releases.
-  const { save: runSave, busy: saveBusy } = useSaveWithRefresh();
+  // T2 §1: `saveError`/`saveSavedAt` feed the SaveFlash in the savebar
+  // so a dropped-connection or 5xx wording lands beside the button.
+  const { save: runSave, busy: saveBusy, savedAt: saveSavedAt, error: saveError } = useSaveWithRefresh();
   const [dryRunSentence, setDryRunSentence] = useState<string | null>(null);
   const dryRunTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -252,6 +256,10 @@ export function PanelMeasuresBlock({
   }, [baseline, ingredient.id]);
 
   const dirty = !sameList(draft, baseline);
+  // T2 §3: the panel's Discard ask asks every dirty editor to reset
+  // to its baseline. discardChanges below snaps the draft back to
+  // the server-rendered measures.
+  useDirtyEditor(`measures-${ingredient.id}`, dirty && !saveBusy, () => setDraft(baseline));
 
   const candidateForRejection = useMemo<UiMeasure | null>(() => {
     if (!addingFrom) return null;
@@ -632,6 +640,7 @@ export function PanelMeasuresBlock({
               >
                 Discard
               </button>
+              <SaveFlash savedAt={saveSavedAt} error={saveError} />
             </span>
           </div>
         ) : null}

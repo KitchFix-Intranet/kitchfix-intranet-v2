@@ -18,6 +18,7 @@ import { useRouter } from "next/navigation";
 import { Play, Check, AlertTriangle } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount } from "@/lib/fmt";
+import { postJson, saveErrorSentence } from "./panel/common";
 // N13.1 R2: pick up the .kf-dpn__label primitive directly instead of
 // depending on the admin page loading review.css.
 import "./ingredient-typeahead.css";
@@ -82,39 +83,17 @@ export function MatchRunButton() {
     setState({ kind: "running", startedAt });
 
     const qs = limit != null ? `?limit=${limit}` : "";
-    let data: MatchResp | null = null;
-    let status = 0;
-    try {
-      // No AbortController + no timeout. The server maxDuration is 300s;
-      // the browser fetch will wait as long as the server holds the
-      // connection, which is what we want for a multi-minute matcher
-      // wave.
-      const res = await fetch(`/api/match${qs}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-      });
-      status = res.status;
-      data = (await res.json().catch(() => null)) as MatchResp | null;
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      toast(msg, { tone: "block" });
-      setState({
-        kind: "error",
-        message: msg,
-        counts: null,
-        note: null,
-        elapsedMs: Date.now() - startedAt,
-      });
-      return;
-    }
-
+    // T2 §1 long-job path: no 30 s cap (the matcher wave can take
+    // minutes); on failure the error paragraph below shows one of
+    // the three sentences from panel/common and the button comes back.
+    const r = await postJson(`/api/match${qs}`, {}, { timeoutMs: null });
+    const data = (r.data ?? null) as MatchResp | null;
     const elapsedMs = Date.now() - startedAt;
     const counts = data?.counts ?? null;
     const note = data?.note ?? null;
 
-    if (status < 200 || status >= 300 || data?.status === "failed") {
-      const msg = note ?? `Matcher failed (${status})`;
-      toast(msg, { tone: "block" });
+    if (!r.ok || data?.status === "failed") {
+      const msg = saveErrorSentence(r) ?? "Nothing was saved.";
       setState({ kind: "error", message: msg, counts, note, elapsedMs });
       return;
     }

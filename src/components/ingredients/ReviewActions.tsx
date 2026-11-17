@@ -21,6 +21,7 @@ import {
 import { uomLabel } from "@/lib/ingredients/pack";
 import { canonicalIngredientName } from "@/lib/ingredients/nameNorm";
 import { IngredientTypeahead, formatIngredientMeta } from "./IngredientTypeahead";
+import { postJson, saveErrorSentence } from "./panel/common";
 
 // Kept exported so other call sites that import it keep compiling even
 // though ReviewCard no longer passes a memberItems prop.
@@ -91,23 +92,12 @@ type Props = {
 // lands on the Relink panel's primary, not on the bar's Confirm.
 type Op = null | "confirming" | "relinking" | "relinkandconfirm" | "creating" | "notfood" | "resale" | "archived" | "oneoff" | "keepsep" | "flag";
 
-async function postJson(url: string, body: unknown): Promise<{ ok: boolean; status: number; data: unknown }> {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  let data: unknown = null;
-  try { data = await res.json(); } catch { /* ignore */ }
-  return { ok: res.ok, status: res.status, data };
-}
+// T2 §1: ReviewActions now goes through the shared postJson in
+// ./panel/common, so a dropped connection is a caught outcome and
+// the three failure sentences come from one vocabulary. The local
+// copy is retired; the toast / in-panel error paths below call
+// saveErrorSentence(r) to produce the words.
 
-function errMsg(data: unknown, fallback: string): string {
-  if (data && typeof data === "object" && "error" in data && typeof (data as { error?: unknown }).error === "string") {
-    return (data as { error: string }).error;
-  }
-  return fallback;
-}
 
 // N4: Create-success toasts that name a master append the inferred
 // unit when it is not the common-case default "each". Keeps the usual
@@ -192,6 +182,11 @@ export function ReviewActions({
   // or next submit. Renders the error band above the foot.
   const [relinkError, setRelinkError] = useState<string | null>(null);
   const [newError, setNewError] = useState<string | null>(null);
+  // T2 §5: batch-flag in-page note form (replaces the former
+  // window.prompt). Open on Flag click; Save posts; Cancel closes.
+  const [flagFormOpen, setFlagFormOpen] = useState(false);
+  const [flagNote, setFlagNote] = useState("");
+  const [flagError, setFlagError] = useState<string | null>(null);
   // N3: why the user opened the create panel. "confirm" is the plain
   // + Create flow (default). "retail" is set only by the markResale
   // fallback below when it cannot post directly (name < 2 chars or
@@ -284,7 +279,7 @@ export function ReviewActions({
       itemIds: checkedIds,
     });
     if (!r.ok) {
-      toast(errMsg(r.data, `Confirm failed (${r.status})`), { tone: "block" });
+      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
       setOp(null);
       return;
     }
@@ -325,7 +320,7 @@ export function ReviewActions({
     if (op || noneChecked || !relinkId) return;
     setRelinkError(null);
     setOp("relinking");
-    let r: { ok: boolean; status: number; data: unknown };
+    let r: Awaited<ReturnType<typeof postJson>>;
     try {
       r = await postJson("/api/review/relink", {
         ingredientId: relinkId,
@@ -339,7 +334,7 @@ export function ReviewActions({
       return;
     }
     if (!r.ok) {
-      const msg = errMsg(r.data, `Relink failed (${r.status})`);
+      const msg = saveErrorSentence(r) ?? "Nothing was saved.";
       setRelinkError(msg);
       toast(msg, { tone: "block" });
       setOp(null);
@@ -371,7 +366,7 @@ export function ReviewActions({
     if (op || noneChecked || !relinkId) return;
     setRelinkError(null);
     setOp("relinkandconfirm");
-    let r: { ok: boolean; status: number; data: unknown };
+    let r: Awaited<ReturnType<typeof postJson>>;
     try {
       r = await postJson("/api/review/confirm", {
         ingredientId: relinkId,
@@ -385,7 +380,7 @@ export function ReviewActions({
       return;
     }
     if (!r.ok) {
-      const msg = errMsg(r.data, `Save failed (${r.status})`);
+      const msg = saveErrorSentence(r) ?? "Nothing was saved.";
       setRelinkError(msg);
       toast(msg, { tone: "block" });
       setOp(null);
@@ -453,7 +448,7 @@ export function ReviewActions({
     // N10 round 2 fix 10: panel submits catch network throws so a
     // dropped connection does not leave the panel on "Saving..."
     // forever. Other handlers are untouched.
-    let r: { ok: boolean; status: number; data: unknown };
+    let r: Awaited<ReturnType<typeof postJson>>;
     try {
       r = await postJson("/api/review/new-ingredient", {
       name,
@@ -481,7 +476,7 @@ export function ReviewActions({
       return;
     }
     if (!r.ok) {
-      const msg = errMsg(r.data, `Save failed (${r.status})`);
+      const msg = saveErrorSentence(r) ?? "Nothing was saved.";
       setNewError(msg);
       toast(msg, { tone: "block" });
       setOp(null);
@@ -540,7 +535,7 @@ export function ReviewActions({
     setOp("notfood");
     const r = await postJson("/api/review/not-food", { itemIds: checkedIds });
     if (!r.ok) {
-      toast(errMsg(r.data, `Mark failed (${r.status})`), { tone: "block" });
+      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
       setOp(null);
       return;
     }
@@ -574,7 +569,7 @@ export function ReviewActions({
     setOp("oneoff");
     const r = await postJson("/api/review/one-off", { itemIds: checkedIds });
     if (!r.ok) {
-      toast(errMsg(r.data, `Mark failed (${r.status})`), { tone: "block" });
+      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
       setOp(null);
       return;
     }
@@ -643,7 +638,7 @@ export function ReviewActions({
         resale: true,
       });
       if (!r.ok) {
-        toast(errMsg(r.data, `Mark failed (${r.status})`), { tone: "block" });
+        toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
         setOp(null);
         return;
       }
@@ -681,7 +676,7 @@ export function ReviewActions({
       itemIds: checkedIds,
     });
     if (!r.ok) {
-      toast(errMsg(r.data, `Mark failed (${r.status})`), { tone: "block" });
+      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
       setOp(null);
       return;
     }
@@ -710,7 +705,7 @@ export function ReviewActions({
     setOp("archived");
     const r = await postJson("/api/review/archive", { itemIds: checkedIds });
     if (!r.ok) {
-      toast(errMsg(r.data, `Mark failed (${r.status})`), { tone: "block" });
+      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
       setOp(null);
       return;
     }
@@ -733,28 +728,33 @@ export function ReviewActions({
   // Flag. Orthogonal to disposition - doesn't move anything, just
   // stamps flagged/flag_note/flagged_by/flagged_at. A follow-up
   // reviewer sees these on the Overview flagged panel. Unflag/resolve
-  // happens from that panel. Prompts for an optional short note.
-  async function flagChecked() {
+  // happens from that panel. T2 §5: the former window.prompt is now
+  // an in-page note form (see the render below); flagSave posts the
+  // chosen note.
+  function openFlagForm() {
     if (op || noneChecked) return;
-    // eslint-disable-next-line no-alert
-    const note = window.prompt(
-      `Flag ${checkedCount} item${checkedCount === 1 ? "" : "s"} for a second look. Optional note:`,
-      ""
-    );
-    if (note === null) return; // user cancelled
+    setFlagError(null);
+    setFlagNote("");
+    setFlagFormOpen(true);
+  }
+  async function flagSave() {
+    if (op || noneChecked) return;
     setOp("flag");
+    setFlagError(null);
     const r = await postJson("/api/review/flag", {
       itemIds: checkedIds,
       flagged: true,
-      note: note.trim() || null,
+      note: flagNote.trim() || null,
     });
     if (!r.ok) {
-      toast(errMsg(r.data, `Flag failed (${r.status})`), { tone: "block" });
+      setFlagError(saveErrorSentence(r) ?? "Nothing was saved.");
       setOp(null);
       return;
     }
     toast(`Flagged ${fmtCount(checkedCount)} item${checkedCount === 1 ? "" : "s"} for review`);
     setOp(null);
+    setFlagFormOpen(false);
+    setFlagNote("");
     setLastDone(Date.now());
     router.refresh();
   }
@@ -764,7 +764,7 @@ export function ReviewActions({
     setOp("keepsep");
     const r = await postJson("/api/review/keep-separate", { itemIds: checkedIds });
     if (!r.ok) {
-      toast(errMsg(r.data, `Mark failed (${r.status})`), { tone: "block" });
+      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
       setOp(null);
       return;
     }
@@ -861,11 +861,67 @@ export function ReviewActions({
           type="button"
           className={`kf-btn kf-btn--ghost kf-btn--sm${op === "flag" ? " is-busy" : ""}`}
           disabled={op !== null || noneChecked}
-          onClick={flagChecked}
+          onClick={openFlagForm}
           title="Mark for a second look (optional note); stays in the queue, shows on the Overview flagged panel"
         >
           {op === "flag" ? "Saving..." : "Flag"}
         </button>
+        {flagFormOpen ? (
+          <div className="kf-ing-note-form" role="group" aria-label="Flag note">
+            <label className="kf-ing-note-form__label" htmlFor="rvc-flag-note">
+              {`Flag ${checkedCount} item${checkedCount === 1 ? "" : "s"} for a second look. Optional note:`}
+            </label>
+            <input
+              id="rvc-flag-note"
+              type="text"
+              className="kf-ing-note-form__input"
+              value={flagNote}
+              onChange={(e) => setFlagNote(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setFlagFormOpen(false);
+                  setFlagNote("");
+                  setFlagError(null);
+                } else if (e.key === "Enter") {
+                  e.preventDefault();
+                  flagSave();
+                }
+              }}
+              disabled={op === "flag"}
+              placeholder="(optional)"
+              autoFocus
+            />
+            <div className="kf-ing-note-form__actions">
+              <button
+                type="button"
+                className={`kf-btn kf-btn--primary kf-btn--sm${op === "flag" ? " is-busy" : ""}`}
+                disabled={op === "flag"}
+                onClick={flagSave}
+              >
+                {op === "flag" ? "Saving..." : "Flag"}
+              </button>
+              <button
+                type="button"
+                className="kf-btn kf-btn--line kf-btn--sm"
+                disabled={op === "flag"}
+                onClick={() => {
+                  setFlagFormOpen(false);
+                  setFlagNote("");
+                  setFlagError(null);
+                }}
+              >
+                Cancel
+              </button>
+              {flagError ? (
+                <span className="kf-dpn__flash kf-dpn__flash--err" role="alert">
+                  {flagError}
+                </span>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
 
         {/* Divider before "not for recipes" group. */}
         <span className="kf-rvc__actions-sep" aria-hidden />
