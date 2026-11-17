@@ -1,48 +1,60 @@
 // Under the calendar: the whole year, 13 period cards.
+//
+// On a phone the whole section folds behind one line ("The year") so
+// the landing stays about two screens.
+//
+// SERVER component. The phone-only fold lives in its own
+// `"use client"` wrapper (YearFoldDisclosure) so we never cross a
+// function into a client child.
 
 import Link from "next/link";
 import { Lock } from "lucide-react";
+import { YearFoldDisclosure } from "./YearFoldDisclosure";
 import type { YearPeriodCard, YearSquare } from "@/lib/sc/calendar/types";
 import { fmtDate, fmtCount } from "@/lib/fmt";
 
 export function YearSection({
-  fiscalYear, cards, totals, hrefForPeriod, hrefForFy, isLoaded,
+  fiscalYear, cards, totals, periodHrefs, fyHrefs, isLoaded,
 }: {
   fiscalYear: number;
   cards: YearPeriodCard[];
   totals: { entered: number; meals: number };
-  hrefForPeriod: (periodNo: number) => string;
-  hrefForFy: (fy: number) => string;
+  // Precomputed strings: periodNo -> href, and fiscalYear -> href.
+  // No functions cross the boundary; the phone fold wraps children.
+  periodHrefs: Record<number, string>;
+  fyHrefs: Record<number, string>;
   isLoaded: boolean;
 }) {
+  const sub = isLoaded
+    ? `Fiscal ${fiscalYear} · ${fmtCount(totals.entered)} days entered · ${fmtCount(totals.meals)} meals`
+    : `Fiscal ${fiscalYear}`;
+
+  const body = isLoaded ? (
+    <ol className="kf-sc-year" role="list">
+      {cards.map((c) => (
+        <li key={c.periodNo}>
+          <YearCard card={c} href={periodHrefs[c.periodNo]} />
+        </li>
+      ))}
+    </ol>
+  ) : (
+    <p className="kf-sc-yearsec__note">The {fiscalYear} calendar is not loaded yet.</p>
+  );
+
   return (
     <section className="kf-sc-yearsec" aria-label="The year">
       <header className="kf-sc-yearsec__head">
-        <div>
+        <div className="kf-sc-yearsec__titles">
           <h2>The year</h2>
-          <p className="kf-sc-yearsec__meta">
-            {isLoaded
-              ? `Fiscal ${fiscalYear} · ${fmtCount(totals.entered)} days entered · ${fmtCount(totals.meals)} meals`
-              : `Fiscal ${fiscalYear}`}
-          </p>
+          <p className="kf-sc-yearsec__meta">{sub}</p>
         </div>
         <nav className="kf-sc-seg" aria-label="Fiscal year">
-          <Link className={fiscalYear === 2026 ? "is-on" : ""} href={hrefForFy(2026)} aria-current={fiscalYear === 2026 ? "true" : undefined}>2026</Link>
-          <Link className={fiscalYear === 2027 ? "is-on" : ""} href={hrefForFy(2027)} aria-current={fiscalYear === 2027 ? "true" : undefined}>2027</Link>
+          <Link className={fiscalYear === 2026 ? "is-on" : ""} href={fyHrefs[2026]} aria-current={fiscalYear === 2026 ? "true" : undefined}>2026</Link>
+          <Link className={fiscalYear === 2027 ? "is-on" : ""} href={fyHrefs[2027]} aria-current={fiscalYear === 2027 ? "true" : undefined}>2027</Link>
         </nav>
       </header>
 
-      {isLoaded ? (
-        <ol className="kf-sc-year" role="list">
-          {cards.map((c) => (
-            <li key={c.periodNo}>
-              <YearCard card={c} href={hrefForPeriod(c.periodNo)} />
-            </li>
-          ))}
-        </ol>
-      ) : (
-        <p className="kf-sc-yearsec__note">The {fiscalYear} calendar is not loaded yet.</p>
-      )}
+      <YearFoldDisclosure>{body}</YearFoldDisclosure>
     </section>
   );
 }
@@ -63,7 +75,7 @@ function YearCard({ card, href }: { card: YearPeriodCard; href: string }) {
       <span className="kf-sc-pcard__head">
         <b>P{card.periodNo}</b>
         <span>{fmtDate(card.startIso, "short")} - {fmtDate(card.endIso, "short")}</span>
-        {card.isCurrent ? <i className="kf-sc-chip kf-sc-chip--small">Now</i> : card.isClosed ? <Lock size={14} strokeWidth={1.5} aria-hidden /> : null}
+        {card.isCurrent ? <span className="kf-sc-chip kf-sc-chip--small">Now</span> : card.isClosed ? <Lock size={14} strokeWidth={1.5} aria-hidden /> : null}
       </span>
       <span className="kf-sc-pcard__dow" aria-hidden>
         {DOW_ONE.map((d, i) => <i key={i}>{d}</i>)}
@@ -80,9 +92,7 @@ function YearSquareCell({ square }: { square: YearSquare }) {
   const cls = `kf-sc-sq is-${sqTone(square.state)}`;
   const extra = `${square.isToday ? " is-today" : ""}${square.isHome ? " is-home" : ""}`;
   return (
-    <span className={`${cls}${extra}`}>
-      {square.meals > 0 ? <b>{compactMeals(square.meals)}</b> : null}
-    </span>
+    <span className={`${cls}${extra}`} />
   );
 }
 
@@ -99,14 +109,4 @@ function sqTone(state: YearSquare["state"]): string {
     case "projected": return "proj";
     case "no_service": return "none";
   }
-}
-
-function compactMeals(n: number): string {
-  if (n >= 10000) return `${Math.round(n / 1000)}k`;
-  if (n >= 1000) {
-    const k = n / 1000;
-    const s = k.toFixed(1);
-    return s.endsWith(".0") ? `${s.slice(0, -2)}k` : `${s}k`;
-  }
-  return String(n);
 }

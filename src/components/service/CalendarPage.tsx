@@ -20,16 +20,30 @@ export function CalendarPage({
   asQuery: string;    // "" or "&as=<id>"
   previewName: string | null;
 }) {
-  const hrefForPeriod = (p: number) => `${basePath}?site=${view.site.slug}&fy=${view.period.fiscalYear}&p=${p}${asQuery}`;
-  const hrefForThisPeriod = `${basePath}?site=${view.site.slug}${asQuery}`;
-  const hrefForFy = (fy: number) => `${basePath}?site=${view.site.slug}&fy=${fy}${asQuery}`;
+  // Precompute every href as a plain string here on the server, so
+  // nothing that crosses into a `"use client"` child is a function.
+  // React's App Router rejects function props across the server/client
+  // boundary unless they are marked `"use server"` (and these are not
+  // server actions - they are URL builders).
+  const periodHrefs: Record<number, string> = {};
+  for (let p = 1; p <= 13; p++) {
+    periodHrefs[p] = `${basePath}?site=${view.site.slug}&fy=${view.period.fiscalYear}&p=${p}${asQuery}`;
+  }
+  const thisPeriodHref = `${basePath}?site=${view.site.slug}${asQuery}`;
+  const fyHrefs: Record<number, string> = {
+    2026: `${basePath}?site=${view.site.slug}&fy=2026${asQuery}`,
+    2027: `${basePath}?site=${view.site.slug}&fy=2027${asQuery}`,
+  };
+  const prevPeriodHref = view.period.periodNo > 1 ? periodHrefs[view.period.periodNo - 1] : null;
+  const nextPeriodHref = view.period.periodNo < 13 ? periodHrefs[view.period.periodNo + 1] : null;
+  const previewExitHref = thisPeriodHref.replace(/[&?]as=[^&]+/, "") || thisPeriodHref;
 
   // The band: the one thing the site needs first.
   const band = bandContent(view);
 
   return (
     <div className="kf-sc-surface">
-      {previewName ? <OwnerPreviewBanner name={previewName} exitHref={hrefForThisPeriod.replace(/[&?]as=[^&]+/, "") || hrefForThisPeriod} /> : null}
+      {previewName ? <OwnerPreviewBanner name={previewName} exitHref={previewExitHref} /> : null}
 
       <IdentBand
         eyebrow={band.eyebrow}
@@ -49,16 +63,17 @@ export function CalendarPage({
         period={view.period}
         isBilled={view.site.isBilled}
         siteToday={view.today}
-        hrefForPeriod={hrefForPeriod}
-        hrefForThisPeriod={hrefForThisPeriod}
+        prevPeriodHref={prevPeriodHref}
+        nextPeriodHref={nextPeriodHref}
+        thisPeriodHref={thisPeriodHref}
       />
 
       <YearSection
         fiscalYear={view.year.fiscalYear}
         cards={view.year.cards}
         totals={view.year.totals}
-        hrefForPeriod={hrefForPeriod}
-        hrefForFy={hrefForFy}
+        periodHrefs={periodHrefs}
+        fyHrefs={fyHrefs}
         isLoaded={view.year.cards.length > 0}
       />
     </div>
@@ -98,19 +113,20 @@ function bandContent(view: CalendarView): { eyebrow: string; title: string; kick
       return { eyebrow, title: "No service this week", kick: `Period ${view.period.periodNo}` };
     }
     const unentered = cur.days.filter((d) => d.state === "projected" || d.state === "needs_actuals" || d.state === "part_entered").length;
+    // The band kick stays short (reads inside the IdentBand's 60-char
+    // soft cap; at 1024 wide it still has to fit beside the facts). The
+    // numbers live on the week row, not here.
     if (unentered > 0) {
       return {
         eyebrow,
         title: `${unentered} day${unentered === 1 ? "" : "s"} to enter this week`,
-        kick: cur.billableCents !== null
-          ? `Period ${view.period.periodNo} · entered so far: ${cur.meals ?? 0} meals · ${shortDollarsFromCents(cur.billableCents)} before tax`
-          : `Period ${view.period.periodNo} · entered so far: ${cur.meals ?? 0} meals`,
+        kick: `Period ${view.period.periodNo}`,
       };
     }
     return {
       eyebrow,
       title: "This week is entered",
-      kick: `Period ${view.period.periodNo} · ${cur.meals ?? 0} meals${cur.billableCents !== null ? ` · ${shortDollarsFromCents(cur.billableCents)} before tax` : ""}`,
+      kick: `Period ${view.period.periodNo}`,
     };
   }
   // Viewing a period the site's today is not in.

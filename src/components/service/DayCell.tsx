@@ -2,6 +2,15 @@
 // not labelled by aria-label alone. The full reading sits in real
 // text (visibly where the cell has room, visually hidden otherwise),
 // inside an <li>, so a screen reader meets it in order.
+//
+// The cell has two shapes driven by CSS:
+//   - wide:   a stacked card, number as the big thing, state at the foot
+//   - narrow: a 56px row, day+date | number | state, one line (home
+//             game adds one more line below)
+//
+// The small square that used to sit at the top of the cell is gone -
+// it read as an empty tick box (Chat-Claude note Nov 16). The cell's
+// ground + the state's icon and word carry the state.
 
 import { Icon } from "./Icon";
 import { StatusWord } from "./StatusWord";
@@ -17,29 +26,41 @@ export function DayCell({ day }: { day: DayView }) {
   if (day.home) classes.push("is-home");
 
   const dateLong = fmtDate(day.iso, "long");
-  // For the reading the screen reader picks up: a complete sentence,
-  // in order, that explains everything on the cell.
   const reading = buildReading(day, dateLong);
 
   const numberShown = day.meals !== null ? day.meals.toString()
     : day.projectedMeals !== null ? day.projectedMeals.toString()
     : "";
   const numberIsGhost = day.meals === null && day.projectedMeals !== null;
+  const unitShown = numberShown
+    ? (numberIsGhost ? "projected" : (day.meals === 1 ? "meal" : "meals"))
+    : "";
 
   return (
     <li className={classes.join(" ")}>
       <div className="kf-sc-cell__inner">
-        {/* The visually hidden full reading, in order. */}
         <span className="kf-sc-sr">{reading}</span>
 
-        <span className="kf-sc-cell__mark" aria-hidden>
-          <span className={`kf-sc-sq is-${toneClass(day.state)}${day.isToday ? " is-today" : ""}${day.home ? " is-home" : ""}`} />
-        </span>
-
+        {/* The dow + date line. "Today" sits inline when the cell is
+         * wide enough, else wraps under the date. The ring on the cell
+         * (kf-sc-cell.is-today outline) is the second signal. */}
         <span className="kf-sc-cell__when" aria-hidden>
           <b className="kf-sc-cell__dow">{DOW_SHORT[day.dow]}</b>
           <span className="kf-sc-cell__date">{fmtDate(day.iso, "short")}</span>
-          {day.isToday ? <i className="kf-sc-chip">Today</i> : null}
+          {day.isToday ? <span className="kf-sc-cell__today">Today</span> : null}
+        </span>
+
+        {/* Number on its own line. The unit sits on the SAME line when
+         * there is room, otherwise CSS drops it under the number. */}
+        <span className="kf-sc-cell__fig" aria-hidden>
+          {numberShown ? (
+            <span className={`kf-sc-cell__num${numberIsGhost ? " is-ghost" : ""}`}>{numberShown}</span>
+          ) : null}
+          {unitShown ? <span className="kf-sc-cell__unit">{unitShown}</span> : null}
+        </span>
+
+        <span className="kf-sc-cell__st" aria-hidden>
+          <StatusWord tone={day.tone} icon={day.icon} word={day.word} />
         </span>
 
         {day.home ? (
@@ -48,19 +69,6 @@ export function DayCell({ day }: { day: DayView }) {
             <span>{day.home.kind === "night" ? "Night game" : "Day game"}{day.home.time ? ` · ${day.home.time}` : ""}</span>
           </span>
         ) : null}
-
-        <span className="kf-sc-cell__fig" aria-hidden>
-          {numberShown ? (
-            <>
-              <span className={`kf-sc-cell__num${numberIsGhost ? " is-ghost" : ""}`}>{numberShown}</span>
-              <span className="kf-sc-cell__unit">{numberIsGhost ? "projected" : (day.meals === 1 ? "meal" : "meals")}</span>
-            </>
-          ) : null}
-        </span>
-
-        <span className="kf-sc-cell__st" aria-hidden>
-          <StatusWord tone={day.tone} icon={day.icon} word={day.word} size={14} />
-        </span>
       </div>
     </li>
   );

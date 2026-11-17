@@ -16,9 +16,6 @@ export function SiteList({ sites, basePath }: { sites: SiteNavItem[]; basePath: 
 
   return (
     <section className="kf-sc-sitelist" aria-label="Your sites">
-      <header>
-        <h2>Open a calendar</h2>
-      </header>
       {regions.map((r) => (
         <div key={r} className="kf-sc-sitelist__region">
           <h3>{r}</h3>
