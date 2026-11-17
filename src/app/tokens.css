@@ -5,7 +5,7 @@
   --sp-ground:#F3F6F9; --sp-card:#FFFFFF; --sp-raise:#F8FAFC;
   --sp-line:#DCE4EB; --sp-line-soft:#EAEFF3; --sp-line-field:#7F8B9A;
   --sp-ink:#1B2637; --sp-body:#48556A; --sp-muted:#5C6778; --sp-link:#2459A8;
-  --sp-on-navy:#FFFFFF; --sp-on-navy-text:#D5DFEC; --sp-on-navy-muted:#B7C6DA; --sp-on-navy-dim:#7A8FAD;
+  --sp-on-navy:#FFFFFF; --sp-on-navy-text:#D5DFEC; --sp-on-navy-muted:#B7C6DA; --sp-on-navy-dim:#9AAAC2;
   --sp-good:#1B7A55; --sp-good-bg:#E3F1EA;
   --sp-warn:#8A5A0E; --sp-warn-bg:#F8EDD6; --sp-warn-strong:#C98A1A;
   --sp-block:#C0262A; --sp-block-bg:#FBE8E8; --sp-block-line:#F1C4C4;
@@ -27,6 +27,7 @@
   --sp-sp-1:4px; --sp-sp-2:8px; --sp-sp-3:12px; --sp-sp-4:16px; --sp-sp-5:24px; --sp-sp-6:32px; --sp-sp-7:40px; --sp-sp-8:48px;
   --sp-z-topbar:10; --sp-z-notch:30; --sp-z-rail-phone:50; --sp-z-drawer:60; --sp-z-toast:90;
   --sp-good-on-navy:#8FD3B4;
+  --sp-bad-on-navy:#FF9D94;
   --sp-floor-chef:48px; --sp-floor-corp:44px;
   color-scheme:light}
 *:focus-visible{outline:2px solid var(--sp-navy);outline-offset:2px}

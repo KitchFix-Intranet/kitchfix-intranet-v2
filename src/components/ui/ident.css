@@ -135,6 +135,8 @@
 .kf-band-fact--warn .kf-band-fact__note  { color: var(--sp-warn-bg); }
 .kf-band-fact--muted .kf-band-fact__value { color: var(--sp-on-navy-dim); }
 .kf-band-fact--muted .kf-band-fact__note  { color: var(--sp-on-navy-muted); }
+.kf-band-fact--good .kf-band-fact__value { color: var(--sp-good-on-navy); }
+.kf-band-fact--bad  .kf-band-fact__value { color: var(--sp-bad-on-navy); }
 @keyframes kf-pulse {
   0%, 100% { transform: scale(1); opacity: 1; }
   50%      { transform: scale(1.3); opacity: .55; }
