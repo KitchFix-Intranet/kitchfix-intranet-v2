@@ -3,15 +3,23 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, LogOut } from "lucide-react";
 
+type Role = "owner" | "lead" | "learner" | "denied";
+
 type Props = {
-  email: string;
   name: string;
+  role: Role;
   slim: boolean;
 };
 
-function initials(name: string, email: string): string {
-  const base = name && name.length > 0 ? name : email.split("@")[0] ?? "";
-  const parts = base
+const ROLE_WORDS: Record<Role, string> = {
+  owner: "Owner",
+  lead: "Lead",
+  learner: "Learner",
+  denied: "Learner",
+};
+
+function initials(name: string): string {
+  const parts = name
     .replace(/[._]+/g, " ")
     .split(/\s+/)
     .filter(Boolean);
@@ -20,7 +28,7 @@ function initials(name: string, email: string): string {
   return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
 }
 
-export function AccountMenu({ email, name, slim }: Props) {
+export function AccountMenu({ name, role, slim }: Props) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -42,8 +50,8 @@ export function AccountMenu({ email, name, slim }: Props) {
     };
   }, [open]);
 
-  const label = name && name.length > 0 ? name : email;
-  const ini = initials(name, email);
+  const ini = initials(name);
+  const roleWord = ROLE_WORDS[role];
 
   return (
     <div className="kf-account" ref={rootRef}>
@@ -57,8 +65,8 @@ export function AccountMenu({ email, name, slim }: Props) {
         <span className="kf-account__ini" aria-hidden>{ini}</span>
         {slim ? null : (
           <span className="kf-account__who">
-            <span className="kf-account__name">{label}</span>
-            <span className="kf-account__email" title={email}>{email}</span>
+            <span className="kf-account__name">{name}</span>
+            <span className="kf-account__role">{roleWord}</span>
           </span>
         )}
         {slim ? null : <ChevronDown size={16} strokeWidth={1.5} className="kf-account__caret" />}

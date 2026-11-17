@@ -4,8 +4,11 @@ The design law. Kevin reviews every preview against two approved renders he hold
 
 This file is the binding extract of the master Kevin holds. If something below reads ambiguous next to a render, the render wins and this doc gets updated in the same PR.
 
+The approved render for Stockpot Ingredients V1 lives at `docs/renders/INGREDIENTS_V1_RENDER_REFERENCE.html` with its stylesheet `docs/renders/INGREDIENTS_V1_PROPOSAL.css`. Read both before touching any Ingredients surface.
+
 ## 1. Signatures
 
+- A screen carries at most five type sizes. 12px (`--sp-t-micro`) is for dates, counts, and unit labels only - never for sentences. The weight and line-height tokens are `--sp-w-regular|semi|bold|heavy` and `--sp-lh-flat|tight|snug|body`; every new and touched rule uses them in place of raw 400/500/600/700/800 and raw 1/1.1/1.3/1.5.
 - Global `h1`-`h4`: display face (`--sp-disp`), uppercase via CSS `text-transform`, `line-height: 1`, `letter-spacing: .2px`. Typed copy stays sentence case.
 - Eyebrow: condensed 700, `--sp-t-label` (13px), `letter-spacing: 2px`, uppercase, color `--sp-red`, with a 56 by 5 red bar `skewX(-30deg)` sitting under it. The red bar lives only inside the identity band and on a `.kf-section-head`; card eyebrows use `.kf-eyebrow--plain` (same type, no bar).
 - Skew motif: `-30deg` red bars and `--sp-navy-mid` sheen panels on identity bands. Tags skew `-12deg`.
@@ -20,8 +23,10 @@ Desktop and tablet (viewport wider than 860px).
 
 - Notch toggle. A floating 28-px circle pinned to the rail's right edge (left = `calc(var(--rail-width) - 14px)`, top = `calc(var(--sp-topbar) / 2 - 14px)`), 28-px visual + 44-px hit area via a `::before` inset `-8px`, a chevron that rotates 180deg on collapse. Positioned off the rail because the rail's `overflow: hidden` would clip it. Must not sit inside anything carrying `transform`.
 - Nav items: 48px tall, radius `--sp-r-sm`, color `--sp-on-navy-text`. Hover: white at 7 percent. Active: `--sp-sky-tint` background, `--sp-navy` text. Labels fade (`opacity`, `--sp-fast`) before layout collapses to the icon rail. In slim mode the live dot moves to a 6px bubble at the icon's top-right corner.
-- Two rail levels. Top level is Home plus the six tool doors. Entering a tool swaps the rail to that tool's pages. Level 2 header is: a 44-px row with `ArrowLeft` + "All tools" (14.5px 600 `--sp-on-navy-text`, hairline below), then an uppercase section label (condensed 700, 12px, 2px tracking, `--sp-on-navy-dim`), then the nav. Slim mode: back arrow only.
-- Account row. The rail foot carries a 56-px button: 32-px initials avatar on `--sp-navy-mid`, name (from `pr_users.name`, with the existing fallback), email 12px dim, `ChevronDown` caret that rotates on open. Toggles a menu (`--sp-card`, `--sp-shadow-float`, `--sp-r-ctl`, 44-px items) with Sign out. Escape and outside click close it. Slim: avatar only; menu anchors right.
+- Two rail levels. Top level is Home plus the six tool doors. Entering a tool swaps the rail to that tool's pages. Level 2 header is: a 44-px row with `ArrowLeft` + "All tools" (13px regular `--sp-on-navy-dim`, hairline below), then an uppercase section label (condensed 700, `--sp-t-micro`, 2px tracking, `--sp-on-navy-dim`), then the nav. Slim mode: back arrow only.
+- Rail navigation is named. The outer `<aside>` carries `aria-label="Main navigation"`; the inner `<nav class="kf-rail__nav">` carries the current section: `Stockpot`, `People`, `Academy`, `Admin`, `Library`, or `All tools` at the top level. The active rail item carries `aria-current="page"`, as does the active slot in the phone tab bar.
+- Skip link. The first keyboard stop in the shell is `Skip to the page` (`kf-btn kf-btn--primary kf-btn--sm kf-skiplink`), off screen until focused. Activating it moves focus to `<main id="main" tabIndex={-1}>`; the click handler cancels the default so `#main` never lands in the address. `.kf-canvas:focus` has no outline so no ring draws around the whole page when it receives focus.
+- Account row. The rail foot carries a 56-px button: 32-px initials avatar on `--sp-navy-mid`, name (from `pr_users.name`, otherwise derived from the local-part on the server), role word under it (`Owner` / `Lead` / `Learner`) at `--sp-t-micro` dim, `ChevronDown` caret that rotates on open. The signed-in email does not cross to the browser - this screen does not need it and no other screen draws it into product chrome. Toggles a menu (`--sp-card`, `--sp-shadow-float`, `--sp-r-ctl`, 44-px items) with Sign out. Escape and outside click close it. Slim: avatar only; menu anchors right.
 
 **Topbar.** White, sticky, `--sp-topbar` (64px), 1px `--sp-line` bottom border.
 
@@ -39,19 +44,20 @@ The pathname reaches the layout via an `x-pathname` header the proxy sets (Next 
 **Identity band.** `--sp-band` (128px), `--sp-navy-deep` with a `--sp-navy-mid` sheen panel at the skew motif. Grid `grid-template-columns: minmax(0, 1fr) auto`, padding `0 32px`.
 
 - Left column: eyebrow, H2 (30px display, white, nowrap + ellipsis - a status headline built from data, never the page title, which the topbar owns; the only exception is the failure state below), kick (16px on-navy-text, nowrap + ellipsis, under 60 characters). Optional `kickInfo` button opens a popover below the band on click AND on focus, closes on Escape and outside click; never a hover-only title.
-- Right column: facts (max 2) and the CTA. Fact label 12px condensed 700 2px tracking `--sp-on-navy-dim`, value 28px condensed 800 white, note Mulish 12px 700 `--sp-good-on-navy`. 1px `--sp-navy-line` separators 44px tall, 28px gaps. CTA uses `.kf-btn--on-navy`.
+- Right column: facts (max 2) and the CTA. Fact label 12px condensed 700 2px tracking `--sp-on-navy-dim`, value `--sp-t-h1` (30px) condensed 800 white, note Mulish 12px 700 `--sp-good-on-navy`. 1px `--sp-navy-line` separators 44px tall, 28px gaps. CTA uses `.kf-btn--on-navy`.
 - Failed state: facts render "Unavailable" with the note "Couldn't read intake status" and a `--line-on-navy` Retry (`router.refresh()`); the headline falls back to the page name.
 - Running state: fact "Running" with a pulsing 10-px `--sp-sky` dot and the note "started {timeAgo} - about 3 min"; a `<RunningWatch>` client calls `router.refresh()` every 15 s. Stalled >= 15 min: "Stalled - started {timeAgo}" in warn tone.
-- Compact desktop (viewport <= 1280px): facts and separators hidden; headline drops to `--sp-t-title`; CTA stays.
+- Compact desktop (viewport <= 1280px): the facts and their separators hide; the headline drops to `--sp-t-title`; the lead button and the failure-state Retry stay. A right column that holds no button is collapsed so the grid does not leave an empty track (`.kf-band__right:not(:has(.kf-band__cta)) { display: none; }`).
 - Band section is `kf-only-desktop`; the section must not set `display` itself - the grid is on an inner div.
 
 Drawers open on the right at `min(480px, 100%)` width. A URL-param drawer cannot animate its exit; the `<DrawerFrame>` client wrapper plays `kf-slide-out` + `kf-fade-out` before `router.push(closeHref)`.
 
 ## 3. Phone (viewport 860px or less)
 
-- Rail is off-canvas, revealed by the Menu slot in the bottom tab bar. There is no hamburger in the top bar. 56-px topbar; topbar title is 20px.
+- Rail is off-canvas, revealed by the Menu slot in the bottom tab bar. There is no hamburger in the top bar. 56-px topbar; topbar title is `--sp-t-h3` (20px).
 - One way in: the drawer has exactly one opener on phones, the Menu slot (R-PP80, 2026-11-12).
-- Bottom tab bar: `--sp-tabbar` (64px), `--sp-navy-deep`, five slots. Active icon in `--sp-sky`.
+- Rail close + "All tools" back row sit at `--sp-floor-chef` (48px) on a phone so both clear the chef floor.
+- Bottom tab bar: `--sp-tabbar` (64px), `--sp-navy-deep`, five slots, label `--sp-t-micro` (12px). Active icon in `--sp-sky`.
   - At shell level: Home, Stockpot, People, Ops, Menu.
   - Inside Stockpot: Ingredients, Recipes, Menus, Signs, Menu.
 - No identity band on phones. No page head that repeats the topbar title.
@@ -66,12 +72,12 @@ Drawers open on the right at `min(480px, 100%)` width. A URL-param drawer cannot
 - Tiles. Radius `--sp-r-card`, shadow `--sp-shadow`. Label in condensed 700 at `--sp-t-label`, uppercase. Value in condensed 800 at `--sp-t-value` (34px). The lead tile on each screen uses the navy variant (background `--sp-navy`, text `--sp-on-navy`).
 - Cards. `h3` 20px (`--sp-t-h3`). Clickable cards hover-lift: `translateY(-2px)` with `--sp-shadow-lift` and a 4px `--sp-navy` top reveal.
 - Tables. Rows 48px (`--sp-row`), `table-layout: fixed` with an explicit `<colgroup>`. Headers 12.5px condensed 700 uppercase, sticky (`position: sticky; top: 0`) inside the table card. Body `--sp-t-table` (14.5px). Text left aligned, numbers right aligned with tabular numerals. Row hover `--sp-raise`. Rows are **whole-row-clickable** through a `<RowLink>` client wrapper; the description cell is no longer a nested link. A legend bar lives between the meta line and the first row listing the link-state pills and the row flags.
-- Buttons. Base 48px, radius `--sp-r-ctl`. Variants: `--primary` (navy fill), `--line` (1px navy on white), `--soft` (`--sp-sky-tint`), `--ghost` (text only), `--on-navy` (white on navy), `--line-on-navy` (transparent, white border 55 percent). Small 44px, radius `--sp-r-sm`. Rule: filled = action; outlined = status. Press: `translateY(1px)`. Busy: `.is-busy` spins the icon and disables pointer events.
+- Buttons. Base 48px, radius `--sp-r-ctl`. Variants: `--primary` (navy fill), `--line` (1px navy on white), `--soft` (`--sp-sky-tint`), `--ghost` (text only), `--on-navy` (white on navy), `--line-on-navy` (transparent, white border 55 percent). Small 44px on a desktop, `--sp-floor-chef` (48px) at 860px and below so the phone floor holds. Rule: filled = action; outlined = status. Press: `translateY(1px)`. Busy: `.is-busy` spins the icon and disables pointer events.
 - Tabs. 48px tall, 3px `--sp-red` underline on a 2px `--sp-line` baseline. Disabled tabs carry a `Lock size={14}` icon and `title="Arrives with ..."` - no visible step-number pill in the resting state.
-- Status pills (one family). `.kf-pill--live / --info / --good / --warn / --block / --muted / --twin / --reserved`. Always paired with a word or shape so color is never the only signal.
-- Toast. `<Toaster>` mounted at the app root, `toast(message, { undo })` from any client component. Background `--sp-ink`, white text, radius `--sp-r-ctl`, `--sp-shadow-float`. If reversible, carries a 44-px inline Undo. Auto-dismiss 6 s. The toaster container is `aria-live="polite"`.
-- Empty states. `.kf-empty` with a 44-px `--sp-sky-tint` icon tile, Mulish 17px 800 title, one `--sp-muted` line. Framed as onboarding, not apology.
-- Error states. `.kf-error` card with a `--sp-block` title, a plain-English message, a Retry button.
+- Status pills (one family). `.kf-pill--live / --info / --good / --warn / --block / --muted / --twin / --reserved / --premium`. Always paired with a word or shape so color is never the only signal. `.kf-pill--premium` is `--sp-sky-tint` on `--sp-navy` (10.06:1) - a grade is noteworthy, not a block; the earlier amber-register treatment (2.53:1) mis-read as a warning.
+- Toast. `<Toaster>` mounted at the app root, `toast(message, { tone?, undo? })` from any client component. Background `--sp-ink`, white text, radius `--sp-r-ctl`, `--sp-shadow-float`. One toast at a time; a new toast replaces the one on screen at once. A toast with Undo stays 10 s and any other stays 6 s; hover and keyboard focus pause the clock, which carries on with the time that was left when both have gone. Every toast carries a 44-px X with `aria-label="Dismiss"`; a toast with Undo has Undo before the X. A failure toast (`tone: "block"`) is routed to an assertive live region (`role="alert"`); every other toast goes to a polite one (`role="status"`). Both regions sit in the document from first paint, so the first message is never missed. An undo that throws replaces its toast with `The undo did not finish. Check it before you go on.` and stops the clock while an undo is running.
+- Empty states. `.kf-empty` with a 44-px `--sp-sky-tint` icon tile, Mulish `--sp-t-body` (16px) 800 title, one `--sp-muted` line. Framed as onboarding, not apology.
+- Error states. `.kf-error` card with a `--sp-block` title at `--sp-t-body` (16px), a plain-English message, a Retry button. The raw `error.message` is never drawn to screen; the shell's `(shell)/error.tsx` keeps its `console.error` and shows a fixed sentence.
 - Every data surface ships loading, empty, partial and error states.
 
 ## 5. Floors
@@ -123,10 +129,18 @@ Review queue and Ingredients-naming tabs render but disabled with a `Lock size={
 
 ## 10. Loading and states
 
+- 404 copy. The out-of-shell `not-found.tsx` reads `This page is not available` with the sentence `It may not exist, or your account may not have access to it.` and two ways out: `Go back` (only when there is a prior entry to go back to - a tiny client island reads `window.history.length`) and `Sign out` (the same POST the account menu uses). No logo, no tool names, no class from `components.css`: the gate answers "not found" to anyone outside the owner list on purpose. Its `<title>` is `Page not available`; `robots` stays noindex.
 - `loading.tsx` renders inside the shell. The skeleton heights equal the content heights.
 - Skeletons use the `.kf-skel` shimmer; `.kf-skel--navy` for a band placeholder; `.kf-skel--line` for text lines.
 - Band `status` prop drives three paths: **ok** (facts), **failed** (facts render "Unavailable" with a Retry; the headline falls back to the page name), **running** (pulsing dot, 15-s auto-refresh via `<RunningWatch>`, "Stalled" fallback after 15 minutes).
 - Empty surfaces use `.kf-empty` with a soft recovery action (Clear filters / Open vendor items / Reload). Error surfaces use `.kf-error` with Retry.
+
+## 10.1 Browser-tab titles
+
+- `<page> - <tool>`. Home is `Home - KitchFix`. A tool landing whose page name is the tool's own name (e.g. `/library`) is `<tool> - KitchFix`. A route with no row is `KitchFix`.
+- First path segment maps to the product: `people` -> `People Portal`, `academy` -> `Academy`, `library` -> `Library`, `stockpot` -> `Stockpot`, `ops` -> `Ops Hub`, `service` -> `Service Calendar`, `kpi` -> `KPI Dashboard`.
+- One source of truth lives in `src/components/shell/routeTitles.tsx`: `tabTitleFor(pathname)`. Rows may carry an optional `tabTitle` override; set it only on Stockpot rows where the browser-tab title differs from the top-bar title.
+- Two writers share the resolver so both prongs produce the same string: `(shell)/layout.tsx`'s `generateMetadata` runs on every full load (and sets the title on first paint), and a `TabTitle` client island inside Shell re-writes `document.title` on every `usePathname` change (client nav + browser Back + Forward). A shared layout does not re-render on sibling nav, so the client writer is what survives client navigation.
 
 ## 11. Formatting and voice
 
@@ -146,7 +160,9 @@ Review queue and Ingredients-naming tabs render but disabled with a `Lock size={
 ## 13. Spacing and z-index scales
 
 - Spacing: `--sp-sp-1: 4px`, `--sp-sp-2: 8px`, `--sp-sp-3: 12px`, `--sp-sp-4: 16px`, `--sp-sp-5: 24px`, `--sp-sp-6: 32px`, `--sp-sp-7: 40px`, `--sp-sp-8: 48px`. Component CSS uses the scale for gaps and padding; existing files are migrated to it as they are touched.
-- z-index: `--sp-z-topbar: 10`, `--sp-z-notch: 30`, `--sp-z-rail-phone: 50`, `--sp-z-drawer: 60`, `--sp-z-toast: 90`.
+- z-index: `--sp-z-topbar: 10`, `--sp-z-notch: 30`, `--sp-z-rail-phone: 50`, `--sp-z-drawer: 60`, `--sp-z-toast: 90`, `--sp-z-skip: 100` (the skip link sits above every chrome layer, toasts included).
+- Weights: `--sp-w-regular: 400`, `--sp-w-semi: 600`, `--sp-w-bold: 700`, `--sp-w-heavy: 800` (the four weights the font link loads; 500 is not loaded and draws as 400).
+- Line heights: `--sp-lh-flat: 1`, `--sp-lh-tight: 1.1`, `--sp-lh-snug: 1.3`, `--sp-lh-body: 1.5`.
 
 ## 14. Gotchas
 

@@ -201,3 +201,16 @@ export function fmtDuration(startIso: string, endIso: string | null): string {
   const mr = m - h * 60;
   return mr === 0 ? `${h} h` : `${h} h ${mr} min`;
 }
+
+// Derive a display name from the local-part of a work email. Used by Home
+// (greeting) and the shell account row. Returns "there" when the local
+// part is empty so Home's greeting still reads as a sentence.
+export function nameFromEmail(email: string): string {
+  const local = email.split("@")[0] ?? "";
+  if (!local) return "there";
+  return local
+    .split(".")
+    .filter((p) => p.length > 0)
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+    .join(" ");
+}

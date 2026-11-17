@@ -118,6 +118,7 @@
   border-color: var(--sp-on-navy);
 }
 .kf-btn--sm { min-height: var(--sp-floor-corp); padding: 0 14px; border-radius: var(--sp-r-sm); font-size: var(--sp-t-label); }
+@media (max-width: 860px) { .kf-btn--sm { min-height: var(--sp-floor-chef); } }
 
 .kf-btn.is-busy svg { animation: kf-spin var(--sp-spin) linear infinite; }
 .kf-btn.is-busy { pointer-events: none; }
@@ -158,10 +159,11 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--sp-navy); }
 .kf-pill--muted { background: var(--sp-line-soft); color: var(--sp-body); }
 .kf-pill--twin { background: var(--sp-sky-tint); color: var(--sp-navy); }
 .kf-pill--reserved { background: var(--sp-info-bg); color: var(--sp-link); }
-/* G1 (grade model): amber-register tier marker on the linked-items
-   row. Register picked deliberately: Premium is noteworthy, not an
-   error. Standard has no pill - absence IS the label. */
-.kf-pill--premium { background: var(--sp-warn-bg); color: var(--sp-warn-strong); }
+/* Premium grade pill. Sky tint on navy (10.06:1). A grade is not a
+   warning; the earlier amber-register treatment measured 2.53:1 and
+   mis-read as a block signal. Standard has no pill - absence IS the
+   label. */
+.kf-pill--premium { background: var(--sp-sky-tint); color: var(--sp-navy); }
 
 /* ---------- Card ---------- */
 .kf-card {
@@ -189,7 +191,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--sp-navy); }
   background: var(--sp-card);
   border: 1px solid var(--sp-line);
 }
-.kf-state__title { font-family: var(--sp-ui); font-size: 17px; font-weight: 800; color: var(--sp-ink); margin-bottom: var(--sp-sp-1); }
+.kf-state__title { font-family: var(--sp-ui); font-size: var(--sp-t-body); font-weight: 800; color: var(--sp-ink); margin-bottom: var(--sp-sp-1); }
 .kf-state__body  { font-family: var(--sp-ui); font-size: var(--sp-t-body); color: var(--sp-muted); }
 
 .kf-empty {
@@ -207,7 +209,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--sp-navy); }
   background: var(--sp-sky-tint); color: var(--sp-navy);
   border-radius: var(--sp-r-ctl);
 }
-.kf-empty__title { font-family: var(--sp-ui); font-size: 17px; font-weight: 800; color: var(--sp-ink); }
+.kf-empty__title { font-family: var(--sp-ui); font-size: var(--sp-t-body); font-weight: 800; color: var(--sp-ink); }
 .kf-empty__body  { font-family: var(--sp-ui); font-size: var(--sp-t-body); color: var(--sp-muted); margin-top: var(--sp-sp-1); }
 
 .kf-error {
@@ -219,7 +221,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--sp-navy); }
   flex-direction: column;
   gap: var(--sp-sp-3);
 }
-.kf-error__title { color: var(--sp-block); font-family: var(--sp-ui); font-size: 17px; font-weight: 800; }
+.kf-error__title { color: var(--sp-block); font-family: var(--sp-ui); font-size: var(--sp-t-body); font-weight: 800; }
 .kf-error__body  { color: var(--sp-body); font-size: var(--sp-t-body); }
 
 /* ---------- Skeletons (shimmer) ---------- */
@@ -276,7 +278,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--sp-navy); }
   left: 0; right: 0;
   bottom: calc(var(--sp-sp-5) + env(safe-area-inset-bottom, 0px));
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-sp-2);
   z-index: var(--sp-z-toast);
   pointer-events: none;
 }
@@ -313,9 +317,24 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--sp-navy); }
   border-radius: var(--sp-r-sm);
   font-family: var(--sp-ui);
   font-weight: 700;
+  font-size: var(--sp-t-label);
   cursor: pointer;
 }
 .kf-toast__undo:hover { background: color-mix(in srgb, white 18%, transparent); }
+.kf-toast__undo:disabled { opacity: 0.6; cursor: not-allowed; }
+.kf-toast__x {
+  width: var(--sp-floor-corp);
+  min-height: var(--sp-floor-corp);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--sp-on-navy);
+  border-radius: var(--sp-r-sm);
+  cursor: pointer;
+}
+.kf-toast__x:hover { background: color-mix(in srgb, white 14%, transparent); }
 @keyframes kf-toast-in {
   from { opacity: 0; transform: translateY(12px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -347,3 +366,10 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--sp-navy); }
 }
 .kf-kv .is-missing dd,
 .kf-kv dd.is-missing { color: var(--sp-muted); font-weight: 500; }
+
+/* ---------- Skip link ---------- */
+/* Off screen until it has focus; z-index above every chrome layer so it is
+   never covered by a toast or the drawer. The receiving element sets its
+   own focus with no visible ring (see shell.css .kf-canvas:focus). */
+.kf-skiplink { position: absolute; left: var(--sp-sp-3); top: calc(-1 * var(--sp-sp-8) - var(--sp-sp-5)); z-index: var(--sp-z-skip); }
+.kf-skiplink:focus { top: var(--sp-sp-3); }
