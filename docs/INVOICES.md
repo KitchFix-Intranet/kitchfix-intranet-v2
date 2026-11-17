@@ -80,11 +80,23 @@ id walks per chip, union-dedup, size = chip count.
 ## Table vs cards - CSS container queries only
 
 The list markup renders both the `<table>` and the stacked `<ul>` cards
-on every request. A `container-type: inline-size` wrapper and two
-`@container` queries decide which one is visible:
+on every request. A `container-type: inline-size` wrapper and one
+`@container` rule decide which is visible:
 
-- One-site surface: table >= 1000 px, cards below.
-- Many-site surface: table >= 1100 px, cards below.
+- Table shows at a container width of **940 px and up**, for both
+  one-site and many-site surfaces. At a 1366 viewport with the rail
+  open and a scrollbar showing, the container is about 959 px.
+- Cards show below 940, including every phone width.
+
+Column widths at the 940 threshold (fix pass 1, Chat-Claude ruling):
+
+- Many-site: Site 100, Vendor fluid, Invoice 196, Sent 150, Total 116, Status 172.
+- One-site: Vendor fluid, Invoice 196, Invoice date 112, Sent 104, Total 116, Status 172.
+
+Status and Total never clip. Invoice numbers beyond what 196 px holds
+ellipsis with the full value in the cell's `title` and in the drawer.
+Vendor names ellipsis with the full value in the vendor button's
+`title` and in the drawer header.
 
 The hidden side is `display: none` so it stays out of the tab order and
 the accessibility tree. First paint at 390 and 1440 is already the
@@ -109,9 +121,12 @@ Both scoped under `.kf-invoices-surface` only:
 1. Status pills at `--sp-t-label` (13 px). The shared `.kf-pill` is
    12 px (`--sp-t-micro`); the 13 px floor for a label on a site
    screen applies here.
-2. Field edges (`input[type="search"]`, `select`) use `--sp-line-field`
-   instead of `--sp-line`. Same discipline the People lane adopted in
-   R-PP63; a cross-lane adoption is a separate ruling.
+2. Control edges (`input[type="search"]`, `select`, filter chips,
+   the "?" button) use `--sp-line-field` (3.46:1 on page ground)
+   instead of `--sp-line` (1.18:1). Same token the People lane
+   adopted in R-PP63 for form controls; extended in fix pass 1 to
+   chip and toggle edges so every control in the lane clears the
+   3:1 floor. A cross-lane adoption is a separate ruling.
 
 ## Candidates for the shared lane (listed in the PR body)
 

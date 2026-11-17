@@ -4,7 +4,10 @@
  * Two lane-scoped choices (listed in PR body as pending the
  * shared-foundation lane's nod):
  *   1. Status pills at --sp-t-label (13px); the shared pill is 12px.
- *   2. Field edges (select, input) use --sp-line-field (not --sp-line).
+ *   2. Control edges (select, input, filter chip, "?") use
+ *      --sp-line-field (3.46:1 on page ground) instead of --sp-line
+ *      (1.18:1). Extended from "field edges" to chip/toggle edges
+ *      in fix pass 1 to clear the 3:1 control-edge floor.
  */
 
 .kf-sr-only {
@@ -50,6 +53,20 @@
 .kf-invoices-surface input[type="search"]:focus-visible {
   outline: 2px solid var(--sp-navy);
   outline-offset: 2px;
+}
+
+/* Fix pass 1: every control in this lane lands on the chef floor
+ * (48px). The simplest reading of DESIGN section 5: a site or
+ * regional viewer sits at 48; so does a phone; and the office is
+ * one of several viewers here. Blanket the lane rather than branch
+ * by viewer kind. The band CTA (`.kf-band__cta .kf-btn` in the
+ * shared IdentBand) defaults to the corp floor on ident.css;
+ * override only inside this surface. Noted in the PR body as a
+ * shared-lane defect for the ident CTA. */
+.kf-invoices-surface .kf-btn,
+.kf-invoices-surface .kf-btn--sm,
+.kf-invoices-surface .kf-band__cta .kf-btn {
+  min-height: var(--sp-floor-chef);
 }
 
 /* ─── Owner preview banner ────────────────────────────────────── */
@@ -113,6 +130,12 @@
 }
 
 /* ─── Toolbar ─────────────────────────────────────────────────── */
+/*
+ * Two filter rows: a desk-only chip row and a phone-only one-select
+ * row. CSS below toggles which is visible; both carry their own "?"
+ * button wired to the same open-handler in Toolbar.tsx. On phone the
+ * whole toolbar stacks column-wise and every control is full width.
+ */
 
 .kf-invoices-toolbar {
   display: flex;
@@ -123,6 +146,13 @@
   border-bottom: 1px solid var(--sp-line);
   position: relative;
 }
+.kf-invoices-toolbar__chiprow {
+  display: none;
+  gap: var(--sp-sp-2);
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+}
 .kf-invoices-toolbar__chips {
   display: flex;
   flex-wrap: wrap;
@@ -131,12 +161,51 @@
   flex: 1 1 auto;
   min-width: 0;
 }
+.kf-invoices-toolbar__phonerow {
+  display: flex;
+  gap: var(--sp-sp-2);
+  align-items: center;
+  width: 100%;
+}
+.kf-invoices-toolbar__phonefilter {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.kf-invoices-toolbar__phonefilter select {
+  width: 100%;
+}
 .kf-invoices-toolbar__right {
   display: flex;
   gap: var(--sp-sp-3);
   align-items: center;
   flex: 0 1 auto;
   min-width: 0;
+}
+@media (min-width: 861px) {
+  .kf-invoices-toolbar__chiprow  { display: flex; }
+  .kf-invoices-toolbar__phonerow { display: none; }
+}
+@media (max-width: 860px) {
+  .kf-invoices-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--sp-sp-3);
+  }
+  .kf-invoices-toolbar__right {
+    flex-direction: column;
+    gap: var(--sp-sp-3);
+    width: 100%;
+    align-items: stretch;
+  }
+  .kf-invoices-toolbar__site,
+  .kf-invoices-toolbar__search,
+  .kf-invoices-toolbar__site select,
+  .kf-invoices-toolbar__search .kf-invoices-search {
+    width: 100%;
+  }
+  .kf-invoices-toolbar__search .kf-invoices-search input {
+    width: 100%;
+  }
 }
 .kf-invoices-toolbar__site {
   display: flex;
@@ -152,7 +221,7 @@
   width: var(--sp-floor-chef);
   height: var(--sp-floor-chef);
   border-radius: var(--sp-r-pill);
-  border: 1px solid var(--sp-line);
+  border: 1px solid var(--sp-line-field);
   background: var(--sp-card);
   color: var(--sp-body);
   cursor: pointer;
@@ -173,7 +242,7 @@
   min-width: var(--sp-floor-chef);
   padding: 0 var(--sp-sp-4);
   border-radius: var(--sp-r-pill);
-  border: 1px solid var(--sp-line);
+  border: 1px solid var(--sp-line-field);
   background: var(--sp-card);
   color: var(--sp-ink);
   font: inherit;
@@ -195,12 +264,12 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 20px;
+  min-width: 22px;
   padding: 2px 6px;
   border-radius: var(--sp-r-pill);
   background: var(--sp-ground);
   color: var(--sp-body);
-  font-size: var(--sp-t-micro);
+  font-size: var(--sp-t-label);
   font-variant-numeric: tabular-nums;
 }
 .kf-invoices-chip.is-selected .kf-invoices-chip__count {
@@ -246,31 +315,17 @@
 .kf-invoices-tablewrap { display: none; }
 .kf-invoices-cards     { display: block; }
 
-/* One-site surface switches at 1000px. */
-.kf-invoices-surface.is-onesite .kf-invoices-list {
-  --invlist-threshold: 1000px;
+/* One threshold for both surface modes. 940px container is the
+ * point at which Chat-Claude's measured column widths fit without
+ * clipping; at a 1366 viewport (rail open, scrollbar showing) the
+ * container is about 959, so the table shows from 1366 up.
+ *
+ * On phones (<=860px) the container never approaches 940, so the
+ * cards stay visible and the table is permanently display:none. */
+@container invlist (min-width: 940px) {
+  .kf-invoices-tablewrap { display: block; }
+  .kf-invoices-cards     { display: none; }
 }
-/* Many-site surface switches at 1100px. */
-.kf-invoices-surface.is-manysites .kf-invoices-list {
-  --invlist-threshold: 1100px;
-}
-
-@container invlist (min-width: 1000px) {
-  .kf-invoices-surface.is-onesite .kf-invoices-tablewrap { display: block; }
-  .kf-invoices-surface.is-onesite .kf-invoices-cards     { display: none; }
-}
-@container invlist (min-width: 1100px) {
-  .kf-invoices-surface.is-manysites .kf-invoices-tablewrap { display: block; }
-  .kf-invoices-surface.is-manysites .kf-invoices-cards     { display: none; }
-}
-
-/* On phones (<=860px) the Shell canvas is narrower than either
- * container threshold; the container query above never matches,
- * so cards show and the table is permanently display:none. We
- * still ship the table in the DOM only on desktop widths where a
- * viewer resizing their browser crosses the breakpoint on the
- * one surface where that matters (ingredients already uses this
- * exact pattern). */
 
 /* ─── Table ───────────────────────────────────────────────────── */
 
@@ -291,7 +346,12 @@
   text-align: left;
   font-family: var(--sp-disp);
   font-weight: 700;
-  font-size: 12.5px;
+  /* Fix pass 1: swapped from the raw 12.5 px that DESIGN section 4
+   * lists for table headers (no token exists for that size) to
+   * var(--sp-t-label). DESIGN section 4 vs tokens.css is drift for
+   * the shared-foundation lane to rule on; using 13 px here keeps
+   * the page content to five type sizes with the drawer open. */
+  font-size: var(--sp-t-label);
   letter-spacing: 1px;
   text-transform: uppercase;
   color: var(--sp-ink);
@@ -338,10 +398,17 @@
   font: inherit;
   cursor: pointer;
   text-align: left;
-  min-height: var(--sp-floor-corp);
+  /* Fix pass 1: the lane uses the chef floor on every control
+   * (prompt 2 fix 6). Was --sp-floor-corp. */
+  min-height: var(--sp-floor-chef);
   display: inline-flex;
   align-items: center;
   max-width: 100%;
+  /* Clip long vendor names; the full value is in `title` and the
+   * drawer shows it in full. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .kf-invoices-row__vendorbtn:hover { color: var(--sp-navy); text-decoration: underline; }
 .kf-invoices-row__vendorbtn:focus-visible {
@@ -623,7 +690,9 @@
   margin: 0;
   font-family: var(--sp-disp);
   font-weight: 800;
-  font-size: var(--sp-t-h3);
+  /* Fix pass 1: was --sp-t-h3 (20 px); switched to --sp-t-title
+   * so the dialog does not introduce a sixth size when it is open. */
+  font-size: var(--sp-t-title);
   color: var(--sp-navy);
   text-transform: uppercase;
   letter-spacing: .2px;
