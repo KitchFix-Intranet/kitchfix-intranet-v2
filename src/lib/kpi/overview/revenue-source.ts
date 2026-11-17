@@ -1,0 +1,279 @@
+// src/lib/kpi/overview/revenue-source.js
+//
+// Overview Phase 2 PR-3 (Master KPI CC seat).
+//
+// The ONE resolver of revenue for the Overview. Every card, every
+// table row, every ticker read binds through this function. Do NOT
+// read pnl_actuals / kpi_budgets / sc_daily_revenue for revenue
+// anywhere else in the Overview.
+//
+// Rules (§5.5, R-20, table):
+//
+//   Period state       | Per-meal accounts   | Fee accounts        | TXR-TX-V
+//   -------------------|---------------------|---------------------|--------
+//   Closed, verified   | pnl_actuals         | pnl_actuals         | pnl_actuals
+//   Closed, awaiting   | pnl_actuals if      | kpi_budgets         | budget + note
+//   finance            | present, else       | (2400.1 contractual |
+//                      | budget to date      |  + other per_meal   |
+//                      | with "estimate"     |  lines optional)    |
+//   Open               | budget to date      | kpi_budgets         | budget + note
+//                      | (planned) UNLESS    | (as above)          |
+//                      | sc_revenue_live=T   |                     |
+//                      | AND rev_source=sc   |                     |
+//                      | -> sc_daily_revenue |                     |
+//                      | with NOT is_non_rev |                     |
+//
+// Fee accounts read the FULL per_meal line set so a fee account's
+// non-fee revenue (e.g. service charges on 2300, one-off catering on
+// 2200) still surfaces in the Overview. Only 2400.1 carries the
+// `contractual` flag downstream.
+//
+// Fee accounts NEVER read sc_daily_revenue (contamination guard,
+// R888-1 / #888). Fee accounts NEVER read sc_fee_schedule.amount
+// (STL-MO [amount] tax layer absent from the P&L, per
+// PURCHASING handoff §10).
+//
+// R14 note: this resolver does NOT know about closed_at overrides
+// beyond the derivePeriodState output; callers pass in the resolved
+// period_state ('open' | 'closed_awaiting' | 'verified').
+
+import { costModelFor } from "@/lib/kpi/accountModels";
+
+// Fee accounts (cost model = pass_through in accountModels.js OR the
+// special-case fee accounts CIN - OH, STL - FL, STL - MO, TXR - TX - H).
+// The scope brief §5.5 explicitly names the four fee accounts; the
+// codebase's accountModels.js today marks the three PASS_THROUGH
+// accounts (CIN - OH, STL - FL, STL - MO) as pass_through and TXR - TX - H
+// as at_risk. The fee-account list per the scope brief overlaps with
+// pass_through PLUS one at_risk (TXR - TX - H) plus TXR - TX - V (which
+// is at_risk but has direct-sales semantics per R-3 / R-11).
+//
+// This Overview resolver treats "fee revenue" as "revenue-side
+// contract" rather than "pass_through cost model". The list here
+// pins the four accounts named in the scope brief + TXR - TX - V as
+// a fifth "tracked" account (revenue = budget with note per R-3).
+const FEE_REVENUE_ACCOUNTS = new Set([
+  "CIN - OH",
+  "STL - FL",
+  "STL - MO",
+  "TXR - TX - H",
+]);
+
+// TXR - TX - V direct-sales / tracked account (R-3, R-11).
+const TRACKED_REVENUE_ACCOUNTS = new Set([
+  "TXR - TX - V",
+]);
+
+/**
+ * Classify an account for the Overview revenue picker.
+ *
+ * Returns one of:
+ *   'per_meal'     - open period uses planned (budget-to-date) or
+ *                    sc_daily_revenue when sc_revenue_live=true and
+ *                    rev_source=sc; closed uses pnl_actuals.
+ *   'fee'          - kpi_budgets contractual on open + awaiting;
+ *                    pnl_actuals on verified. Reads the full per_meal
+ *                    line set; 2400.1 carries the `contractual` flag
+ *                    (preserving its "always 100% of itself" treatment
+ *                    even when its budget-to-date is zero).
+ *   'tracked'      - TXR - TX - V; budget + tracked marker, pnl_actuals
+ *                    when verified.
+ */
+export function classifyForRevenue(accountKey: any): any {
+  if (FEE_REVENUE_ACCOUNTS.has(accountKey)) return "fee";
+  if (TRACKED_REVENUE_ACCOUNTS.has(accountKey)) return "tracked";
+  // Rely on the cost-model resolver for the rest. Pseudo-keys are not
+  // valid input here; callers should classify per-member for aggregate.
+  const cm = costModelFor(accountKey);
+  if (cm === "pass_through") return "fee";      // pass_through implies fee revenue
+  return "per_meal";
+}
+
+/**
+ * Resolve the revenue source for one (account, period, state)
+ * combination.
+ *
+ * Inputs:
+ *   accountKey    - real account key (no ALL/EAST/WEST)
+ *   periodState   - 'open' | 'closed_awaiting' | 'verified'
+ *   revSource     - 'planned' (default) | 'sc' (corporate + per-meal only)
+ *   accountFlags  - { sc_revenue_live: bool } or null (defaults to false)
+ *
+ * Returns:
+ *   {
+ *     source:   'pnl_actuals' | 'sc_daily_revenue' | 'kpi_budgets_2400_1' |
+ *               'kpi_budgets_2400_1_estimate' | 'kpi_budgets_2400_1_planned' |
+ *               'kpi_budgets_2400_1_tracked' | 'kpi_budgets_2400_1_contractual' |
+ *               'pnl_actuals_verified' | 'sc_estimate',
+ *     model:    'finance' | 'live_count' | 'contractual' | 'planned' |
+ *               'estimate_from_budget' | 'estimate_from_sc' | 'tracked',
+ *     line_codes: string[]   // which line codes this source binds to
+ *     read_sc_daily_revenue: bool  // guard: iff this account+state actually reads SC
+ *   }
+ *
+ * Guard: `read_sc_daily_revenue = true` iff account is per-meal AND
+ * accountFlags.sc_revenue_live === true AND revSource === 'sc'. The
+ * loader wrapper in pnl-loader.js does NOT re-check; the resolver's
+ * caller enforces via this function's return value.
+ */
+// Hoisted so both the "tracked" and "per_meal" branches of
+// resolveRevenueSource can reference it. The 5 revenue lines are the
+// full per_meal set; "tracked" uses the same list because
+// TXR - TX - V can carry revenue on any of them (e.g. 2200 in P4),
+// not just 2400.2.
+const PER_MEAL_LINES = ["2200", "2300", "2400.1", "2400.2", "2600"];
+
+export function resolveRevenueSource({ accountKey, periodState, revSource = "planned", accountFlags = null }: any): any {
+  const kind = classifyForRevenue(accountKey);
+  const scLive = !!(accountFlags && accountFlags.sc_revenue_live);
+  const wantsSc = revSource === "sc";
+
+  if (kind === "fee") {
+    // Fee accounts carry their fee contract on 2400.1, but a fee
+    // account can still earn revenue on the other per_meal lines -
+    // one-off service charges (2300), catering (2200), consulting
+    // (2600). Those lines land in pnl_actuals the same way they land
+    // for per_meal accounts; the fee classifier reads them so the
+    // Revenue Lines card picks them up. 2400.1 keeps its contractual
+    // flag downstream (isContractual = isFeeAccount && line === "2400.1"
+    // in the resolver's statement-row build) so its "always 100%"
+    // treatment is preserved. Fee accounts STILL never read
+    // sc_daily_revenue (R888-1 contamination guard, preserved via
+    // read_sc_daily_revenue:false on both branches).
+    //
+    // Prior line_codes:["2400.1"] silently hid STL - MO's 2300
+    // service-charge revenue and TXR - TX - H's 2200 catering - the
+    // pnl_actuals rows exist, the reader just never looked at them.
+    // Same defect shape as the TXR - TX - V tracked fix from PR #1307.
+    if (periodState === "verified") {
+      return {
+        source: "pnl_actuals_verified",
+        model: "finance",
+        line_codes: PER_MEAL_LINES,
+        read_sc_daily_revenue: false,
+      };
+    }
+    return {
+      source: "kpi_budgets_2400_1_contractual",
+      model: "contractual",
+      line_codes: PER_MEAL_LINES,
+      read_sc_daily_revenue: false,
+    };
+  }
+
+  if (kind === "tracked") {
+    // TXR - TX - V (direct-sales, tracked). The primary revenue line
+    // is 2400.2 Meal Service (Away) - this account bills AWAY, not
+    // Home - but the account can also carry revenue on other per_meal
+    // lines in some periods (e.g. 2200 Catering in P4), so the reader
+    // iterates the full per_meal line set, same as a per_meal account.
+    // The ONLY difference from per_meal is the open-period "model"
+    // marker (tracked vs planned) and the fact that tracked never
+    // reads SC daily revenue.
+    if (periodState === "verified") {
+      return {
+        source: "pnl_actuals_verified",
+        model: "finance",
+        line_codes: PER_MEAL_LINES,
+        read_sc_daily_revenue: false,
+      };
+    }
+    return {
+      source: "kpi_budgets_2400_2_tracked",
+      model: "tracked",
+      line_codes: PER_MEAL_LINES,
+      read_sc_daily_revenue: false,
+    };
+  }
+
+  // per_meal: PER_MEAL_LINES hoisted above.
+  if (periodState === "verified") {
+    return {
+      source: "pnl_actuals_verified",
+      model: "finance",
+      line_codes: PER_MEAL_LINES,
+      read_sc_daily_revenue: false,
+    };
+  }
+  if (periodState === "closed_awaiting") {
+    // [name] walkthrough sweep + revenue fallback prompt (2026-09-07):
+    // "A budget is never an actual. If no actual exists, the board
+    // says so - it does not substitute the plan."
+    //
+    // Prior code returned `kpi_budgets_2400_1_estimate` here, which
+    // caused the caller to sum the BUDGET and label it "actual".
+    // Measured live: TBJ - FL P9 today - actual = budget cent-exact
+    // on both 2300 ([amount]) and 2400.1 ([amount]). Cost lines' pcts
+    // computed against a fabricated denominator.
+    //
+    // Corrected precedence for per_meal closed_awaiting:
+    //   1. Service Calendar actual, when the account is sc_revenue_live
+    //   2. nothing (source: "not_reported") - never the budget
+    //
+    // The `sc_estimate` model marker distinguishes this from open+SC
+    // (where the source is "live_count"). Both read sc_daily_revenue;
+    // the model tells the client whether the number is settled (closed
+    // period, counts complete = the answer for the period) or live
+    // (open period, counts through today = provisional).
+    if (scLive) {
+      return {
+        source: "sc_daily_revenue",
+        model: "sc_estimate",
+        line_codes: PER_MEAL_LINES,
+        read_sc_daily_revenue: true,
+      };
+    }
+    return {
+      source: "not_reported",
+      model: "not_reported",
+      line_codes: PER_MEAL_LINES,
+      read_sc_daily_revenue: false,
+    };
+  }
+  // open. R-40 polish (2026-09-01): the user control was retired -
+  // scLive alone flips the source, no separate toggle. Once counts
+  // are live for an account the board picks them up on the next fetch
+  // without anyone flipping a switch. wantsSc is preserved for the
+  // legacy signature but is not consulted here.
+  if (scLive) {
+    return {
+      source: "sc_daily_revenue",
+      model: "live_count",
+      line_codes: PER_MEAL_LINES,
+      read_sc_daily_revenue: true,
+    };
+  }
+  return {
+    source: "kpi_budgets_2400_1_planned",
+    model: "planned",
+    line_codes: PER_MEAL_LINES,
+    read_sc_daily_revenue: false,
+  };
+}
+
+/**
+ * Guard: throw if we're about to read sc_daily_revenue for an account
+ * that shouldn't. Called from the resolver's SC read path as belt-and-
+ * suspenders for the picker.
+ */
+export function assertScReadAllowed({ accountKey, revSource, accountFlags }: any): any {
+  const kind = classifyForRevenue(accountKey);
+  if (kind !== "per_meal") {
+    throw new Error(
+      `overview-contamination-guard: attempted sc_daily_revenue read on ${accountKey} ` +
+      `(kind=${kind}). Fee + tracked accounts NEVER read sc_daily_revenue (R888-1).`
+    );
+  }
+  if (!(accountFlags && accountFlags.sc_revenue_live === true)) {
+    throw new Error(
+      `overview-contamination-guard: attempted sc_daily_revenue read on ${accountKey} ` +
+      `without kpi_account_flags.sc_revenue_live=true.`
+    );
+  }
+  if (revSource !== "sc") {
+    throw new Error(
+      `overview-contamination-guard: attempted sc_daily_revenue read on ${accountKey} ` +
+      `without rev_source=sc.`
+    );
+  }
+}

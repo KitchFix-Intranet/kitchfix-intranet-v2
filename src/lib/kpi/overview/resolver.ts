@@ -1,0 +1,4605 @@
+// src/lib/kpi/overview/resolver.js
+//
+// Overview Phase 2 PR-3 (Master KPI CC seat).
+//
+// Top-level orchestrator. Composes labor + purchasing engines as
+// LIBRARY CALLS (never re-queries labor_actuals, never re-buckets
+// purchasing rows) and folds the pnl / period / flag layer on top to
+// produce the Overview payload described in §5.4-§5.8 of
+// KPI_MASTER_SCOPE.md v4.
+//
+// Rule enforcement in code:
+//   - Cost lines come exclusively from labor's buildBoard (3100) +
+//     purchasing's buildPurchasingBoard (3200 / 3400 / 3500 buckets +
+//     tracked 5002.1 / 5002.5 / 5017.3).
+//   - Revenue lines come from resolveRevenueSource, which picks
+//     pnl_actuals / kpi_budgets / sc_daily_revenue per §5.5.
+//   - budget_to_date_days for cost lines comes from
+//     board.budget_to_date_days + totals.buckets_budget_to_date_days
+//     (Phase B rider on the drill boards). Revenue budget_to_date_days
+//     uses the pure computeBudgetToDateForLine from budget-to-date.js.
+//   - Absence contract propagates: statement rows carry
+//     `reported: true|false`, and `actual` is null when reported=false.
+//
+// Instrumentation:
+//   - Every loader call is timed via performance.now(). The `?debug=
+//     timing` param on the route returns an `_debug` block with the
+//     per-loader wall-time attribution (Phase E of the brief).
+
+import { performance } from "node:perf_hooks";
+
+// Labor + purchasing engines (library-call, no HTTP hop).
+import { buildBoard, computeBudgetToDateDays as computeLaborBudgetToDateDays } from "@/lib/kpi/labor/board";
+import { paginateActuals as paginateLaborActuals, resolveMemberBudgets } from "@/lib/kpi/labor/loaders";
+import {
+  loadWeeklyRevenueBasis as loadWeeklyRevenueBasisForOverview,
+  attachWeeklyBasisToBoard,
+  computeLineTargetPctByPeriod,
+} from "@/lib/kpi/labor/labor-week-basis";
+import { resolveWorkerMeta } from "@/lib/kpi/resolveWorkerMeta";
+import { buildWorkerToEmail, countDistinctPeople } from "@/lib/kpi/labor/personCount";
+// Salary-side loaders + merge helper. Overview ALWAYS composes labor
+// with salary included (R-28, §5.9): "Salary control reveals sub-lines
+// only; totals always include salary. Gross margin must equal
+// finance's, and finance's includes salary." The `includeSalary` flag
+// on this resolver is a DISCLOSURE toggle for the 3100.1 / 3100.2
+// sub-rows in the statement; it never changes the 3100 total or any
+// derived figure (COGS, gross margin, ticker, chart).
+import { load3100_2Budgets, loadSalaryActuals, mergeBudgetPeriods, shapeSalaryRow } from "@/lib/kpi/labor/salaryBoard";
+// R-77 fix ([name] 2026-09-04): budget_at_this_revenue moves to a
+// shared module so both boards compute the same figure. See the
+// header of src/lib/kpi/shared/batr.js for the invariant + reasoning.
+import {
+  budgetAtThisRevenue as sharedBatr,
+  envelopeDelta as sharedEnvelopeDelta,
+  computePeriodRevenueByLine as sharedComputePeriodRevenueByLine,
+  contributesToTotal,
+  computeContractualAccrualByPeriod,
+} from "@/lib/kpi/shared/periodBasis";
+
+import { buildPurchasingBoard } from "@/lib/kpi/purchasing/resolver";
+import {
+  paginateActuals as paginatePurchasingActuals,
+  paginateWeekly as paginatePurchasingWeekly,
+  loadPending as loadPurchasingPending,
+  loadPurchasingBudgets,
+  loadFreshness as loadPurchasingFreshness,
+  fetchMembers,
+} from "@/lib/kpi/purchasing/loaders";
+
+
+// Overview owned modules.
+import {
+  REVENUE_LINE_CODES,
+  ALSO_TRACKED_LINE_CODES,
+  loadPeriodStatus,
+  loadAccountFlags,
+  loadPnlActuals,
+  loadOverviewBudgets,
+  loadInventoryAdjustments,
+  loadScDailyRevenue,
+  loadScDailyRevenueCarveOut,
+  derivePeriodState,
+  derivePeriodSpendSettled,
+  capBeforeToday,
+} from "./pnl-loader";
+import { SC_LINE_CARVE_OUTS } from "@/lib/kpi/shared/periodBasis";
+
+// R-67 constant + computePeriodRevenueByLine now live in
+// src/lib/kpi/shared/periodBasis.js (see imports above). Local
+// duplicates removed 2026-09-07 per [name]'s shared-basis PR.
+// classifyForRevenue + resolveRevenueSource stay in revenue-source.js
+// (still owned there); periodBasis re-exports them for convenience
+// but this file keeps the direct import for the two remaining
+// direct call sites.
+import { classifyForRevenue, resolveRevenueSource } from "./revenue-source";
+import {
+  computeBudgetToDateForLine,
+  computeFullPeriodBudget,
+  computeFullYearBudget,
+} from "./budget-to-date";
+import { computeTicker } from "./ticker";
+import {
+  formatMoneyWhole,
+  formatPct,
+  formatDayLabel,
+  pctOf,
+  gapDollarsCost,
+  gapDollarsRevenue,
+  gapDollarsMargin,
+  gapPointsCost,
+  gapPointsRevenue,
+  gapPointsMargin,
+  directionOfDelta,
+} from "./formatting";
+import { resolveAccessFlags, resolveIncludeSalary } from "./accessFlags";
+import { composeFlags, isPackagingGapAccount, isSeededAccount } from "./flags";
+
+import { periodOf, periodStartISO, periodEndISO, weekStartsInRange, endOfLastCompleteWeek } from "@/lib/kpi/labor/periods";
+import { PURCHASING_ENVELOPE_EXCLUSIONS } from "@/lib/kpi/accountModels";
+import { canonicalSubLine } from "@/lib/kpi/purchasing/glRollup";
+import { resolveFinanceCloseAdjustment, absorbFinanceCloseIntoSubLines } from "@/lib/kpi/shared/financeCloseAdjustment";
+import { buildBillback, buildBillbackPeriod } from "@/lib/kpi/overview/billback";
+
+const FISCAL_YEAR = 2026;
+
+// ─── Helpers ────────────────────────────────────────────────────────
+
+function r2(n: any): any {
+  if (n == null || Number.isNaN(n)) return null;
+  return Math.round(Number(n) * 100) / 100;
+}
+
+// Sum a specific line's budgets across members (returns Map<period, amount>).
+function sumBudgetByPeriodForLine({ overviewBudgets, lineCode, members }: any): any {
+  const perLine = overviewBudgets.get(lineCode);
+  if (!perLine) return new Map<any, any>();
+  const out = new Map<any, any>();
+  for (const m of members) {
+    if (PURCHASING_ENVELOPE_EXCLUSIONS.has(m)) continue;
+    const byAcct = perLine.get(m);
+    if (!byAcct) continue;
+    for (const [pn, amt] of byAcct) {
+      out.set(pn, (out.get(pn) || 0) + Number(amt));
+    }
+  }
+  return out;
+}
+
+// Sum a line's actuals across members + periods from pnl_actuals.
+// Returns { amount, reported_period_count, absent_period_count }.
+// Absent periods do NOT contribute to `amount` (null = not reported).
+function sumPnlForLine({ pnl, lineCode, members, periods }: any): any {
+  let amount = 0;
+  let reported = 0;
+  let absent = 0;
+  let anyReported = false;
+  for (const m of members) {
+    const byAcct = pnl.get(m);
+    for (const p of periods) {
+      const perPeriod = byAcct?.get(p);
+      const row = perPeriod?.get(lineCode);
+      if (row && row.actual != null) {
+        amount += Number(row.actual);
+        reported += 1;
+        anyReported = true;
+      } else {
+        absent += 1;
+      }
+    }
+  }
+  return {
+    amount: anyReported ? r2(amount) : null,
+    reported_period_count: reported,
+    absent_period_count: absent,
+  };
+}
+
+// SC daily revenue -> sum across members + periods. Sums are cumulative.
+// scByAcct: Map<account, Map<serviceDate, amount>>
+function sumScDailyRevenue({ scByAcct, members, start, end }: any): any {
+  let amount = 0;
+  let any = false;
+  for (const m of members) {
+    const byDate = scByAcct.get(m);
+    if (!byDate) continue;
+    for (const [day, amt] of byDate) {
+      if (day >= start && day <= end) {
+        amount += Number(amt);
+        any = true;
+      }
+    }
+  }
+  return { amount: any ? r2(amount) : null, present: any };
+}
+
+// Resolve the members list for a top-level account key.
+async function resolveMembers(supa: any, account: any): Promise<any> {
+  if (account === "ALL" || account === "EAST" || account === "WEST") {
+    const q = await fetchMembers(supa, account);
+    if (q.error) return { error: q.error, scope: "members" };
+    return { data: q.members };
+  }
+  return { data: [account] };
+}
+
+// P2-1 (2026-09-01): the folio rail on the Overview corporate posture
+// needs the same live directory shape labor + purchasing ship
+// (accounts.name / city / state). Prior to this fix the Overview
+// passed STATIC_DIRECTORY from lib/accounts.js, which reserves the
+// desc-line slot but carries null team_name / city / state on 8 of
+// 11 accounts. folioMemberDescription returned `line: null` for
+// those 8 rows, so the FolioRail rendered the placeholder single
+// space (" ") for 8/11 accounts instead of "St Louis Cardinals ·
+// Jupiter, FL". [name]'s DOM audit named this class as a "payload
+// gap, not styling."
+//
+// Mirrors the private helper in src/app/api/kpi/labor/route.js
+// (fetchAccountsDirectory). Duplication is intentional - the labor
+// route helper is not exported and lifting it into a shared module
+// would touch the labor route (off-limits for this PR). Query is
+// small (15 lines, one SELECT), self-contained, and the CORP filter
+// / D17 exclusion are inherited from the labor version.
+async function fetchAccountsDirectoryOv(supa: any): Promise<any> {
+  // [name] ruling 2026-10-06: retired accounts (active=false, today
+  // CHI - IL + CIN - FL) are not Overview directory rows. Same filter
+  // as the labor route's fetchAccountsDirectory.
+  const q = await supa.from("accounts")
+    .select("team_key, region, name, city, state, timezone")
+    .neq("team_key", "CORP")
+    .neq("active", false)
+    .order("team_key");
+  if (q.error) return { error: q.error };
+  const salaried = new Set(["CIN - KY", "TBJ - NY"]);
+  return {
+    data: (q.data || []).map((r: any): any => ({
+      team_key: r.team_key,
+      region: r.region,
+      team_name: r.name || null,
+      city: r.city || null,
+      state: r.state || null,
+      timezone: r.timezone || null,
+      salaried: salaried.has(r.team_key),
+    })),
+  };
+}
+
+
+const FY_START_ISO = "2025-12-29";
+
+// [name] R-58 (2026-09-03): every account belongs to one of three
+// revenue models. Source of truth is kpi_account_flags.revenue_model
+// (migration docs/migrations/pnl-2-revenue-model.sql). This map is a
+// PRE-MIGRATION FALLBACK ONLY - dev environments or a fresh row can
+// return null revenue_model. In production the column is populated
+// per [name]'s ruling and the fallback is never consulted. Kept in
+// sync with the SQL backfill; if either changes, both change.
+const REVENUE_MODEL_FALLBACK = {
+  "TBR - FL": "sc_driven",
+  "TBJ - FL": "sc_driven",
+  "TBJ - NY": "sc_driven",
+  "CIN - AZ": "sc_driven",
+  "CIN - KY": "sc_driven",
+  "TXR - AZ": "sc_driven",
+  "STL - FL": "management_fee",
+  "STL - MO": "management_fee",
+  "CIN - OH": "management_fee",
+  "TXR - TX - H": "management_fee",
+  "TXR - TX - V": "sales_based",
+};
+function accountRevenueModel(accountKey: any, flagRow: any): any {
+  if (flagRow && flagRow.revenue_model) return flagRow.revenue_model;
+  // @ts-expect-error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type '{
+  return REVENUE_MODEL_FALLBACK[accountKey] || null;
+}
+
+// P2-3 / P2-5 (2026-09-01): normalize an `explicit` (start, end) that
+// matches a known preset window to that preset's canonical kind so
+// downstream consumers (range chip label, revenue card full-year
+// vs full-period budget label) hit the right branch. Same class as
+// R14's `?preset=` silent-ignore: the client sends explicit dates
+// but the server had no way to recover the preset identity, so the
+// range chip read "Custom 12/29/25 - 08/31/26" instead of "FYTD"
+// and the revenue card read "period budget" ([amount] for CIN - AZ,
+// = sum of P1-P9) instead of "annual budget" ([amount]).
+//
+// Two preset windows are recognized:
+//   - FYTD:  start === FY_START_ISO && end === today
+//   - Period N: (start, end) === (periodStartISO(N), periodEndISO(N))
+//
+// A single-period explicit range folds to { kind: 'period', period_no }.
+// FY start..today folds to { kind: 'fytd' }. Everything else stays
+// explicit. Range PR-2 retired last_4wk / last_13wk as presets on
+// the picker; those windows do not fold and correctly read as
+// "Custom" on the chip.
+function normalizeExplicitToPreset({ start, end, today }: any): any {
+  if (start === FY_START_ISO && end === today) {
+    return { kind: "fytd", period_no: null };
+  }
+  for (let p = 1; p <= 13; p += 1) {
+    const ps = periodStartISO(p);
+    const pe = periodEndISO(p);
+    if (ps && pe && start === ps && end === pe) {
+      return { kind: "period", period_no: p };
+    }
+  }
+  return null;
+}
+
+// [name] 2026-09-02 (PR-1 of language pass): FYTD ends at the last
+// CLOSED period's end - not `today`. The Overview is a scoreboard,
+// so its year-to-date figure must not roll in a live partial period
+// alongside eight closed ones. Both revenue and cost derive from
+// this end date, so both sides move together at the same grain -
+// the exact defect class that produced the rolling-window 65.7% GM
+// and the 23% revenue "beat" on future service days. "Closed"
+// here means calendar-closed: the period whose end < today.
+// Fee accounts, salaried, per-meal - all treated identically.
+// The running period stays reachable through the "This period"
+// preset and the P{N} picker.
+function lastClosedPeriodNoBefore(today: any): any {
+  let last = null;
+  for (let p = 1; p <= 13; p += 1) {
+    const pe = periodEndISO(p);
+    if (pe && pe < today) last = p;
+  }
+  return last;
+}
+
+// Range resolution. `range` inputs:
+//   - { kind: 'fytd' }
+//   - { kind: 'period', period_no: N }
+//   - { kind: 'explicit', start, end }
+function resolveRange({ range, today }: any): any {
+  if (!range || range.kind === "fytd") {
+    const lastClosed = lastClosedPeriodNoBefore(today);
+    // Fall back to `today` if the FY hasn't got a single closed period
+    // yet (e.g. day one of a new FY). Downstream still works but the
+    // payload will just carry zero contributing periods.
+    const end = lastClosed != null ? periodEndISO(lastClosed) : today;
+    return {
+      start: FY_START_ISO,
+      end,
+      kind: "fytd",
+      period_no: null,
+    };
+  }
+  if (range.kind === "period") {
+    const s = periodStartISO(range.period_no);
+    const e = periodEndISO(range.period_no);
+    if (!s || !e) {
+      throw new Error(`overview-range: unknown period_no ${range.period_no}`);
+    }
+    return {
+      start: s,
+      end: e,
+      kind: "period",
+      period_no: range.period_no,
+    };
+  }
+  if (range.kind === "explicit") {
+    const folded = normalizeExplicitToPreset({
+      start: range.start,
+      end: range.end,
+      today,
+    });
+    if (folded) {
+      return {
+        start: range.start,
+        end: range.end,
+        kind: folded.kind,
+        period_no: folded.period_no,
+      };
+    }
+    return {
+      start: range.start,
+      end: range.end,
+      kind: "explicit",
+      period_no: null,
+    };
+  }
+  throw new Error(`overview-range: unknown range.kind ${range?.kind}`);
+}
+
+// Enumerate the fiscal periods the range's weeks touch.
+function periodsInRangeFor(start: any, end: any): any {
+  const weeks = weekStartsInRange(start, end);
+  return [...new Set(weeks.map((w: any): any => periodOf(w)).filter((p: any): any => p != null))].sort((a: any, b: any): any => a - b);
+}
+
+
+// Sum per-period contributions into range totals per line.
+function sumRangeRevenueByLine({ perPeriod, lineCodes }: any): any {
+  const out = {};
+  for (const line of lineCodes) {
+    let amount = 0;
+    let anyReported = false;
+    const sources = new Set();
+    for (const [_, byLine] of perPeriod) {
+      const b = byLine[line];
+      if (b) {
+        if (b.reported) {
+          amount += b.amount;
+          anyReported = true;
+        }
+        for (const s of b.sources) sources.add(s);
+      }
+    }
+    // @ts-expect-error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type '{
+    out[line] = {
+      amount: anyReported ? r2(amount) : null,
+      reported: anyReported,
+      sources: [...sources],
+    };
+  }
+  return out;
+}
+
+// ─── Loader independence audit ──────────────────────────────────────
+//
+// This audit is proven BY READING each loader's inputs, per [name]'s
+// rule. See PR body for the table. The three top-level parallel
+// loaders in this resolver are:
+//   - loadPeriodStatus (supa, fiscalYear)      - global
+//   - loadAccountFlags (supa)                  - global
+//   - resolveMembers (supa, accountKey)        - independent of the two above
+// Once members is resolved, all downstream loaders read only
+// (supa, members, start, end, fiscal_year). None reads any other's
+// output. The single downstream parallel block is safe.
+
+// ─── The top-level resolve ──────────────────────────────────────────
+
+/**
+ * Resolve the Overview payload for one request.
+ *
+ * @param {object} args
+ * @param {object} args.supa               Supabase service client
+ * @param {string} args.accountKey         'ALL' | 'EAST' | 'WEST' | single account
+ * @param {object} args.range              { kind: 'fytd' | 'period' | 'explicit', ... }
+ * @param {string} args.revSource          'planned' | 'sc'
+ * @param {boolean} args.includeSalary
+ * @param {object} args.caller             { role, scope, can_see_salary }
+ *                                          `can_see_salary` here is the
+ *                                          account-aware verdict for
+ *                                          `accountKey` (canSeeSalary(caller,
+ *                                          accountKey) at the route), not
+ *                                          the raw kpi_roles column value.
+ * @param {string} args.today              ISO YYYY-MM-DD
+ * @param {boolean} [args.debugTiming]     when true, includes _debug.timings
+ *
+ * @returns {Promise<object>} payload
+ */
+export async function resolveOverview({
+  supa,
+  accountKey,
+  range,
+  // R-40 polish (2026-09-01): rev_source URL parameter retired.
+  // Overview picks SC automatically when the account carries
+  // sc_revenue_live=true. The `revSource` positional keeps a stub
+  // value here for the internal `assertScReadAllowed` signature (see
+  // step 3 loader block below); no caller passes it.
+  includeSalary = false,
+  caller,
+  today,
+  debugTiming = false,
+  // Train 2a: the two regional-director display names are inputs,
+  // not derived in the engine. v1 imported `REGIONAL_DIRECTORS` from
+  // `src/lib/incidentSchema.js` (addresses in code) and ran its own
+  // ovRdoDisplayName helper on them. Both are left behind in v1;
+  // the entry passes the two display strings here instead. v1's own
+  // comment at the folio site says a null name is already handled.
+  regionalDirectorEastDisplay = null,
+  regionalDirectorWestDisplay = null,
+}: any): Promise<any> {
+  const t0 = performance.now();
+  const timings = {};
+  const timeIt = async (label: any, fn: any): Promise<any> => {
+    const t = performance.now();
+    const v = await fn();
+    // @ts-expect-error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type '{
+    timings[label] = Math.round((performance.now() - t) * 10) / 10;
+    return v;
+  };
+
+  // 1. Range resolution + members resolution (single hop each, independent).
+  const rng = resolveRange({ range, today });
+  const mResp = await timeIt("resolveMembers", (): any => resolveMembers(supa, accountKey));
+  if (mResp.error) return { error: mResp.error, scope: mResp.scope };
+  const members = mResp.data;
+  if (!members || members.length === 0) {
+    return { error: { message: `no members for ${accountKey}` }, scope: "members" };
+  }
+
+  const isAggregate = accountKey === "ALL" || accountKey === "EAST" || accountKey === "WEST";
+  // R-40: no `posture` variable. Access flags only. Layout is one
+  // thing everywhere; role governs access.
+  const access = resolveAccessFlags({ caller, salaryAvailable: caller?.can_see_salary === true });
+
+  // R-40 polish (2026-09-01): the user-facing rev-source toggle was
+  // retired. revenue-source.js now flips to SC purely on the account's
+  // own sc_revenue_live flag - no caller input consulted. `effRevSource`
+  // stays as a string for the downstream sc_mode_test_data flag +
+  // the payload's rev_source echo (audit trail so a debugger can tell
+  // which source produced a given revenue figure).
+  const effRevSource = "sc";   // marker; resolveRevenueSource ignores this
+
+  // 2. Layer-1 loaders. Fire in parallel - all read (supa, members)
+  //    or (supa) or (supa, members, start, end).
+  //
+  // Loader independence audit (proven by reading):
+  //   - loadPeriodStatus(supa, FY)                              - (supa) global
+  //   - loadAccountFlags(supa)                                  - (supa) global
+  //   - loadOverviewBudgets(supa, {members, FY})                - (supa, members)
+  //   - loadPnlActuals(supa, {members, periods, FY})            - (supa, members, periods)
+  //     periods enumerated from range (URL param), NOT from any loader
+  //   - loadScDailyRevenue(supa, {members, start, end})         - (supa, members, range)
+  //   - LABOR: paginateLaborActuals(supa, {members, start, end}) - (supa, members, range)
+  //   - LABOR: resolveMemberBudget(supa, m) per member          - (supa, m)
+  //   - PURCH: paginatePurchasingWeekly(supa, {members, start, end}) - (supa, members, range)
+  //   - PURCH: paginatePurchasingActuals(supa, {members, start, end}) - (supa, members, range)
+  //   - PURCH: loadPurchasingPending(supa, {members, start, end}) - (supa, members, range)
+  //   - PURCH: loadPurchasingBudgets(supa, members, FY)         - (supa, members, FY)
+  //
+  // None reads another loader's output. Fire all in one Promise.all.
+  //
+  // resolveWorkerMeta needs actualsRows[].worker_id from paginateLaborActuals -
+  // that IS a dependency, so it runs AFTER Layer 1 in Layer 2.
+  const periods = periodsInRangeFor(rng.start, rng.end);
+
+  // [name] ruling R-63 (2026-09-03): revenue and cost both stop at the
+  // end of the last complete week in the range. On closed ranges every
+  // week is complete, so this is a no-op (effectiveEnd == rng.end).
+  // On open ranges (P9 today = week 4 running), this caps every loader
+  // and every proration at week 3's end (08/30), so revenue and cost
+  // both measure the same window and the acceptance
+  //   max(revenue_contrib_date) == max(cost_contrib_date)
+  // holds by construction.
+  //
+  // Supersedes the today - 1 cap from #976 on open ranges - 08/30 is
+  // earlier than today - 1 = 09/02, so #976's inequality still holds.
+  const lastCompleteWk = endOfLastCompleteWeek(rng.start, rng.end, today);
+  const effectiveEndISO = lastCompleteWk && lastCompleteWk.effectiveEndISO < rng.end
+    ? lastCompleteWk.effectiveEndISO
+    : rng.end;
+
+  // [name] ruling 2026-09-08 item 3 (Approach A). Calendar-derived
+  // gate that decides whether to fire the three rail-block queries
+  // in parallel with layer1 rather than serialising them after.
+  // Derived from rng + today alone - no DB read - so it can be
+  // evaluated BEFORE layer1 runs.
+  //
+  // "Open" per derivePeriodState() is calendar-authoritative when
+  // periodStatusRow carries no verified_at / closed_at OVERRIDE.
+  // So this gate is a superset of the real isRunningSinglePeriod
+  // (below, post-layer1): any period whose calendar window contains
+  // today AND has no early-close/early-verify override. Divergence
+  // asserted below and telemetry-logged; see the divergence branch
+  // for the two theoretical mismatch cases.
+  const railGatePStart = rng.kind === "period" && rng.period_no != null
+    ? periodStartISO(rng.period_no) : null;
+  const railGatePEnd = rng.kind === "period" && rng.period_no != null
+    ? periodEndISO(rng.period_no) : null;
+  const willBeRunningSinglePeriod = !!(
+    rng.kind === "period" &&
+    rng.period_no != null &&
+    railGatePStart && railGatePStart <= today &&
+    railGatePEnd && today <= railGatePEnd
+  );
+  // [name] R-101 (2026-09-09). The labor target on Next period reads
+  // SC forecast + fee at the range level for its 3100 batr, so the
+  // resolver needs weekly-basis (has projected_revenue per date)
+  // even though the period has not started. Extends only the wk
+  // basis fetch to include NP; the rail's labor + salary fetches
+  // stay running-only (no board is built on NP).
+  const willFetchLaborRevBasis = !!(
+    rng.kind === "period" &&
+    rng.period_no != null &&
+    railGatePStart && railGatePEnd &&
+    (
+      (railGatePStart <= today && today <= railGatePEnd) ||   // CP
+      (today < railGatePStart)                                 // NP (planned)
+    )
+  );
+
+  const layer1 = await timeIt("layer1_parallel", async (): Promise<any> => Promise.all([
+    loadPeriodStatus(supa, FISCAL_YEAR),
+    loadAccountFlags(supa),
+    loadOverviewBudgets(supa, { members, fiscalYear: FISCAL_YEAR }),
+    loadPnlActuals(supa, { members, periods, fiscalYear: FISCAL_YEAR }),
+    // SC daily revenue always read (cheap; per-account narrow). The
+    // guard is what prevents contamination from surfacing in the
+    // per-account picker. Aggregates that don't need it just pass
+    // through zero-summed maps.
+    // 2026-09-02 blocker fix: loader now takes `today` and caps
+    // its own upper bound at today - 1. Prior implementation summed
+    // Service Calendar rows for future service days, inflating
+    // revenue on open periods (TBJ - FL P9: 26 days vs 22 days of
+    // budget). Same helper the sources-line label uses below -
+    // label and query derive from one value.
+    // R-63 (2026-09-03): every range-scoped loader takes effectiveEndISO
+    // instead of rng.end. On closed ranges effectiveEndISO == rng.end
+    // (no change); on open ranges it caps at the last complete week's
+    // end. SC's own capBeforeToday(today) is now redundant when the
+    // resolver caps upstream, but stays defensive for legacy callers.
+    loadScDailyRevenue(supa, { members, start: rng.start, end: effectiveEndISO, today }),
+    paginateLaborActuals(supa, { members, start: rng.start, end: effectiveEndISO }),
+    // [name] ruling 2026-10-13 (KPI perf). Bulk-fetched by account_key IN()
+    // instead of one call per member. ALL / EAST / WEST views drop from
+    // 2 * N queries to 2 total here (-20 on an 11-member rollup).
+    resolveMemberBudgets(supa, members, FISCAL_YEAR),
+    paginatePurchasingWeekly(supa, { members, start: rng.start, end: effectiveEndISO }),
+    paginatePurchasingActuals(supa, { members, start: rng.start, end: effectiveEndISO }),
+    loadPurchasingPending(supa, { members, start: rng.start, end: effectiveEndISO }),
+    loadPurchasingBudgets(supa, members, FISCAL_YEAR),
+    // R-28 / §5.9 - salary is composed INTO 3100 unconditionally on
+    // both postures. These two loaders feed the merge in step 5
+    // (buildBoard) below.
+    load3100_2Budgets(supa, members),
+    // R-63: salary actuals capped at effectiveEndISO too so labour and
+    // purchasing measure the same window.
+    loadSalaryActuals(supa, members, rng.start, effectiveEndISO),
+    // P2-1 (2026-09-01): live accounts_directory for the folio rail.
+    // Global read (independent of members). Cheap - one SELECT.
+    fetchAccountsDirectoryOv(supa),
+    // P2-4b / P2-4d (2026-09-01): purchasing freshness for cards_
+    // through (last CLOSED card date) + last_derive_at (drives the
+    // Overview's command-bar freshness chip via last_walk_at echo).
+    loadPurchasingFreshness(supa),
+    // [name] R-61 (2026-09-03): [name]'s inventory adjusting JEs.
+    // Ships an empty map pre-migration; the resolver treats absent
+    // JEs as "no adjustment", not zero (absent-vs-zero rule). Never
+    // fabricates rows for accounts that carry no inventory.
+    loadInventoryAdjustments(supa, { members, periods, fiscalYear: FISCAL_YEAR }),
+    // [name] ruling 2026-09-08 item 3 (Approach A). Rail-block queries
+    // moved into layer1_parallel so they hide behind the slowest
+    // existing query instead of serialising after. Only fire when
+    // the calendar gate says the range is likely a running single
+    // period; otherwise resolve to null and the rail branch skips.
+    // Prod cost drops from ~1,250ms serialised to ~50-100ms concurrent
+    // per [name]'s page-cost timing.
+    //
+    // Wk basis fetch covers the FULL range (not effectiveEndISO) -
+    // the rail needs all four weeks including forecast, and the
+    // R-92 branch (below) reads the same result.
+    willFetchLaborRevBasis
+      ? loadWeeklyRevenueBasisForOverview(supa, { members, start: rng.start, end: rng.end, today })
+      : Promise.resolve(null),
+    // Rail labor + salary full-range fetches (versus the existing
+    // effectiveEndISO-capped fetches above). Full range needed so
+    // buildBoard sees weeks 3+4 on later dates in a period.
+    willBeRunningSinglePeriod
+      ? paginateLaborActuals(supa, { members, start: rng.start, end: rng.end })
+      : Promise.resolve(null),
+    willBeRunningSinglePeriod
+      ? loadSalaryActuals(supa, members, rng.start, rng.end)
+      : Promise.resolve(null),
+    // R-SC-CARVE ([name] ruling 2026-10-05). Sibling SC read scoped
+    // to the SC_LINE_CARVE_OUTS entries that intersect `members`.
+    // Narrows the service_id IN-list to the carve-out groups; a
+    // range with no matching member returns `{ data: new Map<any, any>() }`
+    // without querying sc_services. Shape:
+    //   Map<account, Map<lineCode, Map<day, amount>>>
+    ((): any => {
+      const applicable = new Map<any, any>();
+      for (const m of members) {
+        const co = SC_LINE_CARVE_OUTS.get(m);
+        if (co) applicable.set(m, co);
+      }
+      if (applicable.size === 0) return Promise.resolve({ data: new Map<any, any>() });
+      return loadScDailyRevenueCarveOut(supa, {
+        carveOuts: applicable,
+        start: rng.start,
+        end: effectiveEndISO,
+        today,
+      });
+    })(),
+  ]));
+  const [
+    periodStatusResp, accountFlagsResp, overviewBudgetsResp, pnlResp,
+    scResp, laborActualsResp, memberBudgetResults,
+    purchWeeklyResp, purchActualsResp, purchPendingResp, purchBudgetsResp,
+    salaryBudgetsResp, salaryActualsResp,
+    dirResp, purchFreshness, invAdjResp,
+    railWkBasisResp, railLaborActualsResp, railSalaryActualsResp,
+    scCarveOutResp,
+  ] = layer1;
+
+  const errs = [];
+  if (periodStatusResp.error) errs.push({ scope: "kpi_period_status", error: periodStatusResp.error });
+  if (accountFlagsResp.error) errs.push({ scope: "kpi_account_flags", error: accountFlagsResp.error });
+  if (overviewBudgetsResp.error) errs.push({ scope: "kpi_budgets_overview", error: overviewBudgetsResp.error });
+  if (pnlResp.error) errs.push({ scope: "pnl_actuals", error: pnlResp.error });
+  if (scResp.error) errs.push({ scope: "sc_daily_revenue", error: scResp.error });
+  if (scCarveOutResp?.error) errs.push({ scope: scCarveOutResp.scope || "sc_daily_revenue_carve_out", error: scCarveOutResp.error });
+  if (laborActualsResp.error) errs.push({ scope: "labor_actuals", error: laborActualsResp.error });
+  for (const r of memberBudgetResults || []) {
+    if (r.error) errs.push({ scope: r.scope || "member_budget", error: r.error });
+  }
+  if (purchWeeklyResp.error) errs.push({ scope: "v_purchasing_by_site_week", error: purchWeeklyResp.error });
+  if (purchActualsResp.error) errs.push({ scope: "purchasing_actuals", error: purchActualsResp.error });
+  if (purchPendingResp.error) errs.push({ scope: "purchasing_pending", error: purchPendingResp.error });
+  if (purchBudgetsResp.error) errs.push({ scope: "kpi_budgets_purchasing", error: purchBudgetsResp.error });
+  if (salaryBudgetsResp.error) errs.push({ scope: "kpi_budgets_3100_2", error: salaryBudgetsResp.error });
+  if (salaryActualsResp.error) errs.push({ scope: "labor_salary_actuals", error: salaryActualsResp.error });
+  if (dirResp?.error) errs.push({ scope: "accounts_directory", error: dirResp.error });
+  if (invAdjResp?.error) errs.push({ scope: "inventory_adjustments", error: invAdjResp.error });
+  // Rail responses only checked when the gate fired (otherwise null).
+  if (railWkBasisResp?.error) errs.push({ scope: "rail_weekly_revenue_basis", error: railWkBasisResp.error });
+  if (railLaborActualsResp?.error) errs.push({ scope: "rail_labor_actuals", error: railLaborActualsResp.error });
+  if (railSalaryActualsResp?.error) errs.push({ scope: "rail_salary_actuals", error: railSalaryActualsResp.error });
+  // purchFreshness never returns an `error` field per its loader
+  // shape (loadFreshness returns the freshness object directly),
+  // so no err check here.
+  if (errs.length > 0) {
+    return { error: errs[0].error, scope: errs[0].scope, all_errors: errs };
+  }
+
+  const periodStatus = periodStatusResp.data;
+  const accountFlags = accountFlagsResp.data;
+  const overviewBudgets = overviewBudgetsResp.data;
+  const pnl = pnlResp.data;
+  const scByAcct = scResp.data;
+  const scCarveOutByAcct = scCarveOutResp?.data || new Map<any, any>();
+  const laborActuals = laborActualsResp.data;
+  // [name] ruling 2026-10-13. resolveMemberBudgets returns a
+  // Map<account, { data | error, scope }>. Preserve the earlier error-
+  // surfacing shape by scanning and bailing on the first error; the
+  // downstream code expects memberBudgets as Map<account, periods[]>.
+  const memberBudgets = new Map<any, any>();
+  for (const m of members) {
+    const r = memberBudgetResults.get(m);
+    if (r?.error) return { error: r.error, scope: r.scope || "member_budgets" };
+    memberBudgets.set(m, r?.data || []);
+  }
+  const purchWeekly = purchWeeklyResp.data;
+  const purchActuals = purchActualsResp.data;
+  const purchPending = purchPendingResp.data;
+  const purchBudgets = purchBudgetsResp.data;
+  // [name] R-61 (2026-09-03): inventory adjusting JEs keyed by
+  // (account, period, gl_line_code). Pre-migration this is empty.
+  const invAdjByAcct = invAdjResp?.data || new Map<any, any>();
+  // Finalised periods (closed_awaiting or verified) - NEVER open.
+  // JEs are booked at close; the running period shows purchases
+  // alone. Computed once here + reused for the row + status
+  // computations later.
+  const finalisedPeriods = periods.filter((p: any): any => {
+    const state = derivePeriodState({
+      periodNo: p,
+      todayISO: today,
+      periodStatusRow: periodStatus.get(p) || null,
+    });
+    return state !== "open";
+  });
+  // Sum JEs across members × finalised periods for a given GL code.
+  // Returns 0 (not null) when no JEs found; this is a SUM, not an
+  // actual-vs-null value. Callers subtract from purchases to get
+  // adjusted cost.
+  const sumInventoryJeForGl = (glLineCode: any): any => {
+    let total = 0;
+    for (const m of members) {
+      const byPeriod = invAdjByAcct.get(m);
+      if (!byPeriod) continue;
+      for (const p of finalisedPeriods) {
+        const byGl = byPeriod.get(p);
+        if (!byGl) continue;
+        const je = byGl.get(glLineCode);
+        if (je != null) total += je;
+      }
+    }
+    return r2(total);
+  };
+  const foodInventoryJe = sumInventoryJeForGl("3200");
+  const packagingInventoryJe = sumInventoryJeForGl("3400");
+  // Salary side (§5.9 / R-28). Always composed - no toggle guard.
+  const salary3100_2Budgets = salaryBudgetsResp.byAccount || new Map<any, any>();
+  const salaryRows = salaryActualsResp.rows || [];
+
+  // 3. Layer-2: workerToEmail from laborActuals (dependency).
+  //    Include salary worker_ids so distinct-people counts dedupe across
+  //    the hourly + salary merge (mirrors the labor route's
+  //    withSalary path, which resolves salary-only ids BEFORE the merge
+  //    for the same reason - see src/lib/labor/salaryBoard.js §
+  //    "2026-08-28 person-key fix").
+  const workerIds = [...new Set([
+    ...(laborActuals || []).map((r: any): any => r.worker_id),
+    ...salaryRows.map((r: any): any => r.worker_id),
+  ])];
+  const workerMeta = await timeIt("resolveWorkerMeta", (): any => resolveWorkerMeta(supa, workerIds));
+  const workerToEmail = buildWorkerToEmail(workerMeta.workerMeta);
+
+  // 4. Aggregate labor budget_periods across members (mirrors labor
+  //    route's aggregate branch's per-period sum). Also handles
+  //    single-account case (memberBudgets has one entry).
+  //
+  //    R-28 / §5.9 (2026-08-31): Overview ALWAYS composes labor with
+  //    salary INCLUDED regardless of the `includeSalary` toggle. The
+  //    toggle is a DISCLOSURE control for the 3100.1 / 3100.2 sub-rows
+  //    in the statement; it never moves the 3100 total or any derived
+  //    figure. Rebuild the labor budget input by merging 3100.2 salary
+  //    budgets on top of the resolved hourly (3100.1 / SC-superseded)
+  //    budgets, mirroring what the labor route's withSalary does for
+  //    include_salary=1.
+  const laborBudgetSumMap = new Map<any, any>();  // p -> amount (hourly)
+  for (const [, list] of memberBudgets) {
+    for (const bp of list || []) {
+      laborBudgetSumMap.set(bp.period_no, (laborBudgetSumMap.get(bp.period_no) || 0) + Number(bp.amount));
+    }
+  }
+  const laborBudgetPeriodsHourly = [...laborBudgetSumMap.entries()]
+    .sort((a: any, b: any): any => a[0] - b[0])
+    .map(([p, amt]: any): any => ({ period_no: p, amount: r2(amt) }));
+  // Sum salary (3100.2) budget per period across members.
+  const salaryBudgetByPeriod = new Map<any, any>();
+  for (const m of members) {
+    const inner = salary3100_2Budgets.get(m);
+    if (!inner) continue;
+    for (const [pn, amt] of inner) {
+      salaryBudgetByPeriod.set(pn, (salaryBudgetByPeriod.get(pn) || 0) + Number(amt || 0));
+    }
+  }
+  // [name] ruling R-68 item 1 (2026-09-04) BLOCKER: revert the
+  // this-period item-4 gating. Labor ALWAYS composes salary into
+  // the 3100 total, target %, chart series and cost total. Never
+  // moves a number by toggle. The toggle is a DISCLOSURE control
+  // only - it gates the 3100.1 / 3100.2 sub-rows in the P&L and
+  // the P&L's Full-view button; the parent 3100 total is byte-
+  // identical between the two toggle states.
+  //
+  // Rationale from [name]: managers below site-leader have no access
+  // to salary line items. The default view (hourly) must still tie
+  // to finance's P&L, so hourly-only can never be the composition
+  // seen by any reader. The prior item-4 behavior showed a cost
+  // ([amount]) that was not the cost and a target (42.6%) that was not
+  // the target - [amount] and seven points out.
+  //
+  // Drill URL from the cost-line row: also always passes
+  // include_salary=1 so the labor board opens at the same salary-
+  // inclusive composition the row's 3100 total reflects.
+  const mergedBudget = mergeBudgetPeriods(laborBudgetPeriodsHourly, salaryBudgetByPeriod);
+  const laborBudgetPeriods = mergedBudget.periods;
+  // Merged per-period map for downstream consumers (chart per-period
+  // labor budget point). Always salary-inclusive per R-68.
+  const laborBudgetSumMapMerged = new Map<any, any>();
+  for (const bp of laborBudgetPeriods) {
+    laborBudgetSumMapMerged.set(bp.period_no, Number(bp.amount || 0));
+  }
+
+  // 5. Call labor buildBoard as a library call, on the merged (hourly +
+  //    salary) inputs. account_state stays "hourly_ok" - the salaried-
+  //    only single accounts (CIN - KY, TBJ - NY) fall out with applies=
+  //    false when there are no hourly rows AND no salary rows; when
+  //    salary rows exist they get a real board (matches the labor
+  //    route's D26 salary-on branch, salaryBoard.js line 222-232).
+  const salaryActualsShaped = salaryRows.map(shapeSalaryRow);
+  const mergedLaborActuals = (laborActuals || []).concat(salaryActualsShaped);
+  // R-63 ([name] 2026-09-03): pass effectiveEndISO as the range end AND
+  // as throughISO so labor's budget-to-date days proration stops at
+  // the same edge as revenue + purchasing. On closed ranges this is
+  // a no-op (effectiveEndISO == rng.end).
+  // [name] ruling 2026-10-13 (KPI perf). buildBoard(labor) and
+  // buildBoard(purchasing) run in parallel - neither reads the other's
+  // output. The labor board depends on workerToEmail (from
+  // resolveWorkerMeta above); the purchasing board depends only on
+  // layer-1 outputs already in scope. Pure CPU work; parallelism saves
+  // whichever finishes second (~1-2s on portfolio views).
+  const [laborBoard, purchBoard] = await Promise.all([
+    timeIt("buildBoard(labor)", async (): Promise<any> => buildBoard({
+      account: accountKey,
+      start: rng.start,
+      end: effectiveEndISO,
+      today,
+      throughISO: effectiveEndISO,
+      actuals: mergedLaborActuals,
+      budget_periods: laborBudgetPeriods,
+      account_state: "hourly_ok",
+      workerToEmail,
+    })),
+    // 6. Call purchasing buildPurchasingBoard as a library call.
+    //
+    // R-63 ([name] 2026-09-03): pass effectiveEndISO as the range end AND
+    // as throughISO so the purchasing board's own budget-to-date days
+    // proration lands on the same edge that the SC + labor loaders use.
+    // On closed ranges effectiveEndISO == rng.end (no change).
+    //
+    // [name] CC prompt 2026-09-14 (prereq C · defect 1). Pass the FULL
+    // range end for the bucket-budget compute, not effectiveEndISO.
+    // buildPurchasingBoard's `bucketBudgetForRange` sums
+    // `period_amount/4` over weekStartsInRange(start, end); on running
+    // ranges the prior `end: effectiveEndISO` truncated that to 1 week
+    // of a 4-week period. `throughISO: effectiveEndISO` below still
+    // controls the budget-to-date proration correctly - two different
+    // computations with two different edges.
+    timeIt("buildBoard(purchasing)", async (): Promise<any> => buildPurchasingBoard({
+      members,
+      start: rng.start,
+      end: rng.end,
+      today,
+      throughISO: effectiveEndISO,
+      actualsRows: purchActuals,
+      weeklyRows: purchWeekly,
+      pendingRow: purchPending,
+      budgetMap: purchBudgets,
+    })),
+  ]);
+
+  // 7. Compute per-period revenue by line + range totals.
+  // [name] ruling 2026-09-07: shared periodBasis.js owns the picker
+  // + rules; this file is a consumer.
+  const perPeriodRevenue = sharedComputePeriodRevenueByLine({
+    members,
+    periods,
+    periodStatus,
+    accountFlags,
+    todayISO: today,
+    overviewBudgets,
+    pnl,
+    scByAcct,
+    scCarveOutByAcct,
+    revSource: effRevSource,
+  });
+  const revenueByLine = sumRangeRevenueByLine({
+    perPeriod: perPeriodRevenue,
+    lineCodes: REVENUE_LINE_CODES,
+  });
+
+  // 7b. Range composition ([name] 2026-09-02 blocker). Every period in
+  //     the range is exactly one of verified / live / planned. The
+  //     board's four disclosure surfaces (range chip, revenue-lines
+  //     pill, revenue card sub-line, sources popover) read from THIS
+  //     one field so each surface can't derive its own version - the
+  //     same defect class as the two "year budget" figures on one
+  //     screen. Classification rule (per period):
+  //       - state === "verified"           -> verified
+  //       - any member picked sc_daily_revenue -> live
+  //       - otherwise (open non-SC, closed_awaiting, fee) -> planned
+  //     Invariant: verified.count + live.count + planned.count ===
+  //     periods_total on every range. Enforced at build time; the
+  //     verify probe reasserts on live payloads.
+  const rangeComposition = buildRangeComposition({ periods, perPeriodRevenue });
+  // [name] ruling 2026-09-17. Overdue nudge. A period is OVERDUE when
+  // its calendar close + R-93 settle window are both behind it AND
+  // Finance still has not posted the P&L - i.e. spend_settled === true
+  // AND verified_at IS NULL. Named per period so the reader sees which
+  // period is behind and how many days. Emitted at the range level;
+  // client renders a small strip on any surface where the array has
+  // items. See buildStatusLine / SettlingStrip for the sibling states.
+  const overduePeriods = [];
+  for (const p of periods) {
+    const entry = perPeriodRevenue.get(p);
+    if (!entry || entry.state !== "closed_awaiting") continue;
+    const psRow = periodStatus.get(p) || null;
+    if (psRow?.verified_at) continue;
+    const settled = derivePeriodSpendSettled({
+      periodNo: p,
+      todayISO: today,
+      periodStatusRow: psRow,
+    });
+    if (!settled) continue;
+    const pEnd = periodEndISO(p);
+    if (!pEnd) continue;
+    const daysSinceClose = Math.round(
+      (new Date(today + "T00:00:00Z").getTime()
+       - new Date(pEnd + "T00:00:00Z").getTime()) / 86400000,
+    );
+    overduePeriods.push({
+      period_no: p,
+      period_end_iso: pEnd,
+      days_since_close: daysSinceClose,
+    });
+  }
+  // Build-time invariant: every period is exactly one kind. If this
+  // ever throws, the classifier lost track and a downstream surface
+  // (pill / popover / status) will lie.
+  {
+    const sum = rangeComposition.verified.count
+      + (rangeComposition.awaiting?.count || 0)
+      + rangeComposition.live.count
+      + rangeComposition.planned.count;
+    if (sum !== rangeComposition.periods_total) {
+      throw new Error(
+        `overview-range-composition invariant: ${sum} categorized ` +
+        `vs ${rangeComposition.periods_total} periods_total (periods=${periods.join(",")})`,
+      );
+    }
+  }
+
+  // 8. Revenue TOTAL: sum across the 5 revenue lines. reported = any
+  //    line reported. sources = union of sources across lines.
+  let totalRevenueAmount = 0;
+  let totalRevReported = false;
+  const totalRevSources = new Set();
+  for (const line of REVENUE_LINE_CODES) {
+    const r = revenueByLine[line];
+    if (r?.reported) {
+      totalRevenueAmount += r.amount;
+      totalRevReported = true;
+    }
+    for (const s of r?.sources || []) totalRevSources.add(s);
+  }
+  // let (not const) so the sc_counts_without_dollars pass below can
+  // override this to null when the SC path returned rows summing to 0.
+  let totalRevenue = totalRevReported ? r2(totalRevenueAmount) : null;
+
+  // 9. Revenue BUDGET to date + full-period + full-year. Sum over the
+  //    5 revenue lines' budgets. Fee accounts + tracked accounts only
+  //    have 2400.1 populated; per-meal have multiple.
+  let revBudgetToDate = 0;
+  let revBudgetFullPeriod = 0;
+  let revBudgetFullYear = 0;
+  let anyRevBudget = false;
+  for (const line of REVENUE_LINE_CODES) {
+    const byPeriod = sumBudgetByPeriodForLine({ overviewBudgets, lineCode: line, members });
+    if (byPeriod.size === 0) continue;
+    const bto = computeBudgetToDateForLine({ budgetByPeriod: byPeriod, periodsInRange: periods, today, throughISO: effectiveEndISO });
+    if (bto.amount != null) {
+      revBudgetToDate += bto.amount;
+      anyRevBudget = true;
+    }
+    const fp = computeFullPeriodBudget({ budgetByPeriod: byPeriod, periodsInRange: periods });
+    if (fp != null) revBudgetFullPeriod += fp;
+    const fy = computeFullYearBudget({ budgetByPeriod: byPeriod });
+    if (fy != null) revBudgetFullYear += fy;
+  }
+  const revenue_budget_to_date = anyRevBudget ? r2(revBudgetToDate) : null;
+  const revenue_budget_full_period = anyRevBudget ? r2(revBudgetFullPeriod) : null;
+  const revenue_budget_full_year = anyRevBudget ? r2(revBudgetFullYear) : null;
+
+  // 10. Cost lines - pull from the engines.
+  //    Labor (3100): board.spent_to_date + board.range_budget +
+  //      board.budget_to_date_days
+  //    Purchasing buckets (3200/3400/3500): purchBoard.buckets +
+  //      purchBoard.totals.buckets_budget +
+  //      purchBoard.totals.buckets_budget_to_date_days
+  //    Purchasing tracked (5002.1/5002.5/5017.3): purchBoard.tracked +
+  //      purchBoard.totals.tracked_budget_to_date_days
+
+  let labor3100_actual = laborBoard?.applies ? r2(laborBoard.spent_to_date) : null;
+  const labor3100_actual_feed = labor3100_actual;
+  const labor3100_budget = laborBoard?.applies ? (laborBoard.range_budget ?? null) : null;
+  const labor3100_budget_to_date_days = laborBoard?.applies
+    ? (laborBoard.budget_to_date_days?.amount ?? null)
+    : null;
+
+  // Raw purchases (what was BOUGHT). [name] R-61 (2026-09-03): the
+  // Overview shows finance-side numbers - what was USED, not what
+  // was bought - by subtracting [name]'s inventory adjusting JEs.
+  // Both figures ship on the cost-lines row so the operator sees the
+  // reconciliation ("$X purchased · −$Y inventory = $Z"). Every
+  // downstream calc (cogsActual, pcts, variance, verdicts) uses the
+  // ADJUSTED value. 3200 (food) + 3400 (packaging + supplies) only;
+  // labor + vehicle carry no inventory.
+  const food_actual_purchased = purchBoard.buckets["3200"]?.period_total ?? null;
+  const food_budget = purchBoard.buckets["3200"]?.budget ?? null;
+  const packaging_actual_purchased = purchBoard.buckets["3400"]?.period_total ?? null;
+  const packaging_budget = purchBoard.buckets["3400"]?.budget ?? null;
+  let vehicle_actual = purchBoard.buckets["3500"]?.period_total ?? null;
+  const vehicle_budget = purchBoard.buckets["3500"]?.budget ?? null;
+  let food_actual = food_actual_purchased != null
+    ? r2(food_actual_purchased - foodInventoryJe)
+    : null;
+  let packaging_actual = packaging_actual_purchased != null
+    ? r2(packaging_actual_purchased - packagingInventoryJe)
+    : null;
+  const food_actual_feed = food_actual;
+  const packaging_actual_feed = packaging_actual;
+  const vehicle_actual_feed = vehicle_actual;
+
+  // [name] ruling 2026-09-18 · verified periods read finance for cost.
+  // Build per-period feed maps per parent (feeds side = whatever the
+  // labor and purchasing engines aggregated over the period), call the
+  // shared helper to compute the finance-close adjustment, and reassign
+  // the four parent actuals to (feed_total + adjustment). Non-verified
+  // periods pass through unchanged; the effect nets to zero.
+  //
+  // [name] R-126 (2026-09-18): the .FIN_CLOSE display row is no longer
+  // emitted per parent. A single post-pass further down (search for
+  // absorbFinanceCloseIntoSubLines) folds the adjustment onto the
+  // largest existing sub-line so parent = sub-lines + INVJE without a
+  // synthetic row. Rule 5 backstop re-emits the row only when a parent
+  // has sub-rows but none are absorbable; probe asserts this stays at
+  // zero occurrences on real data.
+  // Guard J: the parent is set ONCE here; no downstream consumer
+  // re-derives the parent from children (enumerated in the pre-build
+  // report; probe scripts/probes/_probe_finance_close_no_double_count.mjs
+  // asserts the invariant).
+  const feedByParentPeriod = new Map([
+    ["3100", new Map<any, any>()],
+    ["3200", new Map<any, any>()],
+    ["3400", new Map<any, any>()],
+    ["3500", new Map<any, any>()],
+  ]);
+  {
+    // 3100 · labor + salary per period. Sum from mergedLaborActuals
+    // (hourly + shaped salary rows) by periodOf(week_start).
+    for (const r of (mergedLaborActuals || [])) {
+      const p = r.week_start ? periodOf(r.week_start) : null;
+      if (p == null) continue;
+      if (!periods.includes(p)) continue;
+      const m = feedByParentPeriod.get("3100");
+      // @ts-expect-error TS18048: 'm' is possibly 'undefined'.
+      m.set(p, (m.get(p) || 0) + Number(r.amount || 0));
+    }
+    // 3200/3400/3500 · purchases per period, from raw purchActuals.
+    for (const r of (purchActuals || [])) {
+      const gl = String(r.gl_line_code || "");
+      if (!gl) continue;
+      const parent = gl.startsWith("3200") ? "3200"
+                   : gl.startsWith("3400") ? "3400"
+                   : gl.startsWith("3500") ? "3500"
+                   : null;
+      if (!parent) continue;
+      const p = r.txn_date ? periodOf(r.txn_date) : null;
+      if (p == null) continue;
+      if (!periods.includes(p)) continue;
+      const m = feedByParentPeriod.get(parent);
+      // @ts-expect-error TS18048: 'm' is possibly 'undefined'.
+      m.set(p, (m.get(p) || 0) + Number(r.amount || 0));
+    }
+    // 3200/3400 · subtract inventory JE per period so per-period feed
+    // matches the post-JE range total (food_actual = purchases - JE).
+    // 3500 has no JE. Only finalised periods contribute JE, matching
+    // the resolver's sumInventoryJeForGl above.
+    for (const parent of ["3200", "3400"]) {
+      const m = feedByParentPeriod.get(parent);
+      for (const acct of members) {
+        const byPeriod = invAdjByAcct.get(acct);
+        if (!byPeriod) continue;
+        for (const p of finalisedPeriods) {
+          const byGl = byPeriod.get(p);
+          if (!byGl) continue;
+          const je = byGl.get(parent);
+          if (je != null && periods.includes(p)) {
+            // @ts-expect-error TS18048: 'm' is possibly 'undefined'.
+            m.set(p, (m.get(p) || 0) - Number(je));
+          }
+        }
+      }
+    }
+  }
+  const financeClose = resolveFinanceCloseAdjustment({
+    accountKeys: members,
+    periods,
+    periodStatus,
+    todayISO: today,
+    pnlMap: pnl,
+    feedByParentPeriod,
+  });
+  // Reassign the four parent actuals to feed_total + adjustment.
+  // On ranges with no verified periods, `after_actual` equals the feed
+  // total (adjustment = 0) so the assignments are byte-identical.
+  if (labor3100_actual != null) {
+    const info = financeClose.per_parent.get("3100");
+    if (info && info.adjustment !== 0) labor3100_actual = info.after_actual;
+  }
+  if (food_actual != null) {
+    const info = financeClose.per_parent.get("3200");
+    if (info && info.adjustment !== 0) food_actual = info.after_actual;
+  }
+  if (packaging_actual != null) {
+    const info = financeClose.per_parent.get("3400");
+    if (info && info.adjustment !== 0) packaging_actual = info.after_actual;
+  }
+  if (vehicle_actual != null) {
+    const info = financeClose.per_parent.get("3500");
+    if (info && info.adjustment !== 0) vehicle_actual = info.after_actual;
+  }
+
+  // Budget-to-date-days for the buckets aggregate. purchBoard's
+  // totals block ships buckets_budget_to_date_days as an aggregate;
+  // per-bucket day-budget is a Phase-6 deliverable, not shipped here.
+  const buckets_budget_to_date_days = purchBoard.totals.buckets_budget_to_date_days;
+
+  const rm_actual = purchBoard.tracked["5002.1"]?.period_total ?? null;
+  const rm_budget = purchBoard.tracked["5002.1"]?.budget ?? null;
+  const equip_actual = purchBoard.tracked["5002.5"]?.period_total ?? null;
+  const equip_budget = purchBoard.tracked["5002.5"]?.budget ?? null;
+  const perks_actual = purchBoard.tracked["5017.3"]?.period_total ?? null;
+  const perks_budget = purchBoard.tracked["5017.3"]?.budget ?? null;
+
+  // Total COGS actual + budget = labor + food + packaging + vehicle.
+  // A null on any line means "not applicable" (e.g., labor on a
+  // salaried-only single account). Substitute 0 for math when null,
+  // but the payload preserves the null in each line.
+  const cogsActual = (labor3100_actual || 0) + (food_actual || 0) + (packaging_actual || 0) + (vehicle_actual || 0);
+  const cogsBudget = (labor3100_budget || 0) + (food_budget || 0) + (packaging_budget || 0) + (vehicle_budget || 0);
+  const cogsBudgetToDateDays = (labor3100_budget_to_date_days || 0) + (buckets_budget_to_date_days?.amount || 0);
+
+  // 2026-09-01 defect fix: target-% surfaces were composing the ratio
+  // as full-period-budget / to-date-revenue - CIN - AZ P9 showed
+  // COGS target 71.5% against actual 45.8% (25.7% "under"), when
+  // the correct same-window ratio is 56.2% (10.4% under). Ratio
+  // rule: target_pct = budget_to_date(line) / budget_to_date(revenue).
+  // Both sides on the same horizon.
+  //
+  // Purchasing exposes only an AGGREGATE `buckets_budget_to_date_days`
+  // (not per-bucket). Since all three buckets prorate against the
+  // same period-in-range grid, the per-bucket to-date is
+  //   bucket.budget * (agg_to_date / agg_full)
+  // The ratio is well-defined when the agg full is non-zero. When
+  // either operand is null (no data), the per-bucket to-date is
+  // null and downstream pctOf returns null.
+  const bucketsBudgetFullSum = (food_budget || 0) + (packaging_budget || 0) + (vehicle_budget || 0);
+  const bucketsToDateRatio = (buckets_budget_to_date_days?.amount != null && bucketsBudgetFullSum > 0)
+    ? buckets_budget_to_date_days.amount / bucketsBudgetFullSum
+    : null;
+  const prorateBucketToDate = (fullBudget: any): any => {
+    if (fullBudget == null || bucketsToDateRatio == null) return null;
+    return r2(fullBudget * bucketsToDateRatio);
+  };
+  const food_budget_to_date_days      = prorateBucketToDate(food_budget);
+  const packaging_budget_to_date_days = prorateBucketToDate(packaging_budget);
+  const vehicle_budget_to_date_days   = prorateBucketToDate(vehicle_budget);
+
+  // R-71 Stage 2 ([name] ruling 2026-09-04): sum vendor-credit amounts
+  // (signed negative, stored that way by the loader) per parent bucket.
+  // Used by the cost row's "$X invoiced - $Y credits = $Z" sub-line
+  // display. Credits FOLD into the GL-coded sub-line (they carry a
+  // chartOfAccountId), so no synthetic CREDITS sub-row is emitted;
+  // the per-gl aggregation naturally nets them into e.g. 3200.1.
+  // The per-bucket total is retained solely for the cost-row derivation
+  // sub-line's visibility.
+  const creditsByBucket = { "3200": 0, "3400": 0, "3500": 0 };
+  const purchasesByBucket = { "3200": 0, "3400": 0, "3500": 0 };
+  for (const r of (purchActuals || [])) {
+    const gl = String(r.gl_line_code || "");
+    const bucket = gl.startsWith("3200") ? "3200"
+                 : gl.startsWith("3400") ? "3400"
+                 : gl.startsWith("3500") ? "3500"
+                 : null;
+    if (!bucket) continue;
+    const amt = Number(r.amount || 0);
+    if (r.source === "billcom_credit") {
+      creditsByBucket[bucket] += amt;
+    } else {
+      purchasesByBucket[bucket] += amt;
+    }
+  }
+
+  // PR-1 item 1 (2026-09-02). has_target is the invariant "there is a
+  // real target to compare against on this range". Rules:
+  //   - Single fiscal period (kind === "period")     -> true
+  //   - FYTD (kind === "fytd")                       -> true
+  //   - Rolling window (kind === "explicit")         -> false
+  // Plus a guard: both budgets must actually be present. An account
+  // with no budget file (or a period with no matching budget row)
+  // trips false regardless of range kind.
+  //
+  // When false, every target_pct, variance_pct, envelope_delta and
+  // budget_at_this_revenue field on every surface (cards, levers,
+  // statement rows, drill.purchasing, statement_totals) is null. The
+  // COGS + GM pills read "No target" (neutral tone). Cost variances
+  // remain (dollars are honest without a target); cost pcts of
+  // revenue remain (a ratio of two actuals, not a comparison).
+  // [name] CC prompt 2026-09-08. #1063 made This year resolve as
+  // kind="explicit" (client sends R-93 dates directly, no preset
+  // param). The old predicate only recognized `period` / `fytd`, so
+  // has_target went false on This year - and every target_pct,
+  // variance_pct, envelope_delta and budget_at_this_revenue null'd
+  // out. Empty board.
+  //
+  // Widened: a target is meaningful whenever the range covers WHOLE
+  // fiscal periods with budgets present, however it was reached
+  // (preset, shared link, back button, typed URL). A rolling window
+  // whose start/end don't align to period boundaries stays false -
+  // that's the guard against going too far. Anyone landing on P3-P5
+  // by any route gets the same answer as clicking a "P3-P5" preset
+  // would today.
+  //
+  // A single-period / fytd fold still resolves via the existing
+  // resolveRange path so those keep has_target=true too; the alignment
+  // check catches the explicit path that #1063 introduced.
+  const rangeAlignsToPeriods = ((): any => {
+    if (rng.kind === "period" || rng.kind === "fytd") return true;
+    if (rng.kind !== "explicit" || !rng.start || !rng.end) return false;
+    let matchStart = false;
+    let matchEnd = false;
+    for (let p = 1; p <= 13; p += 1) {
+      if (periodStartISO(p) === rng.start) matchStart = true;
+      if (periodEndISO(p) === rng.end) matchEnd = true;
+    }
+    return matchStart && matchEnd;
+  })();
+  const has_target = rangeAlignsToPeriods
+    && revenue_budget_full_period != null && revenue_budget_full_period > 0
+    && cogsBudget > 0;
+
+  // 10b. sc_counts_without_dollars diagnostic (PR-1 item 6, [name]
+  // 2026-09-02). When the range is open and the effective revenue
+  // source is sc_daily_revenue, and rows landed but every
+  // actual_revenue is 0, the operator is looking at service days on
+  // the calendar with no meal counts entered - revenue is an absence,
+  // not a zero. Compute here so we can null totalRevenue below and
+  // cascade the null through downstream verdicts rather than lying
+  // "[amount]" into the payload. [name]'s SC thread: seeding must write
+  // sc_daily_actuals.actual_count. Prices are resolved in the sc-8b
+  // view via double COALESCE (actual price -> projected price -> 0),
+  // so counts alone drive dollars; a row without a count contributes
+  // exactly 0.
+  //
+  // Single-account per-meal only. Aggregates + fee + tracked accounts
+  // never read sc_daily_revenue and stay null.
+  //
+  // We derive displayPeriodState locally (it's computed formally
+  // below) so the totalRevenue override can happen before the gross-
+  // margin math.
+  const displayPeriodStateForSc = ((): any => {
+    let n = null;
+    if (rng.kind === "period") n = rng.period_no;
+    else if (periods.length > 0) n = periods[periods.length - 1];
+    if (n == null) return "open";
+    return derivePeriodState({
+      periodNo: n,
+      todayISO: today,
+      periodStatusRow: periodStatus.get(n) || null,
+    });
+  })();
+  let sc_counts_without_dollars = null;
+  if (!isAggregate && classifyForRevenue(accountKey) === "per_meal"
+      && displayPeriodStateForSc === "open") {
+    const acctFlags = accountFlags.get(accountKey) || null;
+    if (acctFlags && acctFlags.sc_revenue_live === true) {
+      const byDate = scByAcct.get(accountKey);
+      if (byDate) {
+        // Sum over the DISPLAY PERIOD, not the whole range. On FYTD
+        // the display period is the running period; only its counts
+        // (or lack thereof) determine the diagnostic. Prior periods
+        // in FYTD read pnl_actuals via the picker.
+        const pn = rng.kind === "period" ? rng.period_no
+          : (periods.length > 0 ? periods[periods.length - 1] : null);
+        const pStart = pn != null ? periodStartISO(pn) : rng.start;
+        const pEnd = pn != null ? periodEndISO(pn) : rng.end;
+        let rowCount = 0;
+        let sumRev = 0;
+        let firstDate = null;
+        let lastDate = null;
+        for (const [day, amt] of byDate) {
+          if (day >= pStart && day <= pEnd) {
+            rowCount += 1;
+            sumRev += Number(amt);
+            if (firstDate == null || day < firstDate) firstDate = day;
+            if (lastDate == null || day > lastDate) lastDate = day;
+          }
+        }
+        if (rowCount > 0 && sumRev === 0) {
+          sc_counts_without_dollars = {
+            row_count: rowCount,
+            dates_covered: { first: firstDate, last: lastDate },
+          };
+        }
+      }
+    }
+  }
+  // Absence, not zero. Every downstream cogs pct + verdict already
+  // cascades from null revenue. See statement row 2400.1 override
+  // further down for the per-row absence patch.
+  if (sc_counts_without_dollars) {
+    totalRevReported = false;
+    totalRevenue = null;
+  }
+
+  // [name] R-92 (2026-09-09). On a running single period the standard
+  // SC path caps at capBeforeToday (today - 1) and misses the week's
+  // confirmed counts entered ahead of the day. Labor already reads
+  // per-week SC and treats a week as CONFIRMED when every projected
+  // service has a count - "a week counts once its counts are
+  // confirmed, not once it has closed." Overview follows the same
+  // rule on This period: revenue actual becomes the sum of confirmed
+  // weeks; the card names the count ("2 of 4 weeks confirmed in the
+  // Service Calendar"). Cost + margin cards HOLD (see cards[]
+  // overrides below and client gate).
+  //
+  // Only runs on a running single period (rng.kind === "period" +
+  // displayPeriodState === "open"). Every other range keeps its
+  // existing totalRevenue path.
+  // R-92 declarations moved below displayPeriodState (line 1130ish)
+  // to escape TDZ - the reference read displayPeriodState before its
+  // let-declaration and threw "Cannot access 'displayPeriodState'
+  // before initialization". See block below.
+  let confirmedWeeksCount = null;
+  let totalWeeksCount = null;
+
+  // 11. Gross margin.
+  // grossMargin (dollars) depends on totalRevenue - under
+  // sc_counts_without_dollars it correctly nulls out. grossMarginBudget
+  // (dollars) is budget-vs-budget: revenue_budget_to_date minus
+  // cogsBudgetToDateDays. Previously gated on totalRevenue != null,
+  // which was wrong - a target is a budget concept, not an actual one.
+  // On sc_counts_without_dollars the target-side stays intact (a real
+  // "here's what you should be spending" number the operator can
+  // still see), only actual-derived figures null out.
+  //
+  // PR-1 item 1 (2026-09-02): gmPctBudget is the FULL-PERIOD target
+  // ratio, not to-date. [name]'s rule: "target percent is identical on
+  // day 1 and day 28". On single-period ranges the two are identical
+  // (proration cancels); on FYTD the to-date form drifts as the
+  // running period elapses. Full-period is invariant across the year.
+  const grossMargin = totalRevenue != null ? r2(totalRevenue - cogsActual) : null;
+  const grossMarginBudget = (revenue_budget_to_date != null)
+    ? r2(revenue_budget_to_date - cogsBudgetToDateDays)
+    : null;
+  const gmPctActual = pctOf(grossMargin, totalRevenue);
+  const gmPctBudget = (revenue_budget_full_period != null && revenue_budget_full_period > 0)
+    ? pctOf(revenue_budget_full_period - cogsBudget, revenue_budget_full_period)
+    : null;
+
+  // 12. Period state chip - the range's chip is the state of the
+  //     current period in the range, or the terminal period for a
+  //     closed range. FYTD uses the current period.
+  let displayPeriodNo = null;
+  let displayPeriodState = "open";
+  if (rng.kind === "period") {
+    displayPeriodNo = rng.period_no;
+  } else if (rng.kind === "fytd") {
+    displayPeriodNo = periods.length > 0 ? periods[periods.length - 1] : null;
+  } else if (rng.kind === "explicit") {
+    displayPeriodNo = periods.length > 0 ? periods[periods.length - 1] : null;
+  }
+  let displaySpendSettled = false;
+  if (displayPeriodNo != null) {
+    displayPeriodState = derivePeriodState({
+      periodNo: displayPeriodNo,
+      todayISO: today,
+      periodStatusRow: periodStatus.get(displayPeriodNo) || null,
+    });
+    // [name] ruling 2026-09-17. Additive `spend_settled` sibling of
+    // `period_state`. True once a closed period is at least 8 days
+    // past its end (R-93 boundary) OR verified. Existing
+    // `period_state` consumers untouched; four Overview surfaces read
+    // this to flip Closed · awaiting -> Closed · unaudited on day 8.
+    displaySpendSettled = derivePeriodSpendSettled({
+      periodNo: displayPeriodNo,
+      todayISO: today,
+      periodStatusRow: periodStatus.get(displayPeriodNo) || null,
+    });
+  }
+
+  // [name] R-92 (2026-09-09). Confirmed-weeks SC read for This period.
+  // Placed here (right after displayPeriodState resolves) so the
+  // isRunningSinglePeriod gate can key off displayPeriodState.
+  // Overrides totalRevenue when the range is a running single period
+  // and at least one week's SC counts are all confirmed - Labor
+  // already reads per-week and treats a week as CONFIRMED when every
+  // projected service has a count. Overview follows the same rule
+  // on This period: revenue actual becomes the sum of confirmed
+  // weeks; the card names the count. Cost + margin cards HOLD (see
+  // cards[] pill overrides + client gate).
+  const isRunningSinglePeriod = rng.kind === "period" && displayPeriodState === "open";
+  // [name] ruling 2026-09-08 item 3. Assert the calendar-derived
+  // rail gate agrees with the real state post-layer1. The gate
+  // gets checked BEFORE any DB reads to decide whether to fire
+  // the three rail queries in parallel with layer1; if it ever
+  // disagrees, either wasted queries (false positive - gate fires
+  // but state isn't open) or missing data (false negative - state
+  // is open but queries didn't fire).
+  //
+  // Divergence cases from derivePeriodState:
+  //   false positive: calendar-open AND periodStatusRow.verified_at
+  //     OR closed_at set -> state = "verified" / "closed_awaiting".
+  //     Rare early-verify or early-close override. Wasted queries,
+  //     no wrong result (rail block skips).
+  //   false negative: state = "open" but calendar-not-open. Cannot
+  //     happen per derivePeriodState (returns "planned" for future,
+  //     "open" only when today in [pStart, pEnd] + no override).
+  //
+  // Warn on divergence so the telemetry catches an actual case if
+  // one appears in production.
+  if (willBeRunningSinglePeriod !== isRunningSinglePeriod) {
+    // eslint-disable-next-line no-console
+    console.warn("[overview] rail-gate divergence", {
+      account: accountKey,
+      range: { start: rng.start, end: rng.end, period_no: rng.period_no },
+      today,
+      willBeRunningSinglePeriod,
+      isRunningSinglePeriod,
+      displayPeriodState,
+      periodStatusRow: displayPeriodNo != null ? (periodStatus.get(displayPeriodNo) || null) : null,
+    });
+  }
+  // [name] ruling 2026-09-08 Path B. wkBasis lives at outer scope so
+  // both the R-92 confirmed-weeks compute (this block) and the
+  // week_rail compute (below the chart) read the same SC weekly
+  // rows. One fetch, two consumers.
+  //
+  // Approach A (2026-09-08 item 3): the fetch itself moved into
+  // layer1_parallel above, gated on willBeRunningSinglePeriod. When
+  // the calendar gate agreed with the real state we already have
+  // the result; otherwise runningWkBasis stays null and the R-92
+  // branch skips.
+  // [name] R-101 (2026-09-09): widen the assignment gate to
+  // willFetchLaborRevBasis so NP gets the wk basis too. The R-92
+  // branch below still uses willBeRunningSinglePeriod for its
+  // running-week SC-confirmed logic, so NP naturally skips it.
+  let runningWkBasis = willFetchLaborRevBasis ? railWkBasisResp : null;
+  if (isRunningSinglePeriod && effRevSource === "sc") {
+    if (runningWkBasis?.data?.length) {
+      const wkBasis = runningWkBasis;
+      const weeks = wkBasis.data;
+      totalWeeksCount = weeks.length;
+      const confirmedWks = weeks.filter((w: any): any => w.basis === "confirmed");
+      confirmedWeeksCount = confirmedWks.length;
+      // [name] ratify (2026-09-09). Revenue for a confirmed week is
+      // EVERYTHING the operator entered - full actuals, no filter
+      // on whether a service was in the R-85 denominator. [name]'s
+      // rule: "a confirmed week is one the operator confirmed and
+      // saved. If they put in 160 breakfasts, 160 lunches and 6
+      // dinners, that is the week." R-85 (denom-only) is for
+      // COUNTING which weeks are confirmed - not for the revenue
+      // figure. Prior code used actual_revenue_in_denom here and
+      // reverted after [name]'s ratify; the [amount] he traced to a
+      // stray forecast week was a week-boundary error in his own
+      // query, not a real leak.
+      const confirmedSum = confirmedWks.reduce((s: any, w: any): any => s + Number(w.revenue || 0), 0);
+      if (confirmedSum > 0) {
+        // [name] ruling 2026-09-08. Running-period revenue is the
+        // Service Calendar confirmed-weeks sum PLUS the 2300 service
+        // fee prorated by the same confirmed weeks. Kept OUT of
+        // periodBasis's R-67 branch on purpose (Guard 1 in the CC
+        // prompt): this is an Overview presentation rule for the
+        // running period, not a shared accrual rule. periodBasis
+        // gets zero changes so Last period, Current year, and Labor
+        // are byte-identical.
+        //
+        // [name] scope call (item 2): 2300 ONLY. Do not prorate 2200
+        // on TBR - its catering comes from the Service Calendar
+        // (B&G Lunch), so it is already in the SC figure. 2600
+        // untouched (rare, no B&G analogue).
+        const feeBudgetByPeriod = sumBudgetByPeriodForLine({
+          overviewBudgets, lineCode: "2300", members,
+        });
+        const feeThisPeriod = Number(feeBudgetByPeriod.get(displayPeriodNo) || 0);
+        const feeProrate = (feeThisPeriod > 0 && confirmedWeeksCount > 0)
+          ? feeThisPeriod * (confirmedWeeksCount / 4)
+          : 0;
+        totalRevenue = Math.round((confirmedSum + feeProrate) * 100) / 100;
+        totalRevReported = true;
+        totalRevSources.add("sc_daily_revenue");
+        if (feeProrate > 0) totalRevSources.add("kpi_budgets_2300_prorate");
+        // [name] ruling PR-3 follow-up (2026-09-08). Per-line
+        // attribution on TP is an audit question, not a design one,
+        // and comes back in a deliberate audit pass. Until then:
+        // the confirmed sum lands as the TOTAL only. Each revenue
+        // line reads "not reported" - honest partial state beats
+        // per-line figures that don't sum to the total (a [amount]
+        // 2400.1 under a [amount] total is worse than showing
+        // nothing on the lines). The standard SC-through-yesterday
+        // path had populated 2400.1 with a one-day partial;
+        // overwrite that null so the lines match the honest state.
+        for (const line of REVENUE_LINE_CODES) {
+          if (revenueByLine[line]) {
+            revenueByLine[line] = { amount: 0, reported: false, sources: [] };
+          }
+        }
+      }
+    }
+  }
+
+  // 13. Flags block.
+  // Determine if the display period's per-meal revenue is planned
+  // (has at least one per-meal member on planned mode).
+  const perMealMembers = members.filter((m: any): any => classifyForRevenue(m) === "per_meal");
+  const perMealPlanned = displayPeriodState === "open" && perMealMembers.length > 0 && !(
+    effRevSource === "sc" && perMealMembers.every((m: any): any => accountFlags.get(m)?.sc_revenue_live === true)
+  );
+  const scLiveAny = perMealMembers.some((m: any): any => accountFlags.get(m)?.sc_revenue_live === true);
+  const flags = composeFlags({
+    accountKey,
+    members,
+    revSource: effRevSource,
+    scLive: scLiveAny,
+    revenueModel: ((): any => {
+      if (isAggregate) return null;
+      const rs = resolveRevenueSource({
+        accountKey,
+        periodState: displayPeriodState,
+        revSource: effRevSource,
+        accountFlags: accountFlags.get(accountKey) || null,
+      });
+      return rs.model;
+    })(),
+  });
+  // Override `planned` to reflect display-period planned semantics for
+  // aggregates too.
+  flags.planned = perMealPlanned;
+
+  // PR-1 item 5 (2026-09-02). revenue_source_state names WHY the
+  // revenue variance carries a suffix, so the client keys "provisional"
+  // off source, not off period_state. Once sc_revenue_live=true for an
+  // account, revenue to date is real actual and the variance is a
+  // settled comparison; the amber suffix belongs only on planned
+  // revenue. Verified periods are also settled (finance P&L).
+  //   planned  - open period, sc_revenue_live=false OR no live counts
+  //   live     - open period, sc_revenue_live=true (real actual)
+  //   verified - period closed (verified or awaiting finance)
+  const revenue_source_state = ((): any => {
+    if (displayPeriodState === "verified") return "verified";
+    if (displayPeriodState === "closed_awaiting") return "verified";
+    if (isAggregate) return flags.planned ? "planned" : "live";
+    const acctFlags = accountFlags.get(accountKey) || null;
+    return (acctFlags && acctFlags.sc_revenue_live === true) ? "live" : "planned";
+  })();
+
+  // [name] R-58 (2026-09-03): revenue_model on payload root. Cards,
+  // cost lines, help copy and probes read this to gate the "adjusted
+  // budget" surface. Portfolio scope has no single model; the value
+  // is null there and downstream surfaces default to the SC-driven
+  // shape (the corporate rollup mixes all three models). Single-
+  // account: read from kpi_account_flags.revenue_model (fallback to
+  // the pre-migration map).
+  const revenue_model = isAggregate
+    ? null
+    : accountRevenueModel(accountKey, accountFlags.get(accountKey) || null);
+  const isManagementFee = revenue_model === "management_fee";
+
+  // PR-1 item 2 (2026-09-02). Envelope + pace helpers.
+  // revenue_pace_pct: how far revenue came in against its own budget-
+  //   to-date. Not a target percent - a pace measurement on revenue.
+  // budget_at_this_revenue: the cost the target percent buys at the
+  //   revenue actually earned (line_target_pct * actual_revenue).
+  // envelope_delta: budget_to_date - budget_at_this_revenue. Positive
+  //   means the envelope shrank (revenue short); negative grew.
+  const revenue_pace_pct = (totalRevenue != null && revenue_budget_to_date != null && revenue_budget_to_date > 0)
+    ? r2((totalRevenue / revenue_budget_to_date) * 100) : null;
+  // R-77 fix ([name] 2026-09-04): route through the shared helper.
+  // Formula is identical; the guard shape moves into the helper so
+  // Labor's route computes with the same rules. See
+  // src/lib/kpi/shared/batr.js for why one owner beats two.
+  const budgetAtThisRevenue = (lineBudget: any): any => sharedBatr({
+    actualRevenue: totalRevenue,
+    lineBudget,
+    revenueBudgetFullPeriod: revenue_budget_full_period,
+    hasTarget: has_target,
+  });
+  const envelopeDelta = (btd: any, batr: any): any => sharedEnvelopeDelta(btd, batr);
+
+  // 14. Ticker.
+  const isFeeAccount = !isAggregate && classifyForRevenue(accountKey) === "fee";
+  const isPassThrough = flags.pass_through;
+  const cogsLinesForTicker = [
+    // PR-1 item 1 (2026-09-02): target_pct = line_budget_full_period /
+    // revenue_budget_full_period. Horizon-invariant across FYTD too.
+    // See card + lever + statement-row treatment for the same rule.
+    { line_code: "3100", label: "Kitchen labor",           actual_pct: pctOf(labor3100_actual, totalRevenue), target_pct: pctOf(labor3100_budget, revenue_budget_full_period) },
+    { line_code: "3200", label: "Food purchased",          actual_pct: pctOf(food_actual, totalRevenue),      target_pct: pctOf(food_budget,      revenue_budget_full_period) },
+    { line_code: "3400", label: "Packaging and supplies",  actual_pct: pctOf(packaging_actual, totalRevenue), target_pct: pctOf(packaging_budget, revenue_budget_full_period) },
+    { line_code: "3500", label: "Vehicle",                 actual_pct: pctOf(vehicle_actual, totalRevenue),   target_pct: pctOf(vehicle_budget,   revenue_budget_full_period) },
+  ].filter((l: any): any => l.actual_pct != null && l.target_pct != null);
+
+  // Weeks-closed for the through segment (single-period ranges).
+  let weeks_closed = null;
+  let weeks_total = null;
+  if (rng.kind === "period" && laborBoard?.applies) {
+    weeks_closed = laborBoard.closed_weeks_count ?? null;
+    weeks_total = laborBoard.weeks_in_period ?? null;
+  }
+
+  const ticker = computeTicker({
+    gm_pct_actual: gmPctActual,
+    gm_pct_target: gmPctBudget,
+    cogs_lines: cogsLinesForTicker,
+    period_state: displayPeriodState,
+    data_thru_date: today,
+    weeks_closed,
+    weeks_total,
+    is_fee_account: isFeeAccount,
+    is_pass_through: isPassThrough,
+    revenue_is_planned: flags.planned,
+    // R-40: effRevSource === "sc" is only reachable when the caller
+    // has revenue_toggle_visible (access-gated in resolveAccessFlags),
+    // so the prior redundant `posture.posture === "corporate"` check
+    // is dropped. Same set of callers reach this branch as before.
+    sc_mode_test_data: effRevSource === "sc" && flags.seeded,
+  });
+
+  // 15. Cards (Revenue, COGS, Gross margin). Server-side formatting.
+  const revenueDelta = totalRevenue != null && revenue_budget_to_date != null
+    ? r2(totalRevenue - revenue_budget_to_date) : null;
+  const cogsDelta = cogsActual - cogsBudgetToDateDays;
+  const gmDelta = grossMargin != null && grossMarginBudget != null
+    ? r2(grossMargin - grossMarginBudget) : null;
+
+  // [name] CC prompt 2026-09-11. `cogsAdjustedFromLines` populated
+  // below (after statement_rows are built) as the sum of the four
+  // parent cost lines' Adjusted. The `let` here + the delayed
+  // populate + the mutation of `cards`/`statement_totals` reads a
+  // bit unusual, but it's the smallest change that keeps the
+  // aggregate in lockstep with the per-line values shipped in
+  // statement_rows - one source of truth, no formula duplication.
+  // Cards + statement_totals below reference these bindings and
+  // are mutated post-hoc to pick up the final values.
+  let cogsAdjustedFromLines = null;
+  let gmAdjustedFromLines = null;
+
+  const cards = [
+    {
+      key: "revenue",
+      label: "Revenue",
+      gl_codes: "2200 · 2300 · 2400",
+      hero_actual: totalRevenue,
+      hero_actual_display: formatMoneyWhole(totalRevenue),
+      hero_reported: totalRevReported,
+      // [name] R-92 (2026-09-09). Confirmed-weeks count for the
+      // running-period card caption: "N of X weeks confirmed in the
+      // Service Calendar. The rest is forecast and will firm up as
+      // counts land." Null on every other range - client omits the
+      // caption. See the confirmed-weeks override on totalRevenue
+      // above; these two fields expose the same computation for
+      // the card face.
+      confirmed_weeks_count: confirmedWeeksCount,
+      total_weeks_count: totalWeeksCount,
+      budget_to_date: revenue_budget_to_date,
+      budget_to_date_display: formatMoneyWhole(revenue_budget_to_date),
+      budget_full_period: revenue_budget_full_period,
+      budget_full_period_display: formatMoneyWhole(revenue_budget_full_period),
+      budget_full_year: revenue_budget_full_year,
+      budget_full_year_display: formatMoneyWhole(revenue_budget_full_year),
+      delta_dollars: revenueDelta,
+      delta_display: revenueDelta != null ? gapDollarsRevenue(revenueDelta) : null,
+      delta_direction: revenueDelta != null ? directionOfDelta(revenueDelta, "revenue") : null,
+      // PR-1 item 2 (2026-09-02): revenue_pace_pct on the revenue card
+      // so the status line and card sub-line can name how far revenue
+      // came in against its own budget-to-date - the sentence [name]
+      // wants operators to see when SC counts arrive short: "revenue
+      // came in 8.1% short, so your cost budget dropped with it".
+      revenue_pace_pct,
+      pill: ((): any => {
+        if (isFeeAccount) return { label: "Contractual", tone: "neutral" };
+        // PR-1 item 6 (2026-09-02): sc_counts_without_dollars is an
+        // absence, not a comparison. "Not yet reporting" beats "Below
+        // budget" because the second reads as a shortfall when the
+        // truth is the counts have not been entered.
+        if (sc_counts_without_dollars) return { label: "Not yet reporting", tone: "neutral" };
+        if (flags.planned) return { label: "Planned", tone: "warn" };
+        if (revenueDelta == null) return { label: "No data", tone: "neutral" };
+        // [name] ruling this-period (2026-09-03) item 2: on an open
+        // range the comparison is prorated (revenue running against
+        // forecast-to-date, not the settled period budget), so the
+        // pill reads TRENDING ABOVE / TRENDING BELOW with a neutral
+        // tone. Green on an AT-RISK card would read as good news
+        // mid-period. Closed ranges keep the settled verdict.
+        //
+        // [name] post-1060 sweep (2026-09-09): pill drops the dollar
+        // figure. It moves to the variance footer on the card body
+        // so the pill scans identically across all three cards. State
+        // words only. Render of record:
+        // docs/renders/overview-cards-variance-footer.html.
+        // Prior form: "[amount] above projection". New form: "above
+        // projection". Trending state on open-mid-period is preserved
+        // (real semantic distinction from the settled verdict on a
+        // closed range).
+        //
+        // [name] R-92 (2026-09-09): on a running single period with
+        // confirmed-weeks revenue, the pill reads "Confirmed so
+        // far" green - names what the figure is. The trending
+        // state above only fires on ranges where no week is fully
+        // confirmed yet (SC still filling in).
+        const openRange = displayPeriodState === "open";
+        if (isRunningSinglePeriod && confirmedWeeksCount != null && confirmedWeeksCount > 0) {
+          return { label: "Confirmed so far", tone: "good" };
+        }
+        if (Math.abs(revenueDelta) < 1) {
+          return { label: "on projection", tone: openRange ? "neutral" : "good" };
+        }
+        if (openRange) {
+          return revenueDelta >= 0
+            ? { label: "trending above", tone: "neutral" }
+            : { label: "trending below", tone: "neutral" };
+        }
+        return revenueDelta >= 0
+          ? { label: "above projection", tone: "good" }
+          : { label: "below projection", tone: "bad" };
+      })(),
+      sources: [...totalRevSources],
+    },
+    {
+      key: "cogs",
+      label: "Cost of goods sold",
+      gl_codes: "3100 – 3500",
+      hero_actual: r2(cogsActual),
+      hero_actual_display: formatMoneyWhole(cogsActual),
+      // COGS is derived from live labor + live purchasing engines - it
+      // is always reported (never null in-scope).
+      hero_reported: true,
+      budget_to_date: r2(cogsBudgetToDateDays),
+      budget_to_date_display: formatMoneyWhole(cogsBudgetToDateDays),
+      pct_of_revenue: pctOf(cogsActual, totalRevenue),
+      pct_of_revenue_display: formatPct(pctOf(cogsActual, totalRevenue)),
+      // PR-1 item 1 (2026-09-02): target_pct is budget/budget on the
+      // FULL-PERIOD sums, not to-date sums. Within a single period the
+      // two are identical (proration cancels), but on FYTD the to-date
+      // form drifts as the running period elapses. [name]'s rule "the
+      // target is identical on day 1 and day 28" applies to every range
+      // that has a target; using full-period sums makes it invariant
+      // across the fiscal year too. Cost pcts of revenue remain (ratio
+      // of two actuals - honest without a target); the target does not
+      // when !has_target (rolling window).
+      target_pct_of_revenue: has_target ? pctOf(cogsBudget, revenue_budget_full_period) : null,
+      target_pct_display: has_target ? formatPct(pctOf(cogsBudget, revenue_budget_full_period)) : null,
+      // [name] CC prompt 2026-09-11. Adjusted = sum of the four
+      // parent lines' Adjusted (`cogsAdjustedFromLines`, computed
+      // above with salary held at budget). Prior blended formula
+      // (`budgetAtThisRevenue(cogsBudget)`) flexed the fixed
+      // salary component and disagreed with the cost table's total
+      // by ~[amount] on TBJ - FL Current year salary. Envelope delta
+      // (budget_to_date - adjusted) uses the same new anchor so
+      // the pill + card + table all agree by construction.
+      budget_at_this_revenue: cogsAdjustedFromLines,
+      budget_at_this_revenue_display: formatMoneyWhole(cogsAdjustedFromLines),
+      // [name] R-58/R-59 (2026-09-03): management-fee accounts have
+      // contractual revenue, so budget_at_this_revenue equals the
+      // period budget by construction and the delta is [amount] in
+      // perpetuity. Emit envelope_delta as null on those accounts so
+      // the card + cost-lines can suppress the "[amount] more than planned"
+      // line rather than render a figure that can never move.
+      envelope_delta: isManagementFee ? null : envelopeDelta(r2(cogsBudgetToDateDays), cogsAdjustedFromLines),
+      delta_dollars: r2(cogsDelta),
+      delta_display: gapDollarsCost(cogsDelta),
+      delta_direction: directionOfDelta(cogsDelta, "cost"),
+      delta_pct_display: has_target ? gapPointsCost(pctOf(cogsActual, totalRevenue) - pctOf(cogsBudget, revenue_budget_full_period)) : null,
+      pill: ((): any => {
+        // PR-1 item 1: rolling window -> "No target", neutral tone.
+        if (!has_target) return { label: "No target", tone: "neutral" };
+        // [name] R-92 (2026-09-09). On a running single period the
+        // cost pct is HELD - revenue is confirmed ahead of the week
+        // and invoices arrive weeks later, so a percentage now
+        // reads 8.3% and means nothing. Pill names the state that
+        // is preventing a verdict.
+        if (isRunningSinglePeriod) return { label: "Invoices still arriving", tone: "wait" };
+        // [name] PR-B item 4 (2026-09-03): the pill reads OVER BUDGET
+        // / UNDER BUDGET, tied to total cost of goods against its
+        // adjusted budget - not a count of lines and not the % gap.
+        // Simple, and it agrees with the card above it (which
+        // displays actual vs budget_at_this_revenue).
+        //
+        // [name] CC prompt 2026-09-11. Anchor is `cogsAdjustedFromLines`
+        // now (sum of parent line Adjusteds, salary held at budget)
+        // - same reference the card + statement totals + cost-lines
+        // table all use.
+        const budAtRev = cogsAdjustedFromLines;
+        // [name] walkthrough sweep item 6 (2026-09-07). "No data" fired
+        // whenever budAtRev was null (no revenue means no adjusted
+        // budget) even when cogsActual carried a real dollar figure -
+        // a contradiction: pill says no data on top of a shown number.
+        // Split the cases: if actual exists but batr can't compute
+        // (day one of a period, no revenue yet), say what is true -
+        // "cost, no revenue yet". If actual itself is missing, keep
+        // "No data".
+        if (cogsActual == null) return { label: "No data", tone: "neutral" };
+        if (budAtRev == null) return { label: "cost, no revenue yet", tone: "neutral" };
+        return cogsActual <= budAtRev
+          ? { label: "under budget", tone: "good" }
+          : { label: "over budget", tone: "bad" };
+      })(),
+      mini: [
+        { label: "Labor",     actual: labor3100_actual, display: formatMoneyWhole(labor3100_actual) },
+        { label: "Food",      actual: food_actual,      display: formatMoneyWhole(food_actual) },
+        { label: "Packaging", actual: packaging_actual, display: formatMoneyWhole(packaging_actual) },
+        { label: "Vehicle",   actual: vehicle_actual,   display: formatMoneyWhole(vehicle_actual) },
+      ],
+      // [name] Prompt 2 PR-B (2026-09-04): the Planning view reads
+      // budget_full_period on the cogs + gm cards (revenue card
+      // already carries it). One field, same shape across three cards.
+      budget_full_period: r2(cogsBudget),
+      budget_full_period_display: formatMoneyWhole(cogsBudget),
+    },
+    {
+      key: "gross_margin",
+      label: "Gross margin",
+      hero_actual: grossMargin,
+      hero_actual_display: formatMoneyWhole(grossMargin),
+      hero_reported: totalRevReported,
+      budget_to_date: grossMarginBudget,
+      budget_to_date_display: formatMoneyWhole(grossMarginBudget),
+      // [name] Prompt 2 PR-B (2026-09-04): budget_full_period for the
+      // Planning view. GM's full-period budget is revenue_full_period
+      // minus cogs_full_period - the same accounting relationship the
+      // cards above express, restated on the margin card.
+      budget_full_period: (revenue_budget_full_period != null)
+        ? r2(revenue_budget_full_period - cogsBudget)
+        : null,
+      budget_full_period_display: (revenue_budget_full_period != null)
+        ? formatMoneyWhole(r2(revenue_budget_full_period - cogsBudget))
+        : null,
+      pct_of_revenue: gmPctActual,
+      pct_of_revenue_display: formatPct(gmPctActual),
+      // PR-1 item 1: null target when !has_target.
+      target_pct_of_revenue: has_target ? gmPctBudget : null,
+      target_pct_display: has_target ? formatPct(gmPctBudget) : null,
+      // [name] CC prompt 2026-09-11. GM Adjusted = revenue - COGS
+      // Adjusted (from lines). Agrees by construction with the
+      // COGS card's Adjusted, the cost table's total, and the
+      // statement_totals rows below. Prior formula fed
+      // budgetAtThisRevenue(cogsBudget) which was the blended
+      // figure that [name]'s ruling retires.
+      budget_at_this_revenue: gmAdjustedFromLines,
+      budget_at_this_revenue_display: (gmAdjustedFromLines != null)
+        ? formatMoneyWhole(gmAdjustedFromLines)
+        : null,
+      delta_dollars: gmDelta,
+      delta_display: gmDelta != null ? gapDollarsMargin(gmDelta) : null,
+      delta_direction: gmDelta != null ? directionOfDelta(gmDelta, "margin") : null,
+      delta_pct_display: (has_target && gmPctActual != null && gmPctBudget != null) ? gapPointsMargin(gmPctActual - gmPctBudget) : null,
+      pill: ((): any => {
+        // PR-1 item 1: rolling window -> "No target", neutral tone.
+        if (!has_target) return { label: "No target", tone: "neutral" };
+        // [name] R-92 (2026-09-09). On a running single period the
+        // margin verdict is HELD - margin needs both sides and cost
+        // is not confirmed. Pill names what the card is waiting on.
+        if (isRunningSinglePeriod) return { label: "Waiting on cost", tone: "neutral" };
+        // [name] walkthrough sweep item 6 (2026-09-07). Split the No
+        // data case: if target exists but actual is a real number and
+        // gmPctActual can't compute (needs revenue as denominator),
+        // don't lie "No data" over a shown dollar hero. Same rule as
+        // cost.
+        if (gmPctActual == null && grossMargin != null) return { label: "cost, no revenue yet", tone: "neutral" };
+        if (gmPctActual == null || gmPctBudget == null) return { label: "No data", tone: "neutral" };
+        // R-114 ([name] 2026-09-17). Anchor moves from plan-ratio
+        // (gmPctActual vs gmPctBudget) to dollar comparison against
+        // gmAdjustedFromLines - same reference the footer and the
+        // Adjusted row use. On P9 TBJ - FL the two anchors disagreed:
+        // 40.24% vs 40.02% said AHEAD while [amount] vs [amount] said
+        // BEHIND. Card contradicting itself. The recompute below at
+        // ~L3665 sets the final value once gmAdjustedFromLines is
+        // populated; this build-time value will always fall through
+        // to "No data" (gmAdjustedFromLines is null here) which is
+        // fine - the recompute is authoritative.
+        if (grossMargin == null || gmAdjustedFromLines == null) return { label: "No data", tone: "neutral" };
+        return grossMargin >= gmAdjustedFromLines
+          ? { label: "ahead of target", tone: "good" }
+          : { label: "behind target", tone: "bad" };
+      })(),
+    },
+  ];
+
+  // 16. Levers - the four COGS lines with actual + budget + variance +
+  //     pct-of-rev + target-pct + vs-target.
+  // 2026-09-01 defect fix: buildLever takes budgetToDate for the
+  // target-pct denominator alignment. `budget` stays the full-period
+  // figure for the variance dollars + budget_display; `budgetToDate`
+  // is used exclusively for the target-pct ratio so both sides of
+  // the ratio share the same horizon.
+  const buildLever = (label: any, code: any, actual: any, budget: any, budgetToDate: any): any => {
+    const actualPct = pctOf(actual, totalRevenue);
+    // PR-1 item 1 (2026-09-02): target_pct = budget/budget on full-
+    // period sums. Horizon-invariant across FYTD.
+    const targetPct = has_target ? pctOf(budget, revenue_budget_full_period) : null;
+    const dv = actual != null && budget != null ? r2(actual - budget) : null;
+    // PR-1 item 2 (2026-09-02): envelope + budget-at-this-revenue per
+    // lever so PR-2's cost-lines table can render them per row.
+    const batr = budgetAtThisRevenue(budget);
+    return {
+      line_code: code,
+      label,
+      actual,
+      actual_display: formatMoneyWhole(actual),
+      budget,
+      budget_display: formatMoneyWhole(budget),
+      variance_dollars: dv,
+      variance_display: dv != null ? gapDollarsCost(dv) : null,
+      actual_pct: actualPct,
+      actual_pct_display: formatPct(actualPct),
+      target_pct: targetPct,
+      target_pct_display: has_target ? formatPct(targetPct) : null,
+      variance_pct: (has_target && actualPct != null && targetPct != null) ? r2(actualPct - targetPct) : null,
+      variance_pct_display: (has_target && actualPct != null && targetPct != null) ? gapPointsCost(actualPct - targetPct) : null,
+      budget_at_this_revenue: batr,
+      // R-58/R-59: MF accounts get null envelope (contractual revenue).
+      envelope_delta: isManagementFee ? null : envelopeDelta(budgetToDate, batr),
+      direction: dv != null ? directionOfDelta(dv, "cost") : null,
+      flag: code === "3400" && flags.packaging_gap ? "mapping_gap" : null,
+    };
+  };
+  const levers = [
+    buildLever("Kitchen labor",          "3100", labor3100_actual,  labor3100_budget,  labor3100_budget_to_date_days),
+    buildLever("Food purchased",         "3200", food_actual,       food_budget,       food_budget_to_date_days),
+    buildLever("Packaging and supplies", "3400", packaging_actual,  packaging_budget,  packaging_budget_to_date_days),
+    buildLever("Vehicle",                "3500", vehicle_actual,    vehicle_budget,    vehicle_budget_to_date_days),
+  ];
+
+  // 17. Chart series.
+  //
+  // [name] ruling 2026-10-06: the week-grain chart is retired. WeekRail
+  // above it already renders an honest week-by-week cost view that
+  // reads per-week target from each week's own revenue, hatches the
+  // trailing week with an explicit invoice-lag rule, and marks not-
+  // yet-landed weeks - all things the week-grain chart lacked. Two
+  // surfaces computing the same idea from different inputs and
+  // disagreeing was the fracture GOTCHAS.md §9B names.
+  //
+  // Period grain for FYTD / explicit multi-period ranges stays. The
+  // period IS the inventory settling unit, so period-grain does not
+  // have the purchase-timing problem that made week-grain misleading.
+  // Single-period ranges emit chart=null and the client renders
+  // nothing.
+  let chart;
+  if (rng.kind === "period") {
+    chart = null;
+  } else {
+    // Period grain for FYTD or explicit range - build one point per
+    // fiscal period in the range.
+    const laborByPeriod = new Map<any, any>();
+    for (const w of laborBoard?.weeks || []) {
+      const p = periodOf(w.week_start);
+      if (p != null) laborByPeriod.set(p, (laborByPeriod.get(p) || 0) + Number(w.spent || 0));
+    }
+    const purchByPeriod = new Map<any, any>();
+    for (const key of ["3200", "3400", "3500"]) {
+      const bucket = purchBoard.buckets[key];
+      if (!bucket?.week_series) continue;
+      for (const w of bucket.week_series) {
+        const p = periodOf(w.week_start);
+        if (p != null) purchByPeriod.set(p, (purchByPeriod.get(p) || 0) + Number(w.amount || 0));
+      }
+    }
+    // [name] walkthrough sweep item 4 (2026-09-07). Inventory adjusting
+    // JEs (R-61) were applied to the COGS card total but not to the
+    // chart's per-period bars. On Last period (single period), the fix
+    // that landed at the account level happens to net to the same
+    // figure because sum-over-one-period equals the whole; on This year
+    // (multi-period), the chart's sum-of-bars differs from the card by
+    // the total JE sum. Measured live 2026-09-07:
+    //   TBJ - FL  bars vs card off by  [amount]
+    //   TBR - FL                       [amount]
+    //
+    // Fix: build per-period inventory-adjustment map from invAdjByAcct
+    // and subtract from chart spent, mirroring the card's
+    // `adjusted_cost = purchases - adjusting_je` derivation (see
+    // pnl-loader.js line 123). 3200 + 3400 only per R-61.
+    const invAdjByPeriod = new Map<any, any>();
+    for (const acct of members) {
+      const byAcct = invAdjByAcct.get(acct);
+      if (!byAcct) continue;
+      for (const [pn, byLine] of byAcct) {
+        let periodJe = 0;
+        for (const [gl, je] of byLine) {
+          if (gl === "3200" || gl === "3400") periodJe += Number(je || 0);
+        }
+        if (periodJe !== 0) invAdjByPeriod.set(pn, (invAdjByPeriod.get(pn) || 0) + periodJe);
+      }
+    }
+    // [name] walkthrough sweep addendum F (2026-09-07). Labor's Tier A
+    // strip hatches the unapproved portion within each bar (see PR
+    // #1034); the Overview's cost-of-goods chart is showing the same
+    // labor hours in its aggregate spent and needs the same
+    // treatment. Compute per-period unapproved-labor dollars from
+    // labor board weeks (draft_hours × avg_rate) so the chart can
+    // render a hatched slice inside each bar sized to the ratio.
+    const laborRate = Number(laborBoard?.avg_rate || 0);
+    const unappLaborByPeriod = new Map<any, any>();
+    if (laborRate > 0) {
+      for (const w of laborBoard?.weeks || []) {
+        const p = periodOf(w.week_start);
+        if (p == null) continue;
+        const dh = Number(w.draft_hours || 0);
+        if (dh > 0.004) unappLaborByPeriod.set(p, (unappLaborByPeriod.get(p) || 0) + dh * laborRate);
+      }
+    }
+    // [name] 2026-09-02 language pass Item 15: each period's budget
+    // line is that period's ADJUSTED budget - period actual revenue
+    // times the target cost percentage. Same rule as the COGS card's
+    // "Adjusted budget" figure. A period where revenue missed gets a
+    // lower budget line.
+    //
+    // [name] post-1049 sweep item 5b (2026-09-07): the ratio must be
+    // PER-PERIOD, never the annual one applied to every period.
+    // Prior code used the range-level ratio (cogsBudget /
+    // revenue_budget_full_period) which produced [amount] for TBJ - FL
+    // P9 (51.5% annual) when P9's own budget says [amount] (60.0%
+    // period-own) - an [amount] gap that flipped P9's bar red when
+    // it should be green. Now uses computePeriodTargetPctForLines
+    // from the shared module - the SAME derivation Last period's
+    // single-period view uses, so the two agree by construction.
+    // [name] ruling 2026-09-09 (post-#1094 follow-up) + [name] ruling
+    // 2026-09-17 (Closed · unaudited alignment).
+    //
+    // Original 2026-09-09 fix: a period whose invoices are still
+    // arriving must hatch on the FYTD chart. Same treatment the week
+    // grain got in #1094 - server emits `invoices_landed` per series
+    // entry, client hatches closed-but-not-landed.
+    //
+    // 2026-09-17 alignment: the ORIGINAL rule used a period-grain
+    // check (`today's period - target ≥ 2`), which held P9 hatched
+    // for ~29 days after close - through all of P10 - even though
+    // R-93 put P9 into Current year on day 8. Two thresholds for the
+    // same concept: the state pill said "settled" while the chart
+    // bar said "still landing". [name] ruling: point the chart at
+    // `spend_settled` (the additive sibling of `period_state`, R-93
+    // 8-day boundary) so ONE threshold drives everything. P9's bar
+    // goes solid on the same day its state flips.
+    //
+    //   - verified                          -> invoices_landed = true
+    //   - closed_awaiting + spend_settled   -> invoices_landed = true
+    //   - closed_awaiting + !spend_settled  -> invoices_landed = false (hatch)
+    //   - open / planned                    -> no flag; other branches
+    const series = periods.map((p: any): any => {
+      const pStart = periodStartISO(p);
+      const pEnd = periodEndISO(p);
+      const state = pEnd < today ? "closed" : (pStart <= today && today <= pEnd) ? "in_progress" : "not_started";
+      const dState = derivePeriodState({
+        periodNo: p,
+        todayISO: today,
+        periodStatusRow: periodStatus.get(p) || null,
+      });
+      const pSettled = derivePeriodSpendSettled({
+        periodNo: p,
+        todayISO: today,
+        periodStatusRow: periodStatus.get(p) || null,
+      });
+      const invoices_landed = state === "closed" && pSettled;
+      // Period budget = sum of member budget + purchasing bucket
+      // budget for this one period. Labor budget is the MERGED
+      // (hourly + salary) figure per R-28 / §5.9 - the chart line
+      // matches the composed labor total the levers surface.
+      const laborBudP = laborBudgetSumMapMerged.get(p) || 0;
+      // Purchasing per-period budget: sum through kpi_budgets purchase
+      // lines. Not directly available on purchBoard.totals per-period,
+      // but we can compute from purchBudgets map for the three
+      // buckets.
+      let purchBudP = 0;
+      const purchLineKeys = typeof purchBudgets?.keys === "function" ? [...purchBudgets.keys()] : Object.keys(purchBudgets || {});
+      for (const gl of purchLineKeys) {
+        const glStr = String(gl);
+        if (!(glStr.startsWith("3200") || glStr.startsWith("3400") || glStr.startsWith("3500"))) continue;
+        const perLine = typeof purchBudgets.get === "function" ? purchBudgets.get(gl) : purchBudgets[gl];
+        if (!perLine) continue;
+        for (const m of members) {
+          if (PURCHASING_ENVELOPE_EXCLUSIONS.has(m)) continue;
+          const byAcct = typeof perLine.get === "function" ? perLine.get(m) : perLine[m];
+          if (!byAcct) continue;
+          const v = typeof byAcct.get === "function" ? byAcct.get(p) : (byAcct[p] ?? byAcct[String(p)]);
+          if (v != null) purchBudP += Number(v);
+        }
+      }
+      // Per-period revenue: sum across the 5 revenue lines from
+      // perPeriodRevenue map. reported=false rows contribute 0.
+      const pRev = perPeriodRevenue.get(p);
+      let periodRevenueActual = 0;
+      if (pRev) {
+        for (const line of REVENUE_LINE_CODES) {
+          const rec = pRev[line];
+          if (rec?.reported && rec.amount != null) periodRevenueActual += Number(rec.amount);
+        }
+      }
+      // [name] post-1049 sweep item 5b: PER-PERIOD target ratio, not
+      // annual. Numerator = period's own cogs budget (labor + purch
+      // + inventory adjustment sign parity), denominator = period's
+      // revenue budget (sum of REVENUE_LINE_CODES from overviewBudgets).
+      // Adjusted budget = period revenue actual × period target pct.
+      let periodRevBudget = 0;
+      let anyRevBud = false;
+      for (const rline of REVENUE_LINE_CODES) {
+        const perR = overviewBudgets.get(rline);
+        if (!perR) continue;
+        for (const m of members) {
+          const byAcct = perR.get(m);
+          if (!byAcct) continue;
+          const v = byAcct.get(p);
+          if (v != null) { periodRevBudget += Number(v); anyRevBud = true; }
+        }
+      }
+      const perPeriodCogsBudget = laborBudP + purchBudP;
+      const perPeriodTargetPct = (anyRevBud && periodRevBudget > 0 && perPeriodCogsBudget > 0)
+        ? (perPeriodCogsBudget / periodRevBudget)
+        : null;
+      const adjustedBudget = (perPeriodTargetPct != null && periodRevenueActual > 0)
+        ? r2(periodRevenueActual * perPeriodTargetPct)
+        : null;
+      return {
+        period_no: p,
+        state,
+        invoices_landed,
+        // [name] walkthrough item 4 - subtract inventory-adjustment JE
+        // so the chart's per-period bars sum to the card total.
+        spent: state === "not_started" ? null : r2((laborByPeriod.get(p) || 0) + (purchByPeriod.get(p) || 0) - (invAdjByPeriod.get(p) || 0)),
+        budget: r2(laborBudP + purchBudP),
+        // Item 15: adjusted per-period budget for the chart's target
+        // line. `budget` above is retained for legacy consumers.
+        revenue_actual: r2(periodRevenueActual),
+        adjusted_budget: adjustedBudget,
+        // [name] walkthrough sweep addendum F (2026-09-07) - per-period
+        // unapproved-labor dollars, so the chart can render a hatched
+        // slice within the bar. Same math the Labor Tier A strip uses.
+        unapproved_labor_dollars: state === "not_started" ? null : r2(unappLaborByPeriod.get(p) || 0),
+      };
+    });
+    chart = { grain: "period", series };
+  }
+
+  // 17a-bb. Billed-back-to-club ([name] ruling 2026-10-09, PR-billback-1).
+  // Management-fee accounts only, multi-period ranges only. Finance
+  // core lives in @/lib/kpi/overview/billback.js (one file, callable
+  // from any surface). Returns null when the gate fails; the client
+  // reads the field and renders nothing on null.
+  const billback = await buildBillback({
+    supa,
+    accountKey,
+    isManagementFee,
+    isMultiPeriod: rng.kind !== "period",
+    todayISO: today,
+    periodStatus,
+    fiscalYear: FISCAL_YEAR,
+  });
+
+  // PR-billback-2. Single-period surface: the goal row inside the Purchasing
+  // fold. Multi-period ships null here (the card + ledger own that range);
+  // non-MF ships null (no goal concept). Exactly one full compute per view -
+  // buildBillback above returns null on single-period (its gate), and this
+  // is skipped on multi-period.
+  const billback_period =
+    isManagementFee && rng.kind === "period" && rng.period_no != null
+      ? await buildBillbackPeriod(
+          {
+            supa,
+            accountKey,
+            isManagementFee,
+            todayISO: today,
+            periodStatus,
+            fiscalYear: FISCAL_YEAR,
+          },
+          rng.period_no,
+        )
+      : null;
+
+  // 17b. Week rail ([name] CC prompt 2026-09-08 item 4). Four cards
+  // below the three, showing each week's confirmed / forecast meals
+  // + prorated service fee + cost target + cost landed + caveats.
+  // Running single-period only; null everywhere else.
+  //
+  // Data source: Path B ([name] ruling). Structural parity with
+  // Labor comes from calling Labor's buildBoard a second time with
+  // end=rng.end (not effectiveEndISO, which caps at the last complete
+  // week on later dates in a period). One buildBoard call = one
+  // computation. Composing per-week from separate labor / SC /
+  // purchasing sources is exactly how the two boards drifted apart
+  // before; Path B refuses that.
+  //
+  // Purchasing per-week comes from purchBoard.buckets (already in
+  // scope). Only the labor+salary side needs the extra fetch.
+  // [name] R-101 (2026-09-09). Hoisted from inside the rail block so
+  // the 3100 batr computation on NP (which doesn't build a rail)
+  // still has fee available. Also feeds the runningWkBasis binding
+  // for the labor3100_revenue_for_batr block downstream. On non-
+  // period ranges (CY / fytd) this Map is populated but unused -
+  // the labor3100RevenueForBatrApplies gate excludes them.
+  const feeBudgetByPeriod = sumBudgetByPeriodForLine({
+    overviewBudgets, lineCode: "2300", members,
+  });
+  let week_rail = null;
+  if (isRunningSinglePeriod && rng.period_no != null) {
+    // Approach A ([name] ruling 2026-09-08 item 3): rail's labor +
+    // salary fetches moved into layer1_parallel, gated on
+    // willBeRunningSinglePeriod. When the calendar gate agreed
+    // with the real state (~always in practice - divergence warned
+    // above) the results are already in hand. The false-positive
+    // divergence case (gate true, state !open) never reaches here
+    // because this branch keys off isRunningSinglePeriod itself.
+    const railLaborActuals = railLaborActualsResp;
+    const railSalaryActuals = railSalaryActualsResp;
+    const railSalaryShaped = (railSalaryActuals?.rows || []).map(shapeSalaryRow);
+    const railMergedLabor = (railLaborActuals?.data || []).concat(railSalaryShaped);
+    const railBoard = buildBoard({
+      account: accountKey,
+      start: rng.start,
+      end: rng.end,
+      today,
+      actuals: railMergedLabor,
+      budget_periods: laborBudgetPeriods,
+      account_state: "hourly_ok",
+      workerToEmail,
+    });
+    // Attach the SC weekly basis so each week carries revenue_basis
+    // + week_actual_revenue + week_projected_revenue. Uses the same
+    // runningWkBasis fetched for R-92 above (hoisted so both consume
+    // one query).
+    // Fee prorated by week. 2300 budget / 4 flat per week; the
+    // period-level accrual (confirmedWeeks × fee/4) lives on the
+    // revenue card hero; this per-week figure is contractual and
+    // the same on every week regardless of state.
+    //
+    // feeBudgetByPeriod is hoisted above this block ([name] R-101,
+    // 2026-09-09) so the 3100 batr can consume it on NP too.
+    const feePerWeek = Number(feeBudgetByPeriod.get(rng.period_no) || 0) / 4;
+    if (railBoard?.applies !== false && runningWkBasis?.data?.length) {
+      // [name] ruling 2026-09-09: salary is a fixed dollar target,
+      // not a percent. Pass the salary map so per-week batr on the
+      // rail's labor board follows the same rule the Overview 3100
+      // parent uses (hourly_pct × week_rev + salary_period / 4).
+      // The rail-emitted week fields don't include this batr today,
+      // but keeping the internal computation consistent with the
+      // labor-panel/Overview path avoids silent drift if a later
+      // consumer starts reading it.
+      const railLineTargetPct = computeLineTargetPctByPeriod({
+        budgetPeriods: laborBudgetPeriods,
+        overviewBudgets,
+        members,
+        periods: [rng.period_no],
+        salaryBudgetByPeriod,
+      });
+      const railContractualAccrual = computeContractualAccrualByPeriod({
+        overviewBudgets,
+        members,
+        periods: [rng.period_no],
+      });
+      attachWeeklyBasisToBoard(railBoard, runningWkBasis, {
+        lineTargetPctByPeriod: railLineTargetPct,
+        todayISO: today,
+        contractualAccrualByPeriod: railContractualAccrual,
+        verifiedPeriodTotals: null,
+        salaryBudgetByPeriod,
+        feeBudgetByPeriod,
+      });
+    }
+    // Purchasing per-week (3200 + 3400 + 3500), indexed by
+    // week_start. Same three buckets the chart's week grain uses.
+    const railPurchByWeek = new Map<any, any>();
+    for (const key of ["3200", "3400", "3500"]) {
+      const bucket = purchBoard.buckets[key];
+      if (!bucket?.week_series) continue;
+      for (const w of bucket.week_series) {
+        railPurchByWeek.set(w.week_start, (railPurchByWeek.get(w.week_start) || 0) + Number(w.amount || 0));
+      }
+    }
+    // Period COGS target% - used for cost_target per week
+    // (week_revenue × target%). Same figure the cost card displays.
+    const cogsTargetPct = (cogsBudget != null && revenue_budget_full_period != null && revenue_budget_full_period > 0)
+      ? (cogsBudget / revenue_budget_full_period) * 100
+      : null;
+    const runningWeekNoOut = (lastCompleteWk?.weekNo ?? 0) + 1;
+    const rows = (railBoard?.weeks || []).map((w: any, i: any): any => {
+      const wkNo = i + 1;
+      // Meal revenue: sum of Labor's per-week actual + projected.
+      // [name] CC prompt 2026-09-10 (partial-week revenue). The prior
+      // ternary keyed off `revenue_basis === "confirmed"` and defaulted
+      // to projected on the else branch. `revenue_basis` has three
+      // emitted values, not two ("confirmed" | "forecast" | "partial",
+      // per src/lib/labor/labor-week-basis.js:243-249), so a partial
+      // week silently picked the projected branch and dropped every
+      // day of actuals it carried.
+      //
+      // [name]'s rule: on a partial week, each day with any actual
+      // uses only its actual; each day with no actuals uses its
+      // projection. Replacement at day level. Labor's
+      // `loadWeeklyRevenueBasis` already enforces that rule in
+      // `actual_revenue` (has_actuals days) + `projected_revenue`
+      // (denom days without actuals) - the two sets are disjoint by
+      // construction. Summing them is Labor's canonical meal figure
+      // on every basis, including partial - this is the same math
+      // `basis.revenue` uses internally at labor-week-basis.js:278-
+      // 280. Consuming what Labor publishes, not deriving a second
+      // implementation. On confirmed weeks projected_revenue = 0
+      // (byte-identical to prior behaviour); on forecast weeks
+      // actual_revenue = 0 (byte-identical). Only partial weeks
+      // move, which is the point of the fix.
+      // Closed-week catering projection carveout (owner ruling
+      // 2026-10-29). On a past week the catering (export_excluded)
+      // projection is a stand-in for a monthly B&G bill that never
+      // arrived - treat it as [amount]. Meals keep today's mix on every
+      // week. Running / future weeks are unchanged. Accounts with no
+      // export_excluded service have cateringProjRaw === 0, so the
+      // subtraction is a no-op and they are byte-identical. See
+      // src/lib/labor/labor-week-basis.js for the mirror rule.
+      const closed = w.state === "closed";
+      const cateringProjRaw = Number(w.week_catering_projected_revenue || 0);
+      const mealRev = Number(w.week_actual_revenue || 0)
+                    + Number(w.week_projected_revenue || 0)
+                    - (closed ? cateringProjRaw : 0);
+      // Catering slice (2026-10-29). export_excluded services only.
+      // Emitted as its own field so the current-period cell can
+      // render a CATERING sub-row between MEALS and SERVICE FEE.
+      // Zero on accounts without catering, so the client guard
+      // catering > 0 suppresses the row. Closed weeks here collapse
+      // to actual-only; running + future keep the actual + projected
+      // mix.
+      const cateringRev = closed
+        ? Number(w.week_catering_actual_revenue || 0)
+        : Number(w.week_catering_actual_revenue || 0) + cateringProjRaw;
+      const weekRevTotal = mealRev + feePerWeek;
+      const costTarget = cogsTargetPct != null ? weekRevTotal * (cogsTargetPct / 100) : null;
+      const laborSpent = Number(w.spent || 0);
+      const purchSpent = Number(railPurchByWeek.get(w.week_start) || 0);
+      return {
+        week_no: wkNo,
+        week_start: w.week_start,
+        week_end: w.week_end,
+        state: w.state,                           // "closed" | "in_progress" | "not_started"
+        revenue_basis: w.revenue_basis || null,   // "confirmed" | "forecast" | "partial" | null
+        meal_revenue: r2(mealRev),
+        catering_revenue: r2(cateringRev),
+        catering_confirmed_services: Number(w.week_catering_confirmed_services || 0),
+        catering_projected_services: Number(w.week_catering_projected_services || 0),
+        fee_prorate: r2(feePerWeek),
+        week_revenue: r2(weekRevTotal),
+        // 2026-10-22. Meal-only pair on confirmed-in-denom days:
+        // what the Service Calendar forecast called vs what actually
+        // happened on the SAME day set. The service fee cancels out
+        // of the delta (contractual, flat), so Overview's per-week
+        // + per-period "vs projection" caption is meal-only. Zero
+        // on forecast / not-started weeks (no confirmed days ->
+        // nothing accrues on either side), so the client's render
+        // guard `revenue_actual_confirmed > 0` naturally suppresses
+        // the caption on those weeks.
+        revenue_actual_confirmed: r2(Number(w.week_actual_revenue_in_denom || 0)),
+        revenue_projection_confirmed: r2(Number(w.week_projected_revenue_in_denom || 0)),
+        cost_target: costTarget != null ? r2(costTarget) : null,
+        cost_landed: r2(laborSpent + purchSpent),
+        labor_landed: r2(laborSpent),
+        purchasing_landed: r2(purchSpent),
+        unapproved_hours: Number(w.unapproved_hours || 0),
+      };
+    });
+    // Period-to-date pair across the four weeks. A forecast / not-
+    // started week contributes 0 on both sides so the period figures
+    // reflect confirmed-day accumulation only - the client renders
+    // the period caption as a true sum, not a client re-derivation.
+    const revenueActualConfirmedPeriod = rows.reduce((s: any, r: any): any => s + Number(r.revenue_actual_confirmed || 0), 0);
+    const revenueProjectionConfirmedPeriod = rows.reduce((s: any, r: any): any => s + Number(r.revenue_projection_confirmed || 0), 0);
+    // Period-level catering total (2026-10-29). True sum emitted
+    // upstream so the current-period cell's PerRevCellBody reads a
+    // single number instead of re-deriving from per-week fields that
+    // round at the week level. Zero on accounts without catering, so
+    // the client's catering > 0 guard suppresses the CATERING line
+    // on the period total as cleanly as on individual weeks.
+    const cateringRevenuePeriod = rows.reduce((s: any, r: any): any => s + Number(r.catering_revenue || 0), 0);
+    week_rail = {
+      period_no: rng.period_no,
+      running_week_no: runningWeekNoOut,
+      // [name] ruling: invoice-landed state derives from the week
+      // index, not from a date string. Client applies:
+      //   invoices_landed = (running_week_no - week_no) >= 2
+      // for each week's caveat line. Two-week rule holds at the
+      // boundary by construction.
+      weeks: rows,
+      revenue_actual_confirmed_period: r2(revenueActualConfirmedPeriod),
+      revenue_projection_confirmed_period: r2(revenueProjectionConfirmedPeriod),
+      catering_revenue_period: r2(cateringRevenuePeriod),
+    };
+  }
+
+  // 18. Statement rows (per-line P&L) and also-tracked rows.
+  const statementRows = [];
+  // Revenue section
+  //
+  // actual_pct / target_pct additions (2026-08-31, engine follow-up):
+  // Revenue rows previously carried only variance_pct, so the client
+  // rendered a dash on pct-of-revenue for each revenue line even when
+  // the row was reported. That reads as "no data" on a money surface
+  // where data does exist (e.g. 2400.1 is genuinely 68.1% of revenue).
+  // Emit the ratio here, mirroring the lever-row convention:
+  //   - fraction returned by pctOf is a percent number (e.g. 68.1),
+  //     not 0.681 - same shape as levers[].actual_pct.
+  // Absence contract propagated:
+  //   - reported=false                     -> actual_pct = null
+  //   - reported=true, totalRevenue = 0    -> actual_pct = null (pctOf
+  //     returns null when denominator is 0)
+  //   - reported=true, actual = 0          -> actual_pct = 0
+  // Same rules apply to target_pct against the revenue budget-to-date.
+  for (const line of REVENUE_LINE_CODES) {
+    const rev = revenueByLine[line];
+    const byPeriod = sumBudgetByPeriodForLine({ overviewBudgets, lineCode: line, members });
+    const bto = computeBudgetToDateForLine({ budgetByPeriod: byPeriod, periodsInRange: periods, today, throughISO: effectiveEndISO });
+    const fp = computeFullPeriodBudget({ budgetByPeriod: byPeriod, periodsInRange: periods });
+    // E17 (2026-09-01): a revenue line the account does not run (no
+    // budget, no actual) reads `inactive`, not a [amount] variance. The
+    // contractual flag on the fee account's 2400.1 takes precedence
+    // - a fee account IS running that line, the ratio is just always
+    // 100%.
+    const isContractual = isFeeAccount && line === "2400.1";
+    const noBudget = fp == null || fp === 0;
+    const noActual = !rev.reported || rev.amount == null || rev.amount === 0;
+    const inactive = !isContractual && noBudget && noActual;
+    // PR-1 item 6 (2026-09-02): on the sc_counts_without_dollars
+    // path, the 2400.1 line is an absence (service days on the
+    // calendar, no counts entered). Override reported/actual to
+    // null with the diagnostic flag so the P&L reads honestly.
+    const scAbsent = sc_counts_without_dollars && line === "2400.1";
+    const suppress = inactive;
+    const rowActualPct = (!inactive && !scAbsent && rev.reported) ? pctOf(rev.amount, totalRevenue) : null;
+    const rowTargetPct = (!inactive && bto.amount != null) ? pctOf(bto.amount, revenue_budget_to_date) : null;
+    statementRows.push({
+      line_code: line,
+      section: "revenue",
+      label: labelForLine(line),
+      reported: !inactive && !scAbsent && rev.reported,
+      actual: (!inactive && !scAbsent && rev.reported) ? rev.amount : null,
+      budget_to_date: inactive ? null : bto.amount,
+      period_budget: inactive ? null : fp,
+      variance: (!suppress && !scAbsent && rev.reported && bto.amount != null) ? r2(rev.amount - bto.amount) : null,
+      variance_pct: (!suppress && !scAbsent && rev.reported && bto.amount != null && bto.amount > 0) ? r2(((rev.amount - bto.amount) / bto.amount) * 100) : null,
+      actual_pct: rowActualPct,
+      target_pct: rowTargetPct,
+      // PR-1 item 5 (2026-09-02): provisional flag keyed on
+      // revenue_source_state, not period_state. Once counts are live
+      // for an account, revenue to date is real actual and the
+      // variance is settled - no "provisional" suffix. Verified
+      // periods are also settled. Only the planned path is amber.
+      provisional: revenue_source_state === "planned",
+      sources: rev.sources,
+      flags: [
+        ...(isContractual ? ["contractual"] : []),
+        ...(inactive ? ["inactive"] : []),
+        ...(scAbsent ? ["sc_counts_without_dollars"] : []),
+      ],
+    });
+  }
+  // COGS section
+  // E17 (2026-09-01): 3100 is inactive when both actual and budget
+  // are absent (labor board didn't apply, or the account genuinely
+  // ran no labor in range). Salaried-only D26 accounts return
+  // applies=false from buildBoard, so labor3100_actual is null - we
+  // don't want that to render as "[amount] under".
+  const labor3100_inactive =
+    (labor3100_actual == null || labor3100_actual === 0) &&
+    (labor3100_budget == null || labor3100_budget === 0);
+  // [name] CC prompt 2026-09-09. Salary is a FIXED dollar target, not a
+  // percent of revenue. The old formula
+  //   batr = actual_revenue × (hourly + salary) / revenue_budget
+  // silently inflates salary any period revenue beat budget (systematic
+  // by design: revenue beat budget six of eight periods on TBJ - FL,
+  // producing [amount] of overstatement across P1-P8 alone). Corrected
+  // formula for the range:
+  //   batr = hourly_pct × actual_revenue + salary_budget
+  // where hourly_pct is (hourly-only budget / revenue budget) full-
+  // period, and salary_budget is the sum of the salary line's budgets
+  // over the periods in the range. Splits into two range totals used
+  // by both the 3100 parent row and the 3100.2 sub-row below - one
+  // source of truth per component so the sub-rows sum to the parent
+  // by construction.
+  const sumPeriodBudgetInRange = (arr: any): any => arr.reduce((acc: any, bp: any): any => {
+    if (periods.includes(bp.period_no)) return acc + Number(bp.amount || 0);
+    return acc;
+  }, 0);
+  const salaryBudgetPeriodsArrForBatr = [...salaryBudgetByPeriod.entries()]
+    .sort((a: any, b: any): any => a[0] - b[0])
+    .map(([p, amt]: any): any => ({ period_no: p, amount: r2(amt) }));
+  const labor3100_hourly_period_budget_range = r2(sumPeriodBudgetInRange(laborBudgetPeriodsHourly));
+  const labor3100_salary_period_budget_range = r2(sumPeriodBudgetInRange(salaryBudgetPeriodsArrForBatr));
+  // [name] CC prompt 2026-09-09 Guard 1 (Labor panel == Overview
+  // 3100 batr every range, every account). Two-path computation:
+  //
+  //  - MULTI-PERIOD RANGES (fytd, explicit N periods): sum per-
+  //    period `hourly_bud_p / rev_bud_p × rev_actual_p` so per-
+  //    period pcts land accurately and match Labor's per-week ×
+  //    per-period pct approach by construction. Range-level
+  //    shortcut drifted [amount] on TBJ CY, [amount] on TBR CY.
+  //  - SINGLE-PERIOD RANGES (period preset - LP, CP, NP): use the
+  //    range-level totalRevenue × hourly_pct formula. On CP the SC
+  //    R-92 confirmed-weeks adjustment lives on totalRevenue but
+  //    NOT on perPeriodRevenue's `reported` records, so a per-
+  //    period sum would silently under-count. Single-period math
+  //    reduces to `totalRevenue × (hourly_bud_p / rev_bud_p)` for
+  //    the one period anyway, which is what budgetAtThisRevenue
+  //    already computes when given the hourly-only budget.
+  //
+  // Salary is fixed per period, so range = sum of salary_budget_p
+  // for both branches.
+  const labor3100_hourly_bud_by_period = new Map<any, any>();
+  for (const bp of laborBudgetPeriodsHourly) {
+    if (bp?.period_no != null) labor3100_hourly_bud_by_period.set(Number(bp.period_no), Number(bp.amount || 0));
+  }
+  // [name] R-101 (2026-09-09) item 4. On CP + NP the labor target
+  // reads a DIFFERENT revenue basis from totalRevenue: full 4-week
+  // SC (actual + projected) plus the contractual service fee. Called
+  // `labor3100_revenue_for_batr` because it drives ONLY the 3100
+  // parent row + the 3100.1 sub-row - no other approved surface
+  // moves. `totalRevenue` stays confirmed-only ([amount] on TBJ CP);
+  // the envelope row directly beneath the card is the bridge
+  // ([amount] planned -> [amount] projected, R-96) so the operator
+  // sees why the target reads against the larger figure without
+  // the card having to move.
+  //
+  // Assertion ([name] ruling 2026-09-09): the gate below MUST be
+  // false on every closed range. `rng.kind === "period"` excludes
+  // fytd (CY). `state === "open" || "planned"` excludes closed_
+  // awaiting (LP) and verified. So on CY + LP the branch never
+  // fires and totalRevenue-based Method A / Method B stands - the
+  // #1097 EQ result on CY + LP is preserved by construction.
+  const labor3100RevenueForBatrApplies =
+    rng.kind === "period" &&
+    (displayPeriodState === "open" || displayPeriodState === "planned");
+  const labor3100_revenue_for_batr = ((): any => {
+    if (!labor3100RevenueForBatrApplies) return null;
+    // 4-week SC (mealRev per week from confirmed actuals + forecast
+    // projections) - available on runningWkBasis, which the resolver
+    // fetches for both CP + NP via willFetchLaborRevBasis. Sum
+    // matches the rail's `weekRevTotal` computation on CP by
+    // construction (rail uses the same `week_actual_revenue` /
+    // `week_projected_revenue` fields per week).
+    let scAllWeeks = 0;
+    if (runningWkBasis?.data?.length) {
+      for (const w of runningWkBasis.data) {
+        // basis.revenue is the mealRev-equivalent: actual for
+        // confirmed weeks, projected for forecast, actual+projected
+        // mix for partial. Same rule the rail uses via
+        // basis.revenue -> weekRevTotal.
+        scAllWeeks += Number(w.revenue || 0);
+      }
+    }
+    const feePeriod = Number(feeBudgetByPeriod?.get(rng.period_no) || 0);
+    if (scAllWeeks <= 0 && feePeriod <= 0) return null;
+    return r2(scAllWeeks + feePeriod);
+  })();
+  // [name] R-121 (2026-09-18) supersedes the old hourly-plus-static
+  // salary composition. Total labor allowed is the set labor percent
+  // (merged hourly + salary budget over revenue budget) times actual
+  // revenue - always. Salary holds its budget dollar; hourly is the
+  // remainder and absorbs the flex. R-111 said the opposite; R-121
+  // reverses it because R-111 measured against an adjusted figure
+  // that was itself hourly-scaled + static salary, and that adjusted
+  // is now merged_pct × revenue.
+  //
+  // The old variable name `labor3100_hourly_batr_range` is retained
+  // as an alias for downstream callers, but its value is now the
+  // MERGED total, not hourly-only. Hourly and salary sub-row batrs
+  // derive from it below (3100.1 = total - salary_$; 3100.2 = salary_$).
+  const labor3100_salary_bud_by_period = new Map<any, any>();
+  for (const bp of salaryBudgetPeriodsArrForBatr) {
+    if (bp?.period_no != null) labor3100_salary_bud_by_period.set(Number(bp.period_no), Number(bp.amount || 0));
+  }
+  const labor3100_total_batr_range = ((): any => {
+    if (!has_target) return null;
+    const mergedBudgetRange = r2(
+      labor3100_hourly_period_budget_range
+      + labor3100_salary_period_budget_range
+    );
+    // [name] R-101 (2026-09-09): CP + NP use `labor3100_revenue_for_
+    // batr` instead of totalRevenue - see block above. Guard 1
+    // (Labor panel == Overview 3100 batr) holds because Labor's
+    // per-week batr sums via merged_pct × week_revenue (R-121 Option 2).
+    if (labor3100RevenueForBatrApplies && labor3100_revenue_for_batr != null) {
+      return sharedBatr({
+        actualRevenue: labor3100_revenue_for_batr,
+        lineBudget: mergedBudgetRange,
+        revenueBudgetFullPeriod: revenue_budget_full_period,
+        hasTarget: has_target,
+      });
+    }
+    // [name] R-141 (2026-09-21). All non-R-101 ranges take the range
+    // formula: parent 3100 adjusted = merged budget % × range actual
+    // revenue. The prior multi-period branch summed per-period
+    // flexes (Method B) so single-period and multi-period ranges
+    // computed different figures for the same account. Labor was
+    // the only line that showed the divergence because its rate
+    // swings across periods while salary stays flat - food and
+    // packaging never diverged. TXR - AZ P1-P9 Method B: [amount].
+    // Range formula: [amount]. [name]'s KPI is 26.46% of adjusted
+    // revenue - [amount] - so the range formula is the truth and
+    // the multi-period branch is deleted. 3100.1 (remainder) and
+    // 3100.2 (static salary) follow by construction; Guard J holds
+    // (parent = 3100.1 + 3100.2 to the cent).
+    return budgetAtThisRevenue(mergedBudgetRange);
+  })();
+  // Backwards-compat alias: prior callers of `labor3100_hourly_batr_range`
+  // (the name predates R-121) now receive the merged total. Keep the
+  // binding rather than renaming call sites - the value is the same
+  // one all downstream 3100 batr consumers want.
+  const labor3100_hourly_batr_range = labor3100_total_batr_range;
+  // [name] CC prompt 2026-09-14 (Purchasing reskin prereq B). On
+  // running ranges (CP + NP) the non-labor cost lines (3200 / 3400
+  // / 3500) flex to the same 4-week SC + fee revenue basis labor
+  // uses (R-101). Prior formula used `totalRevenue` (confirmed-only
+  // on running ranges), which understated Adjusted whenever the
+  // period had a mix of confirmed and forecast weeks. On CY / LP
+  // the gate is false and the compute falls back to the existing
+  // `budgetAtThisRevenue(line_budget)` - byte-identical to prior
+  // behaviour.
+  //
+  // Difference from labor's 3100: 3200 / 3400 / 3500 have NO fixed
+  // component. They flex wholly with revenue. 3100 holds salary at
+  // budget. Same revenue basis, different treatment, for a stated
+  // reason - the salary budget is fixed at hire, not a percentage
+  // of revenue; food / packaging / vehicle scale with volume.
+  const budgetAtThisRevenueForCogsRow = (lineBudget: any): any => {
+    if (labor3100RevenueForBatrApplies && labor3100_revenue_for_batr != null) {
+      return sharedBatr({
+        actualRevenue: labor3100_revenue_for_batr,
+        lineBudget,
+        revenueBudgetFullPeriod: revenue_budget_full_period,
+        hasTarget: has_target,
+      });
+    }
+    return budgetAtThisRevenue(lineBudget);
+  };
+  // R-98 ([name] 2026-09-09): on Current period + Next period with the
+  // hourly toggle (include_salary=false), the 3100 parent row shows
+  // hourly-only figures - not the salary-inclusive combined figure.
+  // This is a SERVER-SIDE ACCESS DECISION, not a client render swap:
+  // salary must never leave the server for a request that will render
+  // the hourly view, because a client-side omit leaves the number in
+  // the payload one devtools tab away. Sub-row emission (3100.1 +
+  // 3100.2) still gated by include_salary+role below - on hourly they
+  // do NOT emit, so the parent row has to CARRY the hourly numbers
+  // itself (no sub-line to display them). Scope: only ranges where
+  // the toggle takes effect (single-period open OR planned). CY + LP
+  // keep the salary-inclusive parent + R-68 dense-sum-suppresses-subs
+  // behaviour so their payloads are byte-identical before + after.
+  //
+  // The compute here duplicates the hourly branch inside the +salary
+  // sub-row emission below (lines 2235 onward). The two paths are
+  // mutually exclusive (this fires when !includeSalary; that fires
+  // when includeSalary) so no double-execution; the duplication is
+  // accepted so this change is provably a no-op for +salary payloads.
+  const labor3100_hourly_swap_applies =
+    !includeSalary
+    && rng.kind === "period"
+    && (displayPeriodState === "open" || displayPeriodState === "planned");
+  const hourlyOnly3100 = ((): any => {
+    if (!labor3100_hourly_swap_applies) return null;
+    const sumActuals = (rows: any): any => {
+      let amt = 0;
+      let anyReported = false;
+      for (const r of rows || []) {
+        const v = r?.amount;
+        if (v != null) { amt += Number(v); anyReported = true; }
+      }
+      return anyReported ? r2(amt) : null;
+    };
+    const sumPeriodBudget = (arr: any): any => arr.reduce((acc: any, bp: any): any => {
+      if (periods.includes(bp.period_no)) return acc + Number(bp.amount || 0);
+      return acc;
+    }, 0);
+    const actual = sumActuals(laborActuals || []);
+    const period_budget = r2(sumPeriodBudget(laborBudgetPeriodsHourly));
+    const btdRes = computeLaborBudgetToDateDays({
+      budget_periods: laborBudgetPeriodsHourly,
+      start: rng.start,
+      end: effectiveEndISO,
+      today,
+      throughISO: effectiveEndISO,
+    });
+    const budget_to_date = btdRes?.amount ?? null;
+    return { actual, period_budget, budget_to_date };
+  })();
+  const hourly_inactive = labor3100_hourly_swap_applies && hourlyOnly3100
+    && (hourlyOnly3100.actual == null || hourlyOnly3100.actual === 0)
+    && (hourlyOnly3100.period_budget == null || hourlyOnly3100.period_budget === 0);
+  {
+    // R-98 ([name] 2026-09-09): pick between salary-inclusive combined
+    // figures (CY, LP, +salary anywhere) and hourly-only figures
+    // (CP+NP hourly). Salary values NEVER reach the payload on the
+    // hourly-only branch.
+    const use_hourly = labor3100_hourly_swap_applies && !!hourlyOnly3100;
+    const row_actual = use_hourly ? hourlyOnly3100.actual : labor3100_actual;
+    const row_budget = use_hourly ? hourlyOnly3100.period_budget : labor3100_budget;
+    const row_budget_to_date = use_hourly ? hourlyOnly3100.budget_to_date : labor3100_budget_to_date_days;
+    const row_inactive = use_hourly ? hourly_inactive : labor3100_inactive;
+    // PR-1 item 3 (2026-09-02): backfill actual_pct + target_pct on
+    // the 3100 statement row so the P&L Target % column stops
+    // rendering dashes. Same budget/budget rule the cards use.
+    const _actPct = pctOf(row_actual, totalRevenue);
+    // [name] CC prompt 2026-09-09. Adjusted (batr) split by branch:
+    //   use_hourly (CP + NP + hourly per R-98): batr = hourly-only
+    //     figure - salary must NOT be reintroduced here (Guard 4).
+    //   !use_hourly (+salary anywhere, or CY / LP either toggle):
+    //     batr = hourly_pct × actual_revenue + salary_budget_range.
+    //
+    // [name] CC prompt 2026-09-11 (R-99 superseded). Target %:
+    //   `budget / budgeted revenue` on both branches. The P&L
+    //   publishes all three percents (hourly + salary + total),
+    //   team reads that sheet, the board mirrors it. Prior state
+    //   returned null on the +salary branch and let the client
+    //   hatch the cell; [name] has reversed that.
+    //
+    //   The `not_applicable_target_pct` flag stays on the +salary
+    //   parent - it now means only "this parent contains a fixed
+    //   cost, so Adjusted must not flex via target% × revenue."
+    //   The client no longer reads the flag as a hatching signal
+    //   (see PnlStatement.js update in the same PR), only as a
+    //   gate on the client-side runningAdjusted override.
+    const _tgtPct = has_target
+      ? pctOf(row_budget, revenue_budget_full_period)
+      : null;
+    // [name] R-101 (2026-09-09) item 4. Both branches route through
+    // labor3100_hourly_batr_range so CP + NP consume the R-101
+    // revenue basis (4-week SC + fee = [amount] on TBJ CP) on
+    // whichever toggle state is asked. On hourly (Guard 4) salary
+    // does not reach the batr; on +salary the salary_$ is added.
+    // On CY + LP the labor3100RevenueForBatrApplies gate is false
+    // by construction (state !== "open" && state !== "planned"), so
+    // labor3100_hourly_batr_range falls through to the totalRevenue-
+    // based single/multi-period branches - Guard 1 EQ on those
+    // ranges from #1097 is preserved byte-identical.
+    // [name] R-121 (2026-09-18). `labor3100_hourly_batr_range` is now
+    // the MERGED total (see rename above). The +salary parent shows
+    // the total (merged_pct × AR). The hourly parent (R-98 swap on
+    // CP+NP hourly toggle) shows total - salary_$: the hourly
+    // allowance. Salary_$ is used internally to compute the hourly
+    // allowance but never ships as a distinct field on the hourly
+    // path (Guard D preserved - salary values do not reach a
+    // hourly-toggle payload; only the derived hourly allowance
+    // number does).
+    const _batr = (has_target && labor3100_hourly_batr_range != null)
+      ? (use_hourly
+          ? r2(labor3100_hourly_batr_range - labor3100_salary_period_budget_range)
+          : labor3100_hourly_batr_range)
+      : null;
+    statementRows.push({
+      line_code: "3100",
+      section: "cogs",
+      label: "Kitchen labor",
+      reported: !row_inactive && laborBoard?.applies === true,
+      actual: row_actual,
+      budget_to_date: row_budget_to_date,
+      period_budget: row_budget,
+      // [name] ruling 2026-09-03 (BLOCKER): row variance must share
+      // the reference with the row's percent gap. Measured against
+      // budget_at_this_revenue - not budget_to_date - so the dollar
+      // and percent columns on the same row agree in sign.
+      variance: (!row_inactive && row_actual != null && _batr != null) ? r2(row_actual - _batr) : null,
+      variance_pct: (has_target && !row_inactive && _actPct != null && _tgtPct != null) ? r2(_actPct - _tgtPct) : null,
+      actual_pct: row_inactive ? null : _actPct,
+      target_pct: row_inactive ? null : _tgtPct,
+      budget_at_this_revenue: row_inactive ? null : _batr,
+      // R-58/R-59: MF accounts null out envelope (contractual revenue).
+      envelope_delta: (row_inactive || isManagementFee) ? null : envelopeDelta(row_budget_to_date, _batr),
+      sources: ["labor_actuals"],
+      // [name] CC prompt 2026-09-09. On the +salary path (or any
+      // range that carries salary in its row_budget) the parent's
+      // Target % column hatches - a line containing a fixed cost
+      // has no single target percent. The `not_applicable_target_pct`
+      // flag drives the client's na-cell hatch; the new client-side
+      // rule (PnlStatement.js) reads it as "target only," so
+      // Adjusted still renders the composed dollar figure.
+      flags: [
+        ...(row_inactive ? ["inactive"] : []),
+        ...(!use_hourly && !row_inactive ? ["not_applicable_target_pct"] : []),
+      ],
+    });
+  }
+  // Salary reveal (R-28 / §5.9): emit 3100.1 (hourly) + 3100.2
+  // (salary) sub-rows under 3100 when the caller requested the salary
+  // split AND the posture makes it visible. The rows carry
+  // `parent_line_code: "3100"` so the client renders them indented
+  // beneath the aggregate. The 3100 total row above is unchanged -
+  // the totals never move; the split just becomes visible.
+  //
+  // 2026-08-31 (blocker 1 fix): salary is now composed into the 3100
+  // total ON EVERY REQUEST (see step 5 above where laborBoard is built
+  // on merged hourly + salary actuals + budgets). The `includeSalary`
+  // flag is purely a DISCLOSURE control here - toggle ON reveals the
+  // sub-rows, toggle OFF hides them; the 3100 total is byte-identical
+  // in both states. This is the fix for [name]'s live measurement
+  // (CIN - AZ FYTD showing 61.2% GM against a 54.4% target because
+  // labor was hourly-only, missing [amount] of salary).
+  //
+  // Absence contract: reported=false on any sub-row we cannot ground
+  // in pnl_actuals. The client renders "-" (missing) rather than
+  // guessing.
+  if (includeSalary && access.salary_toggle_visible) {
+    // [name] ruling final-P&L (2026-09-03) item 3: source both
+    // sub-rows from the SAME engine that produces the parent. The
+    // parent `3100` reads laborBoard.spent_to_date, which is the
+    // sum of hourly (laborActuals) + salary (salaryRows) after the
+    // R-63 effectiveEnd cap. Previously the sub-rows read pnl_actuals
+    // directly, so 3100.1 + 3100.2 did not sum to 3100 (TBJ - FL
+    // FYTD was [amount] off - a defect finance would find on the
+    // first read). Sourcing from the same engine ties them by
+    // construction.
+    const sumRows = (rows: any, field: any = "amount"): any => {
+      let amt = 0;
+      let anyReported = false;
+      for (const r of rows || []) {
+        const v = r?.[field];
+        if (v != null) {
+          amt += Number(v);
+          anyReported = true;
+        }
+      }
+      return anyReported ? r2(amt) : null;
+    };
+    const hourly = sumRows(laborActuals || [], "amount");
+    const salary = sumRows(salaryRows || [], "amount");
+    // [name] ruling final-P&L (2026-09-03) item 3: budgets must sum
+    // to parent too. Use the SAME inputs the labor engine consumes
+    // to build laborBudgetPeriods (parent's input):
+    //   hourly = laborBudgetPeriodsHourly (pre-merge; resolveMemberBudget
+    //            output; on revenue-flex accounts this is the SC-derived
+    //            hourly budget, NOT the kpi_budgets_overview 3100.1
+    //            line - which is why the sub-row previously diverged
+    //            from the parent on TXR - TX - H by [amount]).
+    //   salary = salaryBudgetByPeriod (aggregate map)
+    // Both feed computeBudgetToDateDays (labor engine's helper) so the
+    // same days-elapsed math applies to sub-rows and parent.
+    const salaryBudgetPeriodsArr = [...salaryBudgetByPeriod.entries()]
+      .sort((a: any, b: any): any => a[0] - b[0])
+      .map(([p, amt]: any): any => ({ period_no: p, amount: r2(amt) }));
+    const hourlyBTDLabor = computeLaborBudgetToDateDays({
+      budget_periods: laborBudgetPeriodsHourly,
+      start: rng.start,
+      end: effectiveEndISO,
+      today,
+      throughISO: effectiveEndISO,
+    });
+    const salaryBTDLabor = computeLaborBudgetToDateDays({
+      budget_periods: salaryBudgetPeriodsArr,
+      start: rng.start,
+      end: effectiveEndISO,
+      today,
+      throughISO: effectiveEndISO,
+    });
+    const hourlyBTD = { amount: hourlyBTDLabor.amount };
+    const salaryBTD = { amount: salaryBTDLabor.amount };
+    // Period-budget (full range budget) computed from the same per-
+    // period inputs so it stays consistent with budget_to_date.
+    const sumPeriodBudget = (arr: any): any => arr.reduce((acc: any, bp: any): any => {
+      if (periods.includes(bp.period_no)) return acc + Number(bp.amount || 0);
+      return acc;
+    }, 0);
+    const hourlyPB = r2(sumPeriodBudget(laborBudgetPeriodsHourly));
+    const salaryPB = r2(sumPeriodBudget(salaryBudgetPeriodsArr));
+    // [name] ruling final-P&L (2026-09-03) item 4: sub-rows gain
+    // Target % and Adjusted so the split can be judged on the same
+    // axis as the parent. Both are computable and both sum to the
+    // parent's figures by construction. "The parent says labour is
+    // [amount] over - mild. The split says hourly is roughly [amount]
+    // over and salary roughly [amount] under. They partly cancel and
+    // the parent hides both."
+    //
+    // Hourly (3100.1) is measured as a percent of revenue - it's the
+    // controllable line. Salary (3100.2) is fixed at hire and does
+    // NOT track revenue; [name]'s item 5 says salary sub-rows and
+    // tracked lines hatch the Target % + Adjusted cells (not-
+    // applicable, marked with flags:["not_applicable"]).
+    // R-111 ([name] ruling 2026-09-15): the numerator is the full
+    // period budget, not budget-to-date. `hourlyBTD.amount` becomes
+    // truthy the moment a week closes inside the running period, so
+    // the previous `hourlyBTD.amount || hourlyPB` fell to a quartered
+    // (or worse) figure on CP as soon as week 1 closed on Sunday. Same
+    // class as #1120's 3200 quartering, one line over. Closed ranges
+    // are unchanged by construction: on CY + LP the whole period is
+    // elapsed, so BTD == PB and pctOf gives the same value either way.
+    const hourlyTargetPct = has_target ? pctOf(hourlyPB, revenue_budget_full_period) : null;
+    // [name] R-121 (2026-09-18). Hourly is the remainder. The 3100.1
+    // batr = parent_total_batr - salary_period_budget_range. Sums
+    // to the parent by construction (parent shows total, 3100.1
+    // shows hourly, 3100.2 shows salary; 3100.1 + 3100.2 == parent).
+    // Revenue basis follows the parent (CP+NP use
+    // labor3100_revenue_for_batr; CY+LP use totalRevenue) because
+    // parent_total_batr already threads that gate above.
+    const hourlyBatr = (has_target && labor3100_total_batr_range != null)
+      ? r2(labor3100_total_batr_range - labor3100_salary_period_budget_range)
+      : null;
+    statementRows.push({
+      line_code: "3100.1",
+      section: "cogs",
+      parent_line_code: "3100",
+      label: "Hourly wages",
+      reported: hourly != null,
+      actual: hourly,
+      budget_to_date: hourlyBTD.amount,
+      period_budget: hourlyPB,
+      // Item 6: variance ties. Cost sub-rows measure against Adjusted.
+      variance: (hourly != null && hourlyBatr != null) ? r2(hourly - hourlyBatr) : null,
+      variance_pct: null,
+      actual_pct: pctOf(hourly, totalRevenue),
+      target_pct: hourlyTargetPct,
+      budget_at_this_revenue: hourlyBatr,
+      sources: ["labor_actuals"],
+      flags: [],
+    });
+    statementRows.push({
+      line_code: "3100.2",
+      section: "cogs",
+      parent_line_code: "3100",
+      label: "Salary wages",
+      reported: salary != null,
+      actual: salary,
+      budget_to_date: salaryBTD.amount,
+      period_budget: salaryPB,
+      // Salary is fixed - variance is dollar over/under the salary
+      // BUDGET, not against a % of revenue. [name] CC prompt
+      // 2026-09-09: variance now ties to Adjusted (= period budget)
+      // rather than budget_to_date, matching cost sub-rows' rule -
+      // "the adjusted figure of a fixed cost is what it was
+      // budgeted at."
+      variance: (salary != null && salaryPB != null) ? r2(salary - salaryPB) : null,
+      variance_pct: null,
+      actual_pct: pctOf(salary, totalRevenue),
+      // [name] CC prompt 2026-09-11 (R-99 superseded). Salary's
+      // target% renders as `salary budget / budgeted revenue` -
+      // [name]'s P&L publishes it, team reads it, board
+      // mirrors it. Prior state was null (hatched via the flag).
+      target_pct: has_target ? pctOf(salaryPB, revenue_budget_full_period) : null,
+      // [name] CC prompt 2026-09-09: Adjusted = salary budget for
+      // the range (a fixed cost's adjusted IS its budget).
+      // Preserved 2026-09-11.
+      budget_at_this_revenue: salaryPB,
+      sources: ["labor_salary_actuals"],
+      // Flag kept on the row - it now signals only "salary row,
+      // gate the client-side running-adj override + variance
+      // basis." No longer drives a hatch on Target %; the
+      // PnlStatement.js update in the same PR removes that read.
+      flags: ["not_applicable_target_pct"],
+    });
+    // [name] R-126 (2026-09-18) · the {parent}.FIN_CLOSE synthetic row is
+    // no longer emitted. Its dollars are absorbed into the largest
+    // existing sub-line by a single post-pass after all cost rows +
+    // sources back-fill land (search for absorbFinanceCloseIntoSubLines).
+  }
+  // 2026-09-01 polish PR (E16 + E17): tagging + verdict suppression
+  // on cost-section statement rows.
+  //
+  // E16 billed_back: on pass-through accounts (CIN - OH, STL - MO,
+  // STL - FL) food + packaging are the client's cost, billed back on
+  // the reimbursable line. Rendering a red "over target" verdict on
+  // [amount] of packaging against a [amount] budget was the specific defect
+  // [name] flagged - the purchasing board's own §5.6 rule (no verdict
+  // on billed-back lines) applied to the Overview statement too.
+  // Cost rows on pass-through accounts carry `billed_back: true`,
+  // variance NULL, no target/actual pct. Client renders a tag + no
+  // percentage.
+  //
+  // E17 inactive: a cost line with no budget AND no actual (or
+  // actual=0) is not a saving - it is a line the account does not
+  // run at all. Cost rows with (budget == null || budget == 0) AND
+  // (actual == null || actual == 0) carry `inactive: true`, variance
+  // NULL. Client renders "not active".
+  //
+  // Bill-back takes precedence: on a pass-through account with a
+  // real [amount] packaging charge and a [amount] budget, the row is billed_
+  // back (client's cost), not inactive (line the account doesn't
+  // run).
+  const isCostInactive = (actual: any, budget: any): any => {
+    const noBudget = budget == null || budget === 0;
+    const noActual = actual == null || actual === 0;
+    return noBudget && noActual;
+  };
+  // PR-1 item 3 (2026-09-02): map line_code to its per-bucket
+  // budget-to-date-days so the cost row can ship actual_pct +
+  // target_pct without dashes. buildCostRow already runs for 3200 /
+  // 3400 / 3500, each with a full-period `budget`; the resolver
+  // already prorates each via bucketsToDateRatio above. Reuse those.
+  const perBucketBudgetToDate = {
+    "3200": food_budget_to_date_days,
+    "3400": packaging_budget_to_date_days,
+    "3500": vehicle_budget_to_date_days,
+  };
+  // [name] R-61 (2026-09-03): inventory status - card 1 states
+  // whether the range is `Inventory actualized` (every finalised
+  // period on every applicable member has at least one JE row) or
+  // `Pending inventory` (any finalised period lacks one). Only
+  // applicable to accounts that CAN carry inventory (per-meal /
+  // sales-based). Management-fee + pass-through accounts (billed-
+  // back food) never carry inventory; status is null on those.
+  const inventoryApplicable = !isAggregate && !isPassThrough && !isFeeAccount;
+  const inventory_status = ((): any => {
+    if (!inventoryApplicable) return null;
+    if (finalisedPeriods.length === 0) return null;
+    let allActualized = true;
+    const pendingPeriods = [];
+    for (const p of finalisedPeriods) {
+      let hasAny = false;
+      for (const m of members) {
+        const byPeriod = invAdjByAcct.get(m);
+        if (byPeriod && byPeriod.get(p)) { hasAny = true; break; }
+      }
+      if (!hasAny) { allActualized = false; pendingPeriods.push(p); }
+    }
+    return {
+      status: allActualized ? "actualized" : "pending",
+      finalised_periods: finalisedPeriods.slice(),
+      pending_periods: pendingPeriods,
+    };
+  })();
+
+  const buildCostRow = ({ line_code, label, actual, budget, extraFlags = [], inventoryJe = 0, actualPurchased = null, creditsTotal = 0 }: any): any => {
+    const billed_back = isPassThrough;
+    // inactive takes precedence over billed_back only when there is
+    // truly nothing to say (no actual and no budget). Billed-back
+    // accounts with real spend against [amount] budget remain billed_back.
+    const inactive = !billed_back && isCostInactive(actual, budget);
+    const suppress = billed_back || inactive;
+    // PR-1 item 2 + 3: envelope + pct fields per row. Suppressed rows
+    // (billed_back / inactive) still emit null everywhere - the
+    // absence-contract cascade holds.
+    // @ts-expect-error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type '{
+    const btd = perBucketBudgetToDate[line_code] || null;
+    const _actPct = suppress ? null : pctOf(actual, totalRevenue);
+    // PR-1 item 1: budget/budget on full-period sums (horizon-invariant).
+    const _tgtPct = (suppress || !has_target) ? null : pctOf(budget, revenue_budget_full_period);
+    // PR-2 (2026-09-02) half-null guard: batr + envelope_delta are
+    // a matched trio with btd. If we can't ship btd (per-bucket
+    // proration returned null), suppress batr + envelope too so the
+    // row never emits {btd:null, batr:0, envelope:null}. The cost-
+    // lines row-consistency probe asserts this trio is all-null or
+    // all-present per scored row.
+    //
+    // [name] CC prompt 2026-09-14 (prereq B). Running ranges use the
+    // 4-week SC + fee revenue basis via
+    // budgetAtThisRevenueForCogsRow; CY / LP use totalRevenue as
+    // before (helper falls back). See helper comment for the
+    // "flex wholly with revenue" reasoning.
+    //
+    // [name] R-137 step 2 (2026-09-21). PR-2's btd==null clause exists
+    // to catch a proration failure - a state where budget_to_date
+    // came back null on a range where time HAS elapsed. On a planned
+    // single period btd is null by design (no time has elapsed) and
+    // that must not null out batr, or the client's envelopeOf falls
+    // back to a flat period_budget and non-labor cost rows stop
+    // flexing with the SC forecast. `rng.kind === "period"` clause
+    // is load-bearing and must not be simplified away: fytd and
+    // explicit ranges set displayPeriodNo to the LAST period in the
+    // range, so a year range ending on a future period would derive
+    // "planned" here too - that clause is what keeps CY out of the
+    // exemption and protects the 88 fingerprints.
+    const btdIsExpectedNull =
+      rng.kind === "period" && displayPeriodState === "planned";
+    const _batr = (suppress || (btd == null && !btdIsExpectedNull))
+      ? null
+      : budgetAtThisRevenueForCogsRow(budget);
+    return {
+      line_code,
+      section: "cogs",
+      label,
+      reported: !inactive,
+      actual,
+      budget_to_date: suppress ? null : btd,
+      period_budget: budget,
+      // [name] ruling 2026-09-03 (BLOCKER): row variance shares
+      // reference with the row's percent gap - measured against
+      // budget_at_this_revenue, not budget_to_date. Same fix as the
+      // GM total row and the cost-lines table.
+      variance: (!suppress && actual != null && _batr != null) ? r2(actual - _batr) : null,
+      variance_pct: (has_target && !suppress && _actPct != null && _tgtPct != null) ? r2(_actPct - _tgtPct) : null,
+      actual_pct: _actPct,
+      target_pct: _tgtPct,
+      budget_at_this_revenue: _batr,
+      // R-58/R-59: MF accounts null envelope (contractual revenue).
+      // [name] R-61 (2026-09-03): inventory adjustment on 3200/3400.
+      // `actual` above is the ADJUSTED figure (purchases - JE) so
+      // every downstream calc uses the finance-side number; the raw
+      // purchases figure ships alongside for the cost-lines trio
+      // display. Non-adjustable rows (3100 labor, 3500 vehicle) emit
+      // inventory_je=null so the client knows to skip the trio.
+      envelope_delta: (suppress || btd == null || isManagementFee) ? null : envelopeDelta(btd, _batr),
+      inventory_je: (line_code === "3200" || line_code === "3400") ? r2(inventoryJe) : null,
+      actual_purchased: (line_code === "3200" || line_code === "3400" || line_code === "3500") ? actualPurchased : null,
+      // R-71 Stage 2 ([name] 2026-09-04): vendor-credits total (signed
+      // negative) surfaces on the cost row so the client can render
+      // "$X invoiced - $Y credits = $Z" sub-line, mirroring the
+      // inventory-je pattern. Zero on rows/accounts without credits;
+      // client suppresses the sub-line when zero.
+      credits_total: (line_code === "3200" || line_code === "3400" || line_code === "3500") ? r2(creditsTotal) : null,
+      sources: Math.abs(Number(creditsTotal || 0)) >= 0.01
+        ? ["purchasing_actuals", "billcom_credit"]
+        : ["purchasing_actuals"],
+      flags: [
+        ...(billed_back ? ["billed_back"] : []),
+        ...(inactive ? ["inactive"] : []),
+        ...extraFlags,
+      ],
+    };
+  };
+  // R-71 Stage 2: `actualPurchased` shipped to the row is the pre-
+  // credit, pre-JE invoiced total. The client renders the derivation
+  // sub-line "$X invoiced - $Y credits - $Z inventory = $W". Prior
+  // to R-71 `actualPurchased` was `purchBoard.buckets[X].period_total`
+  // which included credits (since credits landed in purchasing_actuals
+  // once the loader ran); use `purchasesByBucket[X]` here so the
+  // display is honestly labelled.
+  statementRows.push(buildCostRow({
+    line_code: "3200",
+    label: "Food purchased",
+    actual: food_actual,           // adjusted (purchases + credits - foodInventoryJe)
+    actualPurchased: r2(purchasesByBucket["3200"]),
+    inventoryJe: foodInventoryJe,
+    creditsTotal: creditsByBucket["3200"],
+    budget: food_budget,
+  }));
+  statementRows.push(buildCostRow({
+    line_code: "3400",
+    label: "Packaging and supplies",
+    actual: packaging_actual,
+    actualPurchased: r2(purchasesByBucket["3400"]),
+    inventoryJe: packagingInventoryJe,
+    creditsTotal: creditsByBucket["3400"],
+    budget: packaging_budget,
+    extraFlags: flags.packaging_gap ? ["packaging_gap"] : [],
+  }));
+  statementRows.push(buildCostRow({
+    line_code: "3500",
+    label: "Vehicle",
+    actual: vehicle_actual,
+    actualPurchased: r2(purchasesByBucket["3500"]),
+    creditsTotal: creditsByBucket["3500"],
+    budget: vehicle_budget,
+  }));
+
+  // [name] PR-B item 6 (2026-09-03) + follow-up: sub-lines under 3200 /
+  // 3400 / 3500 sourced DATA-DRIVEN from purchasing_actuals AND
+  // kpi_budgets_purchasing - every gl_line_code that appears under
+  // one of the three parent prefixes gets a sub-row. Finance labels
+  // for the codes the P8 workbook names; bare gl_code + `unmapped`
+  // flag for anything the workbook doesn't (finding for [name]).
+  //
+  // Parent-sum invariant (HARD, per [name]'s ruling): parent equals
+  // sum(children) on every parent, every account, every range, both
+  // budget and actual. Emissions honour this by construction:
+  //   - actuals sum: subs sum raw purchasing_actuals per gl code;
+  //     an "Inventory adjustment" synthetic sub-row carries the
+  //     foodInventoryJe / packagingInventoryJe offset so post-JE
+  //     parents still tie to sub-sum.
+  //   - budget sum: subs are suppressed to null WHEN the parent is
+  //     suppressed (billed_back / inactive), propagating the fee-
+  //     account exclusion down the tree. [name]'s second-defect fix.
+  //
+  // Finance labels from the P8 workbook (source of truth):
+  const FINANCE_LABELS = {
+    "3200.1": "General Food",
+    "3200.2": "Resale Food",
+    "3400.1": "Packaging",
+    "3400.2": "Supplies",
+    "3400.5": "Linen",
+    "3500.2": "Vehicle Insurance",
+    "3500.3": "Leased Vehicle",
+    "3500.4": "Fuel",
+    "3500.5": "Vehicle Repair & Maintenance",
+  };
+  const PARENT_PREFIXES = ["3200", "3400", "3500"];
+  const isPrefixMatch = (gl: any, parent: any): any => typeof gl === "string" && gl.startsWith(parent) && gl !== parent;
+  const parentPrefixOf = (gl: any): any => PARENT_PREFIXES.find((p: any): any => isPrefixMatch(gl, p)) || null;
+  // Collect every gl_line_code present in either engine under the
+  // three parents. Sort by parent then by gl for stable render.
+  //
+  // R-71 Stage 2 ([name] ruling 2026-09-04): vendor-credits FOLD into
+  // the GL-coded sub-line, not a synthetic CREDITS row.
+  //
+  // [name]'s ruling: "A credit carries a chartOfAccountId. It is
+  // GL-coded to 3200.1 or 3200.2, so it belongs on that line -
+  // unlike an inventory JE, which has no GL line of its own and
+  // genuinely needs a synthetic row."
+  //
+  // Fold means: include billcom_credit rows in the per-gl aggregation
+  // (they naturally reduce the sub-row's actual by their negative
+  // amount) and DO NOT emit a separate `{parent}.CREDITS` synthetic.
+  // The parent-row derivation sub-line still surfaces the credit
+  // amount ("$X invoiced - $Y credits = $Z") so visibility survives
+  // without double-listing.
+  //
+  // Two knock-on wins: (1) sub-line becomes comparable to finance's
+  // 3200.1 (finance also folds credits in), closing the [amount]+ display
+  // gap on TBJ - FL. (2) The pass-through parent-sum edge case
+  // disappears - no synthetic row to gate, so sub-rows tie to parent
+  // on billed-back accounts without a special-case guard.
+  // [name] ruling 2026-09-17. Sub-lines roll up their children.
+  // A raw GL `3200.1.1` belongs on the canonical sub-line `3200.1`,
+  // not on its own row. Ingress canonicalises the raw code (drop
+  // segments past the second dot); the actual-by-line map then keys
+  // on the canonical sub-line so `3200.1` = 3200.1 + 3200.1.1 +
+  // 3200.1.2 (etc.) in one aggregation pass.
+  const glsUnderParent = new Map(PARENT_PREFIXES.map((p: any): any => [p, new Set()]));
+  const purchActualsByLine = new Map<any, any>();
+  const purchActualsLinesPresent = new Set();
+  for (const r of (purchActuals || [])) {
+    const gl = String(r.gl_line_code || "");
+    if (!gl) continue;
+    const parent = parentPrefixOf(gl);
+    if (!parent) continue;
+    const canonical = canonicalSubLine(gl);
+    if (!canonical) continue;
+    // @ts-expect-error TS2571: Object is of type 'unknown'.
+    glsUnderParent.get(parent).add(canonical);
+    purchActualsByLine.set(canonical, (purchActualsByLine.get(canonical) || 0) + Number(r.amount || 0));
+    purchActualsLinesPresent.add(canonical);
+  }
+  if (purchBudgets && typeof purchBudgets.keys === "function") {
+    for (const gl of purchBudgets.keys()) {
+      const parent = parentPrefixOf(gl);
+      // @ts-expect-error TS2571: Object is of type 'unknown'.
+      if (parent) glsUnderParent.get(parent).add(canonicalSubLine(gl));
+    }
+  }
+  // Per-line budget sum across members + periods. purchBudgets shape
+  // is gl → account → period → amount. PURCHASING_ENVELOPE_EXCLUSIONS
+  // handled explicitly.
+  const sumPurchByPeriod = (lineCode: any): any => {
+    const perLine = purchBudgets?.get?.(lineCode);
+    if (!perLine) return new Map<any, any>();
+    const out = new Map<any, any>();
+    for (const m of members) {
+      if (PURCHASING_ENVELOPE_EXCLUSIONS.has(m)) continue;
+      const byAcct = perLine.get(m);
+      if (!byAcct) continue;
+      for (const [pn, amt] of byAcct) {
+        out.set(pn, (out.get(pn) || 0) + Number(amt));
+      }
+    }
+    return out;
+  };
+  // Per-parent suppression: mirror buildCostRow's `suppress`. If the
+  // parent is billed_back (pass_through) OR inactive (no actual AND
+  // no budget), children carry null on every budget/batr field so the
+  // parent-null → children-null invariant holds. Actual still flows
+  // through on billed_back (real spend, real gl_line_codes) so parent
+  // actual and sub-sum tie via the inventory-JE synthetic row.
+  const parentIsSuppressed = (parent: any): any => {
+    if (isPassThrough) return true;
+    if (parent === "3200") return isCostInactive(food_actual, food_budget);
+    if (parent === "3400") return isCostInactive(packaging_actual, packaging_budget);
+    if (parent === "3500") return isCostInactive(vehicle_actual, vehicle_budget);
+    return false;
+  };
+  // Inventory-JE offset: parent 3200/3400 actual is
+  //   food_actual  = food_actual_purchased  - foodInventoryJe
+  //   packaging    = packaging_purchased    - packagingInventoryJe
+  // Sub actuals sum the pre-JE purchasing_actuals. Emit a synthetic
+  // "Inventory adjustment" sub-row per parent carrying the -JE so
+  // sub-sum = parent post-JE.
+  const parentInventoryJe = {
+    "3200": Number(foodInventoryJe || 0),
+    "3400": Number(packagingInventoryJe || 0),
+    "3500": 0,
+  };
+  for (const parent of PARENT_PREFIXES) {
+    const parentSuppressed_ = parentIsSuppressed(parent);
+    // @ts-expect-error TS2488: Type 'unknown' must have a '[Symbol.iterator]()' method that returns an iterator.
+    const glList = [...glsUnderParent.get(parent)].sort();
+    for (const gl of glList) {
+      const actualPresent = purchActualsLinesPresent.has(gl);
+      const actual = actualPresent ? r2(purchActualsByLine.get(gl) || 0) : null;
+      const byPeriod = sumPurchByPeriod(gl);
+      let periodBudget = 0;
+      let anyBudget = false;
+      for (const p of periods) {
+        const v = byPeriod.get(p);
+        if (v != null) {
+          periodBudget += Number(v);
+          anyBudget = true;
+        }
+      }
+      const period_budget_raw = anyBudget ? r2(periodBudget) : null;
+      const btd = computeBudgetToDateForLine({
+        budgetByPeriod: byPeriod,
+        periodsInRange: periods,
+        today,
+        throughISO: effectiveEndISO,
+      });
+      const budget_to_date_raw = btd.amount;
+      const period_budget = parentSuppressed_ ? null : period_budget_raw;
+      const budget_to_date = parentSuppressed_ ? null : budget_to_date_raw;
+      const isInactive = actual == null && (period_budget == null || period_budget === 0);
+      const _actPct = (parentSuppressed_ || isInactive) ? null : pctOf(actual, totalRevenue);
+      const _tgtPct = (parentSuppressed_ || isInactive || !has_target) ? null : pctOf(period_budget, revenue_budget_full_period);
+      // [name] CC prompt 2026-09-14 (prereq B). Sub-rows share the
+      // parent's revenue basis - running ranges flex to
+      // labor3100_revenue_for_batr; CY / LP unchanged.
+      const _batr = (parentSuppressed_ || isInactive) ? null : budgetAtThisRevenueForCogsRow(period_budget);
+      // @ts-expect-error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type '{
+      const label = FINANCE_LABELS[gl] || gl;
+      // @ts-expect-error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type '{
+      const unmapped = !FINANCE_LABELS[gl];
+      statementRows.push({
+        line_code: gl,
+        section: "cogs",
+        parent_line_code: parent,
+        label,
+        reported: actual != null,
+        actual,
+        budget_to_date,
+        period_budget,
+        variance: (actual != null && _batr != null) ? r2(actual - _batr) : null,
+        variance_pct: (has_target && _actPct != null && _tgtPct != null) ? r2(_actPct - _tgtPct) : null,
+        actual_pct: _actPct,
+        target_pct: _tgtPct,
+        budget_at_this_revenue: _batr,
+        envelope_delta: (parentSuppressed_ || isInactive || isManagementFee) ? null : envelopeDelta(budget_to_date, _batr),
+        sources: ["purchasing_actuals"],
+        flags: [
+          ...(parentSuppressed_ ? ["billed_back"] : []),
+          ...(isInactive ? ["inactive"] : []),
+          ...(unmapped ? ["unmapped"] : []),
+        ],
+      });
+    }
+    // Inventory-JE synthetic sub-row (3200 / 3400 only). Reconciles
+    // sub-actuals (pre-JE) with parent actual (post-JE). Renders with
+    // the inventory_adjustment flag; no budget side.
+    // @ts-expect-error TS7053: Element implicitly has an 'any' type because expression of type 'string' can't be used to index type
+    const je = parentInventoryJe[parent];
+    if (je && je !== 0 && !parentSuppressed_) {
+      statementRows.push({
+        line_code: `${parent}.INVJE`,
+        section: "cogs",
+        parent_line_code: parent,
+        label: "Inventory adjustment",
+        reported: true,
+        actual: r2(-je),
+        budget_to_date: null,
+        period_budget: null,
+        variance: null,
+        variance_pct: null,
+        actual_pct: null,
+        target_pct: null,
+        budget_at_this_revenue: null,
+        envelope_delta: null,
+        sources: ["inventory_adjustments"],
+        flags: ["inventory_adjustment"],
+      });
+    }
+    // [name] R-126 (2026-09-18) · the {parent}.FIN_CLOSE row is no
+    // longer emitted per parent. A single post-pass below runs after
+    // the sources back-fill and folds the adjustment onto the largest
+    // existing sub-line (search for absorbFinanceCloseIntoSubLines).
+  }
+
+  // [name] ruling 2026-09-18. A parent row whose actual was switched to
+  // finance names pnl_actuals in its `sources`. Applied post-hoc so
+  // buildCostRow's signature stays clean. Only touches the 4 parents
+  // that participate in the finance-close switch.
+  for (const parent of ["3100", "3200", "3400", "3500"]) {
+    const info = financeClose.per_parent.get(parent);
+    if (!info || info.adjustment === 0) continue;
+    for (const row of statementRows) {
+      if (row.line_code !== parent) continue;
+      if (!row.parent_line_code && Array.isArray(row.sources) && !row.sources.includes("pnl_actuals")) {
+        row.sources = [...row.sources, "pnl_actuals"];
+      }
+    }
+  }
+
+  // [name] R-126 (2026-09-18) · absorb the finance close adjustment onto
+  // the largest existing sub-line under each parent. Runs AFTER the
+  // sources back-fill so every parent + sub-row is in the array and
+  // the pass sees the whole set. Deletes the `.FIN_CLOSE` display; the
+  // parent's group still sums (Guard J) because a real sub-line has
+  // moved by the exact adjustment amount. Rule 5 backstop (no absorbable
+  // sub-line) re-emits the `.FIN_CLOSE` row for correctness; the
+  // Guard J probe asserts this branch stays at zero occurrences on real
+  // data.
+  absorbFinanceCloseIntoSubLines(statementRows, financeClose, {
+    totalRevenue, r2, pctOf,
+  });
+
+  // Also-tracked rows
+  // 2026-09-01 defect fix: the tracked lines (5002.1 / 5002.5 /
+  // 5017.3) are Rippling-card spend that returns period_total=0 when
+  // no card rows exist for the line - operationally indistinguishable
+  // from "no data" (there is no reported-zero-vs-no-activity signal
+  // on the purchasing side). Prior code kept `reported = actual > 0`
+  // but STILL computed variance from the underlying 0, which rendered
+  // "[amount] under" for a line with no measured spend - a saving that
+  // has not been measured.
+  //
+  // Absence-contract fix: when reported=false, variance is null so
+  // the client renders "no data" instead of a fake savings figure.
+  const alsoTracked = [
+    { line_code: "5002.1", label: "Gen. Repair & Maintenance", actual: rm_actual, budget: rm_budget },
+    { line_code: "5002.5", label: "Equipment",                     actual: equip_actual, budget: equip_budget },
+    { line_code: "5017.3", label: "Perks",                         actual: perks_actual, budget: perks_budget },
+  ].map((r: any): any => {
+    // reported is true iff the loader saw a non-zero actual - positive
+    // OR negative (a credit note on 5002.5 is a real reported figure,
+    // e.g. ALL/P9 -157.03). Zero on the purchasing side is ambiguous
+    // between reported-zero and absent, so we treat it as unreported.
+    const reported = r.actual != null && r.actual !== 0;
+    // PR 2 addition (2026-09-01, [name] surfaced): when reported=false,
+    // the actual + actual_display fields must go null too. Prior code
+    // shipped actual:0 + actual_display:"[amount]" alongside reported:false -
+    // the flag was right but the payload string was one step behind
+    // it, and any consumer reading actual_display in isolation saw a
+    // phantom zero instead of an absence.
+    return {
+      line_code: r.line_code,
+      label: r.label,
+      reported,
+      actual: reported ? r.actual : null,
+      actual_display: reported ? formatMoneyWhole(r.actual) : null,
+      budget: r.budget,
+      budget_display: formatMoneyWhole(r.budget),
+      variance: (reported && r.budget != null) ? r2(r.actual - r.budget) : null,
+      note: r.line_code === "5017.3" ? "Rippling card spend on perks" : null,
+    };
+  });
+
+  // 18b. Drill sub-object (2026-08-31, engine follow-up).
+  //
+  // The purchasing drill button on the Overview needs a single
+  // combined-purchasing summary (spend, pct-of-revenue, target-pct).
+  // [name]'s approved render pulls these three pre-formatted display
+  // strings from the payload rather than having the client sum
+  // buckets and derive a combined pct client-side (§9B: server
+  // computes every dollar, formatting decisions server-side).
+  //
+  // COGS / drill total is food + packaging + vehicle only. R&M /
+  // Equipment / Perks are the "Also tracked" band per R-17b
+  // (charter §11: "not part of gross margin or cost of goods sold
+  // - watched together"), deliberately outside the measured figure.
+  // Including them here would create two numbers for one idea on
+  // the same page (drill would exceed the purchasing board's own
+  // pl_cogs.spent headline) and cross the scored-versus-tracked
+  // line. [name] ruling 2026-08-31.
+  //
+  // Nulls are treated as 0 for the summation (mirrors cogsActual /
+  // cogsBudget on line 646-647 above). A null-only spend collapses
+  // pct via pctOf's zero-denominator branch to null.
+  const purchSpentActual = (food_actual || 0) + (packaging_actual || 0) + (vehicle_actual || 0);
+  const purchSpentBudget = (food_budget || 0) + (packaging_budget || 0) + (vehicle_budget || 0);
+  // 2026-09-01 defect fix: target-pct denominator alignment. Use the
+  // aggregate to-date purchasing budget so both sides of the ratio
+  // share the same horizon. Falls back to null (drill.target hides)
+  // if buckets_budget_to_date_days is absent.
+  const purchSpentBudgetToDate = buckets_budget_to_date_days?.amount ?? null;
+  const purchActualPct = pctOf(purchSpentActual, totalRevenue);
+  // PR-1 item 1 (2026-09-02): budget/budget on full-period sums so
+  // the drill target is horizon-invariant across FYTD too. Null on
+  // rolling windows.
+  const purchSpentBudgetFull = (food_budget || 0) + (packaging_budget || 0) + (vehicle_budget || 0);
+  const purchTargetPct = has_target ? pctOf(purchSpentBudgetFull, revenue_budget_full_period) : null;
+  const purchVariancePct = (has_target && purchActualPct != null && purchTargetPct != null)
+    ? r2(purchActualPct - purchTargetPct)
+    : null;
+  // E16 (2026-09-01): on pass-through accounts the purchasing spend
+  // is billed back - the client pays for it. Rendering "0.1% over
+  // target" on [amount] against [amount] was the specific defect [name] flagged.
+  // The drill payload carries a `billed_back: true` flag so the
+  // client hides the percentage and renders a tag. No variance,
+  // no direction, no verdict.
+  const drillBilledBack = isPassThrough;
+  // PR-1 item 2 (2026-09-02): envelope on the drill so PR-2's card
+  // can render "$X less than the plan allowed" beside the total.
+  // purchTargetPct is a percent number; convert to ratio for the
+  // envelope math (batr = actual_revenue * ratio).
+  const drillBudgetAtThisRevenue = (has_target && totalRevenue != null && purchTargetPct != null)
+    ? r2(totalRevenue * purchTargetPct / 100) : null;
+  const drillEnvelopeDelta = envelopeDelta(purchSpentBudgetToDate, drillBudgetAtThisRevenue);
+  const drill = {
+    purchasing: {
+      spent_display: formatMoneyWhole(purchSpentActual),
+      pct_of_revenue_display: drillBilledBack ? null : formatPct(purchActualPct),
+      target_pct_display: (drillBilledBack || !has_target) ? null : formatPct(purchTargetPct),
+      // Site posture drill button carries the verdict (R-32). "5.4%
+      // under target" pattern - cost axis, so under=good, over=bad.
+      // Billed-back accounts + rolling windows get null on all three
+      // so the client cannot accidentally render a verdict.
+      variance_pct: (drillBilledBack || !has_target) ? null : purchVariancePct,
+      variance_pct_display: (drillBilledBack || !has_target || purchVariancePct == null) ? null : gapPointsCost(purchVariancePct),
+      direction: (drillBilledBack || !has_target || purchVariancePct == null) ? null : directionOfDelta(purchVariancePct, "cost"),
+      budget_at_this_revenue: drillBilledBack ? null : drillBudgetAtThisRevenue,
+      envelope_delta: drillBilledBack ? null : drillEnvelopeDelta,
+      billed_back: drillBilledBack,
+    },
+  };
+
+  // 18c. R-52 ([name], 2026-09-02): pace card removed from the Overview.
+  //
+  // "The Overview is a scoreboard, not a forecast. The board's
+  // credibility rests on stating what is measured, and a projection
+  // invites an operator to argue with the prediction instead of
+  // looking at their spend." what_is_left, its runway math, the pace-
+  // vs-clock verdict, and the two-card composition are all retired.
+  //
+  // The future-period planning view (R-47 / R-48) is a separate
+  // surface, not yet built, and is not affected by this ruling.
+
+  // 19. Sources line. Data-through dates for each source.
+  //
+  // P2-4a / P2-4b / P2-4c (2026-09-01): three-way rewrite.
+  //   (a) Raw ISO dates -> formatDayLabel ("Sun 08/30") per the
+  //       render of record (docs/renders/overview-prototype.html:382).
+  //   (b) Never assert data through a day that has not closed. Each
+  //       source ships the max CLOSED day it actually has:
+  //         - labor:     max labor board week_end where state==='closed'
+  //         - purchases: purchFreshness.cards_through (last CLOSED
+  //                      card txn_date from rippling_spend - one-week
+  //                      lag is baked in)
+  //         - sc:        max sc_daily_revenue.service_date seen for
+  //                      any member in range
+  //       Prior implementation echoed `today` which claimed data
+  //       through an incomplete day ([name]'s live measurement:
+  //       "Labor through 2026-08-31 [today] while cards_through is
+  //       08/30").
+  //   (c) SC revenue always renders as a third source line - not
+  //       gated on effRevSource==='sc' + scLiveAny. Per render of
+  //       record the sources line advertises three sources
+  //       regardless of the revenue-source toggle; the toggle
+  //       controls which SOURCE feeds the open-period revenue
+  //       NUMBERS, not whether the SC through-date is disclosed.
+  //       When no SC data landed at all in range (empty scByAcct),
+  //       the line renders "not yet reporting" so it never asserts
+  //       a date it doesn't have.
+  // 2026-09-01 follow-up rule: NEVER claim data through an incomplete
+  // day. Every source's through_date is capped at STRICTLY LESS THAN
+  // `today` so a sources line can never assert "through Tue 09/01"
+  // when 09/01 is today. Labor already respects this via its
+  // state==='closed' filter (the week has to be closed for its
+  // week_end to count). Purchases + SC use raw last-observed values
+  // from their loaders and can slip past midnight - cap them here.
+  // 2026-09-02: capBeforeToday moved to pnl-loader.js so the
+  // sc_daily_revenue reader and the sources-line label call the
+  // SAME function. [name]'s rule: "one function owns 'through when',
+  // and the sources line already calls it". Locally alias the
+  // imported helper so the callsites below stay legible.
+  const capBefore = (iso: any): any => capBeforeToday(iso, today);
+  const laborLastClosed = ((): any => {
+    const weeks = laborBoard?.weeks || [];
+    let max = null;
+    for (const w of weeks) {
+      if (w.state !== "closed") continue;
+      if (max == null || w.week_end > max) max = w.week_end;
+    }
+    return capBefore(max);
+  })();
+  const scMaxDate = ((): any => {
+    let max = null;
+    for (const [, byDate] of scByAcct) {
+      for (const [day] of byDate) {
+        if (max == null || day > max) max = day;
+      }
+    }
+    return capBefore(max);
+  })();
+  const cardsThrough = capBefore(purchFreshness?.cards_through || null);
+
+  const labelWithThrough = (base: any, iso: any, fallback: any): any => {
+    const day = iso ? formatDayLabel(iso) : null;
+    return day ? `${base} ${day}` : (fallback || `${base} (not yet reporting)`);
+  };
+  // [name] 2026-09-02 blocker Item 4+5: the popover revenue row must
+  // name every source the payload used (verified first), and when the
+  // range contains a still-running period the consequence sentence
+  // must fire. `sources_used` echoes the union of statement_rows
+  // revenue sources so the probe can assert
+  // popover.sources_used == union(statement_rows.revenue.sources)
+  // - the popover cannot omit a source the payload used.
+  const revenueSourcesUsed = ((): any => {
+    const set = new Set();
+    for (const r of statementRows) {
+      if (r.section !== "revenue") continue;
+      const srcs = Array.isArray(r.sources) ? r.sources : [];
+      for (const s of srcs) set.add(s);
+    }
+    return [...set];
+  })();
+  const revenueRowParts = ((): any => {
+    const parts = [];
+    if (rangeComposition.verified.count) {
+      parts.push(`${rangeComposition.verified.label} verified against the finance P&L`);
+    }
+    // [name] walkthrough item 3 - awaiting bucket surfaces in the
+    // popover so the reader sees why a closed period's revenue is
+    // provisional. Sits between verified and live/planned to
+    // preserve the reading order.
+    if (rangeComposition.awaiting?.count) {
+      parts.push(`${rangeComposition.awaiting.label} closed but awaiting finance verification`);
+    }
+    if (rangeComposition.live.count) {
+      const dayLbl = scMaxDate ? formatDayLabel(scMaxDate) : null;
+      const tail = dayLbl ? ` through ${dayLbl}` : "";
+      parts.push(`${rangeComposition.live.label} live from Service Calendar${tail}`);
+    }
+    if (rangeComposition.planned.count) {
+      // Fee accounts read from a contract; per-meal flag-off + closed_
+      // awaiting per-meal read from budget. Name it what it is so the
+      // popover doesn't lump the two together. The union of used
+      // sources tells us which noun to pick.
+      const usesContract = revenueSourcesUsed.some((s: any): any => s === "kpi_budgets_2400_1_contractual");
+      // 2026-10-16 - tracked source renamed from _2400_1_ to _2400_2_
+      // (TXR - TX - V's revenue line is 2400.2, not 2400.1); match
+      // both so a mid-rollout stale cache does not drop the chip.
+      const usesTracked = revenueSourcesUsed.some((s: any): any => s === "kpi_budgets_2400_1_tracked" || s === "kpi_budgets_2400_2_tracked");
+      const noun = usesContract ? "the fee contract"
+        : usesTracked ? "the tracked budget"
+        : "budget";
+      parts.push(`${rangeComposition.planned.label} planned from ${noun}`);
+    }
+    return parts;
+  })();
+  const revenueConsequence = rangeComposition.will_change_at_close && rangeComposition.live.count
+    ? `The ${rangeComposition.live.label} figure is a live estimate and will change when the period closes and is verified against the finance P&L.`
+    : (rangeComposition.will_change_at_close && rangeComposition.planned.count
+      ? `The ${rangeComposition.planned.label} figure is a planned estimate and will change when the period closes and is verified against the finance P&L.`
+      : null);
+  const sourcesLine = {
+    labor: {
+      through_date: laborLastClosed,
+      label: labelWithThrough("Labor through", laborLastClosed, "Labor not yet reporting"),
+    },
+    purchases: {
+      through_date: cardsThrough,
+      label: labelWithThrough("Purchases through", cardsThrough, "Purchases not yet reporting"),
+    },
+    sc_revenue: {
+      through_date: scMaxDate,
+      label: labelWithThrough(
+        "Revenue from Service Calendar through",
+        scMaxDate,
+        "Service Calendar revenue not yet reporting",
+      ),
+    },
+    // Composed revenue row (Item 4+5). Parts joined by " · " in the
+    // popover; consequence rendered as a trailing note when set.
+    revenue: {
+      parts: revenueRowParts,
+      sources_used: revenueSourcesUsed,
+      consequence: revenueConsequence,
+    },
+    period_state: displayPeriodState,
+    // [name] ruling 2026-09-17. Additive sibling of `period_state`.
+    // `true` when a closed period is at least 8 days past its end
+    // (R-93 boundary) OR verified. Four Overview surfaces consult
+    // this to flip Closed · awaiting -> Closed · unaudited on day 8;
+    // every existing `period_state` consumer is untouched. Chart
+    // hatching also aligns to this so P9's bar goes solid on the
+    // same day its status flips (was: three more weeks under the
+    // period-grain rule that has been shipping since #1094).
+    spend_settled: displaySpendSettled,
+    // [name] ruling 2026-09-17. Periods past their R-93 settle window
+    // that Finance has not yet posted. Empty on ranges with no such
+    // period. Client renders a strip like "P9 closed 8 days ago · no
+    // finance P&L loaded" per item. Sibling of `settling` (which is
+    // the pre-day-8 caveat) - one turns off exactly when the other
+    // turns on.
+    overdue_periods: overduePeriods,
+    period_state_display: ((): any => {
+      // [name] ruling 2026-09-17. When a period is closed_awaiting AND
+      // R-93-settled (spend_settled=true), the label reads Closed ·
+      // unaudited instead of Closed · awaiting finance. The operator
+      // question is "can I act on these numbers" and from day 8 the
+      // honest answer is yes.
+      if (displayPeriodState === "closed_awaiting" && displaySpendSettled) {
+        return "closed · unaudited";
+      }
+      switch (displayPeriodState) {
+        case "open":            return "open · live estimate";
+        case "closed_awaiting": return "closed · awaiting finance";
+        case "verified": {
+          const row = periodStatus.get(displayPeriodNo);
+          const va = row?.verified_at;
+          if (va) return `verified against P&L · ${String(va).slice(5, 10).replace("-", "/")}`;
+          return "verified against P&L";
+        }
+        default: return null;
+      }
+    })(),
+    // [name] ruling 2026-09-03 (top-simplify) item 3: two disclosures
+    // move here from the Revenue card. `Periods verified` (was the
+    // range-composition sub-line) + `Inventory` (was the badge). These
+    // are trust statements about the numbers, not metrics; the
+    // Data-current popover is where an operator asks "where do these
+    // numbers come from".
+    periods_display: ((): any => {
+      if (!rangeComposition) return null;
+      const v = rangeComposition.verified;
+      if (!v || !v.count) return null;
+      return `${v.label} verified`;
+    })(),
+    // Inventory: "actualized" when every finalised period has a JE;
+    // "pending · P6" (or "P6, P7") when one or more are outstanding;
+    // "lands at close" on an open range where the badge would
+    // otherwise vanish ([name]'s item 3: the operator should know the
+    // adjustment is coming, not wonder why the row disappeared).
+    inventory_display: ((): any => {
+      // Only relevant on inventory-carrying accounts. `inventoryApplicable`
+      // is true for SC-driven / sales-based sites; MF + pass-through
+      // accounts stay null.
+      if (!inventoryApplicable) return null;
+      if (displayPeriodState === "open" && (!inventory_status || inventory_status.finalised_periods?.length === 0)) {
+        return "lands at close";
+      }
+      if (!inventory_status) return null;
+      if (inventory_status.status === "actualized") return "actualized";
+      if (inventory_status.status === "pending") {
+        const pp = inventory_status.pending_periods || [];
+        if (pp.length === 0) return "pending";
+        return `pending · ${pp.map((p: any): any => "P" + p).join(", ")}`;
+      }
+      return null;
+    })(),
+  };
+
+  // 20. Freshness echo. cards_through comes from the purchasing
+  //     freshness loader; today is the request date. `last_walk_at`
+  //     drives the Shell's command-bar freshness chip (green / amber
+  //     / red per hoursSinceISO(last_walk_at)).
+  //
+  //     P2-4d (2026-09-01): fix the false red chip. The Overview
+  //     composes labor + purchasing + SC. Prior implementation
+  //     passed `freshness={ last_walk_at: null }` on the client
+  //     side, which the Shell's FreshnessChip renders as red
+  //     "No recent walk". That is wrong for the Overview: the
+  //     signal that drives the red on the labor board is the
+  //     Rippling walk age (a labor-pipeline-specific concept),
+  //     but the Overview's aggregated view has no single "walk"
+  //     - it has three source pipes. On the same account,
+  //     purchasing was reading "Data current" while Overview
+  //     was reading red "No recent walk".
+  //     [name]'s ruling: a false red alarm is worse than no chip.
+  //     Fix: emit last_walk_at as the max(labor last derive,
+  //     purchasing last derive). The client passes this into
+  //     Shell's `freshness` prop and the chip reflects the
+  //     underlying data-pipe age. When both pipes are fresh
+  //     (< 30h old per freshnessTint) the chip renders "Data
+  //     current" - matching what purchasing shows on the same
+  //     account.
+  const laborDeriveAt = null;  // labor board doesn't ship this on library-call output
+  const purchDeriveAt = purchFreshness?.last_derive_at || null;
+  const composedWalkAt = purchDeriveAt || laborDeriveAt;
+  const freshness = {
+    today,
+    cards_through: cardsThrough || today,
+    last_walk_at: composedWalkAt,
+  };
+
+  // [name] R-94 (2026-09-09) + [name] ruling 2026-09-17.
+  //
+  // Settling data for the "What is still moving" strip on Last period
+  // when displayPeriodState === "closed_awaiting" AND spend_settled
+  // === false. The added `!displaySpendSettled` gate flips the strip
+  // off on day 8 - the moment the state becomes Closed · unaudited,
+  // invoices and hours have finished landing enough that the caveat
+  // is stale. Names the two sources of movement in week one only.
+  const settling = await (async (): Promise<any> => {
+    if (rng.kind !== "period" || displayPeriodState !== "closed_awaiting" || displaySpendSettled) return null;
+    const p = rng.period_no;
+    if (p == null) return null;
+    const pEnd = periodEndISO(p);
+
+    // [name] ruling 2026-09-08. Purchases line no longer renders
+    // counts - copy is period-dynamic + generic ("Invoices for
+    // P{period_no} finalizing"). Prior current + prior line-count
+    // queries removed with the fields; nothing else consumed them.
+    // Labour: sum draft_hours + count distinct people with any draft
+    // in the period. Reads laborActuals directly (already in scope,
+    // no extra query).
+    const inPeriod = (laborActuals || []).filter((r: any): any =>
+      r.week_start && periodOf(r.week_start) === p && Number(r.draft_hours || 0) > 0.004
+    );
+    const draftHours = inPeriod.reduce((s: any, r: any): any => s + Number(r.draft_hours || 0), 0);
+    const draftPeople = countDistinctPeople(inPeriod, workerToEmail);
+
+    return {
+      period_no: p,
+      period_end: pEnd,
+      labour: {
+        hours: Math.round(draftHours * 100) / 100,
+        people: draftPeople,
+      },
+    };
+  })();
+
+  // [name] CC prompt 2026-09-11. `cogsAdjustedFromLines` populated
+  // from the four emitted cost-parent Adjusteds. Everything the
+  // cards + statement_totals show for COGS/GM Adjusted references
+  // these two bindings, so mutating them here propagates to both
+  // surfaces. One source of truth (the sum-of-parent-lines rule)
+  // for every consumer.
+  {
+    let sum = 0;
+    let any = false;
+    for (const r of statementRows) {
+      if (r.section !== "cogs") continue;
+      if (r.parent_line_code) continue;
+      const v = r.budget_at_this_revenue;
+      if (v != null) { sum += Number(v); any = true; }
+    }
+    cogsAdjustedFromLines = any ? r2(sum) : null;
+    gmAdjustedFromLines = (cogsAdjustedFromLines != null && totalRevenue != null)
+      ? r2(Number(totalRevenue) - Number(cogsAdjustedFromLines))
+      : null;
+    // Mutate the COGS + GM cards in place.
+    const cogsCard = cards.find((c: any): any => c.key === "cogs");
+    const gmCard = cards.find((c: any): any => c.key === "gross_margin");
+    if (cogsCard) {
+      cogsCard.budget_at_this_revenue = cogsAdjustedFromLines;
+      cogsCard.budget_at_this_revenue_display = cogsAdjustedFromLines != null ? formatMoneyWhole(cogsAdjustedFromLines) : null;
+      cogsCard.envelope_delta = isManagementFee ? null : envelopeDelta(r2(cogsBudgetToDateDays), cogsAdjustedFromLines);
+      // Recompute the pill on the same anchor. Matches the compute
+      // originally inline at card build time (line ~1613 pre-edit).
+      if (!has_target) {
+        cogsCard.pill = { label: "No target", tone: "neutral" };
+      } else if (isRunningSinglePeriod) {
+        cogsCard.pill = { label: "Invoices still arriving", tone: "wait" };
+      } else if (cogsActual == null) {
+        cogsCard.pill = { label: "No data", tone: "neutral" };
+      } else if (cogsAdjustedFromLines == null) {
+        cogsCard.pill = { label: "cost, no revenue yet", tone: "neutral" };
+      } else {
+        cogsCard.pill = (cogsActual <= cogsAdjustedFromLines)
+          ? { label: "under budget", tone: "good" }
+          : { label: "over budget", tone: "bad" };
+      }
+    }
+    if (gmCard) {
+      gmCard.budget_at_this_revenue = gmAdjustedFromLines;
+      gmCard.budget_at_this_revenue_display = gmAdjustedFromLines != null ? formatMoneyWhole(gmAdjustedFromLines) : null;
+      // R-114 ([name] 2026-09-17). GM pill recompute on the same
+      // dollar anchor as the footer. Prior build-time pill used
+      // plan-ratio (gmPctActual vs gmPctBudget) and could disagree
+      // with the footer on periods where salary is held fixed - P9
+      // TBJ - FL rendered "ahead of target" over a footer saying
+      // "behind budget [amount]". Mirrors the COGS recompute shape
+      // above so both cards share one anchor.
+      if (!has_target) {
+        gmCard.pill = { label: "No target", tone: "neutral" };
+      } else if (isRunningSinglePeriod) {
+        gmCard.pill = { label: "Waiting on cost", tone: "neutral" };
+      } else if (grossMargin == null) {
+        gmCard.pill = { label: "No data", tone: "neutral" };
+      } else if (gmAdjustedFromLines == null) {
+        gmCard.pill = { label: "cost, no revenue yet", tone: "neutral" };
+      } else {
+        gmCard.pill = (grossMargin >= gmAdjustedFromLines)
+          ? { label: "ahead of target", tone: "good" }
+          : { label: "behind target", tone: "bad" };
+      }
+    }
+    // R-114 ([name] 2026-09-17). Percent beside "Adjusted" on the
+    // COGS + GM cards is that dollar over actual revenue, never the
+    // plan ratio. Prior card rendered `target_pct_display` (plan
+    // ratio) which produced 60.0% next to [amount] on TBJ - FL P9 -
+    // reading 59.76% spent as on target when the true allowed
+    // ratio was 56.78%. New field derives at this point because
+    // both `cogsAdjustedFromLines` / `gmAdjustedFromLines` and
+    // `totalRevenue` are known.
+    if (cogsCard) {
+      const p = pctOf(cogsAdjustedFromLines, totalRevenue);
+      // @ts-expect-error TS2339: Property 'adjusted_pct_of_revenue' does not exist on type '{ key: string; label: string; gl_codes: s
+      cogsCard.adjusted_pct_of_revenue = p;
+      // @ts-expect-error TS2551: Property 'adjusted_pct_of_revenue_display' does not exist on type '{ key: string; label: string; gl_
+      cogsCard.adjusted_pct_of_revenue_display = p != null ? formatPct(p) : null;
+    }
+    if (gmCard) {
+      const p = pctOf(gmAdjustedFromLines, totalRevenue);
+      // @ts-expect-error TS2339: Property 'adjusted_pct_of_revenue' does not exist on type '{ key: string; label: string; gl_codes: s
+      gmCard.adjusted_pct_of_revenue = p;
+      // @ts-expect-error TS2551: Property 'adjusted_pct_of_revenue_display' does not exist on type '{ key: string; label: string; gl_
+      gmCard.adjusted_pct_of_revenue_display = p != null ? formatPct(p) : null;
+    }
+    // [name] CC prompt 2026-09-14 (prereq C · defect 2). Revenue
+    // card's "P{N} projection" row was reading budget_full_period
+    // (the plan, [amount] on TBJ CP), not the projected period
+    // revenue (week_rail sum, [amount]). "Projection" is what the
+    // label calls the value; the value should be the projection.
+    // Ships `projected_period_revenue` on the revenue card when a
+    // week_rail exists (single running period, both CP + NP).
+    // Client reads it as the reference figure on that row when
+    // present.
+    const revCard = cards.find((c: any): any => c.key === "revenue");
+    if (revCard && week_rail?.weeks?.length) {
+      let projSum = 0;
+      let anyRev = false;
+      for (const w of week_rail.weeks) {
+        if (w.week_revenue != null) {
+          projSum += Number(w.week_revenue);
+          anyRev = true;
+        }
+      }
+      if (anyRev) {
+        // @ts-expect-error TS2339: Property 'projected_period_revenue' does not exist on type '{ key: string; label: string; gl_codes: 
+        revCard.projected_period_revenue = r2(projSum);
+        // @ts-expect-error TS2551: Property 'projected_period_revenue_display' does not exist on type '{ key: string; label: string; gl
+        revCard.projected_period_revenue_display = formatMoneyWhole(projSum);
+      }
+    }
+  }
+
+  // 21. Payload assembly.
+  const payload = {
+    ok: true,
+    filters: {
+      account: accountKey,
+      range: { start: rng.start, end: rng.end, kind: rng.kind, period_no: rng.period_no },
+      rev_source: effRevSource,
+      include_salary: !!includeSalary,
+    },
+    account: accountKey,
+    range: {
+      start: rng.start,
+      end: rng.end,
+      kind: rng.kind,
+      period_no: rng.period_no,
+      periods_in_range: periods,
+    },
+    // [name] 2026-09-02 blocker: FYTD hides that it is N verified
+    // periods plus one still running. See step 7b for the
+    // classification rule. Every board surface that names composition
+    // (range chip / revenue-lines pill / revenue card sub-line /
+    // sources popover / status line third clause) reads from this
+    // field. Invariant asserted at build:
+    //   verified.count + live.count + planned.count === periods_total
+    range_composition: rangeComposition,
+    // [name] 2026-09-02 language pass: every "thru P#" / "P1-P8" label
+    // on the board comes from this one object. See buildRangeLabels
+    // for the shape. Client reads verbatim.
+    range_labels: buildRangeLabels({
+      range: { start: rng.start, end: rng.end, kind: rng.kind, period_no: rng.period_no },
+      rangeComposition,
+      overduePeriodNos: overduePeriods.map((o: any): any => o.period_no),
+      periodState: displayPeriodState,
+      lastCompleteWk,
+      effectiveEndISO,
+      todayISO: today,
+    }),
+    // [name] ruling R-63 (2026-09-03): the "as of when" answer for
+    // every figure on the board. On closed ranges this equals
+    // rng.end; on open ranges it's the last complete week's end so
+    // revenue and cost measure the same window. PR-B renders the
+    // horizon line off range_labels.horizon (below).
+    range_effective_end: effectiveEndISO,
+    // R-40 (2026-09-01): posture retired as a layout switch. Access
+    // flags only, named for what they do.
+    //
+    // Polish PR (2026-09-01): revenue_toggle_visible was also
+    // retired - the account's own sc_revenue_live flag flips the
+    // source with no user control, so the toggle has nothing left to
+    // do. Zero unconsumed keys.
+    salary_toggle_visible: access.salary_toggle_visible,
+    period_state: displayPeriodState,
+    // [name] ruling 2026-09-17. See top-level `spend_settled` on
+    // `range_context` for the full note - same value, emitted at
+    // both levels for the four Overview surfaces that consult it.
+    spend_settled: displaySpendSettled,
+    // [name] ruling 2026-09-17. See range_context.overdue_periods for
+    // the note. Emitted here too so client callers reading the
+    // payload's top level (not range_context) can consume without a
+    // path change.
+    overdue_periods: overduePeriods,
+    period_state_details: {
+      period_no: displayPeriodNo,
+      status_row: displayPeriodNo != null ? (periodStatus.get(displayPeriodNo) || null) : null,
+    },
+    ticker,
+    cards,
+    levers,
+    chart,
+    // [name] ruling 2026-10-09 (PR-billback-1). Billed-back-to-club
+    // surface for management-fee accounts on multi-period ranges.
+    // Null on non-MF accounts and single-period ranges; client reads
+    // the field and renders the summary card + bottom fold on non-
+    // null, nothing on null. Finance core in @/lib/kpi/overview/
+    // billback.js.
+    billback,
+    // PR-billback-2. Single-period surface for the Purchasing fold's goal
+    // row. Null on multi-period and on non-MF accounts; populated with the
+    // selected period's scorecard otherwise. Same source as billback above
+    // (one full compute path); the fold renders the row, non-MF self-hides.
+    billback_period,
+    statement_rows: statementRows,
+    // E19 (2026-09-01): total-row period-budget figures the client
+    // renders on Total revenue and Total COGS. Prior payload shipped
+    // only revenue totals in the cards + a null total-COGS period
+    // budget in the statement, so Total COGS rendered as a dash next
+    // to Total revenue's actual dollar figure - two different shapes
+    // for two total rows on one page.
+    // PR-1 item 2 (2026-09-02): envelope + pace on the COGS total so
+    // the PR-2 lever-table row-and-total agreement probe has a
+    // reconciled number to check against per line.
+    // [name] ruling 2026-09-03: every P&L row carrying both a percent
+    // gap and a dollar variance MUST measure both against the SAME
+    // reference. The reference is `x_at_this_revenue` (actual revenue
+    // times the target ratio) - not `budget_to_date`. With BOTH
+    // computed against the same denominator, `variance` and (actual_
+    // pct - target_pct) agree in sign by construction, because
+    //   variance = actual - x_at_this_revenue
+    //            = actual - revenue × target_ratio
+    //            = revenue × (actual/revenue - target_ratio)
+    //            = revenue × (actual_pct - target_pct) / 100
+    // Fourth instance of the split-reference defect class. Client
+    // renders these fields; it computes NOTHING.
+    statement_totals: {
+      revenue: {
+        period_budget: revenue_budget_full_period,
+        budget_to_date: revenue_budget_to_date,
+        actual: totalRevenue,
+        // Revenue has no `%-of-revenue` counterpart to disagree with -
+        // actual_pct is always 100 by definition. The dollar variance
+        // measures revenue vs planned (its own comparison axis). No
+        // split possible; audited 2026-09-03.
+      },
+      cogs: {
+        period_budget: r2(cogsBudget),
+        budget_to_date: r2(cogsBudgetToDateDays),
+        actual: r2(cogsActual),
+        // [name] CC prompt 2026-09-11. Totals sum their lines rather
+        // than applying a blended pct to revenue. The three
+        // downstream fields (batr, envelope_delta, variance) all
+        // read `cogsAdjustedFromLines` = sum of parent line
+        // Adjusteds (salary held at budget). The card + cost table
+        // + these totals now agree by construction.
+        budget_at_this_revenue: cogsAdjustedFromLines,
+        // R-58/R-59: MF accounts null envelope (contractual revenue).
+        envelope_delta: isManagementFee ? null : envelopeDelta(r2(cogsBudgetToDateDays), cogsAdjustedFromLines),
+        variance: (cogsActual != null && cogsAdjustedFromLines != null)
+          ? r2(cogsActual - cogsAdjustedFromLines) : null,
+        actual_pct: pctOf(cogsActual, totalRevenue),
+        target_pct: (revenue_budget_full_period != null && revenue_budget_full_period > 0)
+          ? pctOf(cogsBudget, revenue_budget_full_period) : null,
+      },
+      gross_margin: {
+        period_budget: (revenue_budget_full_period != null) ? r2(revenue_budget_full_period - cogsBudget) : null,
+        budget_to_date: grossMarginBudget,
+        actual: grossMargin,
+        // [name] CC prompt 2026-09-11. GM adjusted = revenue -
+        // cogsAdjustedFromLines. Same anchor everything else uses.
+        // Variance ties to it. Preserves the R-91 unified-reference
+        // rule (variance operand matches the pct axis) - only the
+        // formula on the operand itself moves.
+        margin_at_this_revenue: gmAdjustedFromLines,
+        variance: (grossMargin != null && gmAdjustedFromLines != null)
+          ? r2(grossMargin - gmAdjustedFromLines)
+          : null,
+        actual_pct: pctOf(grossMargin, totalRevenue),
+        target_pct: gmPctBudget,
+      },
+    },
+    // PR-1 payload additions (2026-09-02).
+    has_target,
+    revenue_source_state,
+    // [name] R-58 (2026-09-03): three-way account model - source of
+    // truth for gating "adjusted budget" copy on cards + cost lines.
+    // Null on portfolio scope (mixed models across members).
+    revenue_model,
+    revenue_pace_pct,
+    sc_counts_without_dollars,
+    // [name] R-61 (2026-09-03): inventory adjustment status. Card 1
+    // states whether every finalised period in range carries an
+    // adjusting JE. `null` on accounts that don't carry inventory
+    // (management-fee / pass-through) and on single-open ranges.
+    inventory_status,
+    also_tracked: alsoTracked,
+    drill,
+    // A3+A4 (2026-09-01): the ticker retired. A single status line
+    // replaces it - fixed shape on every account. The pass-through /
+    // fee / planned notes were three restatements of a fact already
+    // carried by the Revenue card's pill and the billed-back tags,
+    // and the longest one forced the ticker to wrap on fee accounts.
+    //
+    // [name] ruling 2026-09-03 (top-simplify): the status line becomes
+    // a single pill - state_copy + tone. Every segment beneath
+    // (GM vs target, biggest lever, weeks-closed progress) was a
+    // restatement of what the three cards below already say. See
+    // buildStatusLine below - trimmed to { state, state_copy, tone }.
+    status_line: buildStatusLine({
+      ticker,
+      period_state: displayPeriodState,
+      spend_settled: displaySpendSettled,
+      has_target,
+      range_kind: rng.kind,
+    }),
+    // [name] R-94 (2026-09-09). "What is still moving" strip data
+    // on Last period when the period is closed but not yet
+    // finance-verified. Null on every other state; client omits the
+    // strip. Includes an amber-tone signal cost + margin cards
+    // consume to render Provisional.
+    settling,
+    // [name] CC prompt 2026-09-08 item 4. Week-by-week rail on the
+    // running single-period surface. Null on every other range; the
+    // client omits the section.
+    week_rail,
+    sources: sourcesLine,
+    flags,
+    freshness,
+    // P2-1 (2026-09-01): live accounts_directory + rdo display so
+    // the folio rail on the corporate posture can render real
+    // descriptions ("St Louis Cardinals · Jupiter, FL") on all 11
+    // rows instead of the placeholder space that STATIC_DIRECTORY
+    // (nulls) resolved to via folioMemberDescription. Mirrors the
+    // labor + purchasing payloads.
+    accounts_directory: dirResp?.data || null,
+    regional_directors_display: {
+      East: regionalDirectorEastDisplay,
+      West: regionalDirectorWestDisplay,
+    },
+    // Preview-mode + landing propagation (mirrors labor route echoes).
+    preview_account: null,
+    landing_account: null,
+    // Instrumentation.
+    ...(debugTiming ? { _debug: { timings, total_ms: Math.round((performance.now() - t0) * 10) / 10 } } : {}),
+  };
+
+  return payload;
+}
+
+// A3+A4 (2026-09-01): the single-sentence status line that replaces
+// the ticker. Fixed shape across every account. Three segments joined
+// by " · " on the client. No notes, no account-model clauses.
+//
+// Segments:
+//
+// [name] ruling 2026-09-03 (top-simplify): status_line collapses to a
+// single pill - `state`, `state_copy`, `tone`. The GM-vs-target
+// segment, biggest-lever segment and weeks-closed segment all restated
+// what the three cards below already say. Sentence-building fields
+// (gm_actual_display / gm_target_display / biggest_lever /
+// progress_display / gm_tone) removed. Card face is now the
+// comparison; the pill states the state alone.
+function buildStatusLine({ ticker, period_state, spend_settled, has_target, range_kind }: any): any {
+  if (!ticker) return null;
+  const gmActualPct = ticker.gm_pct_actual;
+  const gmTargetPct = ticker.gm_pct_target;
+
+  // Two-tone rule ([name] 2026-09-02 items 2-3). GM at or above target
+  // is green; below is red. Rolling windows (has_target=false) are
+  // neutral.
+  const gmDeltaForTone = (gmActualPct != null && gmTargetPct != null)
+    ? Number(gmActualPct) - Number(gmTargetPct)
+    : null;
+  const statusTone = !has_target
+    ? "neutral"
+    : gmDeltaForTone == null
+      ? "neutral"
+      : gmDeltaForTone >= 0 ? "good" : "bad";
+
+  // [name] R-94 (2026-09-09). A closed-but-not-yet-verified period
+  // reads "Awaiting verification" in AMBER, not a settled verdict.
+  // The pill contradicts itself when it says "on target" beside a
+  // horizon line that says "awaiting verification" - and the
+  // figures are still moving, so the verdict is a reading, not a
+  // result. Wait tone is a NEW variant beyond good/bad/neutral;
+  // client renders it as amber with a leading indicator dot.
+  //
+  // [name] ruling 2026-09-17. Once spend_settled flips true (day 8
+  // past close, R-93 boundary), the caveat is stale: invoices and
+  // hours have landed enough that the reading IS the verdict. Fall
+  // through to the closed-copy override so the pill reads "Period
+  // closed · on/off target" - which cascades to CardsRow (awaiting
+  // = status_line.tone === "wait") turning off the Provisional pill
+  // + amber footer.
+  const rangeIsAwaiting = range_kind === "period" && period_state === "closed_awaiting" && !spend_settled;
+  if (rangeIsAwaiting) {
+    return {
+      state: "awaiting_verification",
+      state_copy: "Awaiting verification",
+      tone: "wait",
+    };
+  }
+
+  // [name] ruling 2026-09-08. Running-single-period pill is
+  // "Period running" - a state, not a verdict. Two days into a
+  // period is no time to read "At risk" or "On track"; the ticker
+  // is judging a period against a whole-period budget. Horizon
+  // sub-line ("P10 · week 1 of 4 · day 2 of 28") carries the
+  // progress; the pill just names the state. New tone "run" -
+  // client renders navy with a leading dot (same treatment as
+  // "wait" but different palette).
+  const rangeIsRunning = range_kind === "period" && period_state === "open";
+  if (rangeIsRunning) {
+    return {
+      state: "period_running",
+      state_copy: "Period running",
+      tone: "run",
+    };
+  }
+
+  // "Period closed · on target / off target" on any closed range
+  // (single closed or FYTD - and post-2026-09-08 the aligned-explicit
+  // path This year takes since #1063 sends R-93 dates as explicit).
+  // Open ranges keep the ticker's running copy ("On track" / "Behind
+  // target" / "At risk"). No-target ranges read "No target" (neutral).
+  const rangeIsClosed = range_kind === "period" && period_state !== "open";
+  const rangeIsFytdClosed = range_kind === "fytd";
+  // [name] ruling 2026-09-08. Widen to aligned-explicit so This year
+  // (post-#1063) gets the same closed-copy override. has_target has
+  // already been widened upstream with the same predicate; caller
+  // passes it here so we don't recompute.
+  const rangeIsAlignedExplicit = range_kind === "explicit" && has_target;
+  const closedCopyOverride = (has_target && (rangeIsClosed || rangeIsFytdClosed || rangeIsAlignedExplicit))
+    ? (statusTone === "good" ? "Period closed · on target" : "Period closed · off target")
+    : null;
+  const finalStateCopy = closedCopyOverride
+    || (has_target ? ticker.state_copy : "No target");
+
+  return {
+    state: has_target ? ticker.state : "on_track_below",
+    state_copy: finalStateCopy,
+    tone: statusTone,
+  };
+}
+
+// [name] 2026-09-02 language pass: one helper emits every "thru P#"
+// / "P1-P8" / period-descriptor label the board renders. Client reads
+// verbatim - no per-surface rewrite. `P#` is dynamic:
+//   FYTD                -> last closed period (PR-1 boundary)
+//   Single closed range -> that period
+//   Single open range   -> "period to date" (the period isn't "through"
+//                          anything yet, per the ruling)
+//
+// Shape:
+//   {
+//     kind: "fytd" | "single_open" | "single_closed" | "explicit",
+//     through: "thru P8" | "period to date" | "final" | "to date",
+//     period_span: "P1-P8" | "P8" | null,
+//     period_last: "P8" | null,
+//   }
+function buildRangeLabels({ range, rangeComposition, overduePeriodNos = [], periodState, lastCompleteWk, effectiveEndISO, todayISO }: any): any {
+  const rc = rangeComposition;
+  // [name] ruling 2026-09-08. Explicit ranges that align to WHOLE
+  // period boundaries render fytd-style labels (P1-P8 · closed and
+  // verified). Otherwise they carry no target and the horizon path
+  // never fires. Widens the fytd branch to catch This year post-R-93
+  // (kind="explicit" with settle-day end). Same predicate the
+  // has_target check uses upstream.
+  const explicitAlignsToPeriods = ((): any => {
+    if (range.kind !== "explicit" || !range.start || !range.end) return false;
+    let matchStart = false;
+    let matchEnd = false;
+    for (let p = 1; p <= 13; p += 1) {
+      if (periodStartISO(p) === range.start) matchStart = true;
+      if (periodEndISO(p) === range.end) matchEnd = true;
+    }
+    return matchStart && matchEnd;
+  })();
+  const isFytd = range.kind === "fytd" || explicitAlignsToPeriods;
+  const isSinglePeriod = range.kind === "period";
+  const isSingleOpen = isSinglePeriod && periodState === "open";
+  const isSingleClosed = isSinglePeriod && !isSingleOpen;
+
+  // [name] ruling R-63 (2026-09-03): the "as of when" answer for the
+  // horizon line above the cards. Closed ranges read "P1-P8 · closed
+  // and verified" / "P8 · closed and verified"; open ranges read
+  // "through week N · MM/DD – MM/DD" where N + dates come from the
+  // last complete week helper. Rendered server-side so the value is
+  // one string in one place.
+  const fmtMMDD = (iso: any): any => iso ? `${iso.slice(5, 7)}/${iso.slice(8, 10)}` : null;
+  let horizon = null;
+  // [name] ruling this-period (2026-09-03) item 3: revenue table's
+  // plan-column header names the span. On open the range is partial
+  // ("WK 1 – WK 3") since no complete period; on closed the range
+  // IS the period ("P8", or "P1-P8" on FYTD).
+  //
+  // [name] ruling PR-B item 2 (2026-09-03): the revenue table now
+  // renders BOTH a budget and an actuals column - same span header
+  // suffixed by "BUDGET" / "ACTUALS" respectively. Emit the span
+  // by itself so the render composes both column heads without
+  // duplicating the branching. `forecast_header` stays for backward
+  // compat with other consumers of the range-labels shape.
+  let spanHeader = null;
+  if (isSingleOpen) {
+    // [name] ruling 2026-09-08. Current period horizon reads
+    // "P{n} · week X of 4 · day Y of Z" - progress-oriented, matches
+    // the running-period render of record. Replaces the prior
+    // closed-week-oriented "through week N" / "no complete weeks yet"
+    // forms; both were the This year treatment leaking onto the
+    // running period. Sub-line beside the "Period running" pill.
+    const runningWk = (lastCompleteWk?.weekNo ?? 0) + 1;
+    let dayNo = null;
+    let totalDays = null;
+    if (todayISO && range.start && range.end) {
+      const parseISO = (iso: any): any => {
+        const mm = String(iso).slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        return mm ? new Date(Date.UTC(+mm[1], +mm[2] - 1, +mm[3])) : null;
+      };
+      const s = parseISO(range.start), e = parseISO(range.end), t = parseISO(todayISO);
+      if (s && e && t) {
+        const MSD = 86400000;
+        totalDays = Math.floor((e.getTime() - s.getTime()) / MSD) + 1;
+        dayNo = Math.min(totalDays, Math.max(1, Math.floor((t.getTime() - s.getTime()) / MSD) + 1));
+      }
+    }
+    const pNo = range.period_no != null ? `P${range.period_no}` : "This period";
+    if (dayNo != null && totalDays != null) {
+      horizon = `${pNo} · week ${runningWk} of 4 · day ${dayNo} of ${totalDays}`;
+    } else {
+      horizon = `${pNo} · week ${runningWk} of 4`;
+    }
+    spanHeader = lastCompleteWk
+      ? (lastCompleteWk.weekNo === 1 ? "WK 1" : `WK 1 – WK ${lastCompleteWk.weekNo}`)
+      : "WK 1";
+  } else if (isSingleClosed && range.period_no != null) {
+    // [name] post-1049 sweep item 1 (2026-09-07). #1046 fixed this
+    // on This year but overlooked single_closed. Last period on
+    // TBJ - FL P9 said "closed and verified" while pnl_actuals had
+    // P1-P8 only. Check the awaiting bucket - if this period is
+    // in it, name the state honestly.
+    const isAwaiting = rc?.awaiting?.count > 0
+      && rc.awaiting.first === range.period_no
+      && rc.awaiting.last === range.period_no;
+    // [name] R-94 (2026-09-09) + [name] ruling 2026-09-17 (Closed ·
+    // unaudited). Pre-day-8: "figures still settling" - names WHY the
+    // pill is amber. Past day-8: "unaudited" - names the current
+    // truth (settled numbers, no finance sign-off). The overdue
+    // nudge underneath already carries "no finance P&L loaded" so
+    // this line does not restate that detail.
+    const isUnaudited = isAwaiting && overduePeriodNos.includes(range.period_no);
+    if (isAwaiting) {
+      const pEnd = periodEndISO(range.period_no);
+      const md = pEnd ? `${pEnd.slice(5, 7)}/${pEnd.slice(8, 10)}` : "";
+      const suffix = isUnaudited ? "unaudited" : "figures still settling";
+      horizon = md
+        ? `P${range.period_no} · closed ${md} · ${suffix}`
+        : `P${range.period_no} · ${isUnaudited ? "closed, unaudited" : "awaiting verification"}`;
+    } else {
+      horizon = `P${range.period_no} · closed and verified`;
+    }
+    spanHeader = `P${range.period_no}`;
+  } else if (isFytd) {
+    // [name] walkthrough item 3 (2026-09-07). Prior FYTD label read
+    // "P1-P8 · closed and verified" using verified.first + verified.last,
+    // which lagged the data (revenue aggregate already included P9
+    // via the closed_awaiting picker). Use `settled` (verified +
+    // awaiting = all calendar-closed periods) for the span, and
+    // append the awaiting note when a period is closed but not yet
+    // finance-verified.
+    const sfirst = rc?.settled?.first ?? rc?.verified?.first ?? 1;
+    const slast = rc?.settled?.last ?? rc?.verified?.last ?? rc?.periods_total ?? 1;
+    const spanCopy = sfirst === slast ? `P${slast}` : `P${sfirst}-P${slast}`;
+    // [name] ruling 2026-09-17. Past day-8 the awaiting period is
+    // unaudited, not "awaiting verification" - the numbers are
+    // settled, just no finance sign-off. Overdue nudge underneath
+    // carries "no finance P&L loaded" so the horizon just names the
+    // state. Pre-day-8 keeps the R-94 "awaiting verification" copy.
+    const awaitingSuffix = ((): any => {
+      if (!rc?.awaiting?.count) return " · closed and verified";
+      const allUnaudited = rc.awaiting.first != null
+        && overduePeriodNos.includes(rc.awaiting.first)
+        && rc.awaiting.first === rc.awaiting.last;
+      if (allUnaudited) return ` · ${rc.awaiting.label} closed, unaudited`;
+      return ` · ${rc.awaiting.label} awaiting verification`;
+    })();
+    horizon = `${spanCopy}${awaitingSuffix}`;
+    spanHeader = spanCopy;
+  }
+  // [name] walkthrough sweep addendum item A (2026-09-07): the header
+  // reads "PROJECTION" on every revenue surface. `forecast_header` key
+  // preserved for backwards compat with existing consumers - only the
+  // string value flips.
+  const forecastHeader = spanHeader ? `${spanHeader} PROJECTION` : "PROJECTION";
+  const budgetHeader   = spanHeader ? `${spanHeader} BUDGET`   : "BUDGET";
+  const actualsHeader  = spanHeader ? `${spanHeader} ACTUALS`  : "ACTUALS";
+
+  // [name] R-60 + PR-B items 1-5 (2026-09-03): a closed period is not
+  // "through" anything - it is settled. `Final P#` replaces every
+  // "thru P#" on a single-closed range. The `through` field also
+  // switches its preposition from "thru" to "in" so descriptors like
+  // "of revenue thru P8" read as "of revenue in P8".
+  //
+  //   through   - inline preposition phrase ("of revenue thru P8",
+  //               "of revenue in P8", "of revenue period to date")
+  //   actuals   - noun phrase for actuals headers/hero ("Final P8",
+  //               "thru P8", "period to date"). Same string as
+  //               `through` on FYTD + single_open; differs on
+  //               single_closed.
+  if (isFytd) {
+    // [name] walkthrough item 3 - use `settled` span (verified +
+    // awaiting) so labels match the data. Falls back to verified
+    // then periods_total to stay defined on legacy composition
+    // shapes.
+    const first = rc?.settled?.first ?? rc?.verified?.first ?? 1;
+    const last = rc?.settled?.last ?? rc?.verified?.last ?? rc?.periods_total ?? 1;
+    const thruLast = `thru P${last}`;
+    return {
+      kind: "fytd",
+      through: thruLast,
+      actuals: thruLast,
+      period_span: first === last ? `P${last}` : `P${first}-P${last}`,
+      period_last: `P${last}`,
+      horizon,
+      forecast_header: forecastHeader,
+      budget_header: budgetHeader,
+      actuals_header: actualsHeader,
+      effective_end_iso: effectiveEndISO,
+    };
+  }
+  if (isSingleOpen) {
+    const n = range.period_no;
+    return {
+      kind: "single_open",
+      through: "period to date",
+      actuals: "period to date",
+      period_span: n != null ? `P${n}` : null,
+      period_last: n != null ? `P${n}` : null,
+      horizon,
+      forecast_header: forecastHeader,
+      budget_header: budgetHeader,
+      actuals_header: actualsHeader,
+      effective_end_iso: effectiveEndISO,
+    };
+  }
+  if (isSingleClosed) {
+    const n = range.period_no;
+    return {
+      kind: "single_closed",
+      through: `in P${n}`,
+      actuals: `Final P${n}`,
+      period_span: `P${n}`,
+      period_last: `P${n}`,
+      horizon,
+      forecast_header: forecastHeader,
+      budget_header: budgetHeader,
+      actuals_header: actualsHeader,
+      effective_end_iso: effectiveEndISO,
+    };
+  }
+  return {
+    kind: "explicit",
+    through: "to date",
+    actuals: "to date",
+    period_span: null,
+    period_last: null,
+    horizon,
+    forecast_header: forecastHeader,
+    effective_end_iso: effectiveEndISO,
+  };
+}
+
+// Range composition ([name] 2026-09-02 blocker). One field, one truth,
+// four consumers. See the callsite at step 7b for the classification
+// rule and the invariant every range must satisfy.
+//
+// Shape:
+//   {
+//     periods_total: 9,
+//     verified: { count, first, last, label },
+//     live:     { count, first, last, label },
+//     planned:  { count, first, last, label },
+//     will_change_at_close: bool,
+//     summary: "P1-P8 verified · P9 still running"
+//   }
+//
+// The Sheets audit was clear that composition matters more than any
+// single-source label ("Revenue · Service Calendar · Tue 09/01" named
+// the 7% while omitting the 93%). This function is the single
+// authority - do NOT reproduce its logic on the client.
+function buildRangeComposition({ periods, perPeriodRevenue }: any): any {
+  const verifiedNos = [];
+  const awaitingNos = [];
+  const liveNos = [];
+  const plannedNos = [];
+  for (const p of periods) {
+    const entry = perPeriodRevenue.get(p);
+    if (!entry) {
+      plannedNos.push(p);
+      continue;
+    }
+    const state = entry.state;
+    let sawSc = false;
+    for (const [key, v] of Object.entries(entry)) {
+      if (key === "state") continue;
+      // @ts-expect-error TS2339: Property 'sources' does not exist on type '{}'.
+      if (v && Array.isArray(v.sources)) {
+        // @ts-expect-error TS2339: Property 'sources' does not exist on type '{}'.
+        for (const s of v.sources) {
+          if (s === "sc_daily_revenue") { sawSc = true; break; }
+        }
+      }
+      if (sawSc) break;
+    }
+    // [name] walkthrough sweep item 3 (2026-09-07). The `closed_awaiting`
+    // state already existed in the pnl-loader (calendar-closed OR
+    // record-closed but P&L not yet posted) but did not surface here
+    // - it fell through to `live` or `planned`. On TBJ - FL FYTD today
+    // the label read "P1-P8 · closed and verified" while the revenue
+    // aggregate included P9's [amount] (SC-sourced on the picker's
+    // closed_awaiting branch). Two lies at once: wrong span + a
+    // "verified" claim about a period finance has not posted.
+    //
+    // [name] ruling: include P9 in the label, name the awaiting state
+    // explicitly. Add `awaiting` bucket. Downstream label helpers
+    // read `settled.label` (verified + awaiting) as the span and
+    // append "· PN awaiting verification" when awaiting.count > 0.
+    if (state === "verified") verifiedNos.push(p);
+    else if (state === "closed_awaiting") awaitingNos.push(p);
+    else if (sawSc) liveNos.push(p);
+    else plannedNos.push(p);
+  }
+  const shape = (arr: any): any => {
+    if (arr.length === 0) return { count: 0, first: null, last: null, label: null };
+    const first = arr[0];
+    const last = arr[arr.length - 1];
+    return {
+      count: arr.length,
+      first,
+      last,
+      label: first === last ? `P${first}` : `P${first}-P${last}`,
+    };
+  };
+  const verified = shape(verifiedNos);
+  const awaiting = shape(awaitingNos);
+  const live = shape(liveNos);
+  const planned = shape(plannedNos);
+  // Settled = calendar-closed periods, whether verified or awaiting P&L.
+  // The label reader wants the whole closed span so a chef sees the
+  // range they are looking at, not just the verified subset.
+  const settledNos = [...verifiedNos, ...awaitingNos].sort((a: any, b: any): any => a - b);
+  const settled = shape(settledNos);
+  const willChange = verified.count < periods.length;
+  const parts = [];
+  if (verified.count) parts.push(`${verified.label} verified`);
+  if (awaiting.count) parts.push(`${awaiting.label} awaiting verification`);
+  if (live.count) parts.push(`${live.label} still running`);
+  if (planned.count) parts.push(`${planned.label} planned`);
+  const summary = parts.length ? parts.join(" · ") : null;
+  return {
+    periods_total: periods.length,
+    verified,
+    awaiting,
+    settled,
+    live,
+    planned,
+    will_change_at_close: willChange,
+    summary,
+  };
+}
+
+function labelForLine(code: any): any {
+  switch (code) {
+    case "2200":  return "Catering revenue";
+    case "2300":  return "Service charges";
+    case "2400.1": return "Meal service (home)";
+    case "2400.2": return "Meal service (away)";
+    case "2600":  return "Consulting";
+    case "3100":  return "Kitchen labor";
+    case "3200":  return "Food purchased";
+    case "3400":  return "Packaging and supplies";
+    case "3500":  return "Vehicle";
+    default:      return code;
+  }
+}

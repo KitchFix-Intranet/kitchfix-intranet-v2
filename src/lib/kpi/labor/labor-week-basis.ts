@@ -1,0 +1,740 @@
+// src/lib/labor/labor-week-basis.js
+//
+// [name] Labor PR-B (2026-09-07). Per-week revenue basis + per-week
+// adjusted budget for This period.
+//
+// Two responsibilities:
+//   1. Load the revenue basis for each week in a range - confirmed
+//      (any served day has has_actuals) or forecast (only projections).
+//   2. Attach per-week fields to a labor board: revenue_basis,
+//      revenue_basis_temporal, week_revenue, budget_at_this_week_revenue,
+//      confirmed_days, projected_days, days_left_in_week.
+//
+// The per-week budget uses the same formula the range-level batr uses
+// (shared/batr.js), applied per week against that week's revenue basis
+// and the containing period's line_target_pct (labor_budget[period] /
+// revenue_budget[period]). A chef schedules against next week's real
+// number, not a quarter of the period plan.
+//
+// The distinction drives the tile treatment (solid vs dashed grey),
+// the state label ("confirmed" / "closed" / "running" vs "forecast"),
+// the revenue-row label ("Confirmed revenue" vs "Forecast revenue"),
+// and whether the budget carries a "plan" tag.
+//
+// KEVIN'S RULING · fallback is the main path, not the exception.
+// Today the confirmed path only exercises on TBR - FL and TBJ - FL
+// (the two accounts with a trustworthy Service Calendar). On the
+// other nine accounts every week falls back to forecast. That ratio
+// inverts as seeding completes - which means the forecast path will
+// be under-tested exactly when it starts mattering less, and
+// over-relied-on right now. Both branches are written and named as
+// equal peers here; no "if no confirmed, fall back" phrasing.
+//
+// Data source: sc_daily_revenue view, same table the Overview
+// resolver reads. Fields consumed per row:
+//   service_date · has_actuals · actual_revenue · projected_revenue
+//   is_non_revenue
+// Filters: NOT is_non_revenue (matches Overview's per-line rule).
+//
+// Week bucketing: FY2026 weeks are Sunday-aligned, step 7 days from
+// FY_START (2025-12-29). See src/app/kpi/labor/lib/periods.js for
+// the weekStartsInRange helper.
+
+// [name] ruling 2026-09-07: shared periodBasis.js owns REVENUE_LINE_CODES,
+// batr formula, and CONTRACTUAL_ACCRUAL_LINES. Import from there so
+// this file has no locally-owned duplication.
+import { REVENUE_LINE_CODES, CONTRACTUAL_ACCRUAL_LINES } from "@/lib/kpi/shared/periodBasis";
+import { periodOf } from "@/lib/kpi/labor/periods";
+
+const IN_CHUNK = 60;
+const PS_DEFAULT = 1000;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+// Bucket a service_date into the Sunday-aligned fiscal week_start
+// containing it. Copies the periods.js logic to avoid a route-side
+// dependency on the client-lib import path from a lib/ module.
+const FY_START_ISO = "2025-12-29";
+function weekStartFor(serviceDateISO: any): any {
+  const svc = new Date(serviceDateISO + "T00:00:00Z");
+  const fy = new Date(FY_START_ISO + "T00:00:00Z");
+  // @ts-expect-error TS2345: Argument of type 'Date' is not assignable to parameter of type 'number'.
+  if (!svc || !fy || isNaN(svc) || isNaN(fy) || svc < fy) return null;
+  const days = Math.floor((svc.getTime() - fy.getTime()) / MS_PER_DAY);
+  const weekIdx = Math.floor(days / 7);
+  const ws = new Date(fy.getTime() + weekIdx * 7 * MS_PER_DAY);
+  return ws.toISOString().slice(0, 10);
+}
+
+// Enumerate the Sunday-aligned week_start dates whose 7-day window
+// overlaps [start, end]. Same rule as weekStartsInRange in
+// app/kpi/labor/lib/periods.js.
+function weekStartsInRange(startISO: any, endISO: any): any {
+  const rs = new Date(startISO + "T00:00:00Z");
+  const re = new Date(endISO + "T00:00:00Z");
+  const fy = new Date(FY_START_ISO + "T00:00:00Z");
+  // @ts-expect-error TS2345: Argument of type 'Date' is not assignable to parameter of type 'number'.
+  if (isNaN(rs) || isNaN(re) || isNaN(fy) || rs > re) return [];
+  const rsMs = rs.getTime();
+  const reMs = re.getTime();
+  const fyMs = fy.getTime();
+  const idxStart = Math.max(0, Math.floor((rsMs - 6 * MS_PER_DAY - fyMs) / (7 * MS_PER_DAY)));
+  const out = [];
+  for (let i = idxStart; ; i += 1) {
+    const wStartMs = fyMs + i * 7 * MS_PER_DAY;
+    if (wStartMs > reMs) break;
+    const wEndMs = wStartMs + 6 * MS_PER_DAY;
+    if (wEndMs >= rsMs) {
+      out.push(new Date(wStartMs).toISOString().slice(0, 10));
+    }
+  }
+  return out;
+}
+
+// Chunk helper for .in() clauses under Supabase's row cap.
+function chunk(arr: any, n: any): any {
+  const out = [];
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+  return out;
+}
+
+// Classify a week's temporal state relative to today. [name]'s item 5
+// naming: closed / running / confirmed / forecast. Sub-state
+// disambiguation belongs on the confirmed side (the same tile
+// treatment covers all three); forecast is its own state.
+function weekTemporalState(weekStartISO: any, todayISO: any): any {
+  if (!weekStartISO || !todayISO) return "unknown";
+  const wStart = new Date(weekStartISO + "T00:00:00Z");
+  const wEnd = new Date(wStart.getTime() + 6 * MS_PER_DAY);
+  const today = new Date(todayISO + "T00:00:00Z");
+  if (wEnd < today) return "closed";       // fully in the past
+  if (wStart > today) return "future";     // fully ahead
+  return "running";                         // contains today
+}
+
+/**
+ * Load per-week revenue basis for a range.
+ *
+ * @param {object} supa                    Supabase client
+ * @param {object} opts
+ * @param {string[]} opts.members           account keys in scope
+ * @param {string} opts.start               range start ISO
+ * @param {string} opts.end                 range end ISO
+ * @param {string} opts.today               today ISO for temporal
+ *                                          state classification
+ * @returns {{ data: Array<{
+ *   week_start: string,           // Sunday-aligned ISO
+ *   week_end: string,             // week_start + 6d
+ *   basis: "confirmed" | "forecast",
+ *   temporal: "closed" | "running" | "future",
+ *   confirmed_days: number,       // days with any has_actuals
+ *   projected_days: number,       // days with only projections
+ *   empty_days: number,           // days with no service scheduled
+ *   revenue: number,              // basis-appropriate week revenue
+ *   actual_revenue: number,       // sum of actual_revenue where has_actuals
+ *   projected_revenue: number,    // sum of projected_revenue where !has_actuals
+ * }> }}
+ */
+export async function loadWeeklyRevenueBasis(supa: any, { members, start, end, today }: any): Promise<any> {
+  if (!members || members.length === 0) return { data: [] };
+  if (!start || !end) return { data: [] };
+  const weekStarts = weekStartsInRange(start, end);
+  if (weekStarts.length === 0) return { data: [] };
+
+  // Catering (2200) is the SC revenue stream that invoices separately
+  // from meals. The signal is sc_qbo_service_map.export_excluded = true
+  // (confirmed probe 2026-10-29: today only TBR - FL / B&G Lunch
+  // carries the flag). Build a Set<`${account_key}::${service_id}`> so
+  // the per-row loop below can bucket catering into its own
+  // accumulator without a second query per row.
+  const cateringKeySet = new Set();
+  for (const memberChunk of chunk(members, IN_CHUNK)) {
+    const q = await supa
+      .from("sc_qbo_service_map")
+      .select("account_key, service_id")
+      .in("account_key", memberChunk)
+      .eq("export_excluded", true)
+      .eq("active", true);
+    if (q.error) return { error: q.error, scope: "sc_qbo_service_map" };
+    for (const r of q.data || []) {
+      if (r.account_key && r.service_id) {
+        cateringKeySet.add(`${r.account_key}::${r.service_id}`);
+      }
+    }
+  }
+  const isCatering = (r: any): any => cateringKeySet.has(`${r.account_key}::${r.service_id}`);
+
+  // Query sc_daily_revenue for the whole range, then bucket client-
+  // side by week. Same filter Overview applies: NOT is_non_revenue.
+  const rows = [];
+  for (const memberChunk of chunk(members, IN_CHUNK)) {
+    let from = 0;
+    while (true) {
+      const q = await supa
+        .from("sc_daily_revenue")
+        .select("account_key, service_date, service_id, actual_revenue, projected_revenue, has_actuals, has_projection")
+        .in("account_key", memberChunk)
+        .gte("service_date", start)
+        .lte("service_date", end)
+        .not("is_non_revenue", "is", true)
+        .order("account_key")
+        .order("service_date")
+        .order("service_id")
+        .range(from, from + PS_DEFAULT - 1);
+      if (q.error) return { error: q.error, scope: "sc_daily_revenue" };
+      const data = q.data || [];
+      rows.push(...data);
+      if (data.length < PS_DEFAULT) break;
+      from += PS_DEFAULT;
+    }
+  }
+
+  // [name] walkthrough item 3 (2026-09-07, corrected). Basis is
+  // service-level. Original rule counted every row in the denominator,
+  // which turned complete weeks into "120 of 133" partial because
+  // sc_daily_revenue carries EMPTY CALENDAR SLOTS (`has_projection`
+  // rows with `projected_revenue = 0`) alongside real projected
+  // services. TBJ - FL P9 W1 had 13 zero-projection slots on 08/16
+  // (a non-service day), which is what turned "12 of 12 confirmed"
+  // into "120 of 133 partial" under the naive count.
+  //
+  // Corrected rule: **only services with a non-zero projection are
+  // in the denominator.** An actual service always counts as
+  // confirmed (has_actuals=true regardless of projected_revenue).
+  // A row with has_projection=true AND projected_revenue=0 AND
+  // !has_actuals is an empty calendar slot - excluded entirely.
+  //
+  // Three states:
+  //   confirmed  every projected (non-zero) service has a count
+  //   partial    some do, some don't
+  //   forecast   none do
+  //
+  // Revenue for partial + confirmed: sum(actual $ where has_actuals)
+  //   + sum(projected $ where !has_actuals). Partial and confirmed
+  //   both include the actual + projected mix; forecast is projected
+  //   only. Zero-projection slots contribute [amount] to either side, so
+  //   they never affect the revenue number - only the classification.
+  const byWeek = new Map<any, any>();
+  for (const w of weekStarts) byWeek.set(w, {
+    confirmedSvcs: 0, projectedSvcs: 0, emptySlotSvcs: 0,
+    actualRev: 0, projectedRev: 0,
+    // Catering accumulators (2026-10-29). Parallel bookkeeping over
+    // the export_excluded subset so the current-period cell can render
+    // a CATERING sub-row consistent with the "N of X confirmed"
+    // behaviour applied to meals. Totals ARE included in actualRev /
+    // projectedRev above - catering is a slice of today's SC meal
+    // number, not an additional stream. Clients derive the meals-only
+    // display line as actual - catering (or projected - catering).
+    cateringActualRev: 0, cateringProjectedRev: 0,
+    cateringActualRevInDenom: 0, cateringProjectedRevInDenom: 0,
+    cateringConfirmedSvcs: 0, cateringProjectedSvcs: 0,
+    // [name] ratify R-92 PR-3 (2026-09-09). actualRevInDenom sums
+    // actual_revenue ONLY from rows in the R-85 denominator
+    // (has_projection && projected_revenue > 0). A confirmed week
+    // built from these rows gives the sum that matches the "N of X
+    // confirmed" count exactly - the previous actualRev included
+    // has_actuals rows on empty-slot services (projected_revenue = 0)
+    // which R-85 excludes from the denominator. Overview's confirmed-
+    // revenue-sum on This period reads this field so its count and
+    // figure agree by construction.
+    actualRevInDenom: 0,
+    // Projection baseline for the SAME confirmed-in-denom days that
+    // actualRevInDenom sums. Retains projected_revenue on days that
+    // have an actual (otherwise discarded on the has_actuals branch),
+    // so a closed / elapsed day has something to compare against for
+    // the Overview's "vs projection" caption. Same R-85 inDenom guard
+    // -> same row set -> the over / under reconciles with the
+    // displayed actual.
+    projectedRevInDenom: 0,
+    daysWithService: new Set(),
+    daysWithConfirmedSvc: new Set(),
+    // R-110 (2026-09-16). Distinct dates in this week that carry a
+    // MEANINGFUL service - either a confirmed actual, or a projection
+    // that clears the R-85 denominator (has_projection AND
+    // projected_revenue > 0). Empty calendar slots (has_projection=
+    // true, projected_revenue=0) do NOT count. Feeds the Next-period
+    // one-table view's third small card ("A service day"). TBJ P11 =
+    // 24 across 4 weeks; TBR P11 = 21. [name] ruling 2026-09-16: the
+    // render's "20 service days" was placeholder, each account
+    // renders its own.
+    daysWithMeaningfulService: new Set(),
+  });
+  for (const r of rows) {
+    const ws = weekStartFor(r.service_date);
+    if (!ws || !byWeek.has(ws)) continue;
+    const bucket = byWeek.get(ws);
+    bucket.daysWithService.add(r.service_date);
+    const inDenom = r.has_projection && Number(r.projected_revenue || 0) > 0;
+    if (r.has_actuals || inDenom) bucket.daysWithMeaningfulService.add(r.service_date);
+    const catering = isCatering(r);
+    if (r.has_actuals) {
+      // Confirmed service. Counts in denominator regardless of what
+      // was projected (a service that was served is a real service).
+      bucket.confirmedSvcs += 1;
+      bucket.actualRev += Number(r.actual_revenue || 0);
+      if (catering) {
+        bucket.cateringConfirmedSvcs += 1;
+        bucket.cateringActualRev += Number(r.actual_revenue || 0);
+      }
+      // R-85 denominator: this row only contributes to
+      // actualRevInDenom if it also had a real projection.
+      if (inDenom) bucket.actualRevInDenom += Number(r.actual_revenue || 0);
+      // Mirror actualRevInDenom for the projection side. Same guard,
+      // same row set, so the pair reconciles - sum of either across
+      // confirmed-in-denom days matches a direct SC query that
+      // filters on has_actuals=true AND has_projection AND
+      // projected_revenue>0.
+      if (inDenom) bucket.projectedRevInDenom += Number(r.projected_revenue || 0);
+      if (catering && inDenom) {
+        bucket.cateringActualRevInDenom += Number(r.actual_revenue || 0);
+        bucket.cateringProjectedRevInDenom += Number(r.projected_revenue || 0);
+      }
+      bucket.daysWithConfirmedSvc.add(r.service_date);
+    } else if (inDenom) {
+      // Real projected service - client planned to serve, hasn't been
+      // confirmed yet. Counts in denominator.
+      bucket.projectedSvcs += 1;
+      bucket.projectedRev += Number(r.projected_revenue || 0);
+      if (catering) {
+        bucket.cateringProjectedSvcs += 1;
+        bucket.cateringProjectedRev += Number(r.projected_revenue || 0);
+      }
+    } else if (r.has_projection) {
+      // Empty calendar slot - has_projection=true but projected_revenue=0.
+      // Excluded from denominator per [name]'s ruling; tracked so the
+      // probe can name why a week is confirmed at "12 of 12" when
+      // sc_daily_revenue has 80 rows for the week.
+      bucket.emptySlotSvcs += 1;
+    }
+  }
+
+  const data = weekStarts.map((ws: any): any => {
+    const bucket = byWeek.get(ws);
+    const wEnd = new Date(new Date(ws + "T00:00:00Z").getTime() + 6 * MS_PER_DAY).toISOString().slice(0, 10);
+
+    const {
+      confirmedSvcs, projectedSvcs, emptySlotSvcs,
+      actualRev, projectedRev,
+      actualRevInDenom, projectedRevInDenom,
+      cateringActualRev, cateringProjectedRev,
+      cateringActualRevInDenom, cateringProjectedRevInDenom,
+      cateringConfirmedSvcs, cateringProjectedSvcs,
+    } = bucket;
+    const totalSvcs = confirmedSvcs + projectedSvcs;       // meaningful denominator
+    const basis = totalSvcs === 0
+      ? "forecast"                                         // no meaningful services -> nothing to compare
+      : projectedSvcs === 0
+        ? "confirmed"                                      // every projected service has a count
+        : confirmedSvcs === 0
+          ? "forecast"                                     // none confirmed - pure forecast
+          : "partial";                                     // some of each
+
+    // Day counts retained for backwards compat + client copy. A day
+    // with any confirmed service counts on the confirmed side; days
+    // with only projections count on the projected side; the diff
+    // to 7 is `empty_days`.
+    const confirmedDays = bucket.daysWithConfirmedSvc.size;
+    const projectedDays = bucket.daysWithService.size - confirmedDays;
+    const emptyDays = 7 - bucket.daysWithService.size;
+
+    return {
+      week_start: ws,
+      week_end: wEnd,
+      basis,
+      temporal: weekTemporalState(ws, today),
+      confirmed_days: confirmedDays,
+      projected_days: projectedDays,
+      empty_days: emptyDays < 0 ? 0 : emptyDays,
+      confirmed_services: confirmedSvcs,
+      projected_services: projectedSvcs,
+      total_services: totalSvcs,                            // meaningful denominator (non-zero projected + confirmed)
+      empty_slot_services: emptySlotSvcs,                   // excluded from denominator; kept for the probe
+      service_days: bucket.daysWithMeaningfulService.size,  // R-110: days with confirmed or R-85-in-denom projection
+      actual_revenue: Math.round(actualRev * 100) / 100,
+      // [name] ratify R-92 PR-3 (2026-09-09). R-85-strict actualRev -
+      // only rows in the denom (has_projection && projected_rev > 0)
+      // contribute. Overview's confirmed-weeks-sum on This period
+      // sums this so its "N of X confirmed" count matches its figure.
+      actual_revenue_in_denom: Math.round(actualRevInDenom * 100) / 100,
+      // 2026-10-22 (vs-projection caption). Projection baseline on
+      // the SAME confirmed-in-denom days actual_revenue_in_denom
+      // sums. Enables Overview to show per-week + per-period
+      // "vs proj" on confirmed days only.
+      projected_revenue_in_denom: Math.round(projectedRevInDenom * 100) / 100,
+      projected_revenue: Math.round(projectedRev * 100) / 100,
+      // Closed-week catering projection carveout (owner ruling
+      // 2026-10-29). A past week with no catering (export_excluded)
+      // actuals shows catering = [amount] not its projection. B&G is
+      // billed monthly and separately, so a closed-week catering
+      // projection is a stand-in for a bill that never arrived -
+      // treat it as [amount]. Meals keep today's actual-or-projection mix
+      // on every week (per-day entry pattern is tight; projections
+      // mostly fill the current/future weeks). Running/future weeks
+      // and the forecast branch are unchanged. Accounts with no
+      // export_excluded service have cateringProjectedRev === 0, so
+      // the subtraction is a no-op and they are byte-identical.
+      revenue: basis === "forecast"
+        ? Math.round(projectedRev * 100) / 100             // pure forecast: projections only
+        : Math.round((actualRev + projectedRev - (weekTemporalState(ws, today) === "closed" ? cateringProjectedRev : 0)) * 100) / 100,
+      // Catering slice (2026-10-29). export_excluded services only.
+      // Follows the same actual + projected split and basis logic;
+      // numbers reconcile with their non-catering siblings as
+      // actual_revenue - catering_actual_revenue === meals-only actuals.
+      // Current-period cell renders a CATERING sub-row when
+      // catering_revenue > 0 for the range.
+      catering_actual_revenue: Math.round(cateringActualRev * 100) / 100,
+      catering_projected_revenue: Math.round(cateringProjectedRev * 100) / 100,
+      catering_actual_revenue_in_denom: Math.round(cateringActualRevInDenom * 100) / 100,
+      catering_projected_revenue_in_denom: Math.round(cateringProjectedRevInDenom * 100) / 100,
+      catering_confirmed_services: cateringConfirmedSvcs,
+      catering_projected_services: cateringProjectedSvcs,
+      // Catering shown figure. Closed weeks: actuals only (owner
+      // ruling 2026-10-29; see `revenue` comment above). Running +
+      // future weeks keep today's actual-or-projection mix. Pure
+      // forecast weeks (no in-denom catering actuals or projections)
+      // stay on their projection as before.
+      catering_revenue: weekTemporalState(ws, today) === "closed"
+        ? Math.round(cateringActualRev * 100) / 100
+        : (basis === "forecast"
+          ? Math.round(cateringProjectedRev * 100) / 100
+          : Math.round((cateringActualRev + cateringProjectedRev) * 100) / 100),
+    };
+  });
+  return { data };
+}
+
+/**
+ * Compute line_target_pct per period for the requested account(s).
+ *
+ * line_target_pct[p] = hourly_budget[p] / revenue_budget[p]
+ *
+ * [name] ruling 2026-09-09 (salary is a dollar target, not a percent):
+ * when `salaryBudgetByPeriod` is provided, salary is subtracted from
+ * labor before dividing so pct represents ONLY the hourly component.
+ * The caller then adds the salary dollars back in downstream (per
+ * week share in attachWeeklyBasisToBoard, or range total on the
+ * Overview 3100 batr). Sub without salary preserved for hourly-only
+ * callers (labor route's hourly path, older test fixtures) - when
+ * salaryBudgetByPeriod is absent or empty for a period, pct is
+ * laborBud/revBud as before, so no caller sees behaviour changes
+ * unless it opts in by passing salary.
+ *
+ * Returns Map<period_no, pct>. Periods with either budget missing are
+ * omitted - the caller renders a plain per-week bar with no adjusted
+ * budget, same as the range-level batr returning null.
+ */
+export function computeLineTargetPctByPeriod({ budgetPeriods, overviewBudgets, members, periods, salaryBudgetByPeriod = null }: any): any {
+  const out = new Map<any, any>();
+  if (!Array.isArray(budgetPeriods)) return out;
+  if (!overviewBudgets) return out;
+  const byPeriodLabor = new Map<any, any>();
+  for (const bp of budgetPeriods) {
+    if (bp?.period_no != null && bp.amount != null) {
+      byPeriodLabor.set(Number(bp.period_no), Number(bp.amount));
+    }
+  }
+  for (const p of periods) {
+    const laborBud = byPeriodLabor.get(p);
+    if (laborBud == null) continue;
+    let revBud = 0;
+    let anyRev = false;
+    for (const line of REVENUE_LINE_CODES) {
+      const perLine = overviewBudgets.get(line);
+      if (!perLine) continue;
+      for (const m of members) {
+        const byAcct = perLine.get(m);
+        if (!byAcct) continue;
+        const v = byAcct.get(p);
+        if (v != null) {
+          revBud += Number(v);
+          anyRev = true;
+        }
+      }
+    }
+    if (!anyRev || revBud === 0) continue;
+    // Salary opt-in: subtract salary from labor for the pct. Falls
+    // back to labor/rev when no salary map is passed.
+    const salaryBud = salaryBudgetByPeriod?.get?.(p) || 0;
+    const hourlyBud = laborBud - salaryBud;
+    out.set(p, hourlyBud / revBud);
+  }
+  return out;
+}
+
+// [name] R-121 (2026-09-18) · merged labor target pct per period.
+//   merged_pct[p] = (hourly_budget[p] + salary_budget[p]) / revenue_budget[p]
+// Feeds attachWeeklyBasisToBoard's per-week batr under R-121:
+//   week_batr = week_revenue × merged_pct
+// which sums across the period's four weeks to the Overview 3100 batr's
+// `merged_pct × actual_revenue` figure by construction. Guard 1 holds
+// (Labor panel batr == Overview 3100 batr) on every range every account.
+//
+// R-111 SUPERSEDED. Prior rule was "per-week goal = revenue × hourly_pct
+// + salary/4" on the reasoning that a combined percent bakes a fixed
+// cost into a proportional calc. R-111 measured against an adjusted
+// figure that was itself hourly-scaled + static salary; R-121 rebases
+// adjusted to `merged_pct × revenue`, and the per-week composition
+// follows suit. Leave this note here so R-111 is not re-litigated from
+// the scope doc.
+export function computeMergedLineTargetPctByPeriod({ mergedBudgetPeriods, overviewBudgets, members, periods }: any): any {
+  const out = new Map<any, any>();
+  if (!Array.isArray(mergedBudgetPeriods)) return out;
+  if (!overviewBudgets) return out;
+  const byPeriodMergedLabor = new Map<any, any>();
+  for (const bp of mergedBudgetPeriods) {
+    if (bp?.period_no != null && bp.amount != null) {
+      byPeriodMergedLabor.set(Number(bp.period_no), Number(bp.amount));
+    }
+  }
+  for (const p of periods) {
+    const mergedBud = byPeriodMergedLabor.get(p);
+    if (mergedBud == null) continue;
+    let revBud = 0;
+    let anyRev = false;
+    for (const line of REVENUE_LINE_CODES) {
+      const perLine = overviewBudgets.get(line);
+      if (!perLine) continue;
+      for (const m of members) {
+        const byAcct = perLine.get(m);
+        if (!byAcct) continue;
+        const v = byAcct.get(p);
+        if (v != null) { revBud += Number(v); anyRev = true; }
+      }
+    }
+    if (!anyRev || revBud === 0) continue;
+    out.set(p, mergedBud / revBud);
+  }
+  return out;
+}
+
+// [name] item 6 - running week shows a fraction, not a variance. To
+// render "N days left" the client needs the count of days from today
+// through week_end (inclusive of today, exclusive of past days). Only
+// meaningful for the running week; closed and future weeks return 0
+// and 7 respectively.
+function daysLeftInRunningWeek(weekStartISO: any, todayISO: any): any {
+  if (!weekStartISO || !todayISO) return null;
+  const wStart = new Date(weekStartISO + "T00:00:00Z");
+  const wEnd = new Date(wStart.getTime() + 6 * MS_PER_DAY);
+  const today = new Date(todayISO + "T00:00:00Z");
+  if (today > wEnd) return 0;
+  if (today < wStart) return 7;
+  const diff = Math.floor((wEnd.getTime() - today.getTime()) / MS_PER_DAY);
+  return diff + 1;  // include today
+}
+
+/**
+ * Attach per-week revenue basis + adjusted budget to a labor board.
+ *
+ * For each week in board.weeks:
+ *   - revenue_basis         "confirmed" | "forecast"
+ *   - revenue_basis_temporal "closed" | "running" | "future"
+ *   - confirmed_days        int 0-7
+ *   - projected_days        int 0-7
+ *   - week_revenue          basis-appropriate revenue for the week
+ *   - week_actual_revenue   raw actual sum (confirmed days)
+ *   - week_projected_revenue raw projected sum
+ *   - budget_at_this_week_revenue  week_revenue × line_target_pct[period]
+ *   - days_left_in_week     for running week (null otherwise)
+ *
+ * Idempotent - callers on the salary-merge path re-invoke after the
+ * rebuild same as attachBatrToBoard does. When line_target_pct is
+ * unknown for a week's period (missing revenue budget), the batr
+ * fields are left null; the rest of the per-week basis still lands.
+ *
+ * Weeks not present in weeklyBasisData (defensive - the loader is
+ * called against the same range) get no attach.
+ */
+export function attachWeeklyBasisToBoard(board: any, weeklyBasisData: any, { lineTargetPctByPeriod, todayISO, contractualAccrualByPeriod = null, verifiedPeriodTotals = null, salaryBudgetByPeriod = null, feeBudgetByPeriod = null, mergedTargetPctByPeriod = null }: any): any {
+  if (!board || board.applies === false) return board;
+  if (!Array.isArray(board.weeks)) return board;
+  if (!weeklyBasisData || !Array.isArray(weeklyBasisData.data)) return board;
+
+  const byStart = new Map<any, any>();
+  for (const w of weeklyBasisData.data) {
+    byStart.set(w.week_start, w);
+  }
+
+  // [name] post-1049 sweep item 4/5b (2026-09-07). Sum of per-week
+  // batr must equal the panel's range-level batr. Panel uses total
+  // revenue = SC + R-67 contractual accrual (precedence #3). Per
+  // week must include the same accrual split evenly across the 4
+  // weeks of a period. Only CLOSED weeks accrue - running/future
+  // haven't earned their share. contractualAccrualByPeriod is a
+  // Map<period_no, total_dollars> from shared
+  // computeContractualAccrualByPeriod; empty when caller doesn't
+  // pass it (early callers pre-fix).
+  const accrualByPeriod = contractualAccrualByPeriod || new Map<any, any>();
+
+  // [name] post-1056 sweep (2026-09-08). Direction A · per-week
+  // follows the Overview. For VERIFIED periods (finance-posted),
+  // week_revenue is the Overview's per-period total distributed by
+  // the Service Calendar's weekly shape - derived, not measured.
+  // Sum of per-week matches Overview cent-exact by construction.
+  // Non-verified periods keep the SC + budget-accrual path.
+  //
+  // verifiedPeriodTotals: Map<period_no, total_revenue_from_pnl>.
+  // Only periods whose state === "verified" appear here. Missing
+  // keys mean "not verified" - fall through to SC + accrual.
+  const verifiedTotals = verifiedPeriodTotals || new Map<any, any>();
+
+  // Pass 1: aggregate per-period SC totals so the shape-weighting
+  // has a denominator. SC-weighted split needs sum(SC per week in
+  // period) as the denominator for each week's share.
+  const scByPeriod = new Map<any, any>();
+  for (const w of board.weeks) {
+    const basis = byStart.get(w.week_start);
+    if (!basis) continue;
+    const periodNo = periodOf(w.week_start);
+    if (periodNo == null) continue;
+    const cur = scByPeriod.get(periodNo) || 0;
+    scByPeriod.set(periodNo, cur + Number(basis.revenue || 0));
+  }
+
+  for (const w of board.weeks) {
+    const basis = byStart.get(w.week_start);
+    if (!basis) continue;
+    w.revenue_basis = basis.basis;
+    w.revenue_basis_temporal = basis.temporal;
+    w.confirmed_days = basis.confirmed_days;
+    w.projected_days = basis.projected_days;
+    w.empty_days = basis.empty_days;
+    w.confirmed_services = basis.confirmed_services;
+    w.projected_services = basis.projected_services;
+    w.total_services = basis.total_services;
+    w.empty_slot_services = basis.empty_slot_services;
+    w.service_days = basis.service_days;
+    w.week_actual_revenue = basis.actual_revenue;
+    w.week_projected_revenue = basis.projected_revenue;
+    // 2026-10-22 (vs-projection caption on Overview). Confirmed-in-
+    // denom pair - the SC projection retained on days that have an
+    // actual, so Overview can show per-week + per-period
+    // over / under on confirmed days only. See labor-week-basis
+    // bucket for the mirror-of-actualRevInDenom invariant.
+    w.week_actual_revenue_in_denom = basis.actual_revenue_in_denom;
+    w.week_projected_revenue_in_denom = basis.projected_revenue_in_denom;
+    // Catering split (2026-10-29). Mirrors the meals pair but scoped
+    // to export_excluded services. Feeds the current-period cell's
+    // CATERING sub-row; present on every account but zero unless the
+    // account has an active export_excluded service.
+    w.week_catering_actual_revenue = basis.catering_actual_revenue;
+    w.week_catering_projected_revenue = basis.catering_projected_revenue;
+    w.week_catering_confirmed_services = basis.catering_confirmed_services;
+    w.week_catering_projected_services = basis.catering_projected_services;
+
+    const periodNo = periodOf(w.week_start);
+    const isVerified = periodNo != null && verifiedTotals.has(periodNo);
+
+    let revenueForWeek;
+    let derivation;
+    if (isVerified) {
+      // Direction A · finance-posted period total distributed by SC
+      // shape. week_revenue = period_total × (sc_week / sc_period).
+      // Sum across the period's 4 weeks = period_total exactly.
+      const periodTotal = Number(verifiedTotals.get(periodNo));
+      const scPeriodTotal = Number(scByPeriod.get(periodNo) || 0);
+      const scWeek = Number(basis.revenue || 0);
+      if (scPeriodTotal > 0) {
+        revenueForWeek = periodTotal * (scWeek / scPeriodTotal);
+      } else {
+        // SC unavailable for the period - flat quarters so the
+        // period total still ties. Every week identical; the tile
+        // tooltip names the fallback.
+        revenueForWeek = periodTotal / 4;
+      }
+      derivation = "pnl_distributed_by_sc";
+      // Contractual accrual is already inside periodTotal (P&L
+      // includes 2200/2300/2600 actuals). Do not add it again.
+      w.week_contractual_accrual = 0;
+    } else {
+      // [name] R-140 (2026-09-21). Closed weeks of a running period
+      // now use fee_period/4 (line 2300 only), NOT the full
+      // contractual accrual (2200 + 2300 + 2600). Per R-96 (memory
+      // `project_r96_only_2300_accrues.md`), lines 2200 and 2600 sit
+      // INSIDE the SC per-week revenue as B&G Lunch / equivalent, so
+      // adding the R-67 accrual on top double-counts them. Only
+      // service fee (2300) is a separate accrual on top of SC. On
+      // TBR - FL P10 this double-count inflated Σ week_revenue by
+      // [amount]/week × 2 closed weeks = [amount] which then flowed
+      // into per-week batr and the Labor panel envelope, breaking
+      // the Guard 1 tie with the Overview 3100 batr (docs/backlog/
+      // guard1-tbr-cp-431.md).
+      //
+      // Blast radius: 17 account-periods across FY2026 carry
+      // non-zero 2200 or 2600 (CIN - AZ P1/P2/P3, TBJ - FL P1/P2/P3,
+      // TBR - FL P1-6/P9-P13). Verified branch above zeros
+      // week_contractual_accrual and uses P&L period total × SC
+      // weight, so P1-P9 (verified) tie Overview cent-exact by
+      // construction and are NOT affected by this change. Future
+      // weeks (basis.temporal !== "closed") take the sc_measured
+      // branch, no accrual, byte-identical. Only closed-but-not-
+      // verified weeks (P10 running) move.
+      //
+      // The two branches now do the same arithmetic; the derivation
+      // label stays split so downstream tile/tooltip copy that keys
+      // off `sc_plus_budget_accrual` still fires on closed weeks
+      // (fee, though pinned to 2300 only, is still an accrual on top
+      // of SC on that branch's semantics).
+      const feePeriod = periodNo != null ? Number(feeBudgetByPeriod?.get?.(periodNo) || 0) : 0;
+      const feeThisWeek = feePeriod > 0 ? feePeriod / 4 : 0;
+      if (basis.temporal === "closed" && feeThisWeek > 0) {
+        w.week_contractual_accrual = feeThisWeek;
+        revenueForWeek = Number(basis.revenue || 0) + feeThisWeek;
+        derivation = "sc_plus_budget_accrual";
+      } else {
+        w.week_contractual_accrual = 0;
+        revenueForWeek = Number(basis.revenue || 0) + feeThisWeek;
+        derivation = "sc_measured";
+      }
+    }
+    w.week_revenue = revenueForWeek;
+    // Tile / tooltip copy keys off this. "pnl_distributed_by_sc"
+    // renders "Verified revenue · finance-posted total, distributed
+    // by Service Calendar shape - derived, not measured."
+    w.week_revenue_derivation = derivation;
+
+    // [name] R-121 (2026-09-18). Per-week batr = week_revenue × merged_pct
+    // when the caller supplies mergedTargetPctByPeriod. Sum across the
+    // four weeks then equals the Overview 3100 batr's merged_pct ×
+    // actual_revenue by construction (Guard 1 holds).
+    //
+    // R-111 (2026-09-15) SUPERSEDED. Its formula was
+    //   per_week_batr = week_revenue × hourly_pct + salary_period / 4
+    // on the reasoning that a combined percent bakes a fixed cost into a
+    // proportional calc. R-111 measured against an adjusted figure that
+    // was itself `hourly_pct × revenue + static salary`; R-121 rebases
+    // adjusted to `merged_pct × revenue`, and per-week follows.
+    //
+    // [name] ruling item 1 (2026-09-18): keep the static salary at week
+    // grain via `week_salary_allowed = salary_period_budget / 4`, but do
+    // NOT add it into `budget_at_this_week_revenue`. The top-level batr
+    // is the TOTAL (`revenue × merged_pct`); `week_hourly_allowed` is
+    // the derived remainder. Consumers that want the split derive it
+    // from the two shipped fields.
+    //
+    // Callers without the merged map (probes, older code paths) fall
+    // back to the R-111 shape for backwards compatibility.
+    const mergedPct = periodNo != null ? mergedTargetPctByPeriod?.get?.(periodNo) : null;
+    const hourlyPct = periodNo != null ? lineTargetPctByPeriod?.get?.(periodNo) : null;
+    const salaryPeriodBudget = periodNo != null ? salaryBudgetByPeriod?.get?.(periodNo) : null;
+    const weekSalaryAllowed = salaryPeriodBudget != null ? Number(salaryPeriodBudget) / 4 : 0;
+    if (mergedPct != null) {
+      const weekTotal = revenueForWeek * Number(mergedPct);
+      w.budget_at_this_week_revenue = weekTotal;
+      w.week_salary_allowed = weekSalaryAllowed;
+      w.week_hourly_allowed = weekTotal - weekSalaryAllowed;
+    } else if (hourlyPct != null) {
+      // Fallback: R-111 shape. Only reached by callers that have not
+      // opted into R-121 yet.
+      w.budget_at_this_week_revenue = revenueForWeek * Number(hourlyPct) + weekSalaryAllowed;
+    } else {
+      w.budget_at_this_week_revenue = null;
+    }
+
+    if (basis.temporal === "running") {
+      w.days_left_in_week = daysLeftInRunningWeek(w.week_start, todayISO);
+    } else {
+      w.days_left_in_week = null;
+    }
+  }
+  return board;
+}

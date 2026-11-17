@@ -1,0 +1,1145 @@
+{
+  "periods": {
+    "periodOf": [
+      [
+        "2025-12-29",
+        1
+      ],
+      [
+        "2026-01-25",
+        1
+      ],
+      [
+        "2026-01-26",
+        2
+      ],
+      [
+        "2026-11-17",
+        12
+      ],
+      [
+        "2026-12-27",
+        13
+      ],
+      [
+        "2025-12-28",
+        null
+      ],
+      [
+        "2026-12-28",
+        null
+      ],
+      [
+        "bogus",
+        null
+      ],
+      [
+        null,
+        null
+      ]
+    ],
+    "periodStartISO": [
+      [
+        1,
+        "2025-12-29"
+      ],
+      [
+        7,
+        "2026-06-15"
+      ],
+      [
+        12,
+        "2026-11-02"
+      ],
+      [
+        13,
+        "2026-11-30"
+      ]
+    ],
+    "periodEndISO": [
+      [
+        1,
+        "2026-01-25"
+      ],
+      [
+        7,
+        "2026-07-12"
+      ],
+      [
+        12,
+        "2026-11-29"
+      ],
+      [
+        13,
+        "2026-12-27"
+      ]
+    ],
+    "currentPeriodNo": [
+      [
+        "2026-11-17",
+        12
+      ],
+      [
+        "2025-12-29",
+        1
+      ],
+      [
+        "2026-12-27",
+        13
+      ]
+    ],
+    "r93FytdEndISO": [
+      [
+        "2026-11-17",
+        "2026-11-01"
+      ],
+      [
+        "2025-12-29",
+        null
+      ]
+    ],
+    "r93ExcludedPeriodNo": [
+      [
+        "2026-11-17",
+        null
+      ]
+    ],
+    "periodPickerState": [
+      [
+        [
+          1,
+          "2026-11-17"
+        ],
+        "closed"
+      ],
+      [
+        [
+          12,
+          "2026-11-17"
+        ],
+        "running"
+      ],
+      [
+        [
+          13,
+          "2026-11-17"
+        ],
+        "next"
+      ],
+      [
+        [
+          0,
+          "2026-11-17"
+        ],
+        null
+      ]
+    ],
+    "weekOfPeriod": [
+      [
+        "2025-12-29",
+        1
+      ],
+      [
+        "2026-01-04",
+        1
+      ],
+      [
+        "2026-01-18",
+        3
+      ],
+      [
+        "2026-01-25",
+        4
+      ]
+    ],
+    "rangeForPeriod": [
+      [
+        1,
+        {
+          "startISO": "2025-12-29",
+          "endISO": "2026-01-25"
+        }
+      ],
+      [
+        13,
+        {
+          "startISO": "2026-11-30",
+          "endISO": "2026-12-27"
+        }
+      ],
+      [
+        14,
+        {
+          "startISO": "2026-12-28",
+          "endISO": "2027-01-24"
+        }
+      ]
+    ],
+    "rangeForFiscalMonth": [
+      [
+        [
+          2026,
+          0
+        ],
+        {
+          "startISO": "2026-01-05",
+          "endISO": "2026-02-01",
+          "weekCount": 4
+        }
+      ],
+      [
+        [
+          2026,
+          11
+        ],
+        {
+          "startISO": "2026-12-07",
+          "endISO": "2026-12-27",
+          "weekCount": 3
+        }
+      ],
+      [
+        [
+          2025,
+          11
+        ],
+        {
+          "startISO": "2025-12-29",
+          "endISO": "2026-01-04",
+          "weekCount": 1
+        }
+      ]
+    ],
+    "rangeForCalendarMonth": [
+      [
+        [
+          2026,
+          0
+        ],
+        {
+          "startISO": "2026-01-01",
+          "endISO": "2026-01-31",
+          "spanDays": 31
+        }
+      ],
+      [
+        [
+          2025,
+          11
+        ],
+        {
+          "startISO": "2025-12-29",
+          "endISO": "2025-12-31",
+          "spanDays": 3
+        }
+      ]
+    ],
+    "inferRangeSelection": [
+      [
+        [
+          "2025-12-29",
+          "2026-01-25"
+        ],
+        {
+          "kind": "period",
+          "value": 1,
+          "label": "PERIOD 1"
+        }
+      ],
+      [
+        [
+          "2026-01-01",
+          "2026-01-15"
+        ],
+        null
+      ]
+    ],
+    "spanLabelForRange": [
+      [
+        [
+          "2025-12-29",
+          "2026-01-25",
+          "2026-11-17"
+        ],
+        "P1"
+      ],
+      [
+        [
+          "2025-12-29",
+          "2026-11-17",
+          "2026-11-17"
+        ],
+        "P1-P12 to date"
+      ]
+    ],
+    "weekStartsInRange": [
+      [
+        [
+          "2025-12-29",
+          "2026-01-11"
+        ],
+        [
+          "2025-12-29",
+          "2026-01-05"
+        ]
+      ]
+    ],
+    "fiscalYearOf": [
+      [
+        "2026-01-01",
+        2026
+      ],
+      [
+        "2025-12-28",
+        2025
+      ]
+    ],
+    "endOfLastCompleteWeek": [
+      [
+        [
+          "2026-01-04",
+          "2026-01-25",
+          "2026-01-15"
+        ],
+        {
+          "effectiveEndISO": "2026-01-11",
+          "weekNo": 2,
+          "weekStartISO": "2026-01-05",
+          "weekEndISO": "2026-01-11"
+        }
+      ]
+    ]
+  },
+  "rangeSnap": {
+    "periodContainingDate": [
+      [
+        "2026-01-05",
+        1
+      ],
+      [
+        "2026-11-17",
+        12
+      ],
+      [
+        "2026-12-27",
+        13
+      ],
+      [
+        "2025-12-28",
+        1
+      ],
+      [
+        "2027-01-01",
+        13
+      ]
+    ],
+    "snapRange": [
+      [
+        [
+          "",
+          "",
+          "2026-11-17"
+        ],
+        {
+          "start": "2025-12-29",
+          "end": "2026-11-17",
+          "kind": "fytd",
+          "period_no": null,
+          "start_period_no": null,
+          "end_period_no": null,
+          "snapped": false,
+          "snapped_from": null
+        }
+      ],
+      [
+        [
+          "2025-12-29",
+          "2026-11-17",
+          "2026-11-17"
+        ],
+        {
+          "start": "2025-12-29",
+          "end": "2026-11-17",
+          "kind": "fytd",
+          "period_no": null,
+          "start_period_no": null,
+          "end_period_no": null,
+          "snapped": false,
+          "snapped_from": null
+        }
+      ],
+      [
+        [
+          "2025-12-29",
+          "2026-01-25",
+          "2026-11-17"
+        ],
+        {
+          "start": "2025-12-29",
+          "end": "2026-01-25",
+          "kind": "period",
+          "period_no": 1,
+          "start_period_no": 1,
+          "end_period_no": 1,
+          "snapped": false,
+          "snapped_from": null
+        }
+      ],
+      [
+        [
+          "2026-01-26",
+          "2026-02-22",
+          "2026-11-17"
+        ],
+        {
+          "start": "2026-01-26",
+          "end": "2026-02-22",
+          "kind": "period",
+          "period_no": 2,
+          "start_period_no": 2,
+          "end_period_no": 2,
+          "snapped": false,
+          "snapped_from": null
+        }
+      ],
+      [
+        [
+          "2026-01-15",
+          "2026-02-15",
+          "2026-11-17"
+        ],
+        {
+          "start": "2026-01-26",
+          "end": "2026-02-22",
+          "kind": "period",
+          "period_no": 2,
+          "start_period_no": 2,
+          "end_period_no": 2,
+          "snapped": true,
+          "snapped_from": {
+            "start": "2026-01-15",
+            "end": "2026-02-15"
+          }
+        }
+      ]
+    ]
+  },
+  "previewAccess": {
+    "resolvePreviewAccess": [
+      [
+        {
+          "caller": {
+            "role": "corporate",
+            "scope": null
+          },
+          "urlAccount": "ALL",
+          "previewParam": "TBR - FL"
+        },
+        {
+          "account": "TBR - FL",
+          "preview_account": "TBR - FL"
+        }
+      ],
+      [
+        {
+          "caller": {
+            "role": "site_leader",
+            "scope": "TBR - FL"
+          },
+          "urlAccount": "",
+          "previewParam": "CIN - AZ"
+        },
+        {
+          "account": "",
+          "preview_account": null
+        }
+      ],
+      [
+        {
+          "caller": null,
+          "urlAccount": "ALL",
+          "previewParam": "TBR - FL"
+        },
+        {
+          "account": "ALL",
+          "preview_account": null
+        }
+      ],
+      [
+        {
+          "caller": {
+            "role": "corporate",
+            "scope": null
+          },
+          "urlAccount": "",
+          "previewParam": ""
+        },
+        {
+          "account": "",
+          "preview_account": null
+        }
+      ]
+    ],
+    "deriveClientAccount": [
+      [
+        {
+          "urlAccount": "ALL"
+        },
+        "ALL"
+      ],
+      [
+        {
+          "previewAccount": "TBR - FL",
+          "urlAccount": "ALL"
+        },
+        "TBR - FL"
+      ],
+      [
+        {
+          "landingAccount": "EAST"
+        },
+        "EAST"
+      ],
+      [
+        {},
+        ""
+      ]
+    ],
+    "shouldRestoreLastAccount": [
+      [
+        {
+          "urlAccount": "",
+          "urlPreview": "",
+          "saved": "TBR - FL",
+          "savedIsValidAccount": true
+        },
+        true
+      ],
+      [
+        {
+          "urlAccount": "",
+          "urlPreview": "CIN - AZ",
+          "saved": "TBR - FL",
+          "savedIsValidAccount": true
+        },
+        false
+      ],
+      [
+        {
+          "urlAccount": "",
+          "urlPreview": "",
+          "saved": "CIN - OH",
+          "savedIsValidAccount": true
+        },
+        false
+      ]
+    ],
+    "shouldAutoEnableSalary": [
+      [
+        {
+          "accountState": "salaried_only",
+          "currentAccount": "CIN - KY"
+        },
+        true
+      ],
+      [
+        {
+          "accountState": "hourly_ok",
+          "currentAccount": "CIN - KY"
+        },
+        false
+      ]
+    ],
+    "shouldRenderLandingBridgeLoading": [
+      [
+        {
+          "loadState": "ok",
+          "urlAccount": "",
+          "landingAccount": "ALL",
+          "previewAccount": null
+        },
+        true
+      ],
+      [
+        {
+          "loadState": "ok",
+          "urlAccount": "",
+          "landingAccount": "ALL",
+          "previewAccount": "TBR - FL"
+        },
+        false
+      ]
+    ]
+  },
+  "roleGate": {
+    "canViewAccount": [
+      [
+        [
+          {
+            "role": "corporate",
+            "scope": null
+          },
+          "ALL"
+        ],
+        true
+      ],
+      [
+        [
+          {
+            "role": "corporate",
+            "scope": null
+          },
+          "TBR - FL"
+        ],
+        true
+      ],
+      [
+        [
+          {
+            "role": "site_leader",
+            "scope": "TBR - FL"
+          },
+          "TBR - FL"
+        ],
+        true
+      ],
+      [
+        [
+          {
+            "role": "site_leader",
+            "scope": "TBR - FL"
+          },
+          "CIN - AZ"
+        ],
+        false
+      ],
+      [
+        [
+          {
+            "role": "site_leader",
+            "scope": "TBR - FL"
+          },
+          "ALL"
+        ],
+        false
+      ],
+      [
+        [
+          {
+            "role": "site_manager",
+            "scope": "TBR - FL"
+          },
+          "TBR - FL"
+        ],
+        true
+      ],
+      [
+        [
+          {
+            "role": "site_manager",
+            "scope": "TBR - FL"
+          },
+          "CIN - AZ"
+        ],
+        false
+      ],
+      [
+        [
+          {
+            "role": "site_manager",
+            "scope": "TBR - FL"
+          },
+          "ALL"
+        ],
+        false
+      ],
+      [
+        [
+          {
+            "role": "rdo",
+            "scope": "East"
+          },
+          "TBR - FL"
+        ],
+        true
+      ],
+      [
+        [
+          {
+            "role": "rdo",
+            "scope": "East"
+          },
+          "ALL"
+        ],
+        true
+      ],
+      [
+        [
+          null,
+          "TBR - FL"
+        ],
+        false
+      ]
+    ],
+    "canSeeSalary": [
+      [
+        [
+          {
+            "role": "corporate",
+            "scope": null
+          },
+          "ALL"
+        ],
+        true
+      ],
+      [
+        [
+          {
+            "role": "corporate",
+            "scope": null
+          },
+          "TBR - FL"
+        ],
+        true
+      ],
+      [
+        [
+          {
+            "role": "corporate",
+            "scope": null,
+            "can_see_salary": false
+          },
+          "ALL"
+        ],
+        false
+      ],
+      [
+        [
+          {
+            "role": "site_leader",
+            "scope": "TBR - FL"
+          },
+          "TBR - FL"
+        ],
+        true
+      ],
+      [
+        [
+          {
+            "role": "site_leader",
+            "scope": "TBR - FL"
+          },
+          "CIN - AZ"
+        ],
+        false
+      ],
+      [
+        [
+          {
+            "role": "site_leader",
+            "scope": "TBR - FL"
+          },
+          "ALL"
+        ],
+        false
+      ],
+      [
+        [
+          {
+            "role": "site_manager",
+            "scope": "TBR - FL"
+          },
+          "TBR - FL"
+        ],
+        false
+      ],
+      [
+        [
+          {
+            "role": "rdo",
+            "scope": "East"
+          },
+          "TBR - FL"
+        ],
+        true
+      ],
+      [
+        [
+          {
+            "role": "rdo",
+            "scope": "East"
+          },
+          "ALL"
+        ],
+        true
+      ]
+    ],
+    "landingAccount": [
+      [
+        {
+          "role": "corporate",
+          "scope": null
+        },
+        "ALL"
+      ],
+      [
+        {
+          "role": "site_leader",
+          "scope": "TBR - FL"
+        },
+        "TBR - FL"
+      ],
+      [
+        {
+          "role": "site_manager",
+          "scope": "TBR - FL"
+        },
+        "TBR - FL"
+      ],
+      [
+        {
+          "role": "rdo",
+          "scope": "East"
+        },
+        "EAST"
+      ],
+      [
+        {
+          "role": "rdo",
+          "scope": "West"
+        },
+        "WEST"
+      ],
+      [
+        null,
+        null
+      ]
+    ]
+  },
+  "glRollup": {
+    "canonicalSubLine": [
+      [
+        "3200",
+        "3200"
+      ],
+      [
+        "3200.1",
+        "3200.1"
+      ],
+      [
+        "3200.1.1",
+        "3200.1"
+      ],
+      [
+        "3200.1.2",
+        "3200.1"
+      ],
+      [
+        "1385.3.2",
+        "1385.3"
+      ],
+      [
+        null,
+        null
+      ],
+      [
+        123,
+        null
+      ]
+    ],
+    "isDescendantOfLine": [
+      [
+        [
+          "3200",
+          "3200"
+        ],
+        true
+      ],
+      [
+        [
+          "3200.1",
+          "3200"
+        ],
+        true
+      ],
+      [
+        [
+          "3200.1.1",
+          "3200.1"
+        ],
+        true
+      ],
+      [
+        [
+          "3200.12",
+          "3200.1"
+        ],
+        false
+      ],
+      [
+        [
+          "3200",
+          "3200.1"
+        ],
+        false
+      ],
+      [
+        [
+          null,
+          "3200"
+        ],
+        false
+      ]
+    ],
+    "sumRollupByLine": [
+      [
+        [
+          [
+            {
+              "gl": "3200",
+              "amt": 100
+            },
+            {
+              "gl": "3200.1",
+              "amt": 50
+            },
+            {
+              "gl": "3200.1.1",
+              "amt": 25
+            },
+            {
+              "gl": "3300",
+              "amt": 999
+            }
+          ],
+          "3200"
+        ],
+        175
+      ],
+      [
+        [
+          [
+            {
+              "gl": "3200.1",
+              "amt": 10
+            },
+            {
+              "gl": "3200.1.1",
+              "amt": 5
+            },
+            {
+              "gl": "3200.12",
+              "amt": 999
+            }
+          ],
+          "3200.1"
+        ],
+        15
+      ]
+    ]
+  },
+  "formatting": {
+    "formatMoneyWhole": [
+      [
+        1234.5,
+        "$1,235"
+      ],
+      [
+        -1234.5,
+        "-$1,234"
+      ],
+      [
+        0,
+        "$0"
+      ],
+      [
+        0.4,
+        "$0"
+      ],
+      [
+        null,
+        null
+      ]
+    ],
+    "formatDayLabel": [
+      [
+        "2026-11-17",
+        "Tue 11/17"
+      ],
+      [
+        "2026-01-01",
+        "Thu 01/01"
+      ],
+      [
+        null,
+        null
+      ],
+      [
+        "bogus",
+        null
+      ]
+    ],
+    "fmtWeekRange": [
+      [
+        [
+          "2026-01-04",
+          "2026-01-10"
+        ],
+        "1/4 – 1/10"
+      ],
+      [
+        [
+          null,
+          "2026-01-10"
+        ],
+        null
+      ]
+    ],
+    "formatPct": [
+      [
+        27,
+        "27.00%"
+      ],
+      [
+        27.185,
+        "27.18%"
+      ],
+      [
+        null,
+        null
+      ]
+    ],
+    "pctOf": [
+      [
+        [
+          27,
+          100
+        ],
+        27
+      ],
+      [
+        [
+          27,
+          0
+        ],
+        null
+      ],
+      [
+        [
+          null,
+          100
+        ],
+        null
+      ]
+    ],
+    "gapDollarsCost": [
+      [
+        100,
+        "$100 over"
+      ],
+      [
+        -100,
+        "$100 under"
+      ],
+      [
+        0.5,
+        "on budget"
+      ],
+      [
+        null,
+        null
+      ]
+    ],
+    "gapDollarsRevenue": [
+      [
+        100,
+        "$100 above"
+      ],
+      [
+        -100,
+        "$100 below"
+      ]
+    ],
+    "gapDollarsMargin": [
+      [
+        100,
+        "$100 ahead"
+      ],
+      [
+        -100,
+        "$100 behind"
+      ]
+    ],
+    "gapPointsCost": [
+      [
+        1.5,
+        "1.50% over"
+      ],
+      [
+        -1.5,
+        "1.50% under"
+      ],
+      [
+        0.003,
+        "on target"
+      ]
+    ],
+    "gapPointsRevenue": [
+      [
+        1.5,
+        "1.50% above"
+      ],
+      [
+        -1.5,
+        "1.50% below"
+      ]
+    ],
+    "gapPointsMargin": [
+      [
+        1.5,
+        "1.50% ahead"
+      ],
+      [
+        -1.5,
+        "1.50% behind"
+      ]
+    ],
+    "directionOfDelta": [
+      [
+        [
+          100,
+          "cost"
+        ],
+        "bad"
+      ],
+      [
+        [
+          -100,
+          "cost"
+        ],
+        "good"
+      ],
+      [
+        [
+          100,
+          "revenue"
+        ],
+        "good"
+      ],
+      [
+        [
+          0,
+          "cost"
+        ],
+        "neutral"
+      ],
+      [
+        [
+          null,
+          "cost"
+        ],
+        null
+      ]
+    ]
+  }
+}
