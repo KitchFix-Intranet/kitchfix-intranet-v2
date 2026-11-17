@@ -1,0 +1,526 @@
+// src/lib/kpi/overview/pnl-loader.js
+//
+// Overview Phase 2 PR-3 (Master KPI CC seat).
+//
+// Reads pnl_actuals + kpi_period_status + kpi_account_flags + the
+// revenue-line kpi_budgets rows the Overview needs. Everything here
+// is READ-ONLY (SELECT only, no writes ever).
+//
+// Absence contract (BINDING, per pnl-1 migration comments):
+//   - An absent (account, fiscal_year, period_no, line_code) row in
+//     pnl_actuals means "NOT REPORTED" - it never means "[amount]".
+//   - A row with actual = 0 means zero.
+//   - The Overview resolver MUST propagate this distinction into the
+//     payload: statement rows carry `reported: true|false`, and
+//     `actual` is null when reported=false.
+//
+// kpi_period_status is authoritative for `verified_at`. `closed_at`
+// is a RECORD in the table but is DERIVED at read time from the
+// fiscal calendar (docs/audits/OVERVIEW_BUILD_ALIGNMENT_2026-08-31.md
+// carry-forward): "nothing sets closed_at when a period ends. Derive
+// calendar-closed from periods.js at read time; treat kpi_period_
+// status.closed_at as a record and an override, not the source."
+// Otherwise P9 reads "open" forever after 2026-09-07.
+
+import {
+  periodStartISO,
+  periodEndISO,
+  r93FytdEndISO,
+} from "@/lib/kpi/labor/periods";
+
+const IN_CHUNK = 100;
+const PS_DEFAULT = 1000;
+
+function chunk(values: any, size: any = IN_CHUNK): any {
+  const out = [];
+  for (let i = 0; i < values.length; i += size) out.push(values.slice(i, i + size));
+  return out;
+}
+
+// ─── Revenue-line codes ─────────────────────────────────────────────
+//
+// The Overview reads these for cost + P&L breakdown. Each is used
+// both as a revenue source (kpi_budgets, pnl_actuals) and as a P&L
+// row on the statement.
+export const REVENUE_LINE_CODES = ["2200", "2300", "2400.1", "2400.2", "2600"];
+
+// The five ALSO TRACKED lines (§5.4 item 9 / R-17b). Overview shows
+// budget vs actual for each but no verdict pill.
+export const ALSO_TRACKED_LINE_CODES = ["5002.1", "5002.5", "5017.3"];
+
+// ─── kpi_period_status reader (per-fiscal-year) ─────────────────────
+//
+// Returns Map<period_no, { closed_at, verified_at, verified_by,
+// source_ref }>. The Overview resolver DERIVES calendar-closed from
+// periods.js AND consults this record; verified is authoritative from
+// the row.
+export async function loadPeriodStatus(supa: any, fiscalYear: any = 2026): Promise<any> {
+  const q = await supa
+    .from("kpi_period_status")
+    .select("period_no, closed_at, verified_at, verified_by, source_ref")
+    .eq("fiscal_year", fiscalYear)
+    .order("period_no");
+  if (q.error) return { error: q.error, scope: "kpi_period_status" };
+  const out = new Map<any, any>();
+  for (const r of q.data || []) {
+    out.set(Number(r.period_no), {
+      closed_at: r.closed_at || null,
+      verified_at: r.verified_at || null,
+      verified_by: r.verified_by || null,
+      source_ref: r.source_ref || null,
+    });
+  }
+  return { data: out };
+}
+
+// ─── kpi_account_flags reader ───────────────────────────────────────
+//
+// Returns Map<account_key, { sc_revenue_live, revenue_model, set_at,
+// set_by }>.
+//
+// `revenue_model` ([name] R-58, 2026-09-03) is one of:
+//   'sc_driven'      revenue fluctuates with SC meal counts
+//   'management_fee' revenue is contractual and locked
+//   'sales_based'    revenue is sales against budget (TXR - TX - V)
+// The column was added by docs/migrations/pnl-2-revenue-model.sql.
+// If a row has null revenue_model (fresh env before migration seeds),
+// callers should fall back to a safe default; see accountRevenueModel
+// in the resolver.
+export async function loadAccountFlags(supa: any): Promise<any> {
+  // Migration-gated: revenue_model column is added by
+  // docs/migrations/pnl-2-revenue-model.sql. Pre-migration we
+  // gracefully fall back to a select without the column so the
+  // Overview keeps rendering. Post-migration the resolver reads the
+  // column value directly. The `accountRevenueModel` helper on the
+  // resolver side handles the null-revenue_model row transparently.
+  let q = await supa
+    .from("kpi_account_flags")
+    .select("account_key, sc_revenue_live, revenue_model, set_at, set_by");
+  if (q.error) {
+    q = await supa
+      .from("kpi_account_flags")
+      .select("account_key, sc_revenue_live, set_at, set_by");
+    if (q.error) return { error: q.error, scope: "kpi_account_flags" };
+  }
+  const out = new Map<any, any>();
+  for (const r of q.data || []) {
+    out.set(r.account_key, {
+      sc_revenue_live: !!r.sc_revenue_live,
+      revenue_model: r.revenue_model || null,
+      set_at: r.set_at || null,
+      set_by: r.set_by || null,
+    });
+  }
+  return { data: out };
+}
+
+// ─── inventory_adjustments reader ───────────────────────────────────
+//
+// [name] R-61 (2026-09-03): [name]'s per-period inventory adjusting
+// journal entries are booked at each period close and applied to
+// 3200 (food) + 3400 (packaging + supplies) to convert purchases into
+// USED cost - the way finance measures it.
+//
+//   adjusted_cost = purchases - adjusting_je
+//
+// Migration-gated: docs/migrations/inventory-adjustments-1.sql. If
+// the table doesn't exist yet (pre-migration environment), returns
+// an empty map so the Overview keeps rendering purchases-as-is.
+//
+// Returns Map<account_key, Map<period_no, Map<gl_line_code, adjusting_je_sum>>>.
+// gl_line_code: "3200" (food) or "3400" (packaging + supplies summed).
+// adjusting_je is the SIGNED sum for the (account, period, gl) tuple.
+export async function loadInventoryAdjustments(supa: any, { members, periods, fiscalYear = 2026 }: any): Promise<any> {
+  if (!members || members.length === 0 || !periods || periods.length === 0) {
+    return { data: new Map<any, any>() };
+  }
+  const out = new Map<any, any>();
+  for (const memberChunk of chunk(members, IN_CHUNK)) {
+    const q = await supa
+      .from("inventory_adjustments")
+      .select("account_key, period_no, gl_line_code, adjusting_je")
+      .eq("fiscal_year", fiscalYear)
+      .in("account_key", memberChunk)
+      .in("period_no", periods);
+    if (q.error) {
+      // Pre-migration: table absent. Ship an empty map; the resolver's
+      // callers must treat "no JE" as "no adjustment" per the absent-
+      // vs-zero rule. Never fabricate a zero.
+      // Postgres native: 42P01 (undefined_table). PostgREST/Supabase
+      // wraps this as PGRST205 with the "Could not find the table"
+      // message. Match either code.
+      if (q.error.code === "42P01" || q.error.code === "PGRST205") {
+        return { data: out };
+      }
+      return { error: q.error, scope: "inventory_adjustments" };
+    }
+    for (const r of q.data || []) {
+      const acct = String(r.account_key);
+      const per = Number(r.period_no);
+      const gl = String(r.gl_line_code);
+      const je = Number(r.adjusting_je || 0);
+      if (!out.has(acct)) out.set(acct, new Map<any, any>());
+      const byAcct = out.get(acct);
+      if (!byAcct.has(per)) byAcct.set(per, new Map<any, any>());
+      const byPer = byAcct.get(per);
+      byPer.set(gl, (byPer.get(gl) || 0) + je);
+    }
+  }
+  return { data: out };
+}
+
+// ─── pnl_actuals reader (per-member, per-period range) ──────────────
+//
+// Returns a nested Map:
+//   Map<account_key, Map<period_no, Map<line_code, { actual, budget,
+//                                                    source_ref,
+//                                                    verified_at,
+//                                                    verified_by }>>>
+//
+// Absence = not reported. Callers MUST check .has()/.get() and treat
+// missing as null in the payload; never substitute 0.
+export async function loadPnlActuals(supa: any, { members, periods, fiscalYear = 2026 }: any): Promise<any> {
+  if (!members || members.length === 0 || !periods || periods.length === 0) {
+    return { data: new Map<any, any>() };
+  }
+  const out = new Map<any, any>();
+  for (const memberChunk of chunk(members, IN_CHUNK)) {
+    let from = 0;
+    while (true) {
+      const q = await supa
+        .from("pnl_actuals")
+        .select("account_key, period_no, line_code, actual, budget, source_ref, verified_at, verified_by")
+        .eq("fiscal_year", fiscalYear)
+        .in("account_key", memberChunk)
+        .in("period_no", periods)
+        .order("account_key")
+        .order("period_no")
+        .order("line_code")
+        .range(from, from + PS_DEFAULT - 1);
+      if (q.error) return { error: q.error, scope: "pnl_actuals" };
+      const rows = q.data || [];
+      for (const r of rows) {
+        const acct = String(r.account_key);
+        const per = Number(r.period_no);
+        const line = String(r.line_code);
+        if (!out.has(acct)) out.set(acct, new Map<any, any>());
+        const byAcct = out.get(acct);
+        if (!byAcct.has(per)) byAcct.set(per, new Map<any, any>());
+        byAcct.get(per).set(line, {
+          actual: Number(r.actual),
+          budget: r.budget == null ? null : Number(r.budget),
+          source_ref: r.source_ref || null,
+          verified_at: r.verified_at || null,
+          verified_by: r.verified_by || null,
+        });
+      }
+      if (rows.length < PS_DEFAULT) break;
+      from += PS_DEFAULT;
+    }
+  }
+  return { data: out };
+}
+
+// ─── kpi_budgets reader for revenue + also-tracked lines ────────────
+//
+// The purchasing loader excludes 3100.1 + 3100.2 (labor). For the
+// Overview we need revenue lines (2xxx) + also-tracked (5002.1 /
+// 5002.5 / 5017.3). Purchasing already ships buckets_budget /
+// tracked_budget via the resolver so cost-line budgets come from
+// there; here we read only what the Overview owns directly.
+//
+// Returns Map<line_code, Map<account_key, Map<period_no, amount>>>.
+export async function loadOverviewBudgets(supa: any, { members, fiscalYear = 2026 }: any): Promise<any> {
+  if (!members || members.length === 0) return { data: new Map<any, any>() };
+  const wanted = new Set([...REVENUE_LINE_CODES, ...ALSO_TRACKED_LINE_CODES, "3100.1", "3100.2"]);
+  const out = new Map<any, any>();
+  for (const memberChunk of chunk(members, IN_CHUNK)) {
+    let from = 0;
+    while (true) {
+      const q = await supa
+        .from("kpi_budgets")
+        .select("account_key, line_code, period_no, amount")
+        .eq("fiscal_year", fiscalYear)
+        .in("account_key", memberChunk)
+        .order("account_key")
+        .order("line_code")
+        .order("period_no")
+        .range(from, from + PS_DEFAULT - 1);
+      if (q.error) return { error: q.error, scope: "kpi_budgets_overview" };
+      const rows = q.data || [];
+      for (const r of rows) {
+        const gl = String(r.line_code);
+        if (!wanted.has(gl)) continue;
+        const acct = String(r.account_key);
+        if (!out.has(gl)) out.set(gl, new Map<any, any>());
+        if (!out.get(gl).has(acct)) out.get(gl).set(acct, new Map<any, any>());
+        out.get(gl).get(acct).set(Number(r.period_no), Number(r.amount));
+      }
+      if (rows.length < PS_DEFAULT) break;
+      from += PS_DEFAULT;
+    }
+  }
+  return { data: out };
+}
+
+// The ONE function that owns "through when" - "revenue to date and
+// budget to date must mean the same day, or every percentage built
+// on them lies". Both the sc_daily_revenue reader and the sources-
+// line label call this. Prior to 2026-09-02 the sources line was
+// capped (visibly) but the reader was not, so on an open period
+// the reader summed future service days (Service Calendar carries
+// projected counts) - TBJ - FL P9 was summing 26 days of revenue
+// against 22 days of budget and reporting 23.3% over pace.
+//
+// Cap rule: strictly less than today. Today is not closed; a same-
+// day count can still shift as the day runs. Falls back to today - 1
+// via Date arithmetic. Returns null on null input.
+export function capBeforeToday(iso: any, today: any): any {
+  if (!iso) return null;
+  if (iso < today) return iso;
+  const t = new Date(`${today}T00:00:00Z`);
+  t.setUTCDate(t.getUTCDate() - 1);
+  return t.toISOString().slice(0, 10);
+}
+
+// ─── sc_daily_revenue reader (per-meal accounts, sc_revenue_live=true) ─
+//
+// Reads sc_daily_revenue for the requested date range, filtered to
+// NOT is_non_revenue (per §5.10 binding rules: "NOT is_non_revenue
+// on every raw-view read"). Sums actual_revenue per (account,
+// service_date) - the caller decides how to bucket into periods.
+//
+// GUARD: this loader is called ONLY when the caller has already
+// verified: (1) the account is per-meal (cost model = at_risk) AND
+// (2) kpi_account_flags.sc_revenue_live = true. Fee accounts NEVER
+// read this table. The Overview resolver's revenue-source picker
+// enforces those preconditions BEFORE calling this function.
+// Passing a fee account here is a caller bug - we don't re-check,
+// but the resolver's guard does.
+//
+// UPPER BOUND ([name] 2026-09-02 blocker): the effective end is
+// min(end, today - 1). The Service Calendar carries projected
+// counts for future days; without this cap, on an open period the
+// reader sums those days and every downstream percentage is off.
+// `today` is required so the loader can share the cap with the
+// resolver's sources-line label - one function, one truth.
+export async function loadScDailyRevenue(supa: any, { members, start, end, today }: any): Promise<any> {
+  if (!members || members.length === 0) return { data: new Map<any, any>() };
+  // Cap end at today - 1. When today is not passed (legacy caller),
+  // fall back to the raw end so behavior is a strict extension.
+  // Every current caller in the Overview resolver passes today.
+  const effectiveEnd = today ? capBeforeToday(end, today) : end;
+  if (!effectiveEnd || effectiveEnd < start) return { data: new Map<any, any>() };
+  const out = new Map<any, any>();
+  for (const memberChunk of chunk(members, IN_CHUNK)) {
+    let from = 0;
+    while (true) {
+      const q = await supa
+        .from("sc_daily_revenue")
+        .select("account_key, service_date, service_id, actual_revenue, is_non_revenue")
+        .in("account_key", memberChunk)
+        .gte("service_date", start)
+        .lte("service_date", effectiveEnd)
+        .not("is_non_revenue", "is", true)   // §5.10: NOT is_non_revenue always
+        // Order chain must uniquely order rows across the 1000-row page
+        // boundary. sc_daily_revenue is grained per
+        // (account_key, service_id, service_date) - see sc-6b's
+        // service_days CTE. Without service_id in the order chain, tie
+        // groups of rows sharing (account_key, service_date) reorder
+        // freely across pages, dropping or duplicating rows. Same
+        // pagination-order defect class as the sentinel probe fix on
+        // 2026-08-31 and purchasing #892's .order("id") retraction.
+        .order("account_key")
+        .order("service_date")
+        .order("service_id")
+        .range(from, from + PS_DEFAULT - 1);
+      if (q.error) return { error: q.error, scope: "sc_daily_revenue" };
+      const rows = q.data || [];
+      for (const r of rows) {
+        const acct = String(r.account_key);
+        const day = r.service_date;
+        if (!out.has(acct)) out.set(acct, new Map<any, any>());
+        const m = out.get(acct);
+        m.set(day, (m.get(day) || 0) + Number(r.actual_revenue || 0));
+      }
+      if (rows.length < PS_DEFAULT) break;
+      from += PS_DEFAULT;
+    }
+  }
+  return { data: out };
+}
+
+// ─── sc_daily_revenue carve-out reader (R-SC-CARVE, 2026-10-05) ─────
+//
+// Sibling to loadScDailyRevenue. Resolves `carveOuts` group names to
+// service_ids via sc_services joined to sc_service_groups, then sums
+// sc_daily_revenue for just those services into
+//   Map<account, Map<lineCode, Map<day, amount>>>
+//
+// The output carries lineCode so the picker in periodBasis.js knows
+// which line to populate when the carve-out branch fires. Today
+// TBR - FL has one entry (Boys & Girls Club -> 2200); the per-line
+// nesting keeps the shape future-safe if a second group ever carves
+// to a different line without reworking the loader.
+//
+// Guards match loadScDailyRevenue exactly: NOT is_non_revenue on
+// sc_daily_revenue rows (§5.10), capBeforeToday upper bound (future
+// days carry projected counts), and the stable (account_key,
+// service_date, service_id) order chain for pagination.
+//
+// Resolution rules:
+//   - By group NAME, not service name. Services get renamed; groups
+//     do not. A service added to the group after the fact
+//     automatically joins the carve-out.
+//   - No `active = true` filter on sc_services or sc_service_groups.
+//     Historical dollars tagged with a service_id that is now
+//     inactive still carve - the dollars landed when the service was
+//     active, and verified history reads pnl_actuals anyway (the
+//     picker only consults this map when src.source === "sc_daily_
+//     revenue").
+export async function loadScDailyRevenueCarveOut(supa: any, { carveOuts, start, end, today }: any): Promise<any> {
+  if (!carveOuts || carveOuts.size === 0) return { data: new Map<any, any>() };
+  const effectiveEnd = today ? capBeforeToday(end, today) : end;
+  if (!effectiveEnd || effectiveEnd < start) return { data: new Map<any, any>() };
+
+  const accounts = [...carveOuts.keys()];
+
+  // Resolve (account, service_id) -> lineCode via group lookup. Join
+  // sc_services to sc_service_groups and keep only services whose
+  // group_name appears in the account's carve-out map.
+  const svcToLine = new Map<any, any>();   // Map<acct, Map<service_id, lineCode>>
+  for (const acctChunk of chunk(accounts, IN_CHUNK)) {
+    const q = await supa
+      .from("sc_services")
+      .select("id, account_key, sc_service_groups!inner(group_name)")
+      .in("account_key", acctChunk);
+    if (q.error) return { error: q.error, scope: "sc_services_carve_out_resolve" };
+    for (const r of q.data || []) {
+      const acct = r.account_key;
+      const grpName = r.sc_service_groups?.group_name;
+      if (!grpName) continue;
+      const lineCode = carveOuts.get(acct)?.get(grpName);
+      if (!lineCode) continue;
+      if (!svcToLine.has(acct)) svcToLine.set(acct, new Map<any, any>());
+      svcToLine.get(acct).set(r.id, lineCode);
+    }
+  }
+  if (svcToLine.size === 0) return { data: new Map<any, any>() };
+
+  const serviceIds = [];
+  for (const m of svcToLine.values()) for (const id of m.keys()) serviceIds.push(id);
+
+  const out = new Map<any, any>();  // Map<acct, Map<lineCode, Map<day, amount>>>
+  for (const svcChunk of chunk(serviceIds, IN_CHUNK)) {
+    let from = 0;
+    while (true) {
+      const q = await supa
+        .from("sc_daily_revenue")
+        .select("account_key, service_date, service_id, actual_revenue, is_non_revenue")
+        .in("service_id", svcChunk)
+        .gte("service_date", start)
+        .lte("service_date", effectiveEnd)
+        .not("is_non_revenue", "is", true)
+        // Same stable order chain as loadScDailyRevenue - the
+        // (account_key, service_date, service_id) triple uniquely
+        // identifies a sc_daily_revenue row.
+        .order("account_key")
+        .order("service_date")
+        .order("service_id")
+        .range(from, from + PS_DEFAULT - 1);
+      if (q.error) return { error: q.error, scope: "sc_daily_revenue_carve_out" };
+      const rows = q.data || [];
+      for (const r of rows) {
+        const acct = String(r.account_key);
+        const lineCode = svcToLine.get(acct)?.get(r.service_id);
+        if (!lineCode) continue;
+        if (!out.has(acct)) out.set(acct, new Map<any, any>());
+        const perAcct = out.get(acct);
+        if (!perAcct.has(lineCode)) perAcct.set(lineCode, new Map<any, any>());
+        const perLine = perAcct.get(lineCode);
+        const day = r.service_date;
+        perLine.set(day, (perLine.get(day) || 0) + Number(r.actual_revenue || 0));
+      }
+      if (rows.length < PS_DEFAULT) break;
+      from += PS_DEFAULT;
+    }
+  }
+  return { data: out };
+}
+
+// ─── Period state resolver (derived + record) ───────────────────────
+//
+// Combines calendar-derived close (periods.js periodEndISO) with the
+// kpi_period_status record for verified_at. See module docblock for
+// why the calendar is authoritative for calendar-closed.
+//
+// Returns 'planned' | 'open' | 'closed_awaiting' | 'verified'.
+//
+// [name] Prompt 2 PR-B (2026-09-04): "planned" is a new state for a
+// future period whose start date is after today. Prior to this the
+// resolver returned "open" for future periods, which produced a
+// board with zero actuals and no explanation - the "silent zero" the
+// picker's R-62 rule prevents in the UI. The state is authoritative
+// so the client can render the Planning view instead of the standard
+// This period surface (budget-hero, not-started reference, no
+// verdicts on the top cards).
+export function derivePeriodState({ periodNo, todayISO, periodStatusRow }: any): any {
+  const pStart = periodStartISO(periodNo);
+  const pEnd = periodEndISO(periodNo);
+  if (!pEnd) return "open";
+  // Future period - hasn't started yet.
+  if (pStart && pStart > todayISO) return "planned";
+  const calendarClosed = pEnd < todayISO;
+  const verifiedAt = periodStatusRow?.verified_at || null;
+  if (verifiedAt) return "verified";
+  // Treat kpi_period_status.closed_at as an OVERRIDE that can force
+  // closed even before the calendar (rare early-close case). If not
+  // set, calendar is authoritative.
+  const recordClosed = !!periodStatusRow?.closed_at;
+  if (calendarClosed || recordClosed) return "closed_awaiting";
+  return "open";
+}
+
+// [name] ruling 2026-09-17 · Closed · unaudited.
+//
+// A period spends most of its life in `closed_awaiting`: invoices land
+// in week one, then settle; nothing on the board ever exits it until
+// `verified_at` is stamped. `spend_settled` is the sibling boolean
+// that names the day-8 flip - true once the period is calendar-closed
+// AND at least 8 days past its end (matches R-93's Current-year
+// inclusion boundary).
+//
+// Additive · does NOT change `period_state`. `period_state` continues
+// to return `closed_awaiting` for P9 today; every existing consumer
+// (30+ references across resolver, ticker, revenue-source, chart,
+// labels) keeps working unchanged. Only the four Overview surfaces
+// that need the "unaudited but actionable" treatment consult this
+// flag.
+//
+// Rule (one source, both here and in `r93FytdEndISO`): a period is
+// `spend_settled` when it is calendar-closed OR verified AND the R-93
+// FYTD end date is at or past this period's end. That is exactly the
+// condition R-93 uses to include a period in Current year - reusing
+// `r93FytdEndISO` directly (Path A, imported above) so the state flip
+// and CY inclusion happen on the same day from one arithmetic.
+//
+// Verified periods (finance-stamped) are trivially spend_settled -
+// finance has confirmed the numbers, so the definition holds by
+// construction.
+//
+// Open / planned periods are never spend_settled.
+export function derivePeriodSpendSettled({ periodNo, todayISO, periodStatusRow }: any): any {
+  const pEnd = periodEndISO(periodNo);
+  if (!pEnd) return false;
+  const verifiedAt = periodStatusRow?.verified_at || null;
+  if (verifiedAt) return true;   // verified is settled by definition
+  const calendarClosed = pEnd < todayISO;
+  const recordClosed = !!periodStatusRow?.closed_at;
+  if (!calendarClosed && !recordClosed) return false;  // still open
+  // R-93 boundary: settled once the FYTD end has advanced to or past
+  // this period's end. r93FytdEndISO walks back to the last period
+  // whose end is more than 7 days before today.
+  const fytdEnd = r93FytdEndISO(todayISO);
+  if (!fytdEnd) return false;
+  return fytdEnd >= pEnd;
+}

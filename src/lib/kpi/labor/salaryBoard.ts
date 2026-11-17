@@ -1,0 +1,446 @@
+// src/lib/labor/salaryBoard.js
+//
+// Salary PR 2 · commit 2. Salary-side data loaders + a merge helper
+// that folds salary into the default response WITHOUT touching the
+// hourly path. The gate module (src/lib/kpi/roleGate.js) is the only authority
+// for who calls in here; nothing in this module re-decides.
+//
+// Design posture:
+//   - Two loaders, both parametric over members + range:
+//       load3100_2Budgets(supa, members)               -> Map<accountKey, Map<periodNo, amount>>
+//       loadSalaryActuals(supa, members, start, end)   -> array of per-worker-week rows
+//   - One merge helper that takes the default response body + loaders'
+//     output + the buildBoard reference + range args. Returns a NEW
+//     response object with:
+//       salary_included: true
+//       salary_available: (mirrors the caller-provided flag)
+//       salary_summary: { workers, weeks, amount }
+//       salary_vacancy: [{ account_key, budget, actual, unfilled }]
+//       budget_total: { periods: [...], range: number }
+//       hours_basis: 'hourly_only'
+//       rate_basis:  'hourly_only'
+//       blended_rate_hourly: <copy of the hourly-only blended rate>
+//       board:  RECOMPUTED via buildBoard on merged inputs
+//       budget_periods: PATCHED so each item gains budget_hourly +
+//                       budget_salary; `amount` becomes the sum
+//       actuals: original + synthesized salary rows with
+//                salaried: true (hours zero, coverage 'complete')
+//
+// Salary rows synthesised in labor_actuals shape:
+//   { account_key, worker_id, week_start, week_end (Sun),
+//     amount, hours_regular:0, hours_overtime:0, hours_double_time:0,
+//     hours_premium_other:0, hours_without_dollars:0,
+//     coverage_state:'complete', salaried:true }
+// - matches sumRows() in board.js so combined-actuals math is
+//   arithmetic without special-cases inside buildBoard.
+//
+// PII posture: worker ids flow through the shaped rows (identical to
+// the hourly path) but this module never logs a name, an email, or
+// a dollar figure.
+
+import { countDistinctPeople } from "./personCount";
+
+function r2(n: any): any { return Math.round((Number(n) || 0) * 100) / 100; }
+
+// FIN-2027 W1 PR-A year-safety: fiscalYear is now a parameter with
+// FY2026 default so existing callers stay byte-identical.
+/**
+ * Load 3100.2 (salary) budgets per (account, period).
+ * @returns {Promise<{ byAccount: Map<string, Map<number, number>>, error?: string }>}
+ */
+export async function load3100_2Budgets(supa: any, members: any, fiscalYear: any = 2026): Promise<any> {
+  if (!members || members.length === 0) return { byAccount: new Map<any, any>() };
+  const q = await supa
+    .from("kpi_budgets")
+    .select("account_key, period_no, amount")
+    .in("account_key", members)
+    .eq("line_code", "3100.2")
+    .eq("fiscal_year", fiscalYear);
+  if (q.error) return { byAccount: new Map<any, any>(), error: q.error.message };
+  const byAccount = new Map<any, any>();
+  for (const r of q.data || []) {
+    const inner = byAccount.get(r.account_key) || new Map<any, any>();
+    inner.set(Number(r.period_no), Number(r.amount));
+    byAccount.set(r.account_key, inner);
+  }
+  return { byAccount };
+}
+
+/**
+ * Load labor_salary_actuals in the range for the given members.
+ * @returns {Promise<{ rows: any[], error?: string }>}
+ */
+export async function loadSalaryActuals(supa: any, members: any, start: any, end: any): Promise<any> {
+  if (!members || members.length === 0) return { rows: [] };
+  const PS = 1000;
+  const out = [];
+  let from = 0;
+  while (true) {
+    const q = await supa
+      .from("labor_salary_actuals")
+      .select("account_key, worker_id, week_start, amount, annual_comp_at_time")
+      .in("account_key", members)
+      .gte("week_start", start)
+      .lte("week_start", end)
+      .range(from, from + PS - 1);
+    if (q.error) return { rows: [], error: q.error.message };
+    for (const r of q.data || []) out.push(r);
+    if ((q.data || []).length < PS) break;
+    from += PS;
+  }
+  return { rows: out };
+}
+
+// Turn a labor_salary_actuals row into a labor_actuals-shaped row so
+// buildBoard's sumRows() can fold it into range/week totals without
+// branching. week_end is Sunday = week_start + 6 (Mon..Sun fiscal
+// week, same convention deriveActuals uses).
+//
+// Exported (2026-08-31) so the Overview resolver can use the same
+// shape helper before calling buildBoard. R-28 / §5.9: Overview
+// unconditionally composes salary into 3100; the route-level withSalary
+// merge is not on the Overview code path (Overview calls buildBoard
+// directly), so the resolver runs an inline equivalent using this
+// helper + mergeBudgetPeriods.
+export function shapeSalaryRow(r: any): any {
+  const wsD = new Date(`${r.week_start}T00:00:00.000Z`);
+  wsD.setUTCDate(wsD.getUTCDate() + 6);
+  const weekEnd = wsD.toISOString().slice(0, 10);
+  return {
+    account_key: r.account_key,
+    worker_id: r.worker_id,
+    week_label: null,
+    line_code: "3100.2",
+    week_start: r.week_start,
+    week_end: weekEnd,
+    fiscal_year: 2026,
+    period_no: null,
+    week_source: "salary_derive",
+    hours_regular: 0,
+    hours_overtime: 0,
+    hours_double_time: 0,
+    hours_premium_other: 0,
+    dollars_regular: r.amount,
+    dollars_overtime: 0,
+    dollars_double_time: 0,
+    dollars_premium_other: 0,
+    amount: r.amount,
+    hours_without_dollars: 0,
+    segment_count: 0,
+    entry_count: 0,
+    coverage_state: "complete",
+    derived_at: null,
+    source_run: "salary_derive",
+    salaried: true,
+  };
+}
+
+/**
+ * Merge a 3100.2 budget map with an existing 3100.1 budget_periods
+ * array. Returns { periods, total, hourly_by_period, salary_by_period }.
+ * - periods: same shape as input items but `amount` = hourly+salary,
+ *   with `budget_hourly` and `budget_salary` sub-fields carrying the
+ *   individual pieces.
+ * - total: the sum-of-amounts across the merged periods.
+ */
+export function mergeBudgetPeriods(hourlyPeriods: any, salaryByPeriod: any): any {
+  const combined = new Map<any, any>();
+  for (const p of hourlyPeriods || []) {
+    combined.set(p.period_no, {
+      ...p,
+      budget_hourly: Number(p.amount) || 0,
+      budget_salary: 0,
+    });
+  }
+  for (const [pn, amt] of salaryByPeriod || new Map<any, any>()) {
+    const cur = combined.get(pn);
+    if (cur) {
+      cur.budget_salary = Number(amt) || 0;
+      cur.amount = r2(cur.budget_hourly + cur.budget_salary);
+    } else {
+      combined.set(pn, {
+        period_no: pn,
+        amount: r2(Number(amt) || 0),
+        source: "pnl",
+        basis: "pnl",
+        superseded: false,
+        budget_hourly: 0,
+        budget_salary: Number(amt) || 0,
+      });
+    }
+  }
+  const periods = [...combined.values()].sort((a: any, b: any): any => a.period_no - b.period_no);
+  const total = periods.reduce((s: any, p: any): any => s + Number(p.amount || 0), 0);
+  return { periods, total };
+}
+
+/**
+ * Given the default (hourly-only) response body, build the salary-on
+ * response. Recomputes board via the supplied buildBoard function.
+ *
+ * @param {object} body - the response body about to be sent
+ * @param {object} opts
+ * @param {string} opts.account
+ * @param {string[]} opts.members - members list for aggregate paths
+ * @param {string} opts.start
+ * @param {string} opts.end
+ * @param {string} opts.today
+ * @param {(args: object) => object} opts.buildBoard
+ * @param {object} opts.salary3100_2 - Map<accountKey, Map<period, amount>>
+ * @param {any[]}  opts.salaryRows - raw labor_salary_actuals rows
+ * @returns {object} a new response body with salary merged
+ */
+export function withSalary(body: any, {
+  account,
+  members,
+  start,
+  end,
+  today,
+  buildBoard,
+  buildWeekBudgets,
+  salary3100_2,
+  salaryRows,
+  otThresholds,
+  // 2026-08-28 person-key fix. worker_id -> email map so distinct-
+  // people counts (buildBoard's worker_count / approval_people /
+  // distinct_workers AND our salary_summary.workers) dedupe by person
+  // (email) instead of employment spell (worker_id). Empty preserves
+  // the legacy worker_id-based count for callers that do not build one.
+  workerToEmail = new Map<any, any>(),
+}: any): any {
+  // 1. Sum 3100.2 per-period across the members whose budget we merge.
+  const salaryByPeriod = new Map<any, any>();
+  for (const m of members) {
+    const inner = salary3100_2.get(m);
+    if (!inner) continue;
+    for (const [pn, amt] of inner) {
+      salaryByPeriod.set(pn, (salaryByPeriod.get(pn) || 0) + Number(amt || 0));
+    }
+  }
+
+  // 2. Merge hourly + salary budget_periods.
+  const merged = mergeBudgetPeriods(body.budget_periods || [], salaryByPeriod);
+
+  // 3. Merge actuals + salary rows (shaped for buildBoard).
+  const hourlyActuals = body.actuals || [];
+  const salaryActualsShaped = salaryRows.map(shapeSalaryRow);
+  const mergedActuals = hourlyActuals.concat(salaryActualsShaped);
+
+  // 2026-11-10. Per-week actual payroll split, carried on the merged
+  // board for the CP SPENT split. Sum each population independently
+  // over its source rows BY week_start - never derive one by
+  // subtracting the other from board.spent. That was the pre-fix
+  // premise ("+salary SPENT is hourly_actual + salary_allocation, so
+  // SPENT salary == splitSal by construction"); it is false against
+  // real payroll, which is what landed the entire budget-vs-actual
+  // salary variance into the HOURLY row on the CP card.
+  const hourlyActualByWeek = new Map<any, any>();
+  for (const r of hourlyActuals) {
+    const k = r.week_start;
+    if (!k) continue;
+    hourlyActualByWeek.set(k, (hourlyActualByWeek.get(k) || 0) + Number(r.amount || 0));
+  }
+  const salaryActualByWeek = new Map<any, any>();
+  for (const r of salaryRows) {
+    const k = r.week_start;
+    if (!k) continue;
+    salaryActualByWeek.set(k, (salaryActualByWeek.get(k) || 0) + Number(r.amount || 0));
+  }
+
+  // 4. Recompute board on merged inputs. D26 accounts (CIN - KY,
+  //    TBJ - NY) get a real board on the salary path even though
+  //    their hourly-only board returned applies:false.
+  const mergedBoard = buildBoard({
+    account, start, end, today,
+    actuals: mergedActuals,
+    budget_periods: merged.periods,
+    account_state: "hourly_ok",
+    ot_thresholds: otThresholds,
+    workerToEmail,
+  });
+
+  // Attach the two per-week actual-payroll totals to each merged-board
+  // week. A week with no rows on a side gets 0 explicitly (not
+  // undefined) so the CP cell gate can tell "no spend that side" from
+  // "field absent / not on the salary path". A week not present in
+  // mergedBoard.weeks is skipped - the board owns the week set.
+  for (const w of (mergedBoard?.weeks || [])) {
+    w.hourly_actual = r2(hourlyActualByWeek.get(w.week_start) || 0);
+    w.salary_actual = r2(salaryActualByWeek.get(w.week_start) || 0);
+  }
+
+  // 5. Salary summary counts.
+  // 2026-08-28 person-key fix: dedupe by email so a rehired salaried
+  // employee (rare but possible) counts as one person.
+  const distinctWorkers = countDistinctPeople(salaryRows, workerToEmail);
+  const distinctWeeks = new Set(salaryRows.map((r: any): any => r.week_start)).size;
+  const salaryAmount = r2(salaryRows.reduce((s: any, r: any): any => s + Number(r.amount || 0), 0));
+  const salary_summary = { workers: distinctWorkers, weeks: distinctWeeks, amount: salaryAmount };
+
+  // 6. Per-account vacancy: 3100.2 budget - derived salary. Positive
+  //    unfilled = open position; zero = fully staffed at that budget.
+  //    Range budget = sum of period budgets that fall in the range's
+  //    period span, using the same period set the merged board saw.
+  const periodsInRange = new Set((mergedBoard?.period_span
+    ? enumeratePeriods(mergedBoard.period_span.first, mergedBoard.period_span.last)
+    : []));
+  const actualByAccount = new Map<any, any>();
+  for (const r of salaryRows) actualByAccount.set(r.account_key, (actualByAccount.get(r.account_key) || 0) + Number(r.amount || 0));
+  const salary_vacancy = members.map((m: any): any => {
+    const perPeriod = salary3100_2.get(m) || new Map<any, any>();
+    let budget = 0;
+    for (const [pn, amt] of perPeriod) {
+      if (periodsInRange.size === 0 || periodsInRange.has(pn)) budget += Number(amt || 0);
+    }
+    const actual = actualByAccount.get(m) || 0;
+    const unfilled = Math.max(0, budget - actual);
+    return { account_key: m, budget: r2(budget), actual: r2(actual), unfilled: r2(unfilled) };
+  }).sort((a: any, b: any): any => a.account_key.localeCompare(b.account_key));
+
+  // 7. Blended rate stays HOURLY-only. Keep the original board's
+  //    avg_rate under the explicit name; downstream labels this.
+  const blended_rate_hourly = body.board?.avg_rate ?? null;
+
+  // 8. 2026-08-19 V40 BUG 2 - week_budgets on the salary path.
+  //    Prior state: withSalary spread body.week_budgets unchanged
+  //    (hourly-only), which put the week strip (fed from
+  //    budget_periods = merged, correct) and the WeekTable (fed from
+  //    week_budgets = hourly-only, wrong) into opposite verdicts
+  //    on the same week - measured live at TBR-FL P8 week 07/13:
+  //    strip said "▼ [amount] under [amount]"; table said "▲ [amount]
+  //    over [amount]". Recomputing week_budgets from merged
+  //    budget_periods restores the same source both surfaces read.
+  //    buildWeekBudgets is passed by the caller so this module has
+  //    no direct dep on lib/board.
+  const week_budgets = (typeof buildWeekBudgets === "function")
+    ? buildWeekBudgets({ start, end, budget_periods: merged.periods })
+    : body.week_budgets;
+
+  // [name] walkthrough R-68 for Labor (2026-09-07). This module used
+  // to set salary_included: true unconditionally because the caller
+  // only invoked it when the URL toggle asked for the merge; the
+  // merge and the disclosure were coupled. R-68 restated: aggregates
+  // ALWAYS merge salary (Kitchen labour shows its true total); the
+  // URL toggle only controls DISCLOSURE. `salary_included` now
+  // reflects disclosure state, set by the route after the merge
+  // from the URL param. Do not overwrite it here.
+  return {
+    ...body,
+    actuals: mergedActuals,
+    budget_periods: merged.periods,
+    week_budgets,
+    board: mergedBoard,
+    salary_summary,
+    salary_vacancy,
+    hours_basis: "hourly_only",
+    rate_basis:  "hourly_only",
+    blended_rate_hourly,
+    budget_total: { periods: merged.periods, range: r2(merged.total) },
+  };
+}
+
+function enumeratePeriods(first: any, last: any): any {
+  const out = [];
+  for (let p = first; p <= last; p += 1) out.push(p);
+  return out;
+}
+
+/**
+ * Pin the hourly-only inputs the Hours available + Payroll data cards
+ * read, into named fields that survive the salary merge. Contract:
+ * these fields are byte-identical on a response with or without
+ * include_salary=1 for the same account/range. Owner ruling
+ * 2026-08-26: salary must not touch either card, and the assertion
+ * that proves the pinning is the identity of these fields across the
+ * toggle - not a visual render check.
+ *
+ * Two named objects rather than one generic _alt so the scope is
+ * legible from the name. A prior collision (spent_to_date at two
+ * scopes on the same board) is why generic aliases are refused.
+ *
+ * Callers must invoke BEFORE withSalary. The salary merge spreads
+ * body first and only overrides its explicit outputs (actuals,
+ * budget_periods, week_budgets, board, salary_*, budget_total,
+ * hours_basis, rate_basis, blended_rate_hourly) - hours_available_hourly
+ * and payroll_coverage_hourly are not in that override set, so they
+ * survive intact.
+ */
+export function pinHourlyOnly(board: any): any {
+  const b = board || {};
+  // `applies` on each pinned block encodes the card's renderability
+  // contract, not just "any hourly data exists on the board." The
+  // Hours available card renders ONLY on single_period_in_progress
+  // (owner ruling 2026-08-26: its one honest sentence - "N hrs left
+  // to schedule in Period M" - cannot be written for a closed period,
+  // FYTD or last-4-weeks). Reporting applies:true on those ranges
+  // would lie to a future consumer that trusts the flag and render a
+  // card we deliberately suppress. Approvals renders on every kind
+  // so its applies still follows the board.
+  const hoursAvailableApplies = b.applies !== false && b.kind === "single_period_in_progress";
+  const approvalsApplies = b.applies !== false;
+  return {
+    hours_available_hourly: {
+      applies: hoursAvailableApplies,
+      kind: b.kind ?? null,
+      range_budget: b.range_budget ?? null,
+      period_budget: b.period_budget ?? null,
+      spent_to_date: b.spent_to_date ?? null,
+      avg_rate: b.avg_rate ?? null,
+      weekly_allowance: b.weekly_allowance ?? null,
+      not_started_weeks_count: b.not_started_weeks_count ?? 0,
+      in_progress_week_start: b.in_progress_week_start ?? null,
+      hours_worked: b.hours_vs_budget?.worked ?? null,
+      distinct_workers: b.distinct_workers ?? 0,
+    },
+    // 2026-08-26 approvals card - renamed from payroll_coverage_hourly.
+    // Card name (Approvals) and field name (approvals_hourly) now
+    // aligned. Owner ruling: a stale payroll_coverage_hourly feeding
+    // a card called Approvals is exactly the kind of drift that costs
+    // an hour to untangle in six months. All coverage + approval fields
+    // consolidated into ONE pinned block.
+    //
+    // Field lineage:
+    //   priced_ww / total_ww / unpriced_hours   - existing coverage (V32-10)
+    //   draft_hours / unapproved_weeks          - existing approval-status (V42)
+    //   total_hours                             - polish round 2 materiality
+    //   approved_hours / oldest_draft_date /
+    //     still_costing_hours / approval_people - v43-1 (this file)
+    //
+    // NULL semantics (critical for the Approvals card):
+    //   oldest_draft_date NULL means "we do not know, no drafts in
+    //   range" - the client MUST render the Oldest shift fact absent,
+    //   not "—" and not green ALL CLEAR. Owner ruling 2026-08-26.
+    //   Every other numeric field defaults to 0 - a valid zero state
+    //   (zero drafts, zero costed) has real meaning; a missing date
+    //   does not.
+    approvals_hourly: {
+      applies: approvalsApplies,
+      priced_ww: b.payroll_data?.priced_ww ?? 0,
+      total_ww: b.payroll_data?.total_ww ?? 0,
+      draft_hours: b.payroll_data?.draft_hours ?? 0,
+      unpriced_hours: b.payroll_data?.unpriced_hours ?? 0,
+      unapproved_weeks: b.payroll_data?.unapproved_weeks ?? 0,
+      // 2026-08-26 polish round 2 item 1 - materiality denominator for
+      // the payroll pill (draft_hours / total_hours < 1% -> FINAL). The
+      // ratio must not pick up salary-inflated hours or it stops
+      // being materiality and becomes salary-dilution. Pin-and-expose
+      // rather than derive: board.hours on the pre-merge board is
+      // already hourly-only by construction because salary rows carry
+      // hours_regular = 0 (see shapeSalaryRow above), so this is a
+      // rename, not a computation. DO NOT "fix" this into a client-side
+      // derived value later - salary's zero-hours contract is what
+      // makes the pin trivially correct today, and a downstream change
+      // to that contract would silently poison the ratio.
+      total_hours: b.hours ?? 0,
+      // v43-1 approvals fields. All derive from payroll_data which
+      // buildBoard populates from labor_actuals per the two-dimensional
+      // model (draft/approved x costed/uncosted). approved_hours can
+      // be 0 legitimately on a range with zero approvals; oldest_draft_date
+      // uses NULL for "we do not know" per above.
+      approved_hours:      b.payroll_data?.approved_hours ?? 0,
+      still_costing_hours: b.payroll_data?.still_costing_hours ?? 0,
+      oldest_draft_date:   b.payroll_data?.oldest_draft_date ?? null,
+      approval_people:     b.payroll_data?.approval_people ?? 0,
+    },
+  };
+}

@@ -1,0 +1,194 @@
+// src/lib/kpi/overview/formatting.js
+//
+// Overview Phase 2 PR-3 (Master KPI CC seat).
+//
+// Server-side formatting helpers. The Overview computes direction
+// words, gap wording, and money strings ONCE, in the resolver, so
+// the client never re-does the arithmetic. This mirrors the labor +
+// purchasing rule "server computes every dollar" (§9B), applied to
+// the presentation layer where direction words are as load-bearing
+// as the numbers they modify.
+//
+// Vocabulary (R-24, §5.8):
+//   - costs:    "under" / "over"          - under is the good direction
+//   - margin:   "ahead" / "behind"        - ahead is the good direction
+//   - revenue:  "above" / "below"         - above is the good direction
+//   - gap under [amount]: "on budget"          (never signed, never "points")
+//   - contractual (fee): "contractual"    (no gap wording)
+//
+// Number formatting:
+//   - Whole dollars everywhere on the Overview (R-23). No cents.
+//   - Percent-of-revenue: one decimal.
+//   - Percentage-point gap: one decimal, never called "points" (R-24).
+//
+// All numbers arrive in this module as JS numbers (not strings, not
+// null unless documented). Callers translate null to their own
+// "not reported" affordance BEFORE calling formatMoneyWhole - a null
+// passed here becomes "[amount]" which would be a data lie.
+
+const DOLLAR_LOCALE = "en-US";
+
+// Whole-dollar rendering. Negative shows a proper minus sign. Zero
+// renders as "[amount]". Rounds half-up (JS Math.round default).
+export function formatMoneyWhole(n: any): any {
+  if (n == null || Number.isNaN(n)) return null;
+  const abs = Math.abs(Math.round(Number(n)));
+  const s = "$" + abs.toLocaleString(DOLLAR_LOCALE);
+  return n < 0 ? "-" + s : s;
+}
+
+// P2-4a (2026-09-01): format an ISO YYYY-MM-DD as "Sun 08/30" to
+// match the Overview render of record's sources-line format. Labor
+// exports fmtDate which returns MM/DD/YY (no weekday); the Overview
+// sources line needs the day-of-week prefix for scanability.
+// Parses the ISO as a calendar date (UTC-anchored to avoid TZ drift
+// on client vs server) - the value in the payload is always a whole-
+// day date, never a timestamp.
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+export function formatDayLabel(iso: any): any {
+  if (!iso) return null;
+  const s = String(iso).slice(0, 10);
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  if (Number.isNaN(d.getTime())) return null;
+  const wd = WEEKDAYS[d.getUTCDay()];
+  return `${wd} ${m[2]}/${m[3]}`;
+}
+
+// Shared week-row label for the overview's two ledger tables (labor
+// WeekTable + purchasing PurchasingFold). Normalized "M/D - M/D" with
+// a thin-space en-dash separator, no year (the period name supplies
+// it) and no "Week ·" prefix. Both ledgers used to render different
+// shapes - labor "10/19/26 – 10/25/26" and purchasing "Week · 10-19 -
+// 10-25" - and this helper is the single source of truth for the
+// unified house style.
+export function fmtWeekRange(startIso: any, endIso: any): any {
+  const pick = (iso: any): any => {
+    if (!iso) return null;
+    const m = String(iso).slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return null;
+    return `${Number(m[2])}/${Number(m[3])}`;
+  };
+  const a = pick(startIso);
+  const b = pick(endIso);
+  if (!a || !b) return null;
+  return `${a} – ${b}`;
+}
+
+// R-114 ([name] 2026-09-17). Two-decimal percent. One decimal made
+// computed figures look invented - [amount] next to 60.0% read as
+// hardcoded when the true total was [amount] and the true ratio
+// 59.98%. Precision is what makes the figure legible as a
+// calculation. Handles null (returns null) so callers can
+// distinguish "no data" from "0.00%".
+export function formatPct(n: any): any {
+  if (n == null || Number.isNaN(n)) return null;
+  return Number(n).toFixed(2) + "%";
+}
+
+// Percent of A over B. Returns null if B is null/undefined/zero -
+// the ratio is undefined; callers render appropriately.
+export function pctOf(a: any, b: any): any {
+  if (a == null || Number.isNaN(a)) return null;
+  if (b == null || Number.isNaN(b) || !(Number(b) > 0)) return null;
+  return (Number(a) / Number(b)) * 100;
+}
+
+// Direction word for a dollar delta. `good` is the label when the
+// number is >=0 (in the "good" direction relative to `axis`); `bad`
+// is the label when < 0. Callers pass axis-specific pairs.
+//
+// Convention per §5.8 R-24: gap is a POSITIVE number with a direction
+// word attached. Never a signed number in the display; never called
+// "points" for percentage-point gaps.
+//
+// Under-[amount] gap renders as "on budget" (§5.8) - a distinct semantic
+// state, not "0.0 under".
+// [name] ruling 2026-10-13 (cleanup). Un-exported; CostLines redefines its
+// own local gapDollars, so this module's version has no cross-file
+// consumers. Kept in-file for use by the axis-specific wrappers below.
+function gapDollars(delta: any, goodWord: any, badWord: any): any {
+  if (delta == null || Number.isNaN(delta)) return null;
+  const d = Number(delta);
+  if (Math.abs(d) < 1) return "on budget";
+  const magnitude = Math.abs(Math.round(d));
+  const s = "$" + magnitude.toLocaleString(DOLLAR_LOCALE);
+  return `${s} ${d >= 0 ? goodWord : badWord}`;
+}
+
+// Percentage-point gap: absolute value with two decimals + direction.
+// Under-0.005pp reads "on target" (below rounding threshold at two
+// decimals). Never "points" (R-24).
+// R-114 ([name] 2026-09-17). Two decimals to match `formatPct` -
+// gap and pct render alongside on the same card; a mixed precision
+// makes one figure read as approximate.
+// [name] ruling 2026-10-13 (cleanup). Un-exported; only used by the
+// axis-specific wrappers below in this file.
+function gapPoints(deltaPct: any, goodWord: any, badWord: any): any {
+  if (deltaPct == null || Number.isNaN(deltaPct)) return null;
+  const d = Number(deltaPct);
+  if (Math.abs(d) < 0.005) return "on target";
+  return `${Math.abs(d).toFixed(2)}% ${d >= 0 ? goodWord : badWord}`;
+}
+
+// Axis-specific gap helpers. The axis triple names the direction
+// language the render uses:
+//   - cost axis (COGS lines): under is good.  positive delta = actual >
+//     budget = OVER (bad direction).  So we invert the sign before
+//     picking the word: delta_display = -delta so under/over reads
+//     right when actual < budget.
+//
+// Callers pass `delta = actual - budget`. This helper returns the
+// display-ready string with the axis's direction vocabulary.
+
+// Cost delta: `delta = actual - budget`. Under = good. Display flips.
+export function gapDollarsCost(delta: any): any {
+  if (delta == null || Number.isNaN(delta)) return null;
+  return gapDollars(-Number(delta), "under", "over");
+}
+
+// Revenue delta: `delta = actual - budget`. Above = good. No flip.
+export function gapDollarsRevenue(delta: any): any {
+  return gapDollars(delta, "above", "below");
+}
+
+// Margin (GM) delta: `delta = actual - budget`. Ahead = good. No flip.
+export function gapDollarsMargin(delta: any): any {
+  return gapDollars(delta, "ahead", "behind");
+}
+
+// Percentage-point axis wrappers. `deltaPct` is a signed value:
+// `actual_pct - target_pct` on the appropriate axis.
+export function gapPointsCost(deltaPct: any): any {
+  if (deltaPct == null || Number.isNaN(deltaPct)) return null;
+  // Cost axis: pos delta = actual > target = OVER = bad direction.
+  // We display the magnitude and flip the sign for word choice.
+  return gapPoints(-Number(deltaPct), "under", "over");
+}
+
+export function gapPointsRevenue(deltaPct: any): any {
+  return gapPoints(deltaPct, "above", "below");
+}
+
+export function gapPointsMargin(deltaPct: any): any {
+  return gapPoints(deltaPct, "ahead", "behind");
+}
+
+// The signed sense of a delta relative to a good direction. Returns
+// "good", "bad", or "neutral" (delta small enough to read as
+// on-budget / on-target). Callers use this to pick color / verdict
+// pill without re-doing the arithmetic.
+//
+// axis: 'cost' | 'revenue' | 'margin'
+// deltaKind: 'dollars' | 'points'
+export function directionOfDelta(delta: any, axis: any, deltaKind: any = "dollars"): any {
+  if (delta == null || Number.isNaN(delta)) return null;
+  const d = Number(delta);
+  const threshold = deltaKind === "dollars" ? 1 : 0.05;
+  if (Math.abs(d) < threshold) return "neutral";
+  const isGoodPositive = axis !== "cost";
+  const isPositive = d > 0;
+  if (isGoodPositive) return isPositive ? "good" : "bad";
+  return isPositive ? "bad" : "good";
+}
