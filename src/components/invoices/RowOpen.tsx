@@ -73,14 +73,18 @@ export function RowVendorButton({
   vendorName: string;
 }) {
   const router = useRouter();
+  const label = vendorName || "-";
   return (
     <button
       type="button"
       data-inv-id={invId}
       className="kf-invoices-row__vendorbtn"
       onClick={() => router.push(href)}
+      // Fix pass 1: the vendor name ellipsizes inside the column.
+      // The full value lives in `title` and in the drawer header.
+      title={label}
     >
-      {vendorName || "-"}
+      {label}
     </button>
   );
 }
