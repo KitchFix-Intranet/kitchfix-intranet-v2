@@ -25,13 +25,18 @@ import { shortDollarsFromCents } from "@/lib/sc/calendar/billable";
 import { fmtDate, fmtCount } from "@/lib/fmt";
 
 export function WeekRow({
-  week, isCurrent, isBilled, foldableShort, foldablePhone,
+  week, isCurrent, isBilled, foldableShort, foldablePhone, dayHrefs,
 }: {
   week: WeekView;
   isCurrent: boolean;
   isBilled: boolean;
   foldableShort: boolean;
   foldablePhone: boolean;
+  // Train 2: each day cell is a link to /service?...&day=ISO. Pre-
+  // computed as a Record so no function crosses the server/client
+  // boundary. An iso missing from the map means the cell stays
+  // non-interactive.
+  dayHrefs: Record<string, string>;
 }) {
   const [open, setOpen] = useState(false);
   const foldable = foldableShort || foldablePhone;
@@ -129,7 +134,7 @@ export function WeekRow({
       ) : null}
 
       <ol className="kf-sc-wkrow__days" role="list">
-        {week.days.map((d) => <DayCell key={d.iso} day={d} />)}
+        {week.days.map((d) => <DayCell key={d.iso} day={d} openHref={dayHrefs[d.iso] ?? null} />)}
       </ol>
     </article>
   );

@@ -189,6 +189,32 @@ No V2 path writes `status='billed'`. v1 uses that word to mean "cannot be revert
 
 `requireAllDaysApproved` stays in `scReviewState.ts` unchanged and unused by the submit path (per the brief: no per-day approval is required).
 
+## The day form and its save (train 2, 2026-11-17)
+
+The first V2 screen that writes to the database. A site leader opens one day from the calendar (`/service?site=...&day=YYYY-MM-DD`), enters the actuals for each service, and saves. Save is the only thing that writes.
+
+**Owner-only today.** `requireOwnerPage()` gates the drawer page; `requireOwnerApi()` gates the write route. Once the staff sign-in switch opens, the write path's scope check (`canWriteForAccount`) takes over - corp writes for every account, salaried for their own, no region check (Kevin ruling 2026-11-17 2.B). The regional-director case is intentional: directors carry `is_corp=true`, so they inherit the corporate grant.
+
+**Open by URL (rule 17).** The drawer is `?day=<ISO>` on `/service`; Back closes it. What is typed and not saved lives in `localStorage` (keys `kf-sc-drafts-v2` + `kf-sc-kept-v2`), per-device, scoped to `(accountKey, serviceDate)`. Re-opening the day offers Keep them / Clear them. No "leave without saving?" prompt anywhere. Private-mode-safe: every read + write wraps in try/catch with a session-scoped memory fallback.
+
+**The write route.** `POST /api/service/day-actuals` (upsert touched entries) and `DELETE /api/service/day-actuals` (clear-to-projections). Gate order for both: owner → `canWriteForAccount` → `coerceActualCount` (POST only) → `assertDaysUnlockedForWrite` → `assertWeekOpenForWrite` → day-token recheck → write → `clearReviewStateForDays` (non-fatal) → recompute token + state via the shared `resolveDayState` so the save and the calendar cannot disagree on the post-save word.
+
+**The day-level concurrency token (Kevin ruling 1.A).** SHA-256 of the sorted `(service_id, actual_count, updated_at)` rows for the day, hex-encoded, first 16 chars. The drawer-open side builds it from the loader's rows; the save side recomputes from current rows. Mismatch → 409 `DAY_CHANGED` with the full current rows for a Keep theirs / Save mine panel. "Save mine" resends with `acceptClash: true`; the locks and scope run again, only the token check is suppressed. Empty-day TOCTOU: a narrow race where two unentered-day saves land simultaneously can duplicate the first winner's values into the second's write; the unique index makes that harmless and the trigger records the change on reload.
+
+**Rule 16 (slipped digit).** Client-side only. On Save, a non-flat-fee line at ≥ 3× its projection asks once in place - "<service> is 900. The projection was 90. Keep 900?" Keep / Change it. Keeping writes `(accountKey, serviceDate, serviceId, value)` to the kept store so the same number never asks twice. Server does not see this store.
+
+**Rule 18 (two people).** Day-level: any concurrent save on the same `(account, date)` trips the clash, even on a different service. False-positive cost is low per site; the benefit is no silent overwrite.
+
+**Rule 19 (meals counts meals).** The running total under the input list adds only lines whose service unit is `meals` and is not flat-fee. Pans, each, days and dollars count as rows on the day, not meals.
+
+**F2 post-save focus.** After a successful save the drawer advances to the next day in the same Monday-Sunday week that still has projections not fully answered - the moved drawer shows "Saved Tuesday. Now Wednesday, Nov 18." in its head. When no such day remains, the drawer closes to the calendar.
+
+**Clear-to-projections (Kevin ruling 3.A).** The drawer's "Back to projections" button sends a DELETE. The route runs both locks and the token check, then DELETEs every actuals row for the day; the BEFORE DELETE trigger writes `change_type='delete'` receipts in `sc_daily_actuals_history`. The optional audit note to `sc_day_note_entries` is deferred - the notes surface is not built in V2 yet, so the note-write is held with the ledger UI as a follow-up.
+
+**Files added in this train.** The shared `canWriteForAccount` helper, the `dayActuals` lib (`types`, `coerceActualCount`, `dayToken`, `saveActuals`, `loadDrawer`), the `POST`/`DELETE` route, the `DayDrawer` client + `dayDraftStore`, and 15 new tests (`dayActuals-coerce`, `dayActuals-token`, `dayActuals-canwrite`).
+
+**Not yet verified live.** Owner-only on production today, same as train 1. The interactive flows (slipped-digit, clash, drafts) are unit-tested; the live rule-18 clash and the two-person case cannot be exercised until staff sign-in is opened. The audit note on reset / not-served is held pending Kevin's ruling.
+
 ## The calendar home screen - train 1b fit (2026-11-16)
 
 Train 1 (PR #61) is live. Train 1b is a fit-only pass against the live measurement Chat-Claude took at 18 widths that night. **No change to the read model's rules except one, named at the bottom of this section.**
