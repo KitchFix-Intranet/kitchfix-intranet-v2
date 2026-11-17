@@ -209,7 +209,7 @@ Train 1 (PR #61) is live. Train 1b is a fit-only pass against the live measureme
 - The site-list uses only the band's heading; the "Open a calendar" + "Pick a site." lines are gone.
 - A site with no `sc_qbo_account_map` row carries "Not billed through the service calendar." as one plain line near the period header, on every period, wide and narrow.
 
-**Rule change.** `src/lib/sc/calendar/load.ts` now counts a day in the year's "days entered" total when the day has any actuals line above zero - not only a meal line. A day with only non-meal lines (pans, each, days) counts; a not-served day (every projected line answered with 0) does not. Expected: the Reds' 263 for 2026 reads 265 after the fix. `calendar-year-entered.test.mjs` covers the three branches. This is the only rule change in this train.
+**Rule change.** `src/lib/sc/calendar/load.ts` now counts a day in the year's "days entered" total when the day has any actuals line above zero - not only a meal line. A day with only non-meal lines (pans, each, days) counts; a not-served day (every projected line answered with 0) does not. A site that logged days with only non-meal lines will read a slightly higher days-entered total than before. `calendar-year-entered.test.mjs` covers the three branches. This is the only rule change in this train.
 
 ## The calendar home screen (train 1, 2026-11-16)
 
