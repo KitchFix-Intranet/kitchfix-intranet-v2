@@ -21,6 +21,7 @@
 // fact labels in IngredientMasters.tsx are a separate ask.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   Check,
@@ -1315,6 +1316,7 @@ function SuggestBaseUnitLink({
   // connection caught, one wording vocabulary) and carry the same
   // 10 s Undo the menu writer carries so this button is the menu's
   // equal, not a shortcut with fewer undos.
+  const router = useRouter();
   const { save: runSave, busy, error } = useSaveWithRefresh();
   const next = row.suggestedBaseUnit;
   if (!next) return null;
@@ -1340,6 +1342,10 @@ function SuggestBaseUnitLink({
               baseUnit: prev,
             });
             if (!u.ok) throw new Error(saveErrorSentence(u) ?? "Nothing was saved.");
+            // T2 round 2 §2: refresh the page so the row (its
+            // Costed-per label + every price that reads base_unit)
+            // shows the previous unit without a reload.
+            router.refresh();
             onDone();
           },
         });

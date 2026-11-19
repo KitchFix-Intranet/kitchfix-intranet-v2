@@ -633,6 +633,41 @@
   border: 1px solid var(--sp-sky-line);
   border-radius: var(--sp-r-ctl);
   overflow: hidden;
+  position: relative;
+}
+
+/* T2 round 2 §3: in-panel "Discard what you typed?" ask for the
+ * review-card panels. Centered card over the panel body + foot when
+ * Esc or Cancel fires while any field in the panel's scope is
+ * dirty. */
+.kf-rvc__panel-ask {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--sp-navy-deep) 45%, transparent);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-sp-3);
+  padding: var(--sp-sp-4);
+  z-index: 5;
+}
+.kf-rvc__panel-ask h5 {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  font-weight: var(--sp-w-heavy);
+  color: var(--sp-card);
+  margin: 0;
+}
+.kf-rvc__panel-ask p {
+  color: var(--sp-card);
+  font-size: var(--sp-t-table);
+  margin: 0;
+}
+.kf-rvc__panel-ask-actions {
+  display: flex;
+  gap: var(--sp-sp-2);
+  flex-wrap: wrap;
 }
 .kf-rvc__panel-head {
   display: flex;

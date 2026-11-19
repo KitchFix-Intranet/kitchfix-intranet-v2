@@ -15,9 +15,10 @@
 // still mid-flight; the success toast fires at the moment the refreshed
 // data has rendered.
 
+import { useRouter } from "next/navigation";
 import { toast } from "@/components/ui/Toaster";
 import { WEIGHT_UOMS, VOLUME_UOMS, uomLabel } from "@/lib/ingredients/pack";
-import { postJson } from "./common";
+import { postJson, saveErrorSentence } from "./common";
 import { useSaveWithRefresh } from "./useSaveWithRefresh";
 import { SaveFlash } from "./SaveFlash";
 
@@ -42,6 +43,7 @@ export function BaseUnitControl({
   row: BaseUnitControlRow;
   onSaved?: () => void;
 }) {
+  const router = useRouter();
   const { save: runSave, busy, savedAt, error } = useSaveWithRefresh();
 
   async function save(next: string) {
@@ -64,10 +66,19 @@ export function BaseUnitControl({
       fireSuccessToast: (_d, message) => {
         toast(message, {
           undo: async () => {
-            await postJson("/api/review/set-base-unit", {
+            // T2 round 2 §1: check the answer and throw on failure
+            // so the toaster's "The undo did not finish" fires.
+            const u = await postJson("/api/review/set-base-unit", {
               ingredientId: row.id,
               baseUnit: prev,
             });
+            if (!u.ok) {
+              throw new Error(saveErrorSentence(u) ?? "Nothing was saved.");
+            }
+            // T2 round 2 §2: refresh the page so the menu, the
+            // price tile and every row that reads this ingredient's
+            // base_unit shows the previous unit without a reload.
+            router.refresh();
             if (onSaved) onSaved();
           },
         });

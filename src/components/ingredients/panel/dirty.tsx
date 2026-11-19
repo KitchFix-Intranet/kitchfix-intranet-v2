@@ -1,31 +1,58 @@
 "use client";
 
-// T2 §3: shared "has typed work" registry for the DetailPanel. Each
-// editor with a typed field calls `useDirtyEditor(id, dirty, discard)`
-// at mount; the panel reads `anyDirty()` on Esc, close-button and
-// backdrop click and raises an in-page "Discard what you typed?"
-// (Keep editing / Discard) ask when anything is dirty.
+// T2 §3 + round 2 §4: scoped "has typed work" registry. Each panel
+// provides a scope via <DirtyScopeProvider>; editors inside call
+// `useDirtyEditor(id, dirty, discard)` and pick up the scope through
+// context. An editor rendered outside any provider is a no-op (the
+// Ingredients-tab drill-in uses the same blocks and must never flip
+// the item panel's Discard ask on close).
 //
-// The registry is module-level because only one DetailPanel is open at
-// a time; this keeps the hook free of context plumbing and avoids
-// re-rendering the whole panel on every dirty flip.
+// Entries are held in refs + a module-level Map keyed by scope, so a
+// dirty flip does not cascade re-renders through the panel. Closing
+// one panel never touches another panel's registry because each
+// panel has its own scope key.
 
-import { useEffect, useRef } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  type ReactNode,
+} from "react";
 
 type Entry = {
   dirtyRef: { current: boolean };
   discardRef: { current: () => void };
 };
 
-const entries = new Map<string, Entry>();
+const scopes = new Map<string, Map<string, Entry>>();
 
-export function anyDirty(): boolean {
-  for (const e of entries.values()) if (e.dirtyRef.current) return true;
+function getScopeMap(scope: string): Map<string, Entry> {
+  let m = scopes.get(scope);
+  if (!m) {
+    m = new Map();
+    scopes.set(scope, m);
+  }
+  return m;
+}
+
+const ScopeContext = createContext<string | null>(null);
+
+export function DirtyScopeProvider({ scope, children }: { scope: string; children: ReactNode }) {
+  return <ScopeContext.Provider value={scope}>{children}</ScopeContext.Provider>;
+}
+
+export function anyDirty(scope: string): boolean {
+  const m = scopes.get(scope);
+  if (!m) return false;
+  for (const e of m.values()) if (e.dirtyRef.current) return true;
   return false;
 }
 
-export function discardAll(): void {
-  for (const e of entries.values()) {
+export function discardAll(scope: string): void {
+  const m = scopes.get(scope);
+  if (!m) return;
+  for (const e of m.values()) {
     try {
       e.discardRef.current();
     } catch {
@@ -34,27 +61,31 @@ export function discardAll(): void {
   }
 }
 
-// Clear every registered editor without calling its discard. Used by
-// the panel on close so the next open starts clean even if the browser
-// held onto a stale effect cleanup.
-export function clearAll(): void {
-  entries.clear();
-}
-
-// Hook for editors with a typed field. Pass a stable id (unique to
-// this editor instance), the current dirty flag, and a reset-to-
-// baseline function. The flag is tracked via a ref so a dirty flip
-// never re-registers.
-export function useDirtyEditor(id: string, dirty: boolean, discard: () => void) {
+// Hook for editors with a typed field. Pass a stable id (unique
+// inside its scope), the current dirty flag, and a reset-to-baseline
+// function. Outside any <DirtyScopeProvider> this is a no-op - the
+// editor is not inside a panel that cares. Callers that cannot sit
+// inside the provider (e.g. ReviewActions, which owns the sub-panel
+// state but renders ReviewCardPanelShell as a child) may pass an
+// explicit `scope` to override the context value.
+export function useDirtyEditor(id: string, dirty: boolean, discard: () => void, explicitScope?: string) {
+  const contextScope = useContext(ScopeContext);
+  const scope = explicitScope ?? contextScope;
   const dirtyRef = useRef(dirty);
   const discardRef = useRef(discard);
   dirtyRef.current = dirty;
   discardRef.current = discard;
   useEffect(() => {
-    entries.set(id, { dirtyRef, discardRef });
+    if (!scope) return;
+    const m = getScopeMap(scope);
+    m.set(id, { dirtyRef, discardRef });
     return () => {
-      entries.delete(id);
+      m.delete(id);
+      // Garbage-collect the scope map once empty so a next session
+      // starts clean and the top-level `scopes` map does not grow
+      // without bound across hot-reloads.
+      if (m.size === 0) scopes.delete(scope);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [scope, id]);
 }

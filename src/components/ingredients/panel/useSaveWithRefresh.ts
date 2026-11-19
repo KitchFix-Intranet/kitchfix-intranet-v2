@@ -20,7 +20,8 @@
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/ui/Toaster";
-import { saveErrorSentence, type SaveOutcome } from "./common";
+import { saveErrorSentence } from "./common";
+import type { SaveOutcome } from "./common";
 
 type SaveOp = () => Promise<SaveOutcome>;
 
@@ -86,7 +87,19 @@ export function useSaveWithRefresh() {
       if (busyLocal || isPending) return { ok: false, data: null };
       setBusyLocal(true);
       setError(null);
-      const r = await opts.op();
+      // T2 round 2 §5: defence in depth. Every op today is the
+      // shared postJson which does not throw, but a future caller
+      // could wrap it; a thrown op must still release the control
+      // and show the no-reply sentence.
+      let r: SaveOutcome;
+      try {
+        r = await opts.op();
+      } catch {
+        const msg = "Could not reach the server. Nothing was saved.";
+        setError(msg);
+        setBusyLocal(false);
+        return { ok: false, data: null };
+      }
       if (!r.ok) {
         const msg = saveErrorSentence(r) ?? "Nothing was saved.";
         setError(msg);

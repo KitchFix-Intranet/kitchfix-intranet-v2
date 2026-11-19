@@ -89,11 +89,16 @@ export async function readActiveIngredients<T = Record<string, unknown>>(
   const expected = countRes.count ?? 0;
 
   // 2. Page through, stop when the latest page was smaller than PAGE.
+  //    T2 round 2 §5: order by `id` as a tiebreak after `orderBy`.
+  //    If two rows share the first order column PostgREST's own
+  //    ordering is undefined: a page boundary can repeat one row and
+  //    skip another while the total still matches the count, and the
+  //    length check below would pass on a wrong list.
   const out: T[] = [];
   let from = 0;
   for (;;) {
     const pageRes = await applyFilters(
-      client.from("pr_ingredients").select(columns).order(orderBy)
+      client.from("pr_ingredients").select(columns).order(orderBy).order("id")
     ).range(from, from + PAGE - 1);
     if (pageRes.error) throw new Error(pageRes.error.message);
     const chunk = (pageRes.data ?? []) as T[];

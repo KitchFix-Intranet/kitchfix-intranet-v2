@@ -20,7 +20,12 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/ui/Toaster";
 import { postJson, saveErrorSentence } from "./panel/common";
-import { anyDirty, clearAll, discardAll } from "./panel/dirty";
+import { anyDirty, discardAll, DirtyScopeProvider } from "./panel/dirty";
+
+// T2 round 2 §4: every editor inside the item panel registers under
+// this scope. The Ingredients-tab drill-in re-mounts the same blocks
+// without a provider, so those registrations fall through to no-op.
+const PANEL_SCOPE = "item-panel";
 import type { ReviewCardIngredient, ReviewGroupItem } from "./itemTypes";
 import { PanelHead } from "./panel/PanelHead";
 import { PanelStrip } from "./panel/PanelStrip";
@@ -150,13 +155,14 @@ export function DetailPanel({
   const close = () => {
     if (closing) return;
     setClosing(true);
-    // Flush any still-registered editors so a re-open starts clean.
-    clearAll();
+    // T2 round 2 §4: no clearAll here. Every editor's useEffect
+    // cleanup already removes its entry on unmount; closing the
+    // panel must not touch editors outside this scope.
     window.setTimeout(onClose, EXIT_MS);
   };
 
   const tryClose = () => {
-    if (anyDirty()) {
+    if (anyDirty(PANEL_SCOPE)) {
       setDiscardAskOpen(true);
       return;
     }
@@ -236,6 +242,7 @@ export function DetailPanel({
         aria-modal="true"
         aria-labelledby={labelId}
       >
+      <DirtyScopeProvider scope={PANEL_SCOPE}>
         {/* T8: PanelHead and PanelStrip share one sticky wrapper so
             the four summary cells stay on screen during a scroll.
             Costs about 48 px of pinned real estate (head + strip).
@@ -332,6 +339,7 @@ export function DetailPanel({
           }} />
         ) : null}
 
+      </DirtyScopeProvider>
         {discardAskOpen ? (
           <div
             className="kf-dpn__discard-ask"
@@ -355,7 +363,7 @@ export function DetailPanel({
                   type="button"
                   className="kf-btn kf-btn--line kf-btn--sm"
                   onClick={() => {
-                    discardAll();
+                    discardAll(PANEL_SCOPE);
                     setDiscardAskOpen(false);
                     close();
                   }}

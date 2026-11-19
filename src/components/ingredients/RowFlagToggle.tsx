@@ -12,7 +12,6 @@ import { useRouter } from "next/navigation";
 import { Flag } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
 import { postJson, saveErrorSentence } from "./panel/common";
-import { useDirtyEditor } from "./panel/dirty";
 
 export function RowFlagToggle({
   itemId,
@@ -32,17 +31,10 @@ export function RowFlagToggle({
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Typed work: a non-empty note while the form is open counts as a
-  // dirty editor; the panel's Discard ask offers to discard it on
-  // close.
-  useDirtyEditor(
-    `row-flag-${itemId}`,
-    formOpen && note.trim().length > 0 && !busy,
-    () => {
-      setNote("");
-      setFormOpen(false);
-    }
-  );
+  // T2 round 2 §4: the flag note is not inside any panel's save
+  // boundary (it sits on a review-card row). It does not register
+  // with the dirty registry so it never flips the item panel's
+  // Discard ask. A row-local Esc closes the form in-place.
 
   useEffect(() => {
     if (!formOpen) return;
