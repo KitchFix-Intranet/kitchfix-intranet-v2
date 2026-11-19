@@ -1,7 +1,5 @@
-// /library loading. D2 landing surface is Find - band + search field
-// placeholder + a few result-row-shaped blocks. Matches the final
-// Find layout; the moved D1 Shelves loading lives at
-// /library/shelves/loading.tsx.
+// /library loading. Shape-matched to the bookcase: band + search +
+// shelf-list rail + a few tile blocks.
 import { Band, Block } from "@/components/ui/Skeleton";
 import "@/components/library/library.css";
 
@@ -11,12 +9,26 @@ export default function Loading() {
       <div className="kf-only-desktop">
         <Band />
       </div>
-      <div className="kf-find">
-        <Block height={56} radius={12} />
-        <Block height={56} />
-        <Block height={56} />
-        <Block height={56} />
-        <Block height={56} />
+      <div className="kf-lb-tools">
+        <Block height={48} radius={12} />
+      </div>
+      <div className="kf-lb-lay">
+        <aside className="kf-lb-rail kf-only-desktop" aria-hidden>
+          <div className="kf-lb-rail__inner">
+            <Block height={40} radius={10} />
+            <Block height={40} radius={10} />
+            <Block height={40} radius={10} />
+            <Block height={40} radius={10} />
+            <Block height={40} radius={10} />
+            <Block height={40} radius={10} />
+          </div>
+        </aside>
+        <main className="kf-lb-main">
+          <Block height={28} width={240} />
+          <Block height={140} radius={14} />
+          <Block height={140} radius={14} />
+          <Block height={140} radius={14} />
+        </main>
       </div>
     </div>
   );

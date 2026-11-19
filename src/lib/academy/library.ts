@@ -1,10 +1,43 @@
 // src/lib/academy/library.ts
 //
-// Loader for /api/academy/library. Returns the active document
-// catalogue grouped by shelf, plus the set of doc_ids whose
-// obligations apply to THIS viewer (the "trains you" marker).
+// Loader for the Library bookcase (`/library`) and for
+// `/api/academy/library`. One loader feeds every surface. L2 folds
+// the old `loadLibrary` (shelves) and `loadLibraryIndex` (Find) into
+// one function; the bookcase is one page now, so there is one shape
+// of data behind it.
 //
 // READ-ONLY. No PII on the wire.
+//
+// Access
+// ──────
+// L1's rule stands: `resolveReaderLevel` + `canReadDocument` decide
+// may-read, applied server-side BEFORE any count, shelf or search
+// list is built. A restricted row never reaches the client payload
+// for a viewer whose level is `reads_unrestricted`. See
+// `src/lib/academy/access.ts`.
+//
+// Tile marks (R-AC26)
+// ───────────────────
+// Readers see no reading-level mark and no Academy mark. The three
+// marks the bookcase surfaces are derived here so client code never
+// has to look back at the raw DB fields:
+//
+//   has_es          - `true` when another live, readable document in
+//                     the catalogue has this doc's id followed by
+//                     `-ES`. Derived set-based; two-way-correct:
+//                     POL-006 gets `has_es=true` iff POL-006-ES is
+//                     present AND readable.
+//   posted_on_wall  - mirrors `documents.print_required = true`.
+//   filled_by_leader- OMITTED. No column in `documents` or
+//                     `academy_obligations` encodes "a leader fills
+//                     in this form" today; the spec says a missing
+//                     datum is left out of the UI, not guessed.
+//                     See L2 report / ACADEMY.md.
+//
+// No `trains_you` / `trainsYouCount`: the Library is a reading
+// product (R-AC26) and neither the bookcase nor the document page
+// shows an Academy mark. L1's parity probe may surface this as a
+// diff from v1 - it is expected divergence.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { serviceClient } from "@/lib/supabase/service";
@@ -15,23 +48,29 @@ export type LibraryResult =
   | { ok: false; status: 500; error: string; scope: string }
   | ({ ok: true } & LibraryBody);
 
+export interface LibraryDoc {
+  id: string;
+  title: string;
+  card_line: string | null;
+  summary: string | null;
+  keywords: string[];
+  version: string | number | null;
+  updated_at: string | null;
+  effective_date: string | null;
+  doc_class: string | null;
+  shelf: string | null;
+  // Tile marks (derived; see header).
+  has_es: boolean;
+  posted_on_wall: boolean;
+}
+
 export interface LibraryBody {
   totalDocs: number;
-  totalTrainsYou: number;
+  totalShelves: number;
   shelves: Array<{
     name: string;
     count: number;
-    trains_you_count: number;
-    docs: Array<{
-      id: string;
-      title: string;
-      card_line: string | null;
-      version: string | number | null;
-      updated_at: string | null;
-      effective_date: string | null;
-      doc_class: string | null;
-      trains_you: boolean;
-    }>;
+    docs: LibraryDoc[];
   }>;
   viewer: {
     displayName: string | null;
@@ -49,28 +88,14 @@ const SHELF_ORDER = Object.freeze([
   "Culinary & Kitchen Operations",
 ]);
 
-function obligationTrainsViewer(
-  applies_to: unknown,
-  viewerIsSalaried: boolean
-): boolean {
-  if (applies_to == null) return true;
-  if (typeof applies_to === "string") {
-    return applies_to === "company-wide";
-  }
-  if (typeof applies_to !== "object") return true;
-  const wc = (applies_to as { worker_class?: string }).worker_class;
-  if (wc == null) return true;
-  if (wc === "all") return true;
-  if (wc === "salaried") return !!viewerIsSalaried;
-  if (wc === "hourly") return !viewerIsSalaried;
-  return true;
-}
-
-export async function loadLibrary(email: string, supaIn?: SupabaseClient): Promise<LibraryResult> {
+export async function loadLibrary(
+  email: string,
+  supaIn?: SupabaseClient,
+): Promise<LibraryResult> {
   const supa = supaIn || serviceClient();
 
   // Legitimately null for anyone off the roster; the Library still
-  // renders in that case, just with no trains-you markers.
+  // renders in that case.
   let identity = null as Awaited<ReturnType<typeof resolveAcademyIdentity>>;
   try {
     identity = await resolveAcademyIdentity(email, { supa });
@@ -80,85 +105,74 @@ export async function loadLibrary(email: string, supaIn?: SupabaseClient): Promi
     identity = null;
   }
 
-  // Live-only. The documents table carries status values In Build,
-  // Pending, Blocked, Placeholder and Retired alongside Live - 51 of
-  // the 133 rows today. The Library is a learner surface; a document
-  // that is not Live is not something a chef should be reading. Match
-  // the string case EXACTLY: `documents.status` is title-case
-  // ("Live"), and a lowercase comparison returns zero rows silently
-  // because Postgres text equality is case-sensitive. See GOTCHA 14.
-  // A later library_admin surface may widen this; D1 does not build
-  // that.
-  const [docsQ, obQ] = await Promise.all([
-    supa
-      .from("documents")
-      .select(
-        "id, title, card_line, version, shelf, doc_class, updated_at, effective_date, access_level",
-      )
-      .eq("status", "Live")
-      .not("shelf", "is", null)
-      .order("shelf", { ascending: true })
-      .order("sort_order", { ascending: true })
-      .order("id", { ascending: true }),
-    supa.from("academy_obligations").select("doc_id, applies_to"),
-  ]);
+  // Live-only. GOTCHA 17: `documents.status` is title-case ("Live");
+  // a lowercase comparison would silently return zero rows.
+  const docsQ = await supa
+    .from("documents")
+    .select(
+      "id, title, card_line, summary, keywords, version, shelf, doc_class, updated_at, effective_date, print_required, access_level",
+    )
+    .eq("status", "Live")
+    .not("shelf", "is", null)
+    .order("shelf", { ascending: true })
+    .order("sort_order", { ascending: true })
+    .order("id", { ascending: true });
 
   if (docsQ.error) {
     console.error("[academy/loadLibrary] documents:", docsQ.error.message);
     return { ok: false, status: 500, error: "server_error", scope: "documents" };
-  }
-  if (obQ.error) {
-    console.error("[academy/loadLibrary] obligations:", obQ.error.message);
-    return { ok: false, status: 500, error: "server_error", scope: "obligations" };
   }
 
   type DocRow = {
     id: string;
     title: string | null;
     card_line: string | null;
+    summary: string | null;
+    keywords: string[] | null;
     version: string | number | null;
     shelf: string | null;
     doc_class: string | null;
     updated_at: string | null;
     effective_date: string | null;
+    print_required: boolean | null;
     access_level: string | null;
   };
-  type ObRow = { doc_id: string; applies_to: unknown };
 
-  // Access gate: filter server-side. A restricted row never reaches
-  // the client payload for a viewer whose level is reads_unrestricted.
-  // See src/lib/academy/access.ts for the rule.
+  // L1 gate: filter server-side BEFORE any count, shelf or search
+  // list is built. A restricted row never enters the payload for a
+  // viewer whose level is `reads_unrestricted`.
   const level = resolveReaderLevel(email, identity);
-  const allDocs = (docsQ.data as DocRow[]) || [];
-  const docs = allDocs.filter((d) => canReadDocument(level, d.access_level));
-  const obligations = (obQ.data as ObRow[]) || [];
+  const allRows = (docsQ.data as DocRow[]) || [];
+  const readable = allRows.filter((d) => canReadDocument(level, d.access_level));
 
-  const viewerIsSalaried = !!(identity && identity.isSalaried);
-  const trainsYou = new Set<string>();
-  if (identity) {
-    for (const ob of obligations) {
-      if (obligationTrainsViewer(ob.applies_to, viewerIsSalaried)) {
-        trainsYou.add(ob.doc_id);
-      }
-    }
-  }
+  // Derive `has_es`: an id has a Spanish copy when `<id>-ES` is
+  // present among READABLE rows. A restricted sibling never flips
+  // the mark because it never enters `readable`.
+  const readableIds = new Set(readable.map((d) => d.id));
+  const hasEsFor = (id: string): boolean =>
+    !id.endsWith("-ES") && readableIds.has(`${id}-ES`);
 
-  type ShelfDoc = LibraryBody["shelves"][number]["docs"][number];
-  const byShelf = new Map<string, ShelfDoc[]>();
+  const toDoc = (d: DocRow): LibraryDoc => ({
+    id: d.id,
+    title: d.title || d.id,
+    card_line: d.card_line || null,
+    summary: d.summary || null,
+    keywords: Array.isArray(d.keywords) ? d.keywords : [],
+    version: d.version ?? null,
+    updated_at: d.updated_at ?? null,
+    effective_date: d.effective_date ?? null,
+    doc_class: d.doc_class || null,
+    shelf: d.shelf || null,
+    has_es: hasEsFor(d.id),
+    posted_on_wall: d.print_required === true,
+  });
+
+  const byShelf = new Map<string, LibraryDoc[]>();
   for (const s of SHELF_ORDER) byShelf.set(s, []);
-  const unknownShelves = new Map<string, ShelfDoc[]>();
+  const unknownShelves = new Map<string, LibraryDoc[]>();
 
-  for (const d of docs) {
-    const row: ShelfDoc = {
-      id: d.id,
-      title: d.title || d.id,
-      card_line: d.card_line || null,
-      version: d.version || null,
-      updated_at: d.updated_at || null,
-      effective_date: d.effective_date || null,
-      doc_class: d.doc_class || null,
-      trains_you: trainsYou.has(d.id),
-    };
+  for (const d of readable) {
+    const row = toDoc(d);
     if (d.shelf && byShelf.has(d.shelf)) {
       byShelf.get(d.shelf)!.push(row);
     } else {
@@ -170,174 +184,21 @@ export async function loadLibrary(email: string, supaIn?: SupabaseClient): Promi
 
   const shelves: LibraryBody["shelves"] = [];
   for (const name of SHELF_ORDER) {
-    const rows = byShelf.get(name) || [];
-    shelves.push({
-      name,
-      count: rows.length,
-      trains_you_count: rows.filter((r) => r.trains_you).length,
-      docs: rows,
-    });
+    const docs = byShelf.get(name) || [];
+    // Empty shelves are not shown.
+    if (docs.length === 0) continue;
+    shelves.push({ name, count: docs.length, docs });
   }
-  for (const [name, rows] of unknownShelves) {
-    shelves.push({
-      name: String(name),
-      count: rows.length,
-      trains_you_count: rows.filter((r) => r.trains_you).length,
-      docs: rows,
-    });
+  for (const [name, docs] of unknownShelves) {
+    if (docs.length === 0) continue;
+    shelves.push({ name: String(name), count: docs.length, docs });
   }
 
   return {
     ok: true,
-    totalDocs: docs.length,
-    totalTrainsYou: trainsYou.size,
+    totalDocs: readable.length,
+    totalShelves: shelves.length,
     shelves,
-    viewer: identity
-      ? {
-          displayName: identity.displayName,
-          isSalaried: identity.isSalaried,
-          onRoster: true,
-        }
-      : { displayName: null, isSalaried: false, onRoster: false },
-  };
-}
-
-// ──────────────────────────────────────────────────────────────────
-// Lean search index for the Library's Find surface (D2).
-// ──────────────────────────────────────────────────────────────────
-//
-// Returns a flat array of the Live documents with the four fields
-// the Find island actually filters on - title, card_line, summary,
-// keywords (text[]) - plus id/shelf/doc_class/trains_you for
-// display. 82 rows at this scale fit comfortably in memory and
-// filter client-side instantly; no FTS, no `tsvector` column, no
-// per-keystroke round-trip. Section-level search (into
-// `document_content`) is a later train.
-//
-// Parallels `loadLibrary`: same Live-only filter (GOTCHA 17: title-
-// case 'Live'), same obligation-based trains-you join. `loadLibrary`
-// is left intact.
-
-export interface LibraryIndexDoc {
-  id: string;
-  title: string;
-  card_line: string | null;
-  summary: string | null;
-  keywords: string[];
-  shelf: string | null;
-  doc_class: string | null;
-  // F2 additions. Needed by the V7 hit2 row shape (version + date on
-  // the right). trains_you is retained for backward compat with any
-  // caller that still reads it; the Library UI ignores it (R-AC26).
-  version: string | number | null;
-  updated_at: string | null;
-  trains_you: boolean;
-}
-
-export type LibraryIndexResult =
-  | { ok: false; status: 500; error: string; scope: string }
-  | ({ ok: true } & LibraryIndexBody);
-
-export interface LibraryIndexBody {
-  docs: LibraryIndexDoc[];
-  totalDocs: number;
-  totalTrainsYou: number;
-  viewer: {
-    displayName: string | null;
-    isSalaried: boolean;
-    onRoster: boolean;
-  };
-}
-
-export async function loadLibraryIndex(
-  email: string,
-  supaIn?: SupabaseClient,
-): Promise<LibraryIndexResult> {
-  const supa = supaIn || serviceClient();
-
-  // Null for anyone off the roster; Find still renders, with no
-  // trains-you markers.
-  let identity = null as Awaited<ReturnType<typeof resolveAcademyIdentity>>;
-  try {
-    identity = await resolveAcademyIdentity(email, { supa });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[academy/loadLibraryIndex] identity resolve threw:", msg);
-    identity = null;
-  }
-
-  const [docsQ, obQ] = await Promise.all([
-    supa
-      .from("documents")
-      .select(
-        "id, title, card_line, summary, keywords, shelf, doc_class, version, updated_at, access_level",
-      )
-      .eq("status", "Live")
-      .not("shelf", "is", null)
-      .order("shelf", { ascending: true })
-      .order("sort_order", { ascending: true })
-      .order("id", { ascending: true }),
-    supa.from("academy_obligations").select("doc_id, applies_to"),
-  ]);
-
-  if (docsQ.error) {
-    console.error("[academy/loadLibraryIndex] documents:", docsQ.error.message);
-    return { ok: false, status: 500, error: "server_error", scope: "documents" };
-  }
-  if (obQ.error) {
-    console.error("[academy/loadLibraryIndex] obligations:", obQ.error.message);
-    return { ok: false, status: 500, error: "server_error", scope: "obligations" };
-  }
-
-  type DocRow = {
-    id: string;
-    title: string | null;
-    card_line: string | null;
-    summary: string | null;
-    keywords: string[] | null;
-    shelf: string | null;
-    doc_class: string | null;
-    version: string | number | null;
-    updated_at: string | null;
-    access_level: string | null;
-  };
-  type ObRow = { doc_id: string; applies_to: unknown };
-
-  // Access gate: filter server-side. A restricted row never reaches
-  // the Find index payload for a viewer whose level is reads_unrestricted.
-  const level = resolveReaderLevel(email, identity);
-  const allDocs = (docsQ.data as DocRow[]) || [];
-  const docs = allDocs.filter((d) => canReadDocument(level, d.access_level));
-  const obligations = (obQ.data as ObRow[]) || [];
-
-  const viewerIsSalaried = !!(identity && identity.isSalaried);
-  const trainsYou = new Set<string>();
-  if (identity) {
-    for (const ob of obligations) {
-      if (obligationTrainsViewer(ob.applies_to, viewerIsSalaried)) {
-        trainsYou.add(ob.doc_id);
-      }
-    }
-  }
-
-  const out: LibraryIndexDoc[] = docs.map((d) => ({
-    id: d.id,
-    title: d.title || d.id,
-    card_line: d.card_line || null,
-    summary: d.summary || null,
-    keywords: Array.isArray(d.keywords) ? d.keywords : [],
-    shelf: d.shelf || null,
-    doc_class: d.doc_class || null,
-    version: d.version ?? null,
-    updated_at: d.updated_at ?? null,
-    trains_you: trainsYou.has(d.id),
-  }));
-
-  return {
-    ok: true,
-    docs: out,
-    totalDocs: out.length,
-    totalTrainsYou: trainsYou.size,
     viewer: identity
       ? {
           displayName: identity.displayName,
