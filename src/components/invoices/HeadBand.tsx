@@ -15,6 +15,7 @@ export function HeadBand({
   listView,
   eyebrow,
   showFixHref,
+  addInvoicesHref,
   manySites,
   singleSiteName,
 }: {
@@ -22,6 +23,7 @@ export function HeadBand({
   listView: ListView;
   eyebrow: string;
   showFixHref: string;
+  addInvoicesHref: string | null;   // non-null only for site / RD viewers
   manySites: boolean;
   singleSiteName: string | null;
 }) {
@@ -40,14 +42,22 @@ export function HeadBand({
     fixWord: scope.words.fix,
   });
 
-  const showButton = fixCount > 0 && scope.kind !== "office";
+  // Train 2 (§3): when there is nothing to fix, a site or regional
+  // viewer gets "Add invoices" linking to /invoices. The office does
+  // not get a Capture CTA; the owner can still use it.
+  let cta: { label: string; href: string } | undefined = undefined;
+  if (fixCount > 0 && scope.kind !== "office") {
+    cta = { label: `Show the ${fixCount}`, href: showFixHref };
+  } else if (fixCount === 0 && addInvoicesHref) {
+    cta = { label: "Add invoices", href: addInvoicesHref };
+  }
 
   return (
     <HeadBandView
       eyebrow={eyebrow}
       title={title}
       kick={kick}
-      cta={showButton ? { label: `Show the ${fixCount}`, href: showFixHref } : undefined}
+      cta={cta}
     />
   );
 }
