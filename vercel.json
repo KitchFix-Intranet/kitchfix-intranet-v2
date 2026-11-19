@@ -4,6 +4,10 @@
     {
       "path": "/api/match",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/service/push-retry",
+      "schedule": "*/10 * * * *"
     }
   ]
 }

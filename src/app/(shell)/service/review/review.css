@@ -1,0 +1,410 @@
+/* Week check screen (/service/review). Scoped to kf-sc-rv-*.
+   Round 3:
+   - Five type sizes (label, title, item, body, num). Header uses
+     label-weight + uppercase instead of a smaller computed size.
+   - Phone summary is a single row so meals, dollars, days, and the
+     Submit button fit in ~110px above the shell's tab bar.
+   - Surface padding-bottom derives from the tab bar token and the
+     summary's own height variable, not a raw pixel number.
+   - Pinned foot clears the shell rail on desk and the phone tab bar.
+*/
+
+:root {
+  --kf-sc-rv-foot: 80px;         /* desk summary height */
+  --kf-sc-rv-foot-phone: 110px;  /* phone summary height, single row */
+}
+
+.kf-sc-rv-surface {
+  padding: var(--sp-sp-4) var(--sp-sp-5)
+           calc(var(--kf-sc-rv-foot) + var(--sp-sp-5));
+  max-width: 920px;
+  margin: 0 auto;
+}
+
+.kf-sc-rv-head {
+  margin-bottom: var(--sp-sp-4);
+}
+.kf-sc-rv-head h1 {
+  margin: var(--sp-sp-1) 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-family: var(--sp-ui);
+  color: var(--sp-navy);
+  font-weight: 800;
+  line-height: 1.15;
+}
+.kf-sc-rv-head__eyebrow {
+  font-size: var(--sp-t-label);
+  color: var(--sp-muted);
+  font-weight: 700;
+}
+.kf-sc-rv-head__fact {
+  font-size: var(--sp-t-title);
+  color: var(--sp-navy);
+  font-weight: 800;
+}
+.kf-sc-rv-head__num {
+  font-size: var(--sp-t-item);
+  color: var(--sp-ink);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.kf-sc-rv-head__note {
+  margin: var(--sp-sp-1) 0 0;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  color: var(--sp-muted);
+  font-weight: 700;
+}
+.kf-sc-rv-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--sp-navy);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+  text-decoration: none;
+  min-height: var(--sp-floor-chef);
+}
+
+.kf-sc-rv-already {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  background: var(--sp-good-bg);
+  color: var(--sp-good);
+  border: 1px solid var(--sp-good);
+  border-radius: var(--sp-r-ctl);
+  margin-bottom: var(--sp-sp-3);
+}
+
+.kf-sc-rv-days {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+}
+
+.kf-sc-rv-card {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  box-shadow: var(--sp-shadow);
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+}
+.kf-sc-rv-card.is-flagged { border-color: var(--sp-warn-strong); background: var(--sp-warn-bg); }
+.kf-sc-rv-card.is-submitted { border-color: var(--sp-good); }
+.kf-sc-rv-card.is-called-out { border-color: var(--sp-sky); }
+
+.kf-sc-rv-card__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--sp-sp-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--sp-sp-2);
+}
+.kf-sc-rv-card__head h3 {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  color: var(--sp-ink);
+  font-weight: 800;
+}
+.kf-sc-rv-card__tot {
+  margin: 0;
+  display: inline-flex;
+  gap: var(--sp-sp-3);
+  color: var(--sp-body);
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.kf-sc-rv-card__tot b { color: var(--sp-ink); font-size: var(--sp-t-item); }
+
+.kf-sc-rv-look {
+  margin: var(--sp-sp-2) 0 var(--sp-sp-3);
+  padding: var(--sp-sp-2) var(--sp-sp-3);
+  background: var(--sp-sky-bg);
+  border: 1px solid var(--sp-sky-line);
+  border-radius: var(--sp-r-ctl);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-sp-2);
+  align-items: center;
+  justify-content: space-between;
+}
+.kf-sc-rv-look__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--sp-ink);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+}
+.kf-sc-rv-look__btn.is-on {
+  background: var(--sp-good-bg);
+  color: var(--sp-good);
+  border-color: var(--sp-good);
+}
+
+.kf-sc-rv-dl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--sp-t-label);
+  font-variant-numeric: tabular-nums;
+}
+.kf-sc-rv-dl thead th {
+  text-align: left;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  color: var(--sp-muted);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--sp-line-soft);
+}
+.kf-sc-rv-dl thead th.kf-sc-rv-dl__q,
+.kf-sc-rv-dl thead th.kf-sc-rv-dl__p,
+.kf-sc-rv-dl thead th.kf-sc-rv-dl__a { text-align: right; }
+
+.kf-sc-rv-dl th[scope="row"] {
+  text-align: left;
+  font-weight: 700;
+  color: var(--sp-ink);
+  padding: 6px 0;
+}
+.kf-sc-rv-dl td { padding: 6px 0; color: var(--sp-body); }
+.kf-sc-rv-dl__q { text-align: right; width: 72px; font-weight: 700; color: var(--sp-ink); }
+.kf-sc-rv-dl__p { text-align: right; width: 150px; color: var(--sp-muted); }
+.kf-sc-rv-dl__a { text-align: right; width: 118px; font-weight: 700; color: var(--sp-ink); }
+.kf-sc-rv-dl__g th {
+  padding-top: var(--sp-sp-2);
+  text-align: left;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  color: var(--sp-muted);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.kf-sc-rv-card__note {
+  margin: var(--sp-sp-2) 0 0;
+  padding: 6px 0;
+  font-size: var(--sp-t-label);
+  color: var(--sp-muted);
+}
+.kf-sc-rv-card__note--warn {
+  color: var(--sp-warn);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.kf-sc-rv-card__acts {
+  margin-top: var(--sp-sp-3);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-sp-2);
+}
+
+.kf-sc-rv-foot {
+  position: fixed;
+  left: var(--rail-width, 0);
+  right: 0;
+  bottom: 0;
+  background: var(--sp-card);
+  border-top: 1px solid var(--sp-line);
+  box-shadow: var(--sp-shadow-float);
+  padding: var(--sp-sp-2) var(--sp-sp-5);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-sp-4);
+  z-index: 50;
+  min-height: var(--kf-sc-rv-foot);
+}
+.kf-sc-rv-foot.is-done { display: none; }
+.kf-sc-rv-foot__totals {
+  display: inline-flex;
+  gap: var(--sp-sp-4);
+  flex-wrap: wrap;
+  font-variant-numeric: tabular-nums;
+}
+.kf-sc-rv-foot__meals b,
+.kf-sc-rv-foot__cents b,
+.kf-sc-rv-foot__days  b {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-num);
+  font-weight: 800;
+  color: var(--sp-ink);
+}
+.kf-sc-rv-foot__meals small,
+.kf-sc-rv-foot__cents small,
+.kf-sc-rv-foot__days  small {
+  display: block;
+  color: var(--sp-muted);
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+}
+.kf-sc-rv-foot__acts {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+  align-items: flex-end;
+}
+.kf-sc-rv-blocker {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-1);
+  color: var(--sp-warn);
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+  text-align: right;
+}
+.kf-sc-rv-err {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-1);
+  color: var(--sp-block);
+  font-size: var(--sp-t-label);
+}
+
+@media (max-width: 860px) {
+  .kf-sc-rv-surface {
+    padding: var(--sp-sp-3) var(--sp-sp-3)
+             calc(var(--sp-tabbar) + var(--kf-sc-rv-foot-phone) + var(--sp-sp-3));
+  }
+  /* Shell rail is hidden on phone; the tab bar is fixed at bottom.
+     Clear the tab bar's height so Submit sits above it, tappable.
+     Single row: compact totals on the left, Submit on the right. */
+  .kf-sc-rv-foot {
+    left: 0;
+    right: 0;
+    bottom: var(--sp-tabbar);
+    flex-direction: row;
+    align-items: center;
+    padding: var(--sp-sp-2) var(--sp-sp-3);
+    gap: var(--sp-sp-3);
+    min-height: var(--kf-sc-rv-foot-phone);
+  }
+  .kf-sc-rv-foot__totals {
+    gap: var(--sp-sp-2);
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .kf-sc-rv-foot__meals b,
+  .kf-sc-rv-foot__cents b,
+  .kf-sc-rv-foot__days  b { font-size: var(--sp-t-item); }
+  .kf-sc-rv-foot__acts {
+    align-items: flex-end;
+    flex: 0 0 auto;
+    max-width: 50%;
+  }
+  .kf-sc-rv-foot__acts .kf-btn--primary { min-height: 48px; padding: 10px 14px; }
+  .kf-sc-rv-blocker,
+  .kf-sc-rv-err { max-width: 220px; }
+}
+
+@media (max-width: 440px) {
+  /* On the smallest phones, drop the day count. Meals + dollars +
+     Submit keep the summary at ~110px. */
+  .kf-sc-rv-foot__days { display: none; }
+}
+
+/* Phone: hide the per-line Price column below 440px so the service
+   name has the row to breathe. Before tax column stays; count stays. */
+@media (max-width: 440px) {
+  .kf-sc-rv-dl thead th.kf-sc-rv-dl__p,
+  .kf-sc-rv-dl td.kf-sc-rv-dl__p { display: none; }
+}
+
+/* ─── Finish overlay ─── */
+
+.kf-sc-win {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--sp-navy-deep) 70%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: var(--sp-sp-4);
+}
+.kf-sc-win__card {
+  background: var(--sp-navy);
+  color: var(--sp-on-navy);
+  border-radius: var(--sp-r-card);
+  padding: var(--sp-sp-6) var(--sp-sp-5);
+  max-width: 480px;
+  width: 100%;
+  text-align: center;
+  box-shadow: var(--sp-shadow-float);
+}
+.kf-sc-win__check {
+  width: 72px;
+  height: 72px;
+  margin-bottom: var(--sp-sp-3);
+}
+.kf-sc-win__check circle { fill: none; stroke: var(--sp-good-on-navy); stroke-width: 4; }
+.kf-sc-win__check path { fill: none; stroke: var(--sp-good-on-navy); stroke-width: 6; stroke-linecap: round; stroke-linejoin: round; }
+.kf-sc-win__title {
+  margin: 0 0 var(--sp-sp-2);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-title);
+  color: var(--sp-on-navy);
+  font-weight: 800;
+}
+.kf-sc-win__lead {
+  margin: 0 0 var(--sp-sp-4);
+  color: var(--sp-on-navy-text);
+  font-size: var(--sp-t-label);
+}
+.kf-sc-win__facts {
+  display: flex;
+  justify-content: center;
+  gap: var(--sp-sp-6);
+  margin: 0 0 var(--sp-sp-4);
+}
+.kf-sc-win__facts dt {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  color: var(--sp-on-navy-dim);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.kf-sc-win__facts dd {
+  margin: 4px 0 0;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-num);
+  font-weight: 800;
+  color: var(--sp-on-navy);
+  font-variant-numeric: tabular-nums;
+}
+.kf-sc-win__set {
+  margin: 0 0 var(--sp-sp-4);
+  color: var(--sp-on-navy);
+  font-size: var(--sp-t-body);
+}
+.kf-sc-win__set b { color: var(--sp-good-on-navy); }
+.kf-sc-win__acts {
+  display: flex;
+  justify-content: center;
+  gap: var(--sp-sp-2);
+}
