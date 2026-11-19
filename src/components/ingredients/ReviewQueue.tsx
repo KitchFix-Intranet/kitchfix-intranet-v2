@@ -8,6 +8,7 @@ import { serviceClient } from "@/lib/supabase/service";
 import { COUNTABLE_OBSERVATIONS_VIEW, applyCountableFilter } from "@/lib/ingredients/countability";
 import { categoryForParent } from "@/lib/ingredients/categories";
 import { isMeasuresWorld, readAllMeasures } from "@/lib/ingredients/measuresRead";
+import { readActiveIngredients, type MinimalSupabase } from "@/lib/ingredients/readIngredients";
 import { startTimer, mark, endTimer } from "@/lib/timing";
 // M2 §4B part 2: the each-measure shape helpers are no longer
 // imported by client or server components in the render tree. Nothing
@@ -202,15 +203,16 @@ async function loadReview() {
   // toggle.
   const [vendorsRes, ingredientsRes, notFoodCountRes] = await Promise.all([
     client.from("pr_vendors").select("id,name"),
-    client
-      .from("pr_ingredients")
-      // N6: each_measure_qty + each_measure_uom + each_measure_source
-      // replace N5's avg_weight_lb + avg_weight_source on the ingredient
-      // SELECT. Additive against pre-N5; 439 rows, read once, no new
-      // query.
-      .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source,yield_pct,yield_source")
-      .eq("status", "active")
-      .order("name"),
+    // T2 §2: paged reader fails loudly on a short list so the queue's
+    // category / sub-category / merge dropdowns can never show a
+    // 1,000-capped slice as if it were the full set.
+    readActiveIngredients<Ingredient>(client as unknown as MinimalSupabase, {
+      columns:
+        "id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source,yield_pct,yield_source",
+    }).then(
+      (rows) => ({ data: rows, error: null }),
+      (error: Error) => ({ data: null, error })
+    ),
     client
       .from("pr_vendor_items")
       .select("id", { count: "exact", head: true })

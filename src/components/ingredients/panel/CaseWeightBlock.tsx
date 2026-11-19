@@ -19,6 +19,8 @@ import { priceInUnit } from "@/lib/ingredients/measures";
 import type { ReviewGroupItem } from "../itemTypes";
 import { postJson } from "./common";
 import { useSaveWithRefresh } from "./useSaveWithRefresh";
+import { SaveFlash } from "./SaveFlash";
+import { useDirtyEditor } from "./dirty";
 
 export function CaseWeightBlock({
   item,
@@ -47,7 +49,7 @@ export function CaseWeightBlock({
   const storedCw = localCw;
   const [open, setOpen] = useState<boolean>(forceOpen || storedCw != null);
   const [val, setVal] = useState<string>(storedCw != null ? String(storedCw) : "");
-  const { save: runSave, busy } = useSaveWithRefresh();
+  const { save: runSave, busy, savedAt, error } = useSaveWithRefresh();
 
   // Not shown at all for a weight case (pack_uom is weight). Those
   // items price per the pack's own weight; no override needed.
@@ -76,6 +78,13 @@ export function CaseWeightBlock({
   const n = val.trim() ? Number(val) : null;
   const valid = n == null || (Number.isFinite(n) && n > 0 && n <= 5000);
   const dirty = (storedCw ?? null) !== (n ?? null);
+  // T2 §3: the panel's Discard ask asks us to reset to what the server
+  // stored; that is storedCw -> the input's string form.
+  useDirtyEditor(
+    `case-weight-${item.id}`,
+    dirty && !busy,
+    () => setVal(storedCw != null ? String(storedCw) : "")
+  );
 
   async function save() {
     // T4 §3 wrapper keeps the Save button in "Saving..." until the
@@ -192,6 +201,7 @@ export function CaseWeightBlock({
             Clear
           </button>
         ) : null}
+        <SaveFlash savedAt={savedAt} error={error} />
       </div>
     </div>
   );

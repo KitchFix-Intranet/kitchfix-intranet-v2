@@ -10,6 +10,7 @@ import { useRouter } from "next/navigation";
 import { Undo2 } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount } from "@/lib/fmt";
+import { postJson, saveErrorSentence } from "./panel/common";
 
 export function UndoMergeButton({ sourceId }: { sourceId: string }) {
   const router = useRouter();
@@ -18,24 +19,11 @@ export function UndoMergeButton({ sourceId }: { sourceId: string }) {
   async function undo() {
     if (busy) return;
     setBusy(true);
-    type Resp = { ok?: boolean; error?: string; restoredItems?: number };
-    let data: Resp | null = null;
-    let status = 0;
-    try {
-      const res = await fetch("/api/review/undo-merge", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ sourceId }),
-      });
-      status = res.status;
-      data = (await res.json().catch(() => null)) as Resp | null;
-      if (!res.ok || !data?.ok) {
-        toast(data?.error ?? `Undo ${status}`, { tone: "block" });
-        setBusy(false);
-        return;
-      }
-    } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), { tone: "block" });
+    type Resp = { ok?: boolean; restoredItems?: number };
+    const r = await postJson("/api/review/undo-merge", { sourceId });
+    const data = (r.data ?? null) as Resp | null;
+    if (!r.ok || !data?.ok) {
+      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
       setBusy(false);
       return;
     }

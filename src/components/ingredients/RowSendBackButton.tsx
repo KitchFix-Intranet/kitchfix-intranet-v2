@@ -5,15 +5,14 @@
 // /api/review/undo with { itemId } - the same route the review
 // queue's Undo uses. No new backend.
 //
-// undoConfirm keeps ingredient_id, so the item reappears in the queue
-// still pointed at this master; the queue's own action bar (Relink /
-// New ingredient / Keep separate) is where it then gets corrected.
-// The golden link is soft-revoked, not deleted, so the matcher stops
-// being trained on a confirmation Kevin has taken back.
+// T2 §5: the former window.confirm is replaced by an in-page
+// "What happens" ask. Esc closes the ask; no typed field so no
+// Discard needed.
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/ui/Toaster";
+import { postJson, saveErrorSentence } from "./panel/common";
 
 export function RowSendBackButton({
   itemId,
@@ -24,48 +23,83 @@ export function RowSendBackButton({
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  const [askOpen, setAskOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const cancelBtnRef = useRef<HTMLButtonElement>(null);
 
-  async function onClick() {
-    if (busy) return;
-    // eslint-disable-next-line no-alert
-    const ok = window.confirm(
-      `Send "${itemName}" back to the review queue?\n\n` +
-        `The confirmed link is withdrawn and the item returns to the queue ` +
-        `still pointed at this ingredient, where it can be relinked or split.`
-    );
-    if (!ok) return;
-    setBusy(true);
-    try {
-      const res = await fetch("/api/review/undo", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ itemId }),
-      });
-      const data = (await res.json().catch(() => null)) as { error?: string } | null;
-      if (!res.ok) {
-        toast(data?.error ?? `Send back failed (${res.status})`, { tone: "block" });
-        setBusy(false);
-        return;
+  useEffect(() => {
+    if (!askOpen) return;
+    cancelBtnRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !busy) {
+        e.preventDefault();
+        setAskOpen(false);
       }
-      toast("Sent back to review", { tone: "good" });
-    } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), { tone: "block" });
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [askOpen, busy]);
+
+  async function sendBack() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    const r = await postJson("/api/review/undo", { itemId });
+    if (!r.ok) {
+      setError(saveErrorSentence(r) ?? "Nothing was saved.");
       setBusy(false);
       return;
     }
+    toast("Sent back to review", { tone: "good" });
     setBusy(false);
+    setAskOpen(false);
     router.refresh();
   }
 
+  if (!askOpen) {
+    return (
+      <button
+        type="button"
+        className={`kf-btn kf-btn--line kf-btn--sm${busy ? " is-busy" : ""}`}
+        disabled={busy}
+        onClick={() => setAskOpen(true)}
+        title="Withdraw this confirmation and send the item back to the review queue"
+      >
+        Send back
+      </button>
+    );
+  }
   return (
-    <button
-      type="button"
-      className={`kf-btn kf-btn--line kf-btn--sm${busy ? " is-busy" : ""}`}
-      disabled={busy}
-      onClick={onClick}
-      title="Withdraw this confirmation and send the item back to the review queue"
-    >
-      Send back
-    </button>
+    <div className="kf-ing-ask" role="group" aria-label="Confirm send back">
+      <p className="kf-ing-ask__body">
+        Send &ldquo;{itemName}&rdquo; back to the review queue. The confirmed link is
+        withdrawn and the item returns to the queue still pointed at this ingredient,
+        where it can be relinked or split.
+      </p>
+      <div className="kf-ing-ask__actions">
+        <button
+          type="button"
+          className={`kf-btn kf-btn--primary kf-btn--sm${busy ? " is-busy" : ""}`}
+          disabled={busy}
+          onClick={sendBack}
+        >
+          {busy ? "Saving..." : "Send back"}
+        </button>
+        <button
+          ref={cancelBtnRef}
+          type="button"
+          className="kf-btn kf-btn--line kf-btn--sm"
+          disabled={busy}
+          onClick={() => setAskOpen(false)}
+        >
+          Cancel
+        </button>
+        {error ? (
+          <span className="kf-dpn__flash kf-dpn__flash--err" role="alert">
+            {error}
+          </span>
+        ) : null}
+      </div>
+    </div>
   );
 }

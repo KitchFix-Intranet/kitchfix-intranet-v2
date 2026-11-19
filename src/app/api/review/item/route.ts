@@ -38,6 +38,7 @@ import {
   readMeasuresForIngredientBatchable,
   legacyEachMeasureToMeasures,
 } from "@/lib/ingredients/measuresRead";
+import { readActiveIngredients, type MinimalSupabase } from "@/lib/ingredients/readIngredients";
 import { startTimer, mark, endTimer } from "@/lib/timing";
 // M2 §4B part 2: shape helpers no longer called here. Nothing on
 // screen reads each_measure_*; the GET returns the raw legacy
@@ -239,13 +240,16 @@ export async function GET(req: NextRequest) {
           .maybeSingle()
       : Promise.resolve({ data: null as unknown, error: null }),
     // T4 §2a: distinct parent names across active ingredients. One
-    // SELECT, one small payload - a few hundred bytes versus the ~249
-    // KB `parents` list this call used to return.
-    client
-      .from("pr_ingredients")
-      .select("parent")
-      .eq("status", "active")
-      .not("parent", "is", null),
+    // small payload (names only). T2 §2: goes through the paged
+    // reader so a 1,000-row cap on pr_ingredients never silently
+    // short-reads this list.
+    readActiveIngredients<{ parent: string | null }>(
+      client as unknown as MinimalSupabase,
+      { columns: "parent", nots: [["parent", "is", null]] }
+    ).then(
+      (rows) => ({ data: rows, error: null as { message: string } | null }),
+      (error: Error) => ({ data: null, error: { message: error.message } })
+    ),
     // T4 §2b: mates depend only on ingredient_id (which the item row
     // above already gave us). Runs alongside the enrichment reads
     // instead of serially after them. When the item has no ingredient

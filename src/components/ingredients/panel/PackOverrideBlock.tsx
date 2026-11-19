@@ -17,6 +17,7 @@ import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 import { SaveFlash } from "./SaveFlash";
 import { postJson } from "./common";
 import { useSaveWithRefresh } from "./useSaveWithRefresh";
+import { useDirtyEditor } from "./dirty";
 import {
   UOM_GROUPS,
   BILLED_UNIT_GROUPS,
@@ -196,6 +197,9 @@ export function PackOverrideBlock({
     billedUnit !== initialBilledUnit ||
     note.trim().length > 0 ||
     caseSrc !== initialCaseSrc;
+  // T2 §3: panel Discard ask -> resetDrafts() snaps every field back
+  // to the row the server rendered.
+  useDirtyEditor(`pack-${item.id}`, dirty && !busy, resetDrafts);
   const previewCasePrice =
     caseSrc === "catalog" && catalogV != null
       ? { v: catalogV, src: "catalog" as const }

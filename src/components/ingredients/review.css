@@ -633,6 +633,41 @@
   border: 1px solid var(--sp-sky-line);
   border-radius: var(--sp-r-ctl);
   overflow: hidden;
+  position: relative;
+}
+
+/* T2 round 2 §3: in-panel "Discard what you typed?" ask for the
+ * review-card panels. Centered card over the panel body + foot when
+ * Esc or Cancel fires while any field in the panel's scope is
+ * dirty. */
+.kf-rvc__panel-ask {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--sp-navy-deep) 45%, transparent);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-sp-3);
+  padding: var(--sp-sp-4);
+  z-index: 5;
+}
+.kf-rvc__panel-ask h5 {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  font-weight: var(--sp-w-heavy);
+  color: var(--sp-card);
+  margin: 0;
+}
+.kf-rvc__panel-ask p {
+  color: var(--sp-card);
+  font-size: var(--sp-t-table);
+  margin: 0;
+}
+.kf-rvc__panel-ask-actions {
+  display: flex;
+  gap: var(--sp-sp-2);
+  flex-wrap: wrap;
 }
 .kf-rvc__panel-head {
   display: flex;
@@ -1265,6 +1300,61 @@
 
 /* N13.1 §3: `.kf-dpn__flash` (+ --ok / --err / @keyframes / reduced-
  * motion) and the `.kf-dpn__ledger-*` family moved to drawer.css. */
+
+/* T2 §5: in-page "What happens" ask + optional-note form that
+ * replace the five browser pop-ups. Both drop into whatever container
+ * held the pop-up originally (row button, panel foot, review card
+ * action bar). Tokens only. */
+.kf-ing-ask {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+  padding: var(--sp-sp-3);
+  background: var(--sp-sky-tint);
+  border: 1px solid var(--sp-sky-line);
+  border-radius: var(--sp-r-sm);
+}
+.kf-ing-ask__body {
+  margin: 0;
+  color: var(--sp-ink);
+  font-size: var(--sp-t-table);
+}
+.kf-ing-ask__actions {
+  display: flex;
+  gap: var(--sp-sp-2);
+  align-items: center;
+  flex-wrap: wrap;
+}
+.kf-ing-note-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+  padding: var(--sp-sp-3);
+  background: var(--sp-raise);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+}
+.kf-ing-note-form__label {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  color: var(--sp-ink);
+}
+.kf-ing-note-form__input {
+  min-height: var(--sp-floor-corp);
+  padding: 0 var(--sp-sp-3);
+  border: 1px solid var(--sp-line-field);
+  border-radius: var(--sp-r-ctl);
+  background: var(--sp-card);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  color: var(--sp-ink);
+}
+.kf-ing-note-form__actions {
+  display: flex;
+  gap: var(--sp-sp-2);
+  align-items: center;
+  flex-wrap: wrap;
+}
 
 /* N9: .kf-conf-chip family deleted. The confidence word is now plain
  * micro text on the Unit price cell's sub-line (override / from spend

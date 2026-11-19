@@ -10,6 +10,7 @@ import { useRouter } from "next/navigation";
 import { Play, Check, AlertTriangle } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount } from "@/lib/fmt";
+import { postJson, saveErrorSentence } from "./panel/common";
 
 type Sample = { id: string; result: "converted" | "flagged"; from: string; to?: string };
 type RunState =
@@ -27,27 +28,22 @@ export function PackOverrideMigrateButton() {
     setState({ kind: "running" });
     type Resp = {
       ok?: boolean;
-      error?: string;
       converted?: number;
       flagged?: number;
       skipped?: number;
       samples?: Sample[];
     };
-    let data: Resp | null = null;
-    let status = 0;
-    try {
-      const res = await fetch("/api/admin/pack-override-migrate", { method: "POST" });
-      status = res.status;
-      data = (await res.json().catch(() => null)) as Resp | null;
-      if (!res.ok || !data?.ok) {
-        const msg = data?.error ?? `Migration failed (${status})`;
-        toast(msg, { tone: "block" });
-        setState({ kind: "error", message: msg });
-        return;
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      toast(msg, { tone: "block" });
+    // T2 §1 long-job path: no 30 s cap. Failure wording comes from
+    // the one vocabulary; the error reads under the button, not in a
+    // block toast.
+    const r = await postJson(
+      "/api/admin/pack-override-migrate",
+      {},
+      { timeoutMs: null }
+    );
+    const data = (r.data ?? null) as Resp | null;
+    if (!r.ok || !data?.ok) {
+      const msg = saveErrorSentence(r) ?? "Nothing was saved.";
       setState({ kind: "error", message: msg });
       return;
     }

@@ -256,6 +256,36 @@ already-mounted container. For tone-switched regions, use two
 persistent siblings - one polite, one assertive - and route each
 toast to the one that matches.
 
+## 20. `await fetch()` with no try/catch freezes the control for good
+
+A save handler that does `const res = await fetch(url, ...)` with no
+try/catch will propagate a rejection (network dropped, timeout fired,
+page unloading) past the awaiter. If the control's busy flag was set
+before the await and the handler has no finally block, the busy flag
+never clears - the button reads "Saving..." indefinitely and the
+whole surface is stuck. The symptom looks like the server never
+replied; the real cause is the exception. One shared path per lane:
+`src/components/ingredients/panel/common.ts::postJson` never throws -
+it returns `{ kind: "no-reply" | "server" | "refused" | "ok" }` and
+the shared helper maps the kind to one of three plain sentences
+beside the control. For long jobs (matcher, intake, backfills) pass
+`timeoutMs: null` so the default 30 s cap does not fire.
+
+## 21. PostgREST caps every `.select()` list at 1,000 rows, silently
+
+A page that reads `from("pr_ingredients").select(...).eq("status","active")
+.order("name")` without `.range()` gets at most 1,000 rows on this
+project. Past that boundary the list just stops - no error, no note.
+Four surfaces (`IngredientMasters`, `ReviewQueue`'s dropdowns,
+`/api/review/ingredient`, `/api/review/item`) were each one ingredient
+away from a silent short read. Fix: the shared paged reader at
+`src/lib/ingredients/readIngredients.ts` runs a `count: "exact",
+head: true` on the same filter, pages in 1,000-row windows, and
+throws `IngredientListShortError` if the paged total does not match
+the count. A page shows its error block; a picker says so in place
+and offers nothing to pick. Proof: `scripts/t2_reader_proof.mjs`
+stands in a 2,350-row fake and a page-drop variant.
+
 Branch-specific items we have already lived through on
 `step-1-shell-and-ingredients`:
 

@@ -1501,3 +1501,48 @@
   align-items: center;
   gap: var(--sp-sp-2);
 }
+
+/* T2 §3: in-panel "Discard what you typed?" ask. Overlays the aside
+ * contents when Esc, the close button or the backdrop fires while
+ * any editor reports a changed value. Keep editing is the default
+ * (focus lands on it). Discard calls each dirty editor's reset and
+ * then closes the panel. */
+.kf-dpn__discard-ask {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--sp-navy-deep) 55%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-sp-5);
+  z-index: 10;
+}
+.kf-dpn__discard-ask-inner {
+  background: var(--sp-card);
+  border-radius: var(--sp-r-card);
+  box-shadow: var(--sp-shadow-float);
+  padding: var(--sp-sp-5);
+  max-width: 420px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+}
+.kf-dpn__discard-ask-inner h4 {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  font-weight: var(--sp-w-heavy);
+  color: var(--sp-ink);
+  margin: 0;
+}
+.kf-dpn__discard-ask-inner p {
+  color: var(--sp-body);
+  font-size: var(--sp-t-table);
+  margin: 0;
+}
+.kf-dpn__discard-ask-actions {
+  display: flex;
+  gap: var(--sp-sp-2);
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
