@@ -476,6 +476,23 @@
  * phone media rules below. */
 .kf-sc-wkrow__phone-open-sub { display: none; }
 
+/* Train 3: Check-and-submit link on each week row. Sits under the
+ * row's day cells (or line when folded). */
+.kf-sc-wkrow__review {
+  display: block;
+  padding: var(--sp-sp-2) var(--sp-sp-3);
+  border-top: 1px solid var(--sp-line-soft);
+  background: var(--sp-card);
+  color: var(--sp-navy);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+  text-decoration: none;
+  text-align: center;
+  min-height: var(--sp-floor-chef);
+}
+.kf-sc-wkrow__review:hover { background: var(--sp-sky-soft); }
+
 /* The days grid. */
 .kf-sc-wkrow__days {
   list-style: none;

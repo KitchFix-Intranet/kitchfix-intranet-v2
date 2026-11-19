@@ -3,6 +3,14 @@
 //
 // Run via: node --import ./scripts/_setup/register-aliases.mjs --test \
 //          src/lib/billing/__tests__/runFinalizeEffects.test.mjs
+//
+// SC train 3 (2026-11-17): resolveEffectiveQboMode now gates on
+// SC_V2_OUTBOUND. These tests exercise the engine's LIVE-ROUTING
+// contract and assume the per-account qbo_mode flows through. Pin
+// the gate to "live" for this file so the resolver honours the DB
+// column exactly as it did before the gate existed. In production
+// the gate stays unset (off); this is a test-only pin.
+process.env.SC_V2_OUTBOUND = "live";
 
 import test from "node:test";
 import assert from "node:assert/strict";

@@ -24,19 +24,18 @@ import { fmtDate } from "@/lib/fmt";
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 export function PeriodStage({
-  period, isBilled, siteToday, prevPeriodHref, nextPeriodHref, thisPeriodHref, dayHrefs,
+  period, isBilled, siteToday, prevPeriodHref, nextPeriodHref, thisPeriodHref, dayHrefs, reviewHrefs,
 }: {
   period: PeriodView;
   isBilled: boolean;
   siteToday: string;
-  // Precomputed strings so this server tree hands nothing but
-  // serializable data to its client children (WeekRow, LegendDisclosure).
   prevPeriodHref: string | null;
   nextPeriodHref: string | null;
   thisPeriodHref: string;
-  // Per-day open link, pre-built as a Record so the client child
-  // takes no function prop. iso -> href.
   dayHrefs: Record<string, string>;
+  // Train 3: per-week review link. weekStart -> href. Missing key
+  // means the week shows no link (no service, etc).
+  reviewHrefs: Record<string, string>;
 }) {
   const todayIsInPeriod = siteToday >= period.startIso && siteToday <= period.endIso;
 
@@ -116,6 +115,7 @@ export function PeriodStage({
                 foldableShort={foldableShort}
                 foldablePhone={foldablePhone}
                 dayHrefs={dayHrefs}
+                reviewHref={reviewHrefs[w.weekStart] ?? null}
               />
             </li>
           );

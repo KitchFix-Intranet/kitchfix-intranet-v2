@@ -32,6 +32,7 @@ import { isScLockOverrideDb } from "@/lib/sc/admin";
 import { buildInvoicePayload, UnpricedLinesError } from "@/lib/sc/billing/buildInvoicePayload";
 import { postInvoiceDraft, NotAllowlistedError, QboPostError } from "@/lib/sc/billing/qboAdapter";
 import { fireN1, fireN2, fireNoOpAlert } from "@/lib/sc/billing/qboNotifications";
+import { resolveEffectiveQboMode } from "@/lib/sc/submit/resolveQboMode";
 import type { SupabaseClient, FinalizeRow, InvoiceRecord } from "@/lib/sc/types";
 import { getSalariedManagerEmails } from "@/lib/sc/billing/getSalariedManagerEmails";
 
@@ -390,7 +391,8 @@ export async function checkLiveInvoiceForRevert(
 export async function assertWeekOpenForWrite(
   accountKey: string,
   dates: string[],
-  email: string | null | undefined
+  email: string | null | undefined,
+  supaArg?: any
 ): Promise<null | {
   code: "WEEK_FINALIZED";
   finalizedWeeks: Array<{ weekStart: string; status: string }>;
@@ -406,40 +408,80 @@ export async function assertWeekOpenForWrite(
 
   // Collapse to unique week starts. A 30-day bulk write touches at
   // most 5-6 weeks; the loop below is bounded by that.
-  const uniqueWeekStarts = new Set();
+  const uniqueWeekStarts: string[] = [];
+  const seen = new Set<string>();
   for (const d of dates) {
-    uniqueWeekStarts.add(mondayOfWeek(d));
+    const m = mondayOfWeek(d);
+    if (!seen.has(m)) { seen.add(m); uniqueWeekStarts.push(m); }
   }
 
-  // One SELECT per unique week. supabase-js .rpc isn't necessary
+  const supa = supaArg || getServiceClient();
+
+  // Gap A fix (round 2): for a biweekly account, the finalize row
+  // is keyed on the CLOSING week's Monday. A write on a day inside
+  // the OPENING week (Week 1 or 3) must see the pair's lock. We
+  // additionally probe closingMonday = openingMonday + 7 for any
+  // first-week date in the input.
+  //
+  // Shape: read account cadence once; for biweekly, read week_label
+  // for every unique Monday; any Monday whose label is 1 or 3 gets
+  // an extra finalize probe on its closing Monday.
+  const { data: amRow, error: amErr } = await supa
+    .from("sc_qbo_account_map")
+    .select("cadence")
+    .eq("account_key", accountKey)
+    .maybeSingle();
+  if (amErr) throw amErr;
+  const isBiweekly = (amRow as { cadence: string | null } | null)?.cadence === "biweekly";
+
+  const closingByOpening = new Map<string, string>();
+  if (isBiweekly) {
+    const { data: labels, error: lblErr } = await supa
+      .from("sc_day_metadata")
+      .select("service_date, week_label")
+      .eq("account_key", accountKey)
+      .in("service_date", uniqueWeekStarts);
+    if (lblErr) throw lblErr;
+    const labelByMonday = new Map<string, string | null>();
+    for (const row of (labels ?? []) as Array<{ service_date: string; week_label: string | null }>) {
+      labelByMonday.set(row.service_date, row.week_label ?? null);
+    }
+    for (const ws of uniqueWeekStarts) {
+      const idx = parseWeekIndex(labelByMonday.get(ws));
+      if (idx === 1 || idx === 3) closingByOpening.set(ws, addDaysIso(ws, 7));
+    }
+  }
+
+  // One SELECT per unique Monday, plus one per biweekly opening
+  // Monday's closing partner. supabase-js .rpc isn't necessary
   // here - a table SELECT with equal predicates is simpler and
   // hits the partial unique index cleanly.
+  const probes: Array<{ keyForMessage: string; probeMonday: string }> = [];
+  for (const ws of uniqueWeekStarts) {
+    probes.push({ keyForMessage: ws, probeMonday: ws });
+    const close = closingByOpening.get(ws);
+    if (close) probes.push({ keyForMessage: ws, probeMonday: close });
+  }
   const results = await Promise.all(
-    [...uniqueWeekStarts].map((ws) =>
-      // eslint-disable-next-line no-async-promise-executor
-      new Promise(async (resolve, reject) => {
-        try {
-          const supa = getServiceClient();
-          const { data, error } = await supa
-            .from("sc_week_finalize")
-            .select("week_start, status")
-            .eq("account_key", accountKey)
-            .eq("week_start", ws)
-            .neq("status", "reverted")
-            .maybeSingle();
-          if (error) return reject(error);
-          resolve({ weekStart: ws, live: data || null });
-        } catch (err: any) {
-          reject(err);
-        }
-      })
-    )
+    probes.map(async ({ keyForMessage, probeMonday }) => {
+      const { data, error } = await supa
+        .from("sc_week_finalize")
+        .select("week_start, status")
+        .eq("account_key", accountKey)
+        .eq("week_start", probeMonday)
+        .neq("status", "reverted")
+        .maybeSingle();
+      if (error) throw error;
+      return { keyForMessage, live: data || null };
+    })
   );
 
-  const finalizedWeeks: any[] = [];
-  for (const r of results as any[]) {
-    if (r.live) {
-      finalizedWeeks.push({ weekStart: r.weekStart, status: r.live.status });
+  const finalizedWeeks: Array<{ weekStart: string; status: string }> = [];
+  const seenKey = new Set<string>();
+  for (const r of results) {
+    if (r.live && !seenKey.has(r.keyForMessage)) {
+      seenKey.add(r.keyForMessage);
+      finalizedWeeks.push({ weekStart: r.keyForMessage, status: r.live.status });
     }
   }
 
@@ -647,9 +689,13 @@ export async function runFinalizeEffects(ctx: FinalizeCtx, deps: FinalizeDeps = 
   }
 
   // PR-F: qbo_mode is authoritative from sc_qbo_account_map (sc-35).
-  // Missing column falls back to 'test' so a partially-applied
-  // migration cannot silently flip to live-mode behaviour.
-  const qboMode = accountMap.qbo_mode === "live" ? "live" : "test";
+  // SC train 3 (2026-11-17): the single live/test decision for V2
+  // runs through resolveEffectiveQboMode, which reads the
+  // SC_V2_OUTBOUND env gate first. `off` + `test` force test
+  // regardless of the DB row; `live` respects the DB (four
+  // accounts already live for v1). This is the ONLY site in
+  // src/lib/sc/** that calls the resolver with the account row.
+  const qboMode = resolveEffectiveQboMode(accountMap);
   // salariedManagerEmails derived live from `people` (Kevin ruling
   // 2026-09-17). Same predicate + ordering everywhere - see
   // src/lib/billing/getSalariedManagerEmails.js. Replaces the read

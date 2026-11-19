@@ -47,6 +47,15 @@ export function CalendarPage({
     }
   }
 
+  // Train 3: per-week review link. weekStart -> /service/review?site=&week=.
+  // Show a link whenever the week has any service.
+  const reviewHrefs: Record<string, string> = {};
+  for (const w of view.period.weeks) {
+    if (w.hasService) {
+      reviewHrefs[w.weekStart] = `${basePath}/review?site=${view.site.slug}&week=${w.weekStart}`;
+    }
+  }
+
   // The band: the one thing the site needs first.
   const band = bandContent(view);
 
@@ -76,6 +85,7 @@ export function CalendarPage({
         nextPeriodHref={nextPeriodHref}
         thisPeriodHref={thisPeriodHref}
         dayHrefs={dayHrefs}
+        reviewHrefs={reviewHrefs}
       />
 
       <YearSection
