@@ -43,6 +43,7 @@ import { parseMoneyInput } from "@/lib/invoices/moneyInput";
 import type { SiteGlCode } from "@/lib/invoices/glCodes";
 import type { UsualCode } from "@/lib/invoices/usualCodes";
 import { applySingleCodeFill } from "@/lib/invoices/usualCodes";
+import { waitForCheckAction } from "@/lib/invoices/saveWait";
 import { VendorPicker } from "./VendorPicker";
 import { OwnerPreviewBanner } from "./OwnerPreviewBanner";
 import { Sheet } from "./Sheet";
@@ -146,12 +147,41 @@ export function CaptureSittingRoot({
   // user-driven coding action (chip, Add a code, Put the rest,
   // updateLine, removeLine).
   const fillMarkedRef = useRef<boolean>(false);
+  // Train 2b fix 1 / 2.3. check() waits on the save itself via
+  // waitForCheckAction. The ref mirrors saveState so the waiter
+  // sees "stopped" the moment the retry loop gives up. The
+  // listener set is signalled from flush()'s finally so the
+  // waiter re-decides on every tick of save-loop work; no fixed
+  // sleeps anywhere in the check path.
+  const saveStateRef = useRef<"idle" | "saving" | "offline" | "stopped">("idle");
+  const saveSettledListenersRef = useRef<Set<() => void>>(new Set());
   const pageTriggerRef = useRef<HTMLButtonElement | null>(null);
   const sendButtonRef = useRef<HTMLButtonElement | null>(null);
   const addFileInputRef = useRef<HTMLInputElement | null>(null);
   const replaceFileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => { draftRef.current = draft; }, [draft]);
+
+  // Fire every one-shot save-settled listener. Called from flush()
+  // on every path (ok, conflict, 500, catch) in its finally, and
+  // from the saveStateRef mirror effect so the waiter can see
+  // "stopped" on the next tick after setSaveState("stopped").
+  const notifySaveSettled = useCallback(() => {
+    // Copy first so a listener that unregisters itself during the
+    // call does not mutate the Set we're iterating.
+    const fns = Array.from(saveSettledListenersRef.current);
+    for (const fn of fns) fn();
+  }, []);
+
+  // Keep the saveState mirror in sync so the check-waiter reads
+  // the terminal "stopped" without a re-render dependency. Signal
+  // the waiter too: setSaveState("stopped") fires inside flush's
+  // retry path, which happens BEFORE the ref catches up; waking
+  // the waiter after the ref lands lets it decide "stop".
+  useEffect(() => {
+    saveStateRef.current = saveState;
+    notifySaveSettled();
+  }, [saveState, notifySaveSettled]);
 
   // Train 2b round-2 fix #1. An effect runs on first mount no
   // matter what - so the re-sync's writeLocal(false) was deleting
@@ -307,11 +337,15 @@ export function CaptureSittingRoot({
       writeLocal(true);
     } finally {
       inflightRef.current = false;
-      if (Object.keys(stagedRef.current).length > 0 && saveState !== "stopped") {
+      if (Object.keys(stagedRef.current).length > 0 && saveStateRef.current !== "stopped") {
         scheduleFlush();
       }
+      // Train 2b fix 1 / 2.3: wake any check-waiter so it re-runs
+      // the decision. Fires on every finally path (ok, conflict,
+      // 500, offline, early returns above).
+      notifySaveSettled();
     }
-  }, [asQ, draftId, isPreview, router, saveState, scheduleFlush, writeLocal]);
+  }, [asQ, draftId, isPreview, notifySaveSettled, router, scheduleFlush, writeLocal]);
 
   const stage = useCallback(<K extends keyof Staged>(key: K, value: Staged[K]) => {
     stagedRef.current = { ...stagedRef.current, [key]: value };
@@ -629,7 +663,36 @@ export function CaptureSittingRoot({
     if (checking) return;
     setChecking(true);
     try {
-      if (Object.keys(stagedRef.current).length > 0) await flush();
+      // Train 2b fix 1 / 2.3: wait on the save itself.
+      //
+      // If the retry loop is still running, let it finish; if it
+      // gave up (saveState=stopped), do not run the check - the
+      // save line already carries the reason. If there is staged
+      // typing (user pressed Enter mid-flight), kick the queue
+      // and wait on it.
+      if (Object.keys(stagedRef.current).length > 0 && !inflightRef.current) {
+        // Nothing in flight but typing is queued: start the next
+        // save so the waiter has something to wait on.
+        void flush();
+      }
+      const decision = await waitForCheckAction({
+        getState: () => ({
+          inFlight: inflightRef.current,
+          stagedKeys: Object.keys(stagedRef.current).length,
+          stopped: saveStateRef.current === "stopped",
+        }),
+        onSettled: (fn) => {
+          saveSettledListenersRef.current.add(fn);
+          return () => saveSettledListenersRef.current.delete(fn);
+        },
+      });
+      if (decision === "stop") {
+        // The save line already explains. Keep the button on
+        // "Checking" would be a lie - flip it back by falling
+        // through to the finally.
+        return;
+      }
+
       const res = await fetch(`/api/invoices/drafts/${draftId}/check${asQ}`, { method: "POST" });
       if (!res.ok) {
         setErrors([{ field: "files", message: "Could not run the check." }]);
@@ -775,10 +838,16 @@ export function CaptureSittingRoot({
             >
               <MoreHorizontal size={20} aria-hidden />
             </button>
-            {/* Train 2b fix-before-push #3: mount the Menu for the
-                phone trigger too. Without this the "..." on phone
-                opens nothing and Delete-this-invoice is unreachable. */}
-            {moreMenuOpen ? (
+            {/* Train 2b fix 1 / 2.1: exactly one Menu mounts for
+                the layout on screen. Before this, both the phone
+                head and the desk top row mounted a Menu off the
+                same flag; the hidden one's outside-click handler
+                fired when the visible one's item was pressed and
+                unmounted both before the click landed, so Delete
+                did nothing. useIsPhone() picks the single mount;
+                useIsPhone() returns false on the server so SSR
+                output is stable. */}
+            {moreMenuOpen && isPhone ? (
               <Menu
                 label="More for this invoice"
                 anchorRef={morePhoneTriggerRef}
@@ -789,7 +858,6 @@ export function CaptureSittingRoot({
                     key: "delete",
                     label: "Delete this invoice",
                     icon: <Trash2 size={18} aria-hidden />,
-                    destructive: true,
                     onPick: () => void discard(),
                   },
                 ] : []}
@@ -828,7 +896,7 @@ export function CaptureSittingRoot({
             >
               <MoreHorizontal size={18} aria-hidden />
             </button>
-            {moreMenuOpen ? (
+            {moreMenuOpen && !isPhone ? (
               <Menu
                 label="More for this invoice"
                 anchorRef={moreTriggerRef}
@@ -839,7 +907,6 @@ export function CaptureSittingRoot({
                     key: "delete",
                     label: "Delete this invoice",
                     icon: <Trash2 size={18} aria-hidden />,
-                    destructive: true,
                     onPick: () => void discard(),
                   },
                 ] : []}
@@ -910,7 +977,6 @@ export function CaptureSittingRoot({
                             key: "remove",
                             label: "Remove the file",
                             icon: <Trash2 size={18} aria-hidden />,
-                            destructive: true,
                             onPick: () => void removeActive(),
                           },
                         ]}

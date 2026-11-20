@@ -40,20 +40,27 @@ interface Props {
   // Hide the header's close button (the parent provides its own
   // close path inside the body). Default false.
   hideClose?: boolean;
+  // Optional: the trigger that opened the sheet. On unmount focus
+  // returns there if still in the document. Safari on macOS does
+  // not focus a <button> on click, so capturing activeElement at
+  // mount lands focus on the body - an openerRef is the only
+  // reliable way back to the trigger. Train 2b fix 1 / 2.2.
+  openerRef?: React.RefObject<HTMLElement | null>;
   children: React.ReactNode;
 }
 
-export function Sheet({ title, onClose, footer, variant = "centered", hideClose = false, children }: Props) {
+export function Sheet({ title, onClose, footer, variant = "centered", hideClose = false, openerRef, children }: Props) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
 
-  // Remember what had focus before the sheet opened; give it back on
-  // close. Falls back to document.body (no-op) when nothing.
+  // Move focus into the sheet on mount. On unmount hand focus
+  // back to openerRef.current when the caller passed one (the
+  // most reliable path - Safari on macOS does not focus a button
+  // on click). Otherwise fall back to whatever had focus just
+  // before the sheet opened. If both are detached, do nothing.
   useEffect(() => {
     const previously = document.activeElement;
     if (previously instanceof HTMLElement) returnFocusRef.current = previously;
-    // Move focus into the sheet, preferring an element marked
-    // data-autofocus, else the first focusable, else the sheet.
     const root = rootRef.current;
     if (root) {
       const auto = root.querySelector<HTMLElement>("[data-autofocus]");
@@ -65,12 +72,15 @@ export function Sheet({ title, onClose, footer, variant = "centered", hideClose 
       }
     }
     return () => {
-      // Return focus (best effort; the element may have been
-      // detached).
+      const opener = openerRef?.current ?? null;
+      if (opener && typeof opener.focus === "function" && document.contains(opener)) {
+        opener.focus();
+        return;
+      }
       const el = returnFocusRef.current;
       if (el && typeof el.focus === "function" && document.contains(el)) el.focus();
     };
-  }, []);
+  }, [openerRef]);
 
   const onKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Escape") {

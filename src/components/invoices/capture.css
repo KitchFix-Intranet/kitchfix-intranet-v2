@@ -1355,10 +1355,4 @@
   background: var(--sp-sky-tint);
   color: var(--sp-navy);
 }
-.kf-inv-menu__item.is-destructive { color: var(--sp-block); }
-.kf-inv-menu__item.is-destructive:hover,
-.kf-inv-menu__item.is-destructive:focus-visible {
-  background: var(--sp-block-bg);
-  color: var(--sp-block);
-}
 .kf-inv-menu__icon { display: inline-flex; width: 18px; height: 18px; }
