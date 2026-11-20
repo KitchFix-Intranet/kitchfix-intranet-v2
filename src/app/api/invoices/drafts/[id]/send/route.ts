@@ -1,0 +1,144 @@
+// POST /api/invoices/drafts/[id]/send
+//
+// §5 of train 3:
+//   1. Switch off -> 409 sending_off.
+//   2. Re-run the same Ready check the check route runs.
+//      Not ready -> 409 with errors.
+//   3. Call invoices_v2_commit_send. The DB function is the
+//      only writer of `invoice_submissions` in this train.
+//   4. Deliver once in the same request (correction 2: claim
+//      the send row before delivering; release the claim at
+//      the end, pass or fail).
+//   5. Answer the browser with what is true: delivered or held.
+//
+// Correction 2 also:
+//   - already_sent + email_status='sent' -> answer delivered,
+//     send nothing;
+//   - already_sent + held + cannot claim -> answer held (the
+//     retry job owns it right now).
+//
+// Correction 5: on a DB 'copy' result, say "This vendor,
+// number, date and total are already on file." with two ways
+// out. No second read, no other site's details.
+//
+// Correction 9: maxDuration = 60.
+
+import { NextResponse } from "next/server";
+import { openInvoiceApi } from "@/lib/invoices/apiGuard";
+import {
+  getDraftById, listFilesForDraft,
+} from "@/lib/invoices/draftLoad";
+import { runReadyCheck } from "@/lib/invoices/readyCheck";
+import { activeCodesSetForSite } from "@/lib/invoices/glCodes";
+import { vendorIsAvailable } from "@/lib/invoices/vendorPicker";
+import { copyCheck } from "@/lib/invoices/duplicateCheck";
+import { outboundMode } from "@/lib/invoices/outboundGate";
+import { commitSend } from "@/lib/invoices/sendCommit";
+import { tryClaim, releaseClaim } from "@/lib/invoices/claim";
+import { deliverSend } from "@/lib/invoices/deliverSend";
+
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
+export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id: draftId } = await params;
+  const url = new URL(req.url);
+  const as = url.searchParams.get("as");
+
+  // 1. Switch gate. Off refuses with 409.
+  const mode = outboundMode();
+  if (mode === "off") {
+    return NextResponse.json({ kind: "sending_off" }, { status: 409 });
+  }
+
+  const open = await openInvoiceApi({ as, write: true });
+  if (!open.ok) return open.response;
+  const { sb, scope, ownerEmail } = open;
+
+  const draft = await getDraftById(sb, ownerEmail, draftId);
+  if (!draft) return new Response(null, { status: 404 });
+  if (!scope.accountKeys.includes(draft.account_key)) {
+    return new Response(null, { status: 404 });
+  }
+
+  // 2. Re-run Ready with the same inputs the check route uses.
+  const [files, codeSet, vendorOk, copyResult] = await Promise.all([
+    listFilesForDraft(sb, ownerEmail, draftId),
+    activeCodesSetForSite(sb, draft.account_key),
+    draft.vendor_id ? vendorIsAvailable(sb, draft.vendor_id) : Promise.resolve(false),
+    copyCheck(sb, ownerEmail, draft),
+  ]);
+  const check = runReadyCheck({
+    draft, files, activeCodesForSite: codeSet, vendorInScope: vendorOk,
+    copyError: copyResult ? copyResult.kind : null,
+  });
+  if (!check.ready) {
+    return NextResponse.json({
+      kind: "not_ready",
+      errors: check.errors,
+      copy_match: copyResult?.match ?? null,
+    }, { status: 409 });
+  }
+
+  // 3. Commit. The DB function is the one writer of invoice_submissions.
+  const commit = await commitSend(sb, draftId, ownerEmail, mode);
+  if (commit.result === "not_ready" || commit.result === "not_a_draft" || commit.result === "not_found") {
+    return NextResponse.json({ kind: commit.result }, { status: 409 });
+  }
+  if (commit.result === "copy") {
+    // Correction 5: no second read; no other site's details.
+    return NextResponse.json({
+      kind: "copy",
+      message: "This vendor, number, date and total are already on file.",
+    }, { status: 409 });
+  }
+  const invoiceId = commit.invoice_id;
+
+  // Pull the send row. "sent" came with a fresh row; "already_sent"
+  // may be either sent-and-done or still-held.
+  const { data: sendRow } = await sb
+    .from("invoice_sends")
+    .select("id, mode, email_status")
+    .eq("submission_id", invoiceId)
+    .maybeSingle();
+  if (!sendRow) {
+    return NextResponse.json({
+      kind: "held", invoice_id: invoiceId, code: "no_send_row",
+    }, { status: 200 });
+  }
+  const rowMode = sendRow.mode as "test" | "live";
+
+  if (sendRow.email_status === "sent") {
+    // already_sent + delivered: do not send a second email.
+    return NextResponse.json({
+      kind: "delivered", invoice_id: invoiceId, mode: rowMode,
+    }, { status: 200 });
+  }
+
+  // 4. Claim before deliver. Another process may race (the cron
+  //    job, or a parallel tab); the one that wins the conditional
+  //    UPDATE delivers.
+  const claimed = await tryClaim(sb, sendRow.id);
+  if (!claimed) {
+    return NextResponse.json({
+      kind: "held", invoice_id: invoiceId, mode: rowMode,
+    }, { status: 200 });
+  }
+
+  // 5. Deliver + release. The deliver function records its own
+  //    attempt rows and transitions invoice_sends.
+  try {
+    const result = await deliverSend({
+      sb, sendId: sendRow.id, invoiceId, rowMode, switchMode: mode,
+    });
+    return NextResponse.json({
+      kind: result.kind,
+      invoice_id: invoiceId,
+      mode: rowMode,
+      ...(result.code ? { code: result.code } : {}),
+    }, { status: 200 });
+  } finally {
+    await releaseClaim(sb, sendRow.id);
+  }
+}
