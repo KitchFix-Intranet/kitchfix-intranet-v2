@@ -72,9 +72,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     copyError: copyResult ? copyResult.kind : null,
   });
 
-  // 1. Switch off: carry today's check-route shape so the browser
-  //    can still show today's "Ready..." toast or error list. One
-  //    round-trip whether the switch is on or off.
+  // 1. Switch off: refuse with 409 sending_off per prompt §5.
+  //    The body still carries today's check-route shape so the
+  //    browser can show today's "Ready..." toast or error list
+  //    without a second round-trip.
   if (mode === "off") {
     const nextDraftId = check.ready ? await findNextUnreadyDraftId(sb, ownerEmail, draft.account_key, draft.id, codeSet) : null;
     return NextResponse.json({
@@ -83,7 +84,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       errors: check.errors,
       copy_match: copyResult?.match ?? null,
       next_draft_id: nextDraftId,
-    }, { status: 200 });
+    }, { status: 409 });
   }
 
   if (!check.ready) {
