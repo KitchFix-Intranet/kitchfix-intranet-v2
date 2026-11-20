@@ -1,31 +1,44 @@
-// T5b item 4 (ruling 5): a sibling route that kicks off a matcher
-// batch from the Review-queue page without touching /api/match or its
-// cron semantics. Owner-only. Reads pr_events for an in-progress
-// `ai_match_run_started` row (no matching `ai_match_run` row within
-// the 330 s freshness window) and refuses to start a second run, from
-// this tab or another. Writes its own guard row before calling
-// runMatcher from the library so two concurrent presses start at most
-// one run.
+// T5b round 2 item 2: one run at a time. The route claims a row
+// in pr_events BEFORE calling runMatcher, waits for any racing
+// claim to land, then goes ahead only if its own claim is the
+// earliest live one. A loser cancels its own claim so the next
+// press is free to run. Two or five requests that arrive together
+// end up with ONE matcher call; a request that arrives during a
+// live run calls it zero times. See src/lib/matcher/claim.ts for
+// the claim-and-check logic and scripts/t5b_batch_start_lock_proof.mjs
+// for the proof that imports the real code (not a copy).
 //
-// Sizes are 50 / 100 / 200 (ruling 6). Any other size is rejected
-// outright. At the measured ~28 seconds per 35-item batch (ruling 3),
-// 200 items sit inside the 300 s cap with headroom; 250 and 500 do
-// not. The route exports the same maxDuration as /api/match so the
-// browser fetch can hold the connection for the full run.
+// Why two requests cannot both win, in three sentences:
 //
-// The matcher is never started here from a test. See
-// scripts/t5b_batch_start_lock_proof.mjs: the lock is covered with
-// an injected runMatcher stub.
+// 1. Both requests pass the preflight "is a run live", then both
+//    INSERT their own ai_match_claim row - the row's `at` comes
+//    from Postgres so the two writes are ordered by one clock.
+// 2. Both requests then wait a fixed settle window and re-read
+//    the claims in the window, so each sees BOTH its own row and
+//    the other's.
+// 3. The predicate picks the earliest live claim by (at, id) as
+//    the winner - a deterministic function of what each request
+//    then sees, so both decide the same winner; the loser
+//    cancels its own row.
+//
+// The matcher is never started from this file during tests.
+// scripts/t5b_batch_start_lock_proof.mjs stands up an in-memory
+// store and an injected matcher so the proof exercises every case
+// (two concurrent, five concurrent, during a live run, after a
+// finished run, after a refused claim, after a dead start >= 330 s
+// old) without calling the real matcher.
 
 import { NextRequest, NextResponse } from "next/server";
 import { serviceClient } from "@/lib/supabase/service";
 import { requireOwnerApi } from "@/lib/gate";
 import { runMatcher } from "@/lib/matcher";
-import { isBatchInProgress } from "@/lib/matcher/lock";
+import { makeEventsStore, tryClaim } from "@/lib/matcher/claim";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
+// T5b ruling 6: stated once, mirrored in BatchRunControl. Any other
+// size is refused with the same 400 as a malformed body.
 const ALLOWED_SIZES = [50, 100, 200] as const;
 type AllowedSize = (typeof ALLOWED_SIZES)[number];
 
@@ -39,8 +52,8 @@ export async function POST(req: NextRequest) {
   try {
     body = (await req.json()) as StartBody;
   } catch {
-    // An empty POST is fine; default size applies. A malformed body
-    // (not JSON) also lands here - treat as empty.
+    // Empty / malformed body: fall through with no size (treated as
+    // missing below).
   }
   const sizeRaw = body.size;
   const size: AllowedSize | null =
@@ -58,86 +71,22 @@ export async function POST(req: NextRequest) {
   }
 
   const client = serviceClient();
-
-  // Ruling 7: decide "in progress" from the newest ai_match_run_started
-  // row + the newest ai_match_run row. The started row is only a lock
-  // if it is YOUNGER than BATCH_FRESH_MS AND no ai_match_run row
-  // followed it. Old dead starts (there were 21 on production as of
-  // the memo) never block. The two selects read one row each.
-  const nowMs = Date.now();
-  const [startRes, endRes] = await Promise.all([
-    client
-      .from("pr_events")
-      .select("at")
-      .eq("entity_type", "matcher")
-      .eq("kind", "ai_match_run_started")
-      .order("at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    client
-      .from("pr_events")
-      .select("at")
-      .eq("entity_type", "matcher")
-      .eq("kind", "ai_match_run")
-      .order("at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-  ]);
-  const startAt = (startRes.data?.at as string | undefined) ?? null;
-  const endAt = (endRes.data?.at as string | undefined) ?? null;
-  const startMs = startAt ? Date.parse(startAt) : null;
-  const inProgress = isBatchInProgress(startAt, endAt, nowMs);
-  if (inProgress) {
+  const outcome = await tryClaim(makeEventsStore(client), {
+    size,
+    actor: gate.email,
+  });
+  if (!outcome.won) {
     return NextResponse.json(
       {
         status: "in_progress",
         reason: "A batch is already running. Nothing new was started.",
-        startedAt: startAt,
       },
       { status: 409 },
     );
   }
 
-  // Ruling 7 continued: two near-simultaneous presses must start at
-  // most one run. runMatcher writes its own ai_match_run_started row
-  // at the top of its loop (matcher.ts:368). We re-read the newest
-  // started row AFTER a short cooperative yield to catch a near-race
-  // - the loser sees the winner's started row within one tick of its
-  // own check. The combined "started within 500 ms of now"
-  // short-circuit covers the one case the unordered Promise.all above
-  // can miss. 500 ms is well under BATCH_FRESH_MS and under the time
-  // it takes to drive from "click" to "handler" at any speed.
-  await new Promise<void>((r) => setTimeout(r, 50));
-  const raceRes = await client
-    .from("pr_events")
-    .select("at")
-    .eq("entity_type", "matcher")
-    .eq("kind", "ai_match_run_started")
-    .order("at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const raceAt = (raceRes.data?.at as string | undefined) ?? null;
-  const raceMs = raceAt ? Date.parse(raceAt) : null;
-  if (
-    raceMs != null &&
-    (startMs == null || raceMs > startMs) &&
-    nowMs - raceMs < 500
-  ) {
-    return NextResponse.json(
-      {
-        status: "in_progress",
-        reason: "A batch is already running. Nothing new was started.",
-        startedAt: raceAt,
-      },
-      { status: 409 },
-    );
-  }
-
-  // Ruling 5: no change to /api/match or its handler. We call the
-  // library function directly, in slice mode, with the chosen size
-  // as the limit. runMatcher writes ai_match_run_started /
-  // ai_match_run itself, so the next caller's lock check sees this
-  // one.
+  // We won the claim. runMatcher writes its own ai_match_run_started
+  // and ai_match_run rows; /api/match is untouched.
   const result = await runMatcher(client, {
     mode: "slice",
     limit: size,
@@ -148,7 +97,3 @@ export async function POST(req: NextRequest) {
     status: result.status === "ok" ? 200 : 500,
   });
 }
-
-// The client's BatchRunControl declares the same 50 / 100 / 200 set;
-// Next's route.ts restricts non-handler exports, so the shared
-// constant lives inline in both places with a one-line note each.

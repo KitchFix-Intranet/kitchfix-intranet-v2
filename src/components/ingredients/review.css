@@ -80,12 +80,21 @@
    * the page. */
   overflow: clip;
 }
-/* T5b item 7: the card no longer scrolls sideways. At <=1100 wide
- * the item table stacks (reference's kf-itable--stack rule, ported
- * to this tab's primitives). The old overflow-x: auto rule on
- * .kf-rvc is retired - a 1366 or 1280 window fits with room; 1100
- * and below stack. */
-@media (max-width: 1100px) {
+/* T5b round 2 item 1: the card decides to stack from its OWN
+ * inline-size, not the window's width - a @container query on
+ * .kf-rvc fires when the card cannot carry the fixed-layout table.
+ * The table's natural width equals --kf-rvc-table-min (1,200 px).
+ * When the card is narrower than that we stack. This keeps the
+ * stack in step with the space the shell actually leaves (rail
+ * shown or slim), without hard-coding a rail width. The old
+ * min-width on .kf-rvc__items is dropped below (see the comment
+ * next to the --kf-rvc-table-min var): a table with table-layout:
+ * fixed draws at the sum of its col widths regardless of
+ * min-width, and the stack rule here handles every narrower
+ * container.
+ * See docs/GOTCHAS.md "Media rule placed above the rule it
+ * overrides" (train 8 round 2, nov 16) for the related trap. */
+@container kfrvc (max-width: 1200px) {
   .kf-rvc__items,
   .kf-rvc__items > tbody {
     display: block;
@@ -111,9 +120,6 @@
     overflow-wrap: anywhere;
   }
   .kf-rvc__items td.kf-table__num { text-align: left; }
-  /* Item name spans the full three-column grid; checkbox is pulled
-   * out into the 48 px left gutter so it stays near the item it
-   * selects. */
   .kf-rvc__items td[data-l="Item"] { grid-column: 1 / -1; }
   .kf-rvc__items td.kf-rvc__check-col {
     position: absolute;
@@ -121,9 +127,6 @@
     top: var(--sp-sp-3);
     width: auto;
   }
-  /* Small cell labels appear only in the stacked view so the eye
-   * can tell Vendor from Pack from Price. Not shown on Item (the
-   * name is self-explanatory) or Select. */
   .kf-rvc__items td[data-l]:not([data-l="Item"]):not([data-l="Select"])::before {
     content: attr(data-l);
     display: block;
@@ -135,6 +138,13 @@
     text-transform: uppercase;
     color: var(--sp-muted);
   }
+}
+/* Phone-only: tighten the stacked grid to two columns so each row's
+ * labelled pair stays legible at 360 - 390 px (the container query
+ * at <=1200 has already switched the display; this adjusts the
+ * grid columns for a phone-width card). */
+@container kfrvc (max-width: 480px) {
+  .kf-rvc__items tr { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 .kf-rvc--new { border-left: 4px solid var(--sp-warn-strong); }
 
@@ -230,6 +240,12 @@
  * cannot read CSS variables - with a comment that the two must
  * stay in step). */
 .kf-rvc {
+  /* T5b round 2 item 1: the card is a size-container. The stack
+   * rule at the top of this file reads the card's own inline-size,
+   * not the window's width, so a 1366-window card inside a shell
+   * that leaves <1,200 px of room stacks instead of overflowing. */
+  container-type: inline-size;
+  container-name: kfrvc;
   --kf-rvc-col-sel: 52px;
   --kf-rvc-col-vendor: 160px;
   --kf-rvc-col-pack: 148px;
@@ -241,6 +257,12 @@
    * line; the step-1 pre-N9 regression + round-2 regression came
    * from the Item track getting < 240 px. */
   --kf-rvc-col-item-min: 240px;
+  /* The table's natural width when every col is at its set width.
+   * Keep in step with the @container threshold at the top of this
+   * file: the stack rule must fire whenever the card is narrower
+   * than this sum, so the fixed-layout table never has to overflow
+   * its card. Current sum: 52 + 160 + 148 + 256 + 88 + 112 + 144
+   * + 240 = 1,200 px. */
   --kf-rvc-table-min: calc(
     var(--kf-rvc-col-sel)
     + var(--kf-rvc-col-vendor)
@@ -254,7 +276,13 @@
 }
 .kf-rvc__items {
   width: 100%;
-  min-width: var(--kf-rvc-table-min);
+  /* T5b round 2 item 1: the old min-width: --kf-rvc-table-min rule
+   * pushed every card to at least 1,205 px regardless of its card's
+   * size and scrolled the page sideways at any window below 1,200.
+   * With table-layout: fixed + the col widths above the table
+   * already renders at the cols' sum when it has the room; when it
+   * does not, the @container stack rule at the top of this file
+   * switches to a vertical grid. */
   border-collapse: collapse;
   table-layout: fixed;
   font-family: var(--sp-ui);
@@ -270,7 +298,12 @@
 .kf-rvc__items thead th {
   text-align: left;
   padding: 10px var(--sp-sp-3);
-  font-size: 12.5px;
+  /* T5b round 2 item 5: the hard-coded 12.5 px was the one size
+   * on a card that did not come from a token - it gave the screen
+   * six distinct sizes (12, 12.5, 13, 14.5, 24, 28). Collapse to
+   * --sp-t-micro (12 px): half-pixel shrink on the uppercase thead
+   * label, no other element moves. */
+  font-size: var(--sp-t-micro);
   font-family: var(--sp-disp);
   font-weight: 700;
   letter-spacing: 1.5px;
@@ -300,19 +333,11 @@
  * their <col> shifts the remaining widths onto the wrong cells and
  * the Item column collapses to zero. Hide both the <col> and its
  * matching nth-child <td>/<th>. */
-@media (max-width: 760px) {
-  .kf-rvc__col--vendor,
-  .kf-rvc__col--sites,
-  .kf-rvc__col--activity,
-  .kf-rvc__items thead th:nth-child(3),  /* Vendor */
-  .kf-rvc__items tbody td:nth-child(3),
-  .kf-rvc__items thead th:nth-child(7),  /* Sites */
-  .kf-rvc__items tbody td:nth-child(7),
-  .kf-rvc__items thead th:nth-child(8),  /* Activity */
-  .kf-rvc__items tbody td:nth-child(8) {
-    display: none;
-  }
-}
+/* T5b round 2 item 1: the old nth-child hide at <=760 is gone. At
+ * every width the card is too narrow for the table (anything under
+ * 1,200 px of inline-size) the @container stack rule up top takes
+ * over and renders the labelled pairs. The old rule's columns
+ * (Vendor, Sites, Activity) are kept by the stacked grid. */
 
 /* -----------------------------------------------------------------
  * Confirm leave-animation. The card dims + slides a tiny upward when
@@ -1745,3 +1770,48 @@
  * (`.kf-allergens`, `__head`, `__label`, `__state`, `__state--warn`,
  * `__state--ok`) have no .tsx reader; left as orphan rules in this
  * patch. */
+
+/* --------------------- T5b round 2 item 3 ---------------------
+ * Batch control + beside-a-control message tones. Ported from
+ * docs/renders/INGREDIENTS_V1_PROPOSAL.css (lines around 237 and
+ * 339). Scoped to the Review queue - these class names do not
+ * exist anywhere else in the repo (checked before this hunk).
+ * The .kf-batch control sits in the empty block and, when train 9
+ * reuses it, in the Overview card; both carry no shared padding so
+ * the same rule serves both. */
+.kf-batch {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  flex-wrap: wrap;
+}
+.kf-batch--inline {
+  /* Train 9 reuse: Overview card lays the control inline with
+   * card text. No extra padding or background; the card's own
+   * row carries the separation. */
+}
+.kf-empty__action {
+  margin-top: var(--sp-sp-3);
+}
+
+.kf-msg {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+  color: var(--sp-body);
+}
+.kf-msg--ok { color: var(--sp-good); }
+.kf-msg--why { color: var(--sp-body); font-weight: 400; }
+.kf-msg--fail {
+  color: var(--sp-block);
+  background: var(--sp-block-bg);
+  border-left: 3px solid var(--sp-block);
+  border-radius: var(--sp-r-sm);
+  padding: var(--sp-sp-2) var(--sp-sp-3);
+  font-weight: 400;
+  font-size: var(--sp-t-table);
+}
+.kf-msg--fail b { font-weight: 800; }

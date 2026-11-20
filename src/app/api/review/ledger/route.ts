@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireOwnerApi } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
 import { fmtUsdLong, nameFromEmail } from "@/lib/fmt";
+import { displayNameFor } from "@/lib/ingredients/itemName";
 import { readActiveIngredients, type MinimalSupabase } from "@/lib/ingredients/readIngredients";
 import { LEDGER_KINDS, resolveIngredientName, type LedgerEventRow, type Ingredient as LedgerIngredient } from "@/components/ingredients/ReviewLedger";
 
@@ -73,13 +74,51 @@ export async function GET(req: NextRequest) {
   const itemNameById = new Map<string, string>();
   const itemArr = Array.from(itemIds);
   if (itemArr.length > 0) {
+    // T5b round 2 item 4: use displayNameFor (catalog clean_name
+    // first, else name) so Recent decisions on Show more pages
+    // renders the same text the review card showed in bold.
+    type ItemRow = {
+      id: string;
+      vendor_id: string | null;
+      item_number_norm: string | null;
+      name: string | null;
+    };
     const { data: vi } = await client
       .from("pr_vendor_items")
-      .select("id,description_key,name")
+      .select("id,vendor_id,item_number_norm,name")
       .in("id", itemArr);
-    for (const r of (vi ?? []) as Array<{ id: string; description_key: string | null; name: string | null }>) {
-      const n = (r.description_key ?? r.name ?? "").trim();
-      if (n.length > 0) itemNameById.set(r.id, n);
+    const rows = (vi ?? []) as ItemRow[];
+    const byVendor = new Map<string, Set<string>>();
+    for (const r of rows) {
+      if (!r.vendor_id || !r.item_number_norm) continue;
+      let set = byVendor.get(r.vendor_id);
+      if (!set) {
+        set = new Set();
+        byVendor.set(r.vendor_id, set);
+      }
+      set.add(r.item_number_norm);
+    }
+    const catalogCleanByKey = new Map<string, string>();
+    for (const [vendorId, nums] of byVendor) {
+      const list = Array.from(nums);
+      const { data: cat } = await client
+        .from("pr_vendor_catalog")
+        .select("vendor_id,item_number_norm,clean_name")
+        .eq("vendor_id", vendorId)
+        .in("item_number_norm", list);
+      for (const c of (cat ?? []) as Array<{ vendor_id: string; item_number_norm: string; clean_name: string | null }>) {
+        const name = (c.clean_name ?? "").trim();
+        if (name.length > 0) {
+          catalogCleanByKey.set(`${c.vendor_id}#${c.item_number_norm}`, name);
+        }
+      }
+    }
+    for (const r of rows) {
+      const key =
+        r.vendor_id && r.item_number_norm ? `${r.vendor_id}#${r.item_number_norm}` : null;
+      const cleanName = key ? catalogCleanByKey.get(key) ?? null : null;
+      const name = displayNameFor({ cleanName, name: r.name });
+      if (name !== "Item") itemNameById.set(r.id, name);
     }
   }
   // readActiveIngredients used as a type-only reference; cover the

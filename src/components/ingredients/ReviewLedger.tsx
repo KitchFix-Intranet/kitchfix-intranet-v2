@@ -21,6 +21,7 @@
 
 import { serviceClient } from "@/lib/supabase/service";
 import { fmtUsdLong, timeAgo, fmtDate, nameFromEmail } from "@/lib/fmt";
+import { displayNameFor } from "@/lib/ingredients/itemName";
 import { UndoLedgerButton } from "./UndoLedgerButton";
 import { UndoMergeButton } from "./UndoMergeButton";
 import { UndoDecisionButton } from "./UndoDecisionButton";
@@ -152,10 +153,24 @@ export async function ReviewLedger({ ingredients }: { ingredients: Ingredient[] 
     link_status: string | null;
     link_reason: string | null;
   }>();
-  // T5b ruling 10: one batched read names every item mentioned by
-  // the rows on this page. The query already pages through
-  // pr_vendor_items; adding description_key + name costs nothing.
+  // T5b ruling 10 + round 2 item 4: one batched read names every
+  // item mentioned by the rows on this page, following the SAME
+  // precedence the Review card uses (pr_vendor_catalog.clean_name
+  // ?? pr_vendor_items.name). Two selects: the items row for state
+  // checks + vendor_id + item_number_norm; then one per-vendor
+  // catalog read keyed on item_number_norm (same shape
+  // loadReview uses).
   const itemNameById = new Map<string, string>();
+  type ItemRow = {
+    id: string;
+    status: string | null;
+    link_status: string | null;
+    link_reason: string | null;
+    vendor_id: string | null;
+    item_number_norm: string | null;
+    name: string | null;
+  };
+  const itemRowsById = new Map<string, ItemRow>();
   if (mentionedIds.size > 0) {
     const ids = Array.from(mentionedIds);
     const page = 200;
@@ -163,21 +178,55 @@ export async function ReviewLedger({ ingredients }: { ingredients: Ingredient[] 
       const slice = ids.slice(i, i + page);
       const { data: vi } = await client
         .from("pr_vendor_items")
-        .select("id,status,link_status,link_reason,description_key,name")
+        .select("id,status,link_status,link_reason,vendor_id,item_number_norm,name")
         .in("id", slice);
-      for (const r of (vi ?? []) as Array<{
-        id: string;
-        status: string | null;
-        link_status: string | null;
-        link_reason: string | null;
-        description_key: string | null;
-        name: string | null;
-      }>) {
+      for (const r of (vi ?? []) as ItemRow[]) {
         currentShape.set(r.id, { status: r.status, link_status: r.link_status, link_reason: r.link_reason });
-        const n = (r.description_key ?? r.name ?? "").trim();
-        if (n.length > 0) itemNameById.set(r.id, n);
+        itemRowsById.set(r.id, r);
       }
     }
+  }
+  // Catalog join: one read per vendor, bounded by the small list
+  // of (vendor_id, item_number_norm) pairs the rows above refer to.
+  const catalogCleanByKey = new Map<string, string>();
+  if (itemRowsById.size > 0) {
+    const byVendor = new Map<string, Set<string>>();
+    for (const r of itemRowsById.values()) {
+      if (!r.vendor_id || !r.item_number_norm) continue;
+      let set = byVendor.get(r.vendor_id);
+      if (!set) {
+        set = new Set();
+        byVendor.set(r.vendor_id, set);
+      }
+      set.add(r.item_number_norm);
+    }
+    for (const [vendorId, nums] of byVendor) {
+      const list = Array.from(nums);
+      const chunk = 500;
+      for (let i = 0; i < list.length; i += chunk) {
+        const slice = list.slice(i, i + chunk);
+        const { data: cat } = await client
+          .from("pr_vendor_catalog")
+          .select("vendor_id,item_number_norm,clean_name")
+          .eq("vendor_id", vendorId)
+          .in("item_number_norm", slice);
+        for (const c of (cat ?? []) as Array<{ vendor_id: string; item_number_norm: string; clean_name: string | null }>) {
+          const name = (c.clean_name ?? "").trim();
+          if (name.length > 0) {
+            catalogCleanByKey.set(`${c.vendor_id}#${c.item_number_norm}`, name);
+          }
+        }
+      }
+    }
+  }
+  for (const r of itemRowsById.values()) {
+    const key =
+      r.vendor_id && r.item_number_norm ? `${r.vendor_id}#${r.item_number_norm}` : null;
+    const cleanName = key ? catalogCleanByKey.get(key) ?? null : null;
+    const name = displayNameFor({ cleanName, name: r.name });
+    // displayNameFor floors to "Item"; only record a real match so
+    // LedgerRow's "Item" fallback applies when we have nothing.
+    if (name !== "Item") itemNameById.set(r.id, name);
   }
 
   const ingredientById = new Map(ingredients.map((i) => [i.id, i]));

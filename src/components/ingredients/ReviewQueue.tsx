@@ -33,7 +33,8 @@ import {
   type BlendStatus,
 } from "@/lib/ingredients/ingredientBlend";
 import { canonicalFromBaseUnit } from "@/lib/ingredients/pack";
-import { isBatchInProgress } from "@/lib/matcher/lock";
+import { isBatchLiveFromClient } from "@/lib/matcher/claim";
+import { displayNameFor } from "@/lib/ingredients/itemName";
 import { fmtCount, nameFromEmail } from "@/lib/fmt";
 import { Tabs } from "./Tabs";
 import { ReviewCard, type ReviewCardGroup } from "./ReviewCard";
@@ -503,7 +504,10 @@ export const loadReview = cache(async function loadReview() {
       id: it.id,
       name: it.name,
       vendorOcrName: it.name,
-      displayName: catalogClean ?? it.name,
+      // T5b round 2 item 4: displayName comes from the one shared
+      // rule so the card and the Recent-decisions row never
+      // disagree on the item's words.
+      displayName: displayNameFor({ cleanName: catalogClean, name: it.name }),
       displayNameSource: catalogClean ? "catalog" : "invoice",
       vendor: vendorNameById.get(it.vendor_id) ?? it.vendor_id,
       itemNumber: it.item_number,
@@ -687,30 +691,13 @@ export const loadReview = cache(async function loadReview() {
   }));
   groupList.sort((a, b) => b.totalUsd12m - a.totalUsd12m);
 
-  // T5b ruling 7: the lock predicate is one shared function in
-  // src/lib/matcher/lock.ts, called here and in the batch-start
-  // route so the two surfaces can never disagree.
-  const [batchStartRes, batchEndRes] = await Promise.all([
-    client
-      .from("pr_events")
-      .select("at")
-      .eq("entity_type", "matcher")
-      .eq("kind", "ai_match_run_started")
-      .order("at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    client
-      .from("pr_events")
-      .select("at")
-      .eq("entity_type", "matcher")
-      .eq("kind", "ai_match_run")
-      .order("at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-  ]);
-  const batchStartAt = (batchStartRes.data?.at as string | undefined) ?? null;
-  const batchEndAt = (batchEndRes.data?.at as string | undefined) ?? null;
-  const batchInProgress = isBatchInProgress(batchStartAt, batchEndAt, Date.now());
+  // T5b round 2 item 2: the loader and /api/review/batch-start read
+  // the SAME predicate (src/lib/matcher/claim.ts :: isLive), so the
+  // page's "A batch is running" and the route's refusal agree even
+  // during the moment between a claim and the matcher's own
+  // started row. Four streams: ai_match_claim, _claim_cancelled,
+  // _run_started, _run - combined into one answer.
+  const batchInProgress = await isBatchLiveFromClient(client, Date.now());
 
   // Overall totals.
   const totalItems = items.length;

@@ -365,6 +365,26 @@ entirely. The chef-floor rule for `.kf-search` uses `max-width:
 none` on phone so the search fills the row without a basis that
 would double as a height.
 
+## 25. A later rule of equal weight wins, so a media rule above the base it overrides does nothing
+
+Two rules with the same specificity resolve by source order:
+whichever appears later in the stylesheet wins. A
+`@media (max-width: 1100px)` that overrides a plain
+`.kf-foo { min-width: 1200px }` must sit AFTER the plain rule, not
+before - put it above and the media rule is dead on every width.
+Review queue hit this in train 5b round 2 (the stack rule at the
+top of review.css never cleared the 1,200 px min below it, so the
+card scrolled the page sideways at every window below 1,200) and
+vendor items hit the same shape on Nov 16. When an `@media` or
+`@container` rule "does nothing", the first check is "is it above
+the base rule it overrides?".
+
+A safer shape when the rules must live apart: put the base rule
+first, then every width-conditioned override later in the file,
+in ascending-specificity order. If a conditional has to go
+earlier for reading flow, raise its specificity (one extra class
+selector is enough) and leave a comment saying why.
+
 Branch-specific items we have already lived through on
 `step-1-shell-and-ingredients`:
 
