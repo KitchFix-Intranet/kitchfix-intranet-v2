@@ -7,6 +7,11 @@
 // Drafts waiting).
 // With `site` and `draft`: the sitting (one invoice, page beside
 // the fields).
+//
+// Train 2b correction 4.5: no signed storage URL is built here or
+// passed to any client component. The browser asks the view route
+// for a 60s link only for the file it is drawing (and again if the
+// link expires).
 
 import { notFound, redirect } from "next/navigation";
 import { requireOwnerPage } from "@/lib/gate";
@@ -119,17 +124,13 @@ export default async function Page({
         : Promise.resolve({ data: null, error: null } as { data: { name: string } | null; error: null }),
     ]);
     const vendorName = (vendorRow.data as { name: string } | null)?.name ?? null;
-
-    // Short-lived signed URLs for each live file.
     const liveFiles = files.filter((f) => f.removed_at == null);
-    const viewUrlByFileId: Record<string, string> = {};
-    await Promise.all(liveFiles.map(async (f) => {
-      const { data } = await sb.storage.from("invoice-files").createSignedUrl(f.storage_path, 60);
-      if (data?.signedUrl) viewUrlByFileId[f.id] = data.signedUrl;
-    }));
 
+    // Train 2b correction 4.5: no signed URLs in server-rendered HTML.
+    // The sitting fetches a 60s link per file on screen via /view.
+    const activeSet = new Set(codes.map((c) => c.code));
     const usual = draft.vendor_id
-      ? await loadUsualCodes(sb, accountKey, draft.vendor_id)
+      ? await loadUsualCodes(sb, accountKey, draft.vendor_id, activeSet)
       : { codes: [], singleCodeFill: null, sampleSize: 0 };
 
     return (
@@ -137,7 +138,6 @@ export default async function Page({
         initialDraft={toDraftView(draft)}
         initialFiles={liveFiles.map(toFileView)}
         initialVendorName={vendorName}
-        initialViewUrlByFileId={viewUrlByFileId}
         activeCodes={codes}
         initialUsual={usual}
         siteSlug={slug}

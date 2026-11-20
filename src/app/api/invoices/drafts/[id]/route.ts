@@ -106,5 +106,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   if (result.status === "not_found") return new Response(null, { status: 404 });
   if (result.status === "frozen")    return NextResponse.json({ error: "frozen" }, { status: 409 });
   if (result.status === "conflict")  return NextResponse.json({ error: "conflict" }, { status: 409 });
+  // Train 2b correction 4.2: a database error is NOT a conflict.
+  // The client should retry a few times (growing backoff) and then
+  // stop and say so. 500 with a short code, no SQL in the body.
+  if (result.status === "error")     return NextResponse.json({ error: "save_failed", code: result.detail }, { status: 500 });
   return NextResponse.json({ draft: toDraftView(result.row) });
 }

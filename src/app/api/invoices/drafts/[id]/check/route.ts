@@ -1,11 +1,21 @@
 // /api/invoices/drafts/[id]/check
 //   POST - run the Ready check. No DB write (train 2 never sets
 //   status='sent'); the client uses the returned shape to label the
-//   draft Ready in memory and flip the cursor to the next draft.
+//   draft Ready in memory, show the C9 stop block when a copy is
+//   found, and flip the cursor to the next not-ready draft.
+//
+// Train 2b correction 4 / correction 6:
+//   - copy_match: the client-safe snapshot of the matched row
+//     (vendor_name, invoice_number, invoice_date, submission_id).
+//     C9's stop block reads it directly - no extra client fetch.
+//   - next_draft_id: the oldest (created_at ASC) not-ready draft
+//     for this (owner, site) excluding the one just checked. null
+//     when none remain - the sitting routes to the landing, which
+//     shows E (every draft is ready).
 
 import { NextResponse } from "next/server";
 import { openInvoiceApi } from "@/lib/invoices/apiGuard";
-import { getDraftById, listFilesForDraft } from "@/lib/invoices/draftLoad";
+import { getDraftById, listFilesForDraft, listDraftsForOwnerSiteFixedOrder } from "@/lib/invoices/draftLoad";
 import { runReadyCheck } from "@/lib/invoices/readyCheck";
 import { activeCodesSetForSite } from "@/lib/invoices/glCodes";
 import { vendorIsAvailable } from "@/lib/invoices/vendorPicker";
@@ -29,7 +39,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (!draft) return new Response(null, { status: 404 });
   if (!scope.accountKeys.includes(draft.account_key)) return new Response(null, { status: 404 });
 
-  const [files, codeSet, vendorOk, copyErr] = await Promise.all([
+  const [files, codeSet, vendorOk, copyResult] = await Promise.all([
     listFilesForDraft(sb, ownerEmail, draftId),
     activeCodesSetForSite(sb, draft.account_key),
     draft.vendor_id ? vendorIsAvailable(sb, draft.vendor_id) : Promise.resolve(false),
@@ -41,7 +51,39 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     files,
     activeCodesForSite: codeSet,
     vendorInScope: vendorOk,
-    copyError: copyErr,
+    copyError: copyResult ? copyResult.kind : null,
   });
-  return NextResponse.json(result);
+
+  // Next-draft cursor. Server-computed so the sitting does not need
+  // a second round-trip after a ready pass. Walks this (owner, site)
+  // in fixed order, returning the first draft that is not ready.
+  // Only computed when the current draft is now ready - a failing
+  // check keeps the cursor on the current draft.
+  let nextDraftId: string | null = null;
+  if (result.ready) {
+    const all = await listDraftsForOwnerSiteFixedOrder(sb, ownerEmail, draft.account_key);
+    for (const d of all) {
+      if (d.id === draft.id) continue;
+      const [dfiles, dvendorOk, dcopy] = await Promise.all([
+        listFilesForDraft(sb, ownerEmail, d.id),
+        d.vendor_id ? vendorIsAvailable(sb, d.vendor_id) : Promise.resolve(false),
+        copyCheck(sb, ownerEmail, d),
+      ]);
+      const dres = runReadyCheck({
+        draft: d,
+        files: dfiles,
+        activeCodesForSite: codeSet,
+        vendorInScope: dvendorOk,
+        copyError: dcopy ? dcopy.kind : null,
+      });
+      if (!dres.ready) { nextDraftId = d.id; break; }
+    }
+  }
+
+  return NextResponse.json({
+    ready: result.ready,
+    errors: result.errors,
+    copy_match: copyResult?.match ?? null,
+    next_draft_id: nextDraftId,
+  });
 }

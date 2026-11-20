@@ -50,7 +50,6 @@ export function CaptureSittingRoot({
   initialDraft,
   initialFiles,
   initialVendorName,
-  initialViewUrlByFileId,
   activeCodes,
   initialUsual,
   siteSlug,
@@ -62,7 +61,6 @@ export function CaptureSittingRoot({
   initialDraft: DraftView;
   initialFiles: FileView[];
   initialVendorName: string | null;
-  initialViewUrlByFileId: Record<string, string>;
   activeCodes: SiteGlCode[];
   initialUsual: { codes: UsualCode[]; singleCodeFill: UsualCode | null; sampleSize: number };
   siteSlug: string;
@@ -75,7 +73,12 @@ export function CaptureSittingRoot({
   const [draft, setDraft] = useState<DraftView>(initialDraft);
   const [files, setFiles] = useState<FileView[]>(initialFiles);
   const [vendorName, setVendorName] = useState<string | null>(initialVendorName);
-  const [viewUrls, setViewUrls] = useState<Record<string, string>>(initialViewUrlByFileId);
+  // Train 2b correction 4.5: signed URLs are never rendered into
+  // the server HTML. The sitting fetches a 60s link per file the
+  // moment it appears on screen, and again if a draw fails because
+  // the link ran out. One-at-a-time: only the active file is
+  // requested, not every file on mount.
+  const [viewUrls, setViewUrls] = useState<Record<string, string>>({});
   const [usual, setUsual] = useState(initialUsual);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [errors, setErrors] = useState<CheckResult["errors"]>([]);
@@ -274,6 +277,32 @@ export function CaptureSittingRoot({
   const [activeFileId, setActiveFileId] = useState<string | null>(initialFiles[0]?.id ?? null);
   const activeFile = useMemo(() => files.find((f) => f.id === activeFileId) ?? null, [files, activeFileId]);
 
+  // Fetch a short-lived signed URL for just the active file. Re-fetch
+  // when the active file changes or when we are asked (handleViewExpired
+  // below). Does not refresh on rotate - rotate re-renders the same URL.
+  const fetchViewUrl = useCallback(async (fileId: string) => {
+    try {
+      const u = `/api/invoices/files/${encodeURIComponent(fileId)}/view?draft=${encodeURIComponent(draftId)}${asQ ? `&${asQ.slice(1)}` : ""}`;
+      const res = await fetch(u);
+      if (!res.ok) return;
+      const body = (await res.json()) as { url: string };
+      if (body.url) setViewUrls((m) => ({ ...m, [fileId]: body.url }));
+    } catch { /* ignore - PdfPage / img onError will ask again */ }
+  }, [asQ, draftId]);
+
+  useEffect(() => {
+    if (activeFileId && !viewUrls[activeFileId]) {
+      void fetchViewUrl(activeFileId);
+    }
+    // We intentionally only re-run on active-file change, not on
+    // viewUrls change (that would loop every time a URL lands).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeFileId]);
+
+  const handleViewExpired = useCallback(() => {
+    if (activeFileId) void fetchViewUrl(activeFileId);
+  }, [activeFileId, fetchViewUrl]);
+
   const rotateActive = async () => {
     if (!activeFile || isPreview) return;
     const next = ((activeFile.rotation + 90) % 360) as 0 | 90 | 180 | 270;
@@ -383,13 +412,22 @@ export function CaptureSittingRoot({
               <p className="kf-inv-sitting__no-file">No file yet.</p>
             ) : activeFile.mime_type === "application/pdf" ? (
               viewUrls[activeFile.id] ? (
-                <PdfPage url={viewUrls[activeFile.id]} rotation={activeFile.rotation} />
+                <PdfPage
+                  url={viewUrls[activeFile.id]}
+                  rotation={activeFile.rotation}
+                  onExpired={handleViewExpired}
+                />
               ) : (
                 <p className="kf-inv-sitting__hint">Preparing the page...</p>
               )
             ) : (
               viewUrls[activeFile.id] ? (
-                <img src={viewUrls[activeFile.id]} alt="Invoice page" style={{ transform: `rotate(${activeFile.rotation}deg)` }} />
+                <img
+                  src={viewUrls[activeFile.id]}
+                  alt="Invoice page"
+                  style={{ transform: `rotate(${activeFile.rotation}deg)` }}
+                  onError={handleViewExpired}
+                />
               ) : (
                 <p className="kf-inv-sitting__hint">Preparing the page...</p>
               )

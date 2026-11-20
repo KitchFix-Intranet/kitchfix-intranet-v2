@@ -38,3 +38,33 @@ export async function loadLatestSent(
     type: r.type === "credit" ? "credit" : "invoice",
   }));
 }
+
+// Returned-for-this-site rows for the landing's B2 needs-fix note:
+// vendor + invoice number, oldest-returned first (so the note
+// surfaces the one that has been waiting longest).
+export interface ReturnedRow {
+  id: string;
+  vendor_name: string;
+  invoice_number: string;
+}
+
+export async function loadReturnedForSite(
+  sb: SupabaseClient,
+  accountKey: string,
+  limit: number = 4,
+): Promise<ReturnedRow[]> {
+  const q = await sb
+    .from("invoice_submissions")
+    .select("id, vendor_name, invoice_number, submitted_at")
+    .eq("account_key", accountKey)
+    .eq("status", "returned")
+    .order("submitted_at", { ascending: true })
+    .limit(limit);
+  if (q.error) return [];
+  const rows = (q.data ?? []) as Array<{ id: string; vendor_name: string | null; invoice_number: string | null }>;
+  return rows.map((r) => ({
+    id: r.id,
+    vendor_name: r.vendor_name ?? "",
+    invoice_number: r.invoice_number ?? "",
+  }));
+}

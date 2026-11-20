@@ -239,11 +239,46 @@ export interface FileView {
   // sha256 is deliberately absent from the client view - internal.
 }
 
-// Server-side check result for the "Check and send" path. Train 2
-// does not send; Ready is the only outcome the client needs.
-export interface CheckResult {
+// A short, client-safe snapshot of the row the copy check matched.
+// Used by the C9 stop block. Never carries email, total, or
+// uploader - only what is shown on the stop.
+export interface CopyMatchView {
+  kind: "same_invoice" | "same_draft";
+  vendor_name: string | null;
+  invoice_number: string | null;
+  invoice_date: string | null;
+  // present only when kind='same_invoice', so the "It is the credit
+  // for that invoice" path can stage `is_credit_for = submission_id`.
+  submission_id: string | null;
+}
+
+// Pure Ready check result - what runReadyCheck returns. The route
+// decorates this with copy_match + next_draft_id before replying.
+export interface ReadyResult {
   ready: boolean;
   errors: ReadonlyArray<CheckError>;
+}
+
+// Server-side check result for the "Check and send" path. Train 2
+// does not send; Ready is the only outcome the client needs.
+export interface CheckResult extends ReadyResult {
+  // The matched row when a copy-error is present. null otherwise.
+  copy_match: CopyMatchView | null;
+  // Oldest draft that is not ready for this (owner, site), excluding
+  // the one just checked. The sitting cursors to it after a ready
+  // pass. null means "you are set" - the landing will render E.
+  next_draft_id: string | null;
+}
+
+// Draft + a server-computed ready flag and the missing-fields list.
+// The landing (B1 headline, B6 rows) reads this instead of
+// re-implementing the check client-side.
+export interface DraftListView extends DraftView {
+  vendor_name: string | null;
+  ready: boolean;
+  // Short list of what is missing, in plain words. Empty when ready.
+  // Capped to 4 items for display.
+  missing: string[];
 }
 
 export interface CheckError {

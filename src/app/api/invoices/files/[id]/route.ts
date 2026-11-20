@@ -40,12 +40,15 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const body = (await req.json().catch(() => null)) as { rotation?: unknown; sort_order?: unknown } | null;
   if (!body) return new Response(null, { status: 400 });
 
+  // Train 2b correction 4.3: whole-number sort_order of zero or more
+  // is kept; anything else is ignored. If nothing survives the body,
+  // a 400 is fine here (PATCH, nothing to do).
   const patchBody: { rotation?: 0 | 90 | 180 | 270; sort_order?: number } = {};
   if (typeof body.rotation === "number" && VALID_ROT.has(body.rotation)) {
     patchBody.rotation = body.rotation as 0 | 90 | 180 | 270;
   }
-  if (typeof body.sort_order === "number" && Number.isFinite(body.sort_order) && body.sort_order >= 0) {
-    patchBody.sort_order = Math.floor(body.sort_order);
+  if (typeof body.sort_order === "number" && Number.isInteger(body.sort_order) && body.sort_order >= 0) {
+    patchBody.sort_order = body.sort_order;
   }
   if (Object.keys(patchBody).length === 0) return new Response(null, { status: 400 });
 

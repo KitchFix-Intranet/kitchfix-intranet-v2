@@ -83,3 +83,14 @@ export function parseDateInput(raw: string | null | undefined, now: Date = new D
 
   return { iso: `${y}-${pad2(m)}-${pad2(d)}`, future, moreThan60DaysBack };
 }
+
+// Formats an ISO date-only string back to "MM/DD/YYYY" for the text
+// box on the Capture form. String-slice only - no Date arithmetic, so
+// there is no timezone day-shift. An empty / malformed input returns
+// an empty string; the caller then shows the placeholder.
+export function toBoxDate(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const s = String(iso);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return "";
+  return `${s.slice(5, 7)}/${s.slice(8, 10)}/${s.slice(0, 4)}`;
+}

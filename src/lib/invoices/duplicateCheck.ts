@@ -10,12 +10,30 @@
 // Invoice number is compared the way the database does: via
 // `invoice_number_normalized` (§correction 9). We compute the same
 // shape for the draft side.
+//
+// Train 2b correction 4: the check returns the MATCHED row's
+// client-safe fields (vendor name, number, date), not a boolean.
+// C9's stop block uses them to show "You already sent this one -
+// Acme #1234 on 11/02/2026" without the client having to look the
+// row up itself. `same_draft` returns just number and vendor (no
+// invoice_date; a draft's date may be null or garbage). No email,
+// no total, no who sent it.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { DraftRow, InvoiceKind } from "./types";
+import type { DraftRow, InvoiceKind, CopyMatchView } from "./types";
 import { normalizeInvoiceNumber } from "./invNumber";
+import { loadVendorNames } from "./draftLoad";
 
 export type CopyErrorKind = "same_invoice" | "same_draft";
+
+// A client-safe snapshot of the matched row.
+export type CopyMatch = CopyMatchView;
+
+// The server-side result shape used by the check route.
+export interface CopyCheckResult {
+  kind: CopyErrorKind;
+  match: CopyMatch;
+}
 
 // Pure predicate: given the draft and a candidate (a counting
 // submission or another live draft), is the candidate a copy?
@@ -51,14 +69,14 @@ export function isCopyCandidate(
   return a === b;
 }
 
-// Returns the first collision kind, or null. The UI's three
-// "ways out" (remove / different / credit) live on the client; this
-// function only decides whether to flag.
+// Returns the first collision (kind + matched row's client-safe
+// fields), or null. The UI's "ways out" (remove / different /
+// credit) live on the client; this function only names the match.
 export async function copyCheck(
   sb: SupabaseClient,
   ownerEmail: string,
   draft: DraftRow,
-): Promise<CopyErrorKind | null> {
+): Promise<CopyCheckResult | null> {
   const num = normalizeInvoiceNumber(draft.invoice_number);
   if (!num) return null;
   if (!draft.vendor_id) return null;
@@ -74,19 +92,32 @@ export async function copyCheck(
   //    normalized number matches via invoice_number_normalized.
   const subQ = await sb
     .from("invoice_submissions")
-    .select("id")
+    .select("id, vendor_id, invoice_number, invoice_date")
     .eq("account_key", draft.account_key)
     .eq("vendor_id", draft.vendor_id)
     .eq("type", draft.type)
     .eq("invoice_number_normalized", num)
     .not("status", "in", "(deleted,corrected,archived)")
     .limit(1);
-  if (!subQ.error && (subQ.data ?? []).length > 0) return "same_invoice";
+  if (!subQ.error && (subQ.data ?? []).length > 0) {
+    const row = (subQ.data ?? [])[0] as { id: string; vendor_id: string; invoice_number: string; invoice_date: string | null };
+    const names = await loadVendorNames(sb, [row.vendor_id]);
+    return {
+      kind: "same_invoice",
+      match: {
+        kind: "same_invoice",
+        vendor_name: names.get(row.vendor_id) ?? null,
+        invoice_number: row.invoice_number,
+        invoice_date: row.invoice_date,
+        submission_id: row.id,
+      },
+    };
+  }
 
   // 2. Against this person's OTHER live drafts (not this one).
   const draftQ = await sb
     .from("invoice_drafts")
-    .select("id, invoice_number, type, vendor_id, status")
+    .select("id, vendor_id, invoice_number, invoice_date")
     .eq("owner_email", ownerEmail)
     .eq("account_key", draft.account_key)
     .eq("vendor_id", draft.vendor_id)
@@ -95,8 +126,22 @@ export async function copyCheck(
     .neq("id", draft.id)
     .limit(50);
   if (!draftQ.error) {
-    for (const row of (draftQ.data ?? []) as Array<{ id: string; invoice_number: string | null }>) {
-      if (normalizeInvoiceNumber(row.invoice_number) === num) return "same_draft";
+    for (const row of (draftQ.data ?? []) as Array<{ id: string; vendor_id: string; invoice_number: string | null; invoice_date: string | null }>) {
+      if (normalizeInvoiceNumber(row.invoice_number) === num) {
+        const names = await loadVendorNames(sb, [row.vendor_id]);
+        return {
+          kind: "same_draft",
+          match: {
+            kind: "same_draft",
+            vendor_name: names.get(row.vendor_id) ?? null,
+            invoice_number: row.invoice_number,
+            // A draft's date may not yet be a real date; the C9 block
+            // on same_draft deliberately does not show it.
+            invoice_date: null,
+            submission_id: null,
+          },
+        };
+      }
     }
   }
 
