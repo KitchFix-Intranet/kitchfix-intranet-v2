@@ -35,7 +35,14 @@ const ROUTE_MAP: Array<{ test: (p: string) => boolean; v: Hit }> = [
   { test: (p) => p === "/academy/admin/people",   v: { title: "Admin",      crumb: "People" } },
   { test: (p) => p === "/academy/team",            v: { title: "Team",       crumb: "Your team's compliance" } },
   { test: (p) => p === "/library",                v: { title: "Library",  crumb: "" } },
-  { test: (p) => p.startsWith("/library/"),       v: { title: "Document", crumb: "Library" } },
+  { test: (p) => p === "/library/suggestions",    v: { title: "Suggestions", crumb: "Library" } },
+  // Document page: the BackLink already names where it goes ("Back
+  // to the Library"), so a "Library" crumb duplicates the signal.
+  // Dropping it also keeps the topbar inside its width at 360 when
+  // BackLink + the four tools are all vying for the row - the shell
+  // ellipses the crumb before the title, so a tight phone top bar
+  // was clipping "Library" to one letter. See L3 report.
+  { test: (p) => p.startsWith("/library/"),       v: { title: "Document", crumb: "" } },
   // Stockpot rows. The `tabTitle` override lives here because two of these
   // rows share the top-bar title "Ingredients" and need distinct tab
   // titles (Overview vs. Ingredients masters).
