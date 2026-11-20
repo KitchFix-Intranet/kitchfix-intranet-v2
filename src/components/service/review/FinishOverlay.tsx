@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import { Check, CalendarDays } from "lucide-react";
 import { fmtCount } from "@/lib/fmt";
+import { finishOverlaySr } from "@/lib/sc/submit/finishOverlaySr";
 
 const SIGN = "$";
 
@@ -19,6 +20,7 @@ interface Props {
   isBiweekly: boolean;
   unitStart: string;
   unitEnd: string;
+  siteTimezone: string;
   onBackToCalendar: () => void;
 }
 
@@ -70,7 +72,13 @@ export function FinishOverlay(props: Props) {
           </button>
         </div>
         <span className="kf-sc-sr">
-          <Check size={14} aria-hidden /> Submitted at {props.submittedAt}. Unit span {props.unitStart} to {props.unitEnd}.
+          <Check size={14} aria-hidden /> {finishOverlaySr({
+            submittedAtIso: props.submittedAt,
+            unitStartIso: props.unitStart,
+            unitEndIso: props.unitEnd,
+            timeZone: props.siteTimezone,
+            isPair: props.isBiweekly,
+          })}
         </span>
       </div>
     </div>

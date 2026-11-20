@@ -34,6 +34,7 @@
 // Error shape every caller already catches.
 
 import { outboundMode } from "@/lib/sc/outboundGate";
+import { sendSystemMail } from "@/lib/mail";
 
 export type SendEmailResult = "sent" | "failed";
 
@@ -56,17 +57,29 @@ export async function sendEmailSA(args: SendEmailArgs): Promise<SendEmailResult>
     console.error("[sc/outbound] sendEmailSA stub called in train 1; nothing was sent.");
     return "failed";
   }
-  // mode === "test" or "live": wire up v1's service-account sender.
-  // Train 3 wires this behind the gate; the actual Google OAuth
-  // service-account implementation lands with the first real send
-  // (Kevin flips SC_V2_OUTBOUND=test in Vercel). Until then, falling
-  // through here returns "failed" so a mis-flip cannot pretend to
-  // have sent.
-  console.error(`[sc/outbound] sendEmailSA called under mode=${mode}; real sender not yet wired.`);
-  // Silence the unused-param warning without exporting a different
-  // signature than today's.
-  void args;
-  return "failed";
+  // mode === "test" or "live": thin wrap around the shared system
+  // sender. Train 6 wires this. `sendSystemMail` never throws and
+  // returns `{ ok: true, messageId }` on success or
+  // `{ ok: false, code }` on a known failure; we map that to v1's
+  // two-string contract. `console.error` lives inside the sender on
+  // failure (carrying only the code), so we add none here.
+  try {
+    const r = await sendSystemMail({
+      sender: args.sender,
+      displayName: args.displayName,
+      to: args.to,
+      cc: args.cc,
+      replyTo: args.replyTo,
+      subject: args.subject,
+      html: args.html,
+      attachments: args.attachments,
+    });
+    return r.ok ? "sent" : "failed";
+  } catch {
+    // Belt-and-braces: sendSystemMail is contracted not to throw,
+    // but the lane's contract is also non-throwing, so catch here.
+    return "failed";
+  }
 }
 
 export async function networkFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {

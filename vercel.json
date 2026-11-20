@@ -8,6 +8,14 @@
     {
       "path": "/api/service/push-retry",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/service/reminder-friday",
+      "schedule": "0 20,21 * * 5"
+    },
+    {
+      "path": "/api/service/reminder-monday",
+      "schedule": "0 13-17 * * 1"
     }
   ]
 }

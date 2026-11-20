@@ -35,6 +35,8 @@ import { fireN1, fireN2, fireNoOpAlert } from "@/lib/sc/billing/qboNotifications
 import { resolveEffectiveQboMode } from "@/lib/sc/submit/resolveQboMode";
 import type { SupabaseClient, FinalizeRow, InvoiceRecord } from "@/lib/sc/types";
 import { getSalariedManagerEmails } from "@/lib/sc/billing/getSalariedManagerEmails";
+import { accountKeyToSlug } from "@/lib/sc/calendar/slug";
+import { appBaseUrl } from "@/lib/sc/submit/appBaseUrl";
 
 // ─────────────────────────────────────────────────────────────────
 // Mon-Sun week derivation (banned from `week_label` per C-3).
@@ -582,16 +584,21 @@ function sumCentsFromLines(lines: any) {
   return cents;
 }
 
+// Train 6 (2026-11-20): both link builders emit V2's week-check URL.
+// The engine port was byte-for-byte v1's; this is the one engine
+// divergence named in the PR body. Base address comes from the lane
+// helper `appBaseUrl()` (SC_APP_BASE_URL or the production domain -
+// never "" or "undefined").
 function buildRetryLink(accountKey: any, weekStart: any) {
-  const base = process.env.NEXT_PUBLIC_APP_BASE_URL || "";
-  const q = new URLSearchParams({ account: accountKey, week: weekStart, action: "retry-push" });
-  return `${base}/admin/service-calendar/finalize?${q.toString()}`;
+  const slug = accountKeyToSlug(String(accountKey));
+  const q = new URLSearchParams({ site: slug, week: String(weekStart) });
+  return `${appBaseUrl()}/service/review?${q.toString()}`;
 }
 
 function buildScWeekLink(accountKey: any, weekStart: any) {
-  const base = process.env.NEXT_PUBLIC_APP_BASE_URL || "";
-  const q = new URLSearchParams({ account: accountKey, week: weekStart });
-  return `${base}/service-calendar/season?${q.toString()}`;
+  const slug = accountKeyToSlug(String(accountKey));
+  const q = new URLSearchParams({ site: slug, week: String(weekStart) });
+  return `${appBaseUrl()}/service/review?${q.toString()}`;
 }
 
 function buildQboInvoiceLink(qboInvoiceId: any) {
