@@ -1540,8 +1540,16 @@
 }
 .kf-lb-sug-row__sender { color: var(--sp-muted); font-size: var(--sp-t-table); }
 .kf-lb-sug-row__sender strong { color: var(--sp-body); font-weight: var(--sp-w-bold); }
-.kf-lb-sug-row__acts { display: flex; gap: var(--sp-sp-2); }
+.kf-lb-sug-row__acts { display: flex; gap: var(--sp-sp-2); flex-wrap: wrap; }
 .kf-lb-sug-row__acts .kf-btn { min-height: var(--sp-floor-chef); }
+.kf-lb-sug-row__acts > * { flex: 0 1 auto; min-width: 0; }
+/* Phone: every action spans the row, so four controls do not
+ * squeeze into a 360-wide viewport (hScroll). Each sits full-
+ * width stacked. */
+@media (max-width: 520px) {
+  .kf-lb-sug-row__acts { flex-direction: column; align-items: stretch; }
+  .kf-lb-sug-row__acts > * { width: 100%; justify-content: center; }
+}
 
 /* End-of-section "Suggest an edit" control inside the article body.
  * Server-rendered inside dangerouslySetInnerHTML, picked up by the
@@ -1571,3 +1579,193 @@
   border-color: var(--sp-navy);
 }
 
+/* ============================================================
+ * L4b - suggestions that lead somewhere: three-list tabs, state
+ * pills, decline step, mailto Reply, "Your suggestions" entries,
+ * send-confirmation in the panel.
+ * ============================================================ */
+
+/* Tabs across the owner's board. Three equal-feel buttons, 48px
+ * floor, counts at --sp-t-label. The whole row inherits the five
+ * sizes already in the owner page's own content (13/14.5/16/18/30),
+ * so adding the tabs does not grow the count. */
+.kf-lb-sugs-tabs {
+  display: flex;
+  gap: var(--sp-sp-1);
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--sp-line);
+  margin-bottom: var(--sp-sp-3);
+}
+.kf-lb-sugs-tab {
+  min-height: var(--sp-floor-chef);
+  padding: 0 var(--sp-sp-3);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  background: transparent;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  color: var(--sp-body);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  font-weight: var(--sp-w-bold);
+  cursor: pointer;
+}
+.kf-lb-sugs-tab:hover { color: var(--sp-navy); }
+.kf-lb-sugs-tab[aria-current="page"] {
+  color: var(--sp-navy);
+  border-bottom-color: var(--sp-red);
+}
+.kf-lb-sugs-tab__c {
+  font-family: var(--sp-disp);
+  font-size: var(--sp-t-label);
+  font-weight: var(--sp-w-bold);
+  color: var(--sp-muted);
+  background: var(--sp-sky-tint);
+  padding: 2px var(--sp-sp-2);
+  border-radius: var(--sp-r-pill);
+  min-width: 24px;
+  text-align: center;
+}
+.kf-lb-sugs-tab[aria-current="page"] .kf-lb-sugs-tab__c {
+  background: var(--sp-navy);
+  color: var(--sp-on-navy);
+}
+
+/* State pills on a suggestion row - shape + colour pairs per the
+ * two-signal rule (R4 of DESIGN.md §6). Open has no pill (the tab
+ * already names it); the other three states each get a pill in a
+ * tone that fits the state. */
+.kf-pill--accepted {
+  background: var(--sp-info-bg);
+  color: var(--sp-link);
+  border: 1px solid var(--sp-sky-line);
+}
+.kf-pill--done {
+  background: var(--sp-good-bg);
+  color: var(--sp-good);
+  border: 1px solid var(--sp-good-bg);
+}
+.kf-pill--declined {
+  background: var(--sp-warn-bg);
+  color: var(--sp-warn);
+  border: 1px solid var(--sp-warn-bg);
+}
+.kf-pill--unknown {
+  background: var(--sp-sky-tint);
+  color: var(--sp-muted);
+  border: 1px solid var(--sp-line);
+}
+/* /mine mirrors the owner state pills with the same classes;
+ * .kf-pill--open gives the sender a plain neutral badge that lines
+ * up with the shared .kf-pill ramp. */
+.kf-pill--open {
+  background: var(--sp-sky-tint);
+  color: var(--sp-navy);
+  border: 1px solid var(--sp-sky-line);
+}
+
+/* The "Reader's wording" block (owner) and "Your wording" block
+ * (sender) share the same look - clearly set apart from the note,
+ * but still inside the row card so the context is obvious. */
+.kf-lb-sug-row__wordblock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+  padding: var(--sp-sp-3);
+  background: var(--sp-sky-soft);
+  border-radius: var(--sp-r-sm);
+  border-left: 3px solid var(--sp-sky-line);
+}
+.kf-lb-sug-row__wordblock .kf-lb-sug-row__pre {
+  background: transparent;
+  padding: 0;
+}
+.kf-lb-sug-row__reason {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+  padding: var(--sp-sp-3);
+  background: var(--sp-warn-bg);
+  border-radius: var(--sp-r-sm);
+  border-left: 3px solid var(--sp-warn-strong);
+}
+.kf-lb-sug-row__reason p {
+  margin: 0;
+  color: var(--sp-body);
+  font-size: var(--sp-t-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Meta row inside the row footer: sender + handled-at. */
+.kf-lb-sug-row__meta-row {
+  display: flex;
+  gap: var(--sp-sp-3);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.kf-lb-sug-row__title--link {
+  color: var(--sp-link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+.kf-lb-sug-row__title--link:hover { color: var(--sp-navy); }
+
+/* The decline step opens inside the row (not a full-page modal).
+ * It is a small focused form; Escape or Cancel closes it. */
+.kf-lb-sug-row__decline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+  padding: var(--sp-sp-3);
+  background: var(--sp-raise);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+  margin-top: var(--sp-sp-2);
+}
+.kf-lb-sug-row__decline-acts {
+  display: flex;
+  gap: var(--sp-sp-2);
+  flex-wrap: wrap;
+}
+.kf-lb-sug-row__decline-acts .kf-btn { min-height: var(--sp-floor-chef); }
+
+/* "Your suggestions" link in the end-of-document footer. Quiet by
+ * design - a reader who has never sent a note never sees it. */
+.kf-lb-end__your-row {
+  margin-top: var(--sp-sp-3);
+  display: flex;
+  justify-content: flex-start;
+}
+.kf-lb-end__your {
+  min-height: var(--sp-floor-chef);
+  padding: 0 var(--sp-sp-3);
+  color: var(--sp-muted);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  font-size: var(--sp-t-label);
+}
+.kf-lb-end__your:hover { color: var(--sp-navy); text-decoration: none; }
+
+/* Send-confirmation link inside the Suggest panel body. */
+.kf-lb-sent-link {
+  color: var(--sp-link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-weight: var(--sp-w-bold);
+}
+.kf-lb-sent-link:hover { color: var(--sp-navy); }
+
+/* Phone tweaks: tab labels wrap, sender-page title link stays
+ * underlined, decline textarea sits at a comfortable size. */
+@media (max-width: 860px) {
+  .kf-lb-sugs-tab {
+    flex: 1 1 100%;
+    justify-content: space-between;
+  }
+}

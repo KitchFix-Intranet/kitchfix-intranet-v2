@@ -35,6 +35,7 @@ const ROUTE_MAP: Array<{ test: (p: string) => boolean; v: Hit }> = [
   { test: (p) => p === "/academy/admin/people",   v: { title: "Admin",      crumb: "People" } },
   { test: (p) => p === "/academy/team",            v: { title: "Team",       crumb: "Your team's compliance" } },
   { test: (p) => p === "/library",                v: { title: "Library",  crumb: "" } },
+  { test: (p) => p === "/library/suggestions/mine", v: { title: "Your suggestions", crumb: "Library" } },
   { test: (p) => p === "/library/suggestions",    v: { title: "Suggestions", crumb: "Library" } },
   // Document page: the BackLink already names where it goes ("Back
   // to the Library"), so a "Library" crumb duplicates the signal.

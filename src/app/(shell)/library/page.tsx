@@ -20,7 +20,7 @@ import Link from "next/link";
 import { requireAppAccess } from "@/lib/gate";
 import { ownerEmails } from "@/lib/supabase/env";
 import { loadLibrary } from "@/lib/academy/library";
-import { countOpenSuggestions } from "@/lib/academy/suggestions";
+import { countActiveSuggestions } from "@/lib/academy/suggestions";
 import { IdentBand } from "@/components/ui/IdentBand";
 import { Bookcase } from "@/components/library/Bookcase";
 import "@/components/library/library.css";
@@ -52,12 +52,12 @@ export default async function Page({
   const kick = "Each one is the current version.";
   const initialQuery = typeof sp.q === "string" ? sp.q : "";
 
-  // Owner-only "Suggestions" link. Hidden entirely when no open
-  // notes are waiting, so a non-owner never sees the control and an
-  // owner only sees it when there is something to do. The shell
-  // menu is untouched.
+  // Owner-only "Suggestions" link. Hidden entirely when no notes
+  // need the owner's attention (Open + Accepted-not-changed-yet).
+  // Non-owners never see it; owners only when there is something
+  // to do. The shell menu is untouched.
   const isOwner = ownerEmails().has(email);
-  const openSuggestions = isOwner ? await countOpenSuggestions() : 0;
+  const openSuggestions = isOwner ? await countActiveSuggestions() : 0;
 
   return (
     <div className="kf-library">

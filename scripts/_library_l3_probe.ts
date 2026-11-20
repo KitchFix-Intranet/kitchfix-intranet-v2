@@ -1,5 +1,11 @@
 // scripts/_library_l3_probe.ts
 //
+// WARNING: THIS SCRIPT WRITES TO THE LIVE READER-NOTES TABLE
+// (`public.document_issues`) AND DELETES WHAT IT WROTE. DO NOT
+// RUN WITHOUT THE OWNER'S SAY. Every row is tracked by id and
+// deleted before the probe exits; the row count before and after
+// must be equal.
+//
 // Library train L3 probes. READ-ONLY on A1; A3-A5 create and then
 // delete their own rows and print the before/after count.
 //
