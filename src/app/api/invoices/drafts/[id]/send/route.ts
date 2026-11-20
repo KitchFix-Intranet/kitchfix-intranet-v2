@@ -26,7 +26,7 @@
 import { NextResponse } from "next/server";
 import { openInvoiceApi } from "@/lib/invoices/apiGuard";
 import {
-  getDraftById, listFilesForDraft,
+  getDraftById, listFilesForDraft, listDraftsForOwnerSiteFixedOrder,
 } from "@/lib/invoices/draftLoad";
 import { runReadyCheck } from "@/lib/invoices/readyCheck";
 import { activeCodesSetForSite } from "@/lib/invoices/glCodes";
@@ -36,6 +36,8 @@ import { outboundMode } from "@/lib/invoices/outboundGate";
 import { commitSend } from "@/lib/invoices/sendCommit";
 import { tryClaim, releaseClaim } from "@/lib/invoices/claim";
 import { deliverSend } from "@/lib/invoices/deliverSend";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { DraftRow } from "@/lib/invoices/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -46,11 +48,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const url = new URL(req.url);
   const as = url.searchParams.get("as");
 
-  // 1. Switch gate. Off refuses with 409.
   const mode = outboundMode();
-  if (mode === "off") {
-    return NextResponse.json({ kind: "sending_off" }, { status: 409 });
-  }
 
   const open = await openInvoiceApi({ as, write: true });
   if (!open.ok) return open.response;
@@ -62,7 +60,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return new Response(null, { status: 404 });
   }
 
-  // 2. Re-run Ready with the same inputs the check route uses.
+  // Re-run Ready with the same inputs the check route uses.
   const [files, codeSet, vendorOk, copyResult] = await Promise.all([
     listFilesForDraft(sb, ownerEmail, draftId),
     activeCodesSetForSite(sb, draft.account_key),
@@ -73,6 +71,21 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     draft, files, activeCodesForSite: codeSet, vendorInScope: vendorOk,
     copyError: copyResult ? copyResult.kind : null,
   });
+
+  // 1. Switch off: carry today's check-route shape so the browser
+  //    can still show today's "Ready..." toast or error list. One
+  //    round-trip whether the switch is on or off.
+  if (mode === "off") {
+    const nextDraftId = check.ready ? await findNextUnreadyDraftId(sb, ownerEmail, draft.account_key, draft.id, codeSet) : null;
+    return NextResponse.json({
+      kind: "sending_off",
+      ready: check.ready,
+      errors: check.errors,
+      copy_match: copyResult?.match ?? null,
+      next_draft_id: nextDraftId,
+    }, { status: 200 });
+  }
+
   if (!check.ready) {
     return NextResponse.json({
       kind: "not_ready",
@@ -109,10 +122,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
   const rowMode = sendRow.mode as "test" | "live";
 
+  const nextDraftId = await findNextUnreadyDraftId(sb, ownerEmail, draft.account_key, draft.id, codeSet);
+
   if (sendRow.email_status === "sent") {
     // already_sent + delivered: do not send a second email.
     return NextResponse.json({
-      kind: "delivered", invoice_id: invoiceId, mode: rowMode,
+      kind: "delivered", invoice_id: invoiceId, mode: rowMode, next_draft_id: nextDraftId,
     }, { status: 200 });
   }
 
@@ -122,7 +137,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const claimed = await tryClaim(sb, sendRow.id);
   if (!claimed) {
     return NextResponse.json({
-      kind: "held", invoice_id: invoiceId, mode: rowMode,
+      kind: "held", invoice_id: invoiceId, mode: rowMode, next_draft_id: nextDraftId,
     }, { status: 200 });
   }
 
@@ -136,9 +151,41 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       kind: result.kind,
       invoice_id: invoiceId,
       mode: rowMode,
+      next_draft_id: nextDraftId,
       ...(result.code ? { code: result.code } : {}),
     }, { status: 200 });
   } finally {
     await releaseClaim(sb, sendRow.id);
   }
+}
+
+// Mirror of /check's next-draft cursor: oldest (created_at ASC)
+// not-ready draft for this (owner, site), excluding the one just
+// handled. The sitting routes here on ready/delivered/held so
+// the move-on is server-decided.
+async function findNextUnreadyDraftId(
+  sb: SupabaseClient,
+  ownerEmail: string,
+  accountKey: string,
+  skipDraftId: string,
+  codeSet: ReadonlySet<string>,
+): Promise<string | null> {
+  const all = await listDraftsForOwnerSiteFixedOrder(sb, ownerEmail, accountKey);
+  for (const d of all) {
+    if (d.id === skipDraftId) continue;
+    const [dfiles, dvendorOk, dcopy] = await Promise.all([
+      listFilesForDraft(sb, ownerEmail, d.id),
+      d.vendor_id ? vendorIsAvailable(sb, d.vendor_id) : Promise.resolve(false),
+      copyCheck(sb, ownerEmail, d),
+    ]);
+    const dres = runReadyCheck({
+      draft: d as DraftRow,
+      files: dfiles,
+      activeCodesForSite: codeSet,
+      vendorInScope: dvendorOk,
+      copyError: dcopy ? dcopy.kind : null,
+    });
+    if (!dres.ready) return d.id;
+  }
+  return null;
 }

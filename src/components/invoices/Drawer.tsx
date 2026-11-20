@@ -207,7 +207,13 @@ export function Drawer({
 
           <section className="kf-invoices-drawer__block" aria-label="The page">
             <h3>The page</h3>
-            {detail.pageUrl ? (
+            {detail.v2Send ? (
+              // Train 3: V2 invoices have no Drive link. "See the
+              // page" asks the guarded /api/invoices/sent/[id]/view
+              // route for a 60 s signed URL, then opens it. No
+              // link in server HTML.
+              <SeeThePageButton invoiceId={invId} />
+            ) : detail.pageUrl ? (
               <p>
                 <a className="kf-btn kf-btn--line kf-btn--sm" href={detail.pageUrl} target="_blank" rel="noopener noreferrer">
                   Open the page
@@ -228,6 +234,33 @@ export function Drawer({
         </div>
       </aside>
     </>
+  );
+}
+
+function SeeThePageButton({ invoiceId }: { invoiceId: string }) {
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const open = async () => {
+    if (loading) return;
+    setLoading(true);
+    setErr(null);
+    try {
+      const res = await fetch(`/api/invoices/sent/${encodeURIComponent(invoiceId)}/view`);
+      if (!res.ok) { setErr("Could not open the page."); return; }
+      const body = await res.json() as { url?: string };
+      if (body?.url) window.open(body.url, "_blank", "noopener,noreferrer");
+      else setErr("Could not open the page.");
+    } finally {
+      setLoading(false);
+    }
+  };
+  return (
+    <p>
+      <button type="button" className="kf-btn kf-btn--line kf-btn--sm" onClick={open} disabled={loading}>
+        {loading ? "Opening..." : "See the page"}
+      </button>
+      {err ? <span className="kf-invoices-drawer__err"> {err}</span> : null}
+    </p>
   );
 }
 

@@ -56,6 +56,7 @@ export function stripListRow(row: ListRow): ListRowView {
     pageUrl: row.pageUrl,
     pageCount: row.pageCount,
     status: row.status,
+    v2Send: row.v2Send,
     rejection: row.rejection
       ? {
           rejectedAt: row.rejection.rejectedAt,
@@ -187,8 +188,31 @@ function mapRow(raw: RawRow): ListRow | null {
     pageUrl: pickPageUrl(raw.drive_urls),
     pageCount: typeof raw.page_count === "number" ? raw.page_count : null,
     status,
+    v2Send: null,
     rejection: null,
   };
+}
+
+// Train 3 §7: one extra query per page. Joins invoice_sends rows
+// onto the page's ids. Missing row = v1 invoice = v2Send stays null.
+async function attachV2SendStatus(sb: SupabaseClient, rows: ListRow[]): Promise<void> {
+  if (rows.length === 0) return;
+  const ids = rows.map((r) => r.id);
+  const q = await sb
+    .from("invoice_sends")
+    .select("submission_id, mode, email_status")
+    .in("submission_id", ids);
+  if (q.error) return;
+  const byId = new Map<string, { mode: "test" | "live"; email_status: "held" | "sent" | "gave_up" }>();
+  for (const s of (q.data ?? []) as Array<{ submission_id: string; mode: string; email_status: string }>) {
+    if ((s.mode === "test" || s.mode === "live") && (s.email_status === "held" || s.email_status === "sent" || s.email_status === "gave_up")) {
+      byId.set(s.submission_id, { mode: s.mode, email_status: s.email_status });
+    }
+  }
+  for (const r of rows) {
+    const hit = byId.get(r.id);
+    if (hit) r.v2Send = hit;
+  }
 }
 
 // ─── Returned rows ────────────────────────────────────────────────
@@ -563,6 +587,7 @@ export async function loadInvoiceList(input: ListViewInput): Promise<ListView> {
 
   const combined: ListRow[] = [...returned, ...sent.rows].slice(0, wantedRows);
   await fillFirstNames(sb, combined);
+  await attachV2SendStatus(sb, combined);
 
   const chipCounts = await chipCountsPromise;
 
@@ -634,6 +659,7 @@ export async function loadInvoiceDetail(
 
   // first names on this single row
   await fillFirstNames(sb, [base]);
+  await attachV2SendStatus(sb, [base]);
 
   // vendor extract flag
   let extractLineItems: boolean | null = null;
