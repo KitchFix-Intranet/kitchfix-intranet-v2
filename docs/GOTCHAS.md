@@ -345,6 +345,26 @@ the verb only (`confirmed`, `split`, `relinked`, `archived`, `oneoff`,
 tails in the database; both `parseReason` functions drop everything
 after the first colon so the UI never renders them.
 
+## 24. A flex basis is a width in a row and a height in a column
+
+`flex-basis` is interpreted along the flex container's MAIN axis.
+In a flex row the main axis is width, so `flex: 1 1 280px` means
+"start at 280 px wide, grow and shrink." In a flex column the main
+axis is height, so the same declaration means "start at 280 px
+tall." The shared `.kf-search` label originally shipped with
+`flex: 1 1 280px` and sat happily in Review queue's row and
+Vendor items' grid; on Ingredients and Retail its parent
+`.kf-ingp__tools` is a column, so the 280 became a 280 px tall
+label wrapping a 44 px input (236 px of empty air above and below).
+
+Rule: a rule meant to size on the inline axis (width) uses
+`width` / `max-width` / `min-width`. `flex-basis` only earns its
+keep when the component is known to live in a row. Shared
+primitives that may land in either shape stay off `flex-basis`
+entirely. The chef-floor rule for `.kf-search` uses `max-width:
+none` on phone so the search fills the row without a basis that
+would double as a height.
+
 Branch-specific items we have already lived through on
 `step-1-shell-and-ingredients`:
 

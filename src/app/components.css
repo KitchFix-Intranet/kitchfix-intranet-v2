@@ -462,13 +462,29 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--sp-navy); }
 /* One search box, used by every tab that searches. The magnifier sits
  * inside on the left; the clear button (or the "/" hint when empty) sits
  * on the right. The input rests on the shared 44 px floor; on a phone it
- * bumps to the chef floor (48 px) via the .kf-ctl phone rule's twin here. */
+ * bumps to the chef floor (48 px).
+ *
+ * Train 5a fix 1 (2026-11-20): the shape works in a flex-row parent
+ * (Review queue's `.kf-review__search`), a grid parent (Vendor items'
+ * `.kf-vi__tools-row`), AND a flex-column parent (Ingredients /
+ * Retail's `.kf-ingp__tools`). The old `flex: 1 1 280px` hid a trap:
+ * `flex-basis` is interpreted along the flex container's MAIN axis -
+ * width in a row, HEIGHT in a column. In the Ingredients tab's column
+ * the 280 became the label's height, leaving a 236 px air pocket
+ * around the 44 px input.
+ *
+ * Direction-agnostic shape: `width` and `max-width` only (ordinary
+ * horizontal sizing, independent of the parent's flex direction); no
+ * `flex` shorthand that would make `flex-basis` a height. The label's
+ * height now comes from its content - the 44 px input, 48 on phone.
+ * See docs/GOTCHAS.md "A flex basis is a width in a row and a height
+ * in a column". */
 .kf-search {
   position: relative;
-  flex: 1 1 280px;
-  max-width: 520px;
   display: flex;
   align-items: center;
+  width: 100%;
+  max-width: 520px;
 }
 .kf-search > svg {
   position: absolute;
@@ -516,6 +532,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--sp-navy); }
 }
 .kf-search__clear:hover { color: var(--sp-ink); }
 @media (max-width: 860px) {
-  .kf-search { flex: 1 1 100%; max-width: none; }
+  /* Phone: drop the 520 cap so the search fills the row; same
+   * reason the desktop rule avoids `flex-basis`, the phone rule
+   * must too (flex-basis is a height in a column parent). */
+  .kf-search { max-width: none; }
   .kf-search input { min-height: var(--sp-floor-chef); }
 }
