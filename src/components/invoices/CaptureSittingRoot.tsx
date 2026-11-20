@@ -538,11 +538,22 @@ export function CaptureSittingRoot({
     const out = (await r4.json()) as { file: FileView };
     setFiles((fs) => [...fs, out.file]);
     if (mode === "replace" && oldFile) {
-      // New file is in place - now mark the old one removed.
-      await fetch(`/api/invoices/files/${oldFile.id}/remove?draft=${draftId}${asQAmp}`, { method: "POST" });
-      setFiles((fs) => fs.filter((f) => f.id !== oldFile.id));
-      setActiveFileId(out.file.id);
-      toast("File replaced. What you typed is still here.", { tone: "ink" });
+      // Train 2b fix-before-push #9: the remove call's answer
+      // decides the toast. A failure leaves both files on the
+      // draft (the new one is already added); we say so plainly
+      // rather than claiming the replace worked.
+      const rm = await fetch(`/api/invoices/files/${oldFile.id}/remove?draft=${draftId}${asQAmp}`, { method: "POST" });
+      if (rm.ok) {
+        setFiles((fs) => fs.filter((f) => f.id !== oldFile.id));
+        setActiveFileId(out.file.id);
+        toast("File replaced. What you typed is still here.", { tone: "ink" });
+      } else {
+        // The new file is already on the draft; the old one is
+        // still there too. The user can remove either one by hand
+        // from Change the page.
+        setActiveFileId(out.file.id);
+        toast("Added the new file, but the old one could not be removed. Both are on this invoice.", { tone: "block" });
+      }
     } else {
       setActiveFileId(out.file.id);
       toast("Page added.", { tone: "ink" });
@@ -642,7 +653,11 @@ export function CaptureSittingRoot({
     }
   };
 
-  // C9 copy-stop block ways out.
+  // C9 copy-stop block ways out. Train 2b fix-before-push #10:
+  // after the answer is saved, run the check again so the person
+  // does not have to press Check and send a second time. The
+  // check() call flushes any staged patch first, so the server
+  // sees the new answer before deciding.
   const copyRemove = () => { void discard(); setCopyMatch(null); };
   const copyDifferent = () => {
     const ans = { ...draft.answers, is_different_invoice: true as const };
@@ -650,6 +665,7 @@ export function CaptureSittingRoot({
     setDraft((d) => ({ ...d, answers: ans }));
     setCopyMatch(null);
     setErrors((es) => es.filter((e) => e.field !== "copy"));
+    window.setTimeout(() => void check(), 100);
   };
   const copyCreditFor = () => {
     if (!copyMatch?.submission_id) return;
@@ -659,6 +675,7 @@ export function CaptureSittingRoot({
     setDraft((d) => ({ ...d, answers: ans, type: "credit" }));
     setCopyMatch(null);
     setErrors((es) => es.filter((e) => e.field !== "copy"));
+    window.setTimeout(() => void check(), 100);
   };
 
   const canSave = !isPreview;
