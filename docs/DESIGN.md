@@ -43,6 +43,8 @@ The pathname reaches the layout via an `x-pathname` header the proxy sets (Next 
 
 **Identity band.** `--sp-band` (128px), `--sp-navy-deep` with a `--sp-navy-mid` sheen panel at the skew motif. Grid `grid-template-columns: minmax(0, 1fr) auto`, padding `0 32px`.
 
+Train 5a / D3 call 1 narrows where the band appears: **a tool's landing page carries the full band; a working tab's header is the top bar.** On a working tab the top-bar line carries the page title + crumb (as today) + a one-line fact set (`.kf-topfacts`, rendered from the tab's `@topbar` slot page via the shared cached loader) + the page's action if it has one. Overview keeps its band; Review queue, Ingredients, Retail and Vendor items drop theirs. The fact set hides at viewports <= 1100 wide (`@media (max-width: 1100px) { .kf-topfacts { display: none; } }`) so the title + crumb + action keep the single line at laptop widths.
+
 - Left column: eyebrow, H2 (30px display, white, nowrap + ellipsis - a status headline built from data, never the page title, which the topbar owns; the only exception is the failure state below), kick (16px on-navy-text, nowrap + ellipsis, under 60 characters). Optional `kickInfo` button opens a popover below the band on click AND on focus, closes on Escape and outside click; never a hover-only title.
 - Right column: facts (max 2) and the CTA. Fact label 12px condensed 700 2px tracking `--sp-on-navy-dim`, value `--sp-t-h1` (30px) condensed 800 white, note Mulish 12px 700 `--sp-good-on-navy`. 1px `--sp-navy-line` separators 44px tall, 28px gaps. CTA uses `.kf-btn--on-navy`.
 - Failed state: facts render "Unavailable" with the note "Couldn't read intake status" and a `--line-on-navy` Retry (`router.refresh()`); the headline falls back to the page name.

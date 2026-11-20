@@ -94,13 +94,18 @@ export type PatchDraftResult =
   | { status: "ok"; row: DraftRow }
   | { status: "conflict" }          // If-Match mismatch (another tab saved)
   | { status: "not_found" }
-  | { status: "frozen" };           // the draft is not 'draft' any more
+  | { status: "frozen" }            // the draft is not 'draft' any more
+  | { status: "error"; detail: string }; // DB error: FK violation, type, timeout, etc.
 
 // If-Match: the client sends the `updated_at` it has. The server
 // filters on `.eq("updated_at", ifMatch)` and returns the updated
 // row (which carries a fresh `updated_at`). No matching row -> 409.
 // Clients queue their own next save to carry the fresh timestamp
-// (correction 8).
+// (correction 8). Train 2b correction 4.2 distinguishes a true
+// conflict (no row matched the If-Match) from a DB error (FK
+// violation on bad vendor_id, type error, etc.) - the client needs
+// different handling for each: conflict reloads, error retries with
+// backoff.
 export async function patchDraft(
   sb: SupabaseClient,
   ownerEmail: string,
@@ -135,7 +140,15 @@ export async function patchDraft(
     .eq("status", "draft")
     .select(DRAFT_COLS)
     .maybeSingle();
-  if (q.error) return { status: "conflict" };
+  if (q.error) {
+    // A PostgREST / database error - never a concurrent-edit conflict.
+    // Returns a short code string so the client can show a plain
+    // sentence; no SQL or table names leaked.
+    const code = typeof (q.error as { code?: unknown }).code === "string"
+      ? (q.error as { code: string }).code
+      : "error";
+    return { status: "error", detail: code };
+  }
   if (!q.data) return { status: "conflict" };
   return { status: "ok", row: q.data as unknown as DraftRow };
 }
@@ -283,4 +296,23 @@ export async function removeFile(
     .is("removed_at", null);
   if (q.error) return false;
   return true;
+}
+
+// Train 2b correction 4.7: undo for a removed file. Clears
+// removed_at only when the file is currently removed. No DELETE.
+export async function unremoveFile(
+  sb: SupabaseClient,
+  draftId: string,
+  fileId: string,
+): Promise<import("./types").FileRow | null> {
+  const q = await sb
+    .from("invoice_files")
+    .update({ removed_at: null })
+    .eq("id", fileId)
+    .eq("draft_id", draftId)
+    .not("removed_at", "is", null)
+    .select(FILE_COLS)
+    .maybeSingle();
+  if (q.error || !q.data) return null;
+  return q.data as unknown as import("./types").FileRow;
 }

@@ -207,9 +207,12 @@ current version.` Search is document-level (R-AC10) via `?q=`. The
 match-count line is one visible `<p role="status">` directly under
 the search field - the sighted reader and the screen reader read the
 same words once ("`No documents match "<q>"`" or "`N documents match
-"<q>"`"). There is no second `sr-only` region; the SR never announces
-the same words twice. Pressing a shelf in the sticky list scrolls the
-page to it and moves focus to that shelf's `h2`.
+"<q>"`"). When the search finds nothing, the empty-state block that
+appears in place of the shelves is a plain `<section>` (not a second
+`role="status"` region); only the matchcount `<p>` announces. There
+is no `sr-only` duplicate and no competing live region, so the SR
+never reads the same words twice. Pressing a shelf in the sticky
+list scrolls the page to it and moves focus to that shelf's `h2`.
 
 Phone opens with a plain heading (the shell hides the band), then
 the kick, the search field, a horizontally-scrolling shelf-jump
@@ -233,8 +236,296 @@ local build on `:3100`, reports sideways scroll, under-48 controls,
 distinct type sizes, clipped text, contrast pairs and console
 errors).
 
-Not in this train: L3 (document page), L4 ("Suggest an edit" +
-"Share"), editing / publishing / Changes / Reviews, section-level
-search, the IdentBand right-slot for the search, and the shell-menu
-link to `/library/shelves` (the 308 keeps clicks correct). These are
-shared-foundation or later-train work.
+Not in the L2 train: editing / publishing / Changes / Reviews,
+section-level search, the IdentBand right-slot for the search, and
+the shell-menu link to `/library/shelves` (the 308 keeps clicks
+correct). These are shared-foundation or later-train work.
+
+## Library: the document page
+
+`/library/<id>` is the reading surface. A document is one thing, so
+the page carries no navy band: it opens with the words.
+
+The chrome:
+
+- **Back**, in the top bar, says where it goes. Three shapes:
+  "Back to the Library" by default; "Back to search" when the URL
+  carries `?q=` or `?from=search` (the search term is kept so the
+  reader lands where they left); "Back to the last document" when
+  the URL carries `?from=/library/<docId>` (an in-text link set
+  this). On a phone the button reads "Back" or "Library" per the
+  render. A cold-pasted link (no history we control) falls back
+  to the Library. Browser Back agrees with the control: both go
+  to the same address.
+- **Four tools** in the top bar, right-aligned as outline buttons:
+  Details, Share, Print, Suggest an edit. At `>=1280` each
+  carries its text next to the icon. At `1024-1279` the three
+  non-Details controls collapse to 48 x 48 icon targets; the
+  word stays in `aria-label` + `title`. At `<=1023` Details hides
+  (the About card is already stacked above the article at this
+  width) and Print hides (the phone is read-only), leaving
+  Share and Suggest an edit as the two icon-only controls.
+  DESIGN.md flags the slot as "one or two controls", so the
+  four-control count is drawn here as a lane request; the
+  shared-foundation lane rules on whether to widen the slot.
+- **Contents** (`DocNav`) sits on the left at `>=1181`, scroll-spy
+  highlights the section in view, and pressing an entry moves
+  focus to the section's `h2`. Below `1181` the list folds into
+  a `<details>` above the article; the words lead.
+- **About**, the third column on the right at `>=1281`, shows
+  version, published date, owner, and approver. Below `1281` the
+  column hides and the top bar's Details opens a panel with the
+  full fact set (Number, Kind, Version, Status, Owner,
+  Approver, Approved, Reviewed, Next review, Shelf, Languages).
+- **Section addresses.** Every heading gets a stable `id=`
+  server-side via `buildOutline` in `src/lib/academy/outline.ts`;
+  the slug is the heading text run through a conservative
+  slugifier and de-duplicated by document order (`-2`, `-3`,
+  ...). Opening `/library/<id>#<section>` lands on that section
+  with focus on its heading.
+- **Links between documents.** Where a document's text names
+  another live document by number, server-side
+  `wireCrossDocLinks` resolves the number through L1's rule: a
+  readable sibling becomes `<a class="kf-doclink"
+  href="/library/<id>">`; a sibling the viewer may not read
+  becomes a plain mono span with no hint. The viewer never sees
+  a dead link to a kept-for-management document.
+- **Spanish and English.** A readable Spanish sibling surfaces a
+  plain link next to the title ("Leer en espanol"); the Spanish
+  copy shows the reciprocal ("Read in English"). No language
+  toggle yet; that is a later train.
+- **End of the document** reads "Something wrong or out of date?
+  It goes to <owner>, with your name." and offers Suggest an
+  edit, Share, and Back.
+- **States.** Loading uses the shell's layout `loading.tsx`;
+  not-found and non-Live resolve to the plain 404; the L1
+  kept-for state (unchanged) renders the shared `.kf-empty`
+  primitive at the id only.
+
+R-AC26 holds end to end: no "trains you", no signature line, no
+"Open in Academy" link; the reader on this page never sees an
+Academy marker.
+
+## Library: Share
+
+A small panel on the right of the page (full-height sheet on a
+phone). The link field is readonly and selects on focus; the
+shown link is the document's own address, or the section's when
+"Share just this part" is ticked and a section is picked. Buttons:
+Copy link (uses `navigator.clipboard.writeText` with an
+`execCommand` fallback, announces via the shared toaster when the
+link lands on the clipboard; falls back to selecting the input
+when the host refuses), Email (opens the person's mail client
+with the subject and a line naming the doc + link), Text (same
+but `sms:`), and the phone's own share sheet when `navigator.share`
+is defined.
+
+The link carries no access. Whoever opens it needs their own
+sign-in, and L1 decides what they see. No token, no name, no
+email address is written into the link. Nothing is sent by the
+server.
+
+## Library: Suggest an edit
+
+Readers tell the owner something should change; the owner reviews
+later from a plain owner page. Nothing in the document becomes
+editable through this path - a suggestion is a note, not a diff.
+
+The reader's side opens from three places: the top bar, the end
+of the document, and the quiet "Suggest an edit about this part"
+link at the end of every H1 section (48-px tap target, label at
+`--sp-t-label` so the article's existing size count does not
+grow). On a phone the dialog fills the height. The form has
+three parts:
+
+1. Which part - a `<select>` that defaults to "The whole
+   document" and lists the article's H1 sections. When the
+   reader opens the panel from a per-section control, that
+   section is prefilled. `injectSectionEndControls` in
+   `src/lib/academy/outline.ts` inserts the per-section buttons
+   into the server-rendered HTML; a delegated click listener on
+   `[data-kf-sec-anchor]` inside `DocControlsIsland` reads the
+   anchor + heading text from the clicked element, fires the
+   same custom event the top-bar toolbar uses, and the opener
+   is refocused on close.
+2. What should change, and why - required; cap 4000 characters.
+3. Their own wording for that part - optional; cap 8000
+   characters; only available when a section is picked. There
+   is no point rewriting "the whole document".
+
+A half-written note lives in `localStorage` under
+`kf-lb-sug:<docId>` on that device only, and comes back when the
+panel reopens. Pressing Send clears the draft and shows a toast
+("Suggestion sent to <owner>. Nothing in the document changes
+until they publish."). Pressing Discard clears the draft without
+sending. A failure leaves the draft in place and shows a plain
+sentence; Try again sends the same text.
+
+The write route `POST /api/academy/library/suggestions` is the
+only path that lands a row. Gates (every must pass):
+
+- **App-access gate.** `requireAppAccessApi("/library")` - a
+  static path, never built from request input. The release switch
+  and `isOpenedPath` answer against the opened prefix, not against
+  a crafted string a caller could shape. The per-document may-read
+  check is a separate layer inside `submitSuggestionForEmail`.
+- **Shape check first.** The handler rejects any `docId` whose
+  shape does not match the document-number regex
+  (`/^[A-Z]{2,6}-\d{3}(?:-[A-Z]{2,4})?$/`) before any gate or DB
+  lookup. A bad shape never reaches the gate, never reaches the
+  database, and never participates in any routing decision.
+- **May-read, server-enforced.** The function in
+  `src/lib/academy/suggestions.ts::submitSuggestionForEmail` runs
+  stage-1 against `documents` (id, status, access_level), refuses
+  when the status is not Live, and resolves the viewer's reader
+  level through `resolveReaderLevel` + `canReadDocument`. A
+  suggestion against a restricted document is refused with the
+  **same** 404 answer as a document that does not exist: no
+  difference in wording, status, or timing that would confirm it
+  exists.
+- **reporter_email is server-sourced.** The function accepts an
+  `email` argument; the route handler sets it from the session
+  (`g.email`). The route body is read for `docId`, `issueText`,
+  `sectionKey`, and `suggestedText` only; a `reporterEmail` key
+  in the body is ignored.
+- **section_key is a real section.** `lookupSection(docId,
+  anchor)` rebuilds the outline from today's body and refuses
+  when the anchor does not match. `section_title` and
+  `doc_version` are looked up at the same time and stored on the
+  row; the client cannot rename a section through this path.
+- **Length caps on the server.** `issue_text` 1-4000 characters
+  (trimmed; empty refused with 422); `suggested_text` 0-8000
+  (empty becomes null; over the cap refused with 413).
+- **Rate limit, fail closed.** Two caps, both counted directly
+  against `document_issues` (no new table):
+  - **Burst**: 5 open suggestions per `reporter_email` per
+    rolling 60 s (`status='open'` + `created_at > now()-60s`).
+  - **Daily**: 30 suggestions per `reporter_email` per rolling
+    24 h, counted **regardless of status** so an owner closing
+    old notes does not refill the quota.
+  If either count query returns an error, the submission is
+  refused (`rate_limited(count_query_failed)`). A race between
+  parallel submits is survivable; the probe fires 8 in parallel
+  to trip the burst cap and pre-seeds 30 closed rows to trip the
+  daily cap. The write path uses the index
+  `document_issues_doc_status_idx` on `(doc_id, status)` that the
+  migration adds.
+
+The route answers with nothing about other people's notes. On
+success it returns `201 { ok: true }` and no row body - the
+reader does not need the id, and the owner's list is the only
+place suggestions leave.
+
+**Plain text only.** `issue_text` and `suggested_text` are stored
+as whatever the reader typed (trimmed); the owner's list renders
+them inside React text nodes, so angle brackets survive as
+literal characters. `dangerouslySetInnerHTML` is never pointed at
+either column. The probe stores `<b>x</b>` + a script tag and
+confirms both come back escaped.
+
+**The owner's side** is `/library/suggestions` (requireOwnerPage).
+Three lists on one page, each showing its own count:
+
+- **Open** - notes waiting to be read. Default list.
+- **Accepted - not changed yet** - notes the owner has said Yes
+  to but the document source has not been updated for yet.
+- **Closed** - done and declined notes, newest first. Each one
+  says which it is. Nothing ever just disappears.
+
+The storage schema holds four screen-visible states inside the
+two columns the table already has:
+
+| Screen label                | `status`      | `handled_outcome` |
+|-----------------------------|---------------|-------------------|
+| Open                        | `open`        | null              |
+| Accepted - not changed yet  | `in_progress` | `used`            |
+| Done                        | `closed`      | `used`            |
+| Declined                    | `closed`      | `no_change`       |
+
+The stored values stay as they are (`used` + `no_change` are the
+only values the `chk_issue_outcome` constraint allows); only the
+screen words change. L4b adds one text column, `handled_note`,
+for the optional decline reason.
+
+The actions a note moves through:
+
+- **Accept** (filled button on an Open note) - moves to
+  Accepted - not changed yet. Keeps the owner who accepted and
+  when, until Mark as done closes it.
+- **Mark as done** (filled button on an Accepted note) - moves
+  to Closed as Done. The owner page says in one plain line that
+  accepting does not change the document yet: the change is
+  made in the document's source for now.
+- **Decline** - opens a step with an optional reason (plain
+  text, capped at 2000 characters, stored on `handled_note`)
+  and moves the note to Closed as Declined.
+- **Put back to Open** - on any Accepted or Closed note.
+  Clears `handled_by`, `handled_at`, `handled_outcome` and
+  `handled_note`.
+
+Every row carries three more controls: **Open the document
+here** (goes to `/library/<id>#<section>?from=/library/suggestions`
+so BackLink on the document page lands back here), **Reply**
+(a plain `mailto:` link to the sender with a subject naming the
+document and a body that quotes the note; nothing is sent by the
+server), and - where the reader wrote their own wording - a
+"Reader's wording" block that shows that text clearly apart from
+the note. A failed action is a designed state: the row stays
+where it is and the reader-written fields stay in view.
+
+All four actions go through one route:
+`POST /api/academy/library/suggestions/[id]/action` body
+`{ action, reason? }`. `requireOwnerApi` is the first thing the
+handler runs. The function `applyOwnerAction` in
+`src/lib/academy/suggestions.ts` refuses a move that does not
+make sense from the row's current state (409 `wrong_state`) and
+never trusts the request for who is acting - `handled_by` comes
+from the session email only.
+
+The **bookcase snippet** that shows the owner how many notes need
+their attention is counted as Open plus Accepted-not-changed-yet
+(`countActiveSuggestions`); Closed does not light the badge.
+
+The sender's email is the one place a reader's address is shown
+across both pages. It is never written into an address, a log
+line, or an error message.
+
+## Library: your suggestions
+
+`/library/suggestions/mine` is the reader's own list. Any signed-
+in person the gate lets into the Library sees only their own notes,
+newest first. The server decides whose notes these are from the
+signed-in session (`requireAppAccess` runs first, then
+`listMineForEmail` is called with the gate's email); no email or
+id is in the address or in the request. A person can never see
+anyone else's note or anyone's email on this page - the payload
+is scrubbed of `reporter_email` before it leaves the server, so
+not even the viewer's own address ends up in the markup.
+
+Each row shows: the document number and title, the part, what the
+reader wrote, and what happened: Open, Accepted, Done, or Declined
+with the reason if one was given. Read only. If a note is on a
+document the person can no longer read by L1's rule, the document
+number shows but the title is `null` and no link is drawn.
+
+Readers reach the page from two quiet places and nowhere else:
+
+- A **See your suggestions** link inside the send-confirmation
+  that opens in the Suggest panel after a successful submit
+  (the panel's body swaps to a short "sent" view with the
+  link; the reader presses Close to dismiss it).
+- A **Your suggestions** control in the end-of-document close,
+  rendered only when the server says the viewer has at least
+  one note (`hasOwnSuggestions`). A reader who has never sent a
+  note never sees it.
+
+The shell menu is untouched. Nothing on the shell level knows
+about `/library/suggestions/mine`.
+
+The two June rows and the one 2026-11-20 row have no
+`section_key`, no `section_title`, no `suggested_text` - they
+render cleanly ("The whole document", no reader wording block).
+
+The fuller office queue - reading the wording against the
+document, taking it into a draft, bulk-closing a day's stale
+notes - is a later train.

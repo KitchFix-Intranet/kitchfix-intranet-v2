@@ -90,3 +90,59 @@ export function computeUsualCodes(past: readonly PastInvoiceLite[]): UsualCodesR
 
   return { codes, singleCodeFill, sampleSize: sample.length };
 }
+
+// Train 2b round-2 fix #2. Pure.
+//
+// The 9-in-10 fill plants a single coding line equal to the total.
+// While the coding is still the tool's own fill AND the user has
+// not touched it, the amount follows the total as it changes.
+//
+// The "did the tool fill this and has the user touched it" mark
+// cannot live on the row: the PATCH route strips extra fields, and
+// flush() calls setDraft(out.draft), so any row-level mark is lost
+// after the first save and the fill sticks again on the next
+// keystroke. Instead the component owns the mark (a ref), passes
+// it IN, and reads the next value OUT. Nothing about the mark
+// goes to the server.
+//
+// Return contract:
+//   - When nothing changed, `coding` is the same reference the
+//     caller passed in (so an unchanged total does not stage a
+//     save in the component).
+//   - `isFilled` reads true only when the tool is actively
+//     tracking a single-line fill for the current fillCode.
+export interface LineLite {
+  code: string;
+  name: string;
+  amount: number;
+}
+
+export interface SingleCodeFillResult {
+  coding: ReadonlyArray<LineLite>;
+  isFilled: boolean;
+}
+
+export function applySingleCodeFill(
+  total: number | null,
+  coding: ReadonlyArray<LineLite>,
+  fillCode: { code: string; name: string } | null,
+  isFilled: boolean,
+): SingleCodeFillResult {
+  if (!fillCode) return { coding, isFilled: false };
+  if (total == null) return { coding, isFilled };
+
+  if (coding.length === 0) {
+    const planted: LineLite[] = [{ code: fillCode.code, name: fillCode.name, amount: total }];
+    return { coding: planted, isFilled: true };
+  }
+
+  if (coding.length === 1 && isFilled && coding[0].code === fillCode.code) {
+    if (coding[0].amount === total) {
+      return { coding, isFilled: true };
+    }
+    const updated: LineLite[] = [{ ...coding[0], amount: total }];
+    return { coding: updated, isFilled: true };
+  }
+
+  return { coding, isFilled: false };
+}

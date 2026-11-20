@@ -1744,3 +1744,18 @@
   font-size: var(--sp-t-label);
   color: var(--sp-muted);
 }
+
+/* Train 5: a calm one-line notice above the period stage after a
+ * reopen lands. Not a banner, not a toast. Disappears on the next
+ * navigation.
+ */
+.kf-sc-reopened-notice {
+  margin: 0 0 var(--sp-sp-3);
+  padding: var(--sp-sp-2) var(--sp-sp-4);
+  background: var(--sp-sky-tint);
+  color: var(--sp-navy);
+  border-radius: var(--sp-r-ctl);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  font-weight: var(--sp-w-bold);
+}

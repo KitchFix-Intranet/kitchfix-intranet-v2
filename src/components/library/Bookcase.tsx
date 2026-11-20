@@ -276,7 +276,13 @@ export function Bookcase({ shelves, totalDocs, totalShelves, initialQuery }: Pro
 
         <main className="kf-lb-main">
           {searching && matchCount === 0 ? (
-            <section className="kf-empty" role="status" aria-label="No matches">
+            // No role="status" on this block: the matchcount <p>
+            // above already carries the same announcement with
+            // role="status". Two status regions with the same
+            // words made some screen readers read them twice; this
+            // block is a plain <section> so the SR announces the
+            // sentence once from the matchcount line.
+            <section className="kf-empty" aria-label="No matches">
               <div className="kf-empty__icon" aria-hidden />
               <div>
                 <h3 className="kf-empty__title">
@@ -326,7 +332,7 @@ export function Bookcase({ shelves, totalDocs, totalShelves, initialQuery }: Pro
                   <ul className="kf-lb-books" role="list">
                     {s.docs.map((d) => (
                       <li key={d.id}>
-                        <Tile doc={d} />
+                        <Tile doc={d} searchQuery={trimmed} />
                       </li>
                     ))}
                   </ul>
@@ -341,11 +347,20 @@ export function Bookcase({ shelves, totalDocs, totalShelves, initialQuery }: Pro
   );
 }
 
-function Tile({ doc }: { doc: LibraryDoc }) {
+function Tile({ doc, searchQuery }: { doc: LibraryDoc; searchQuery: string }) {
   const kindLabel = humanizeDocClass(doc.doc_class) || "Document";
   const versionLabel = doc.version != null ? `v${doc.version}` : null;
+  // L3 back-link chain: when the viewer is searching, carry ?q=
+  // onto the tile's href so BackLink on the document page resolves
+  // to the "Back to search" variant and lands them back at
+  // /library?q=<term>. Nothing personal in the param - it is the
+  // user's own typed text and already in their URL.
+  const q = searchQuery.trim();
+  const href = q.length > 0
+    ? `/library/${doc.id}?q=${encodeURIComponent(q)}`
+    : `/library/${doc.id}`;
   return (
-    <Link href={`/library/${doc.id}`} className="kf-lb-book" prefetch={false}>
+    <Link href={href} className="kf-lb-book" prefetch={false}>
       <div className="kf-lb-book__top">
         <span className="kf-lb-book__g" aria-hidden>
           <KindIcon code={doc.doc_class} />

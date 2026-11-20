@@ -383,3 +383,158 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--sp-navy); }
    own focus with no visible ring (see shell.css .kf-canvas:focus). */
 .kf-skiplink { position: absolute; left: var(--sp-sp-3); top: calc(-1 * var(--sp-sp-8) - var(--sp-sp-5)); z-index: var(--sp-z-skip); }
 .kf-skiplink:focus { top: var(--sp-sp-3); }
+
+/* ---------- Top-bar facts (train 5a / D3 call 1) ---------- */
+/* The one line of facts a working tab shows in the top bar instead of a
+ * band. Rendered inside the Shell's `.kf-topbar__actions` cell, so it sits
+ * beside any action (Run intake, Export CSV) the slot also carries.
+ * The whole line hides at <= 1100 wide: the title + crumb + the action
+ * still fit; facts appear again in a form the page below uses. */
+.kf-topfacts {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-4);
+  color: var(--sp-body);
+  font-size: var(--sp-t-label);
+  white-space: nowrap;
+}
+.kf-topfacts b {
+  color: var(--sp-ink);
+  font-weight: var(--sp-w-heavy);
+  font-size: var(--sp-t-body);
+}
+.kf-topfacts__sep {
+  width: 1px;
+  height: var(--sp-sp-4);
+  background: var(--sp-line);
+}
+.kf-topfacts--warn b { color: var(--sp-warn); }
+@media (max-width: 1100px) { .kf-topfacts { display: none; } }
+
+/* ---------- Labelled control (train 5a / D3 call 1) ---------- */
+/* A short word in front of a control, kept on one line. Used by the
+ * shared Sort menu and the shared "Bring in" picker. The word is 13px
+ * bold body; the control inside is the shared .kf-ctl primitive below. */
+.kf-labelled {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  font-size: var(--sp-t-label);
+  font-weight: var(--sp-w-bold);
+  color: var(--sp-body);
+  white-space: nowrap;
+}
+
+/* ---------- Control (train 5a) ---------- */
+/* The shared control shape every select / numeric input inside Stockpot
+ * uses. 44 px high, body-sized type, 12 px rounded corners, line-field
+ * border. select.kf-ctl leaves room for the native caret on the right.
+ *
+ * Train 5a R2: scoped to `.kf-labelled .kf-ctl` because the plain
+ * `.kf-ctl` collided on phone with the review card's pre-existing
+ * `.kf-rvc__panel-form .kf-ctl { height: 44px }` - the phone bump
+ * `min-height: 48px` was overriding the fixed 44 px and growing
+ * controls inside the New ingredient panel. Every new `.kf-ctl` use
+ * lands inside a `.kf-labelled` label (SortMenu's labelled select,
+ * Vendor items' Vendor picker), so this scope matches the real uses
+ * and leaves the review card untouched. */
+.kf-labelled .kf-ctl {
+  min-height: var(--sp-floor-corp);
+  padding: 0 var(--sp-sp-3);
+  border: 1px solid var(--sp-line-field);
+  border-radius: var(--sp-r-ctl);
+  background: var(--sp-card);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  color: var(--sp-ink);
+  max-width: 100%;
+}
+.kf-labelled select.kf-ctl { padding-right: var(--sp-sp-6); }
+.kf-labelled .kf-ctl:disabled {
+  background: var(--sp-raise);
+  color: var(--sp-muted);
+}
+@media (max-width: 860px) {
+  .kf-labelled .kf-ctl { min-height: var(--sp-floor-chef); }
+}
+
+/* ---------- Search (train 5a) ---------- */
+/* One search box, used by every tab that searches. The magnifier sits
+ * inside on the left; the clear button (or the "/" hint when empty) sits
+ * on the right. The input rests on the shared 44 px floor; on a phone it
+ * bumps to the chef floor (48 px).
+ *
+ * Train 5a fix 1 (2026-11-20): the shape works in a flex-row parent
+ * (Review queue's `.kf-review__search`), a grid parent (Vendor items'
+ * `.kf-vi__tools-row`), AND a flex-column parent (Ingredients /
+ * Retail's `.kf-ingp__tools`). The old `flex: 1 1 280px` hid a trap:
+ * `flex-basis` is interpreted along the flex container's MAIN axis -
+ * width in a row, HEIGHT in a column. In the Ingredients tab's column
+ * the 280 became the label's height, leaving a 236 px air pocket
+ * around the 44 px input.
+ *
+ * Direction-agnostic shape: `width` and `max-width` only (ordinary
+ * horizontal sizing, independent of the parent's flex direction); no
+ * `flex` shorthand that would make `flex-basis` a height. The label's
+ * height now comes from its content - the 44 px input, 48 on phone.
+ * See docs/GOTCHAS.md "A flex basis is a width in a row and a height
+ * in a column". */
+.kf-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  max-width: 520px;
+}
+.kf-search > svg {
+  position: absolute;
+  left: var(--sp-sp-3);
+  color: var(--sp-muted);
+  pointer-events: none;
+}
+.kf-search input {
+  width: 100%;
+  min-height: var(--sp-floor-corp);
+  padding: 0 var(--sp-sp-8) 0 var(--sp-sp-7);
+  border: 1px solid var(--sp-line-field);
+  border-radius: var(--sp-r-ctl);
+  background: var(--sp-card);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  color: var(--sp-ink);
+}
+.kf-search input::placeholder { color: var(--sp-muted); }
+.kf-search__kbd {
+  position: absolute;
+  right: var(--sp-sp-3);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: var(--sp-w-bold);
+  color: var(--sp-muted);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-xs);
+  padding: 0 var(--sp-sp-2);
+  background: var(--sp-raise);
+}
+.kf-search__clear {
+  position: absolute;
+  right: 0;
+  width: var(--sp-floor-corp);
+  height: var(--sp-floor-corp);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--sp-body);
+  border-radius: var(--sp-r-ctl);
+  cursor: pointer;
+}
+.kf-search__clear:hover { color: var(--sp-ink); }
+@media (max-width: 860px) {
+  /* Phone: drop the 520 cap so the search fills the row; same
+   * reason the desktop rule avoids `flex-basis`, the phone rule
+   * must too (flex-basis is a height in a column parent). */
+  .kf-search { max-width: none; }
+  .kf-search input { min-height: var(--sp-floor-chef); }
+}

@@ -46,10 +46,25 @@
   white-space: nowrap;
   cursor: pointer;
 }
+/* Train 5a fix 1 (2026-11-20): the halo was `inset: -4px 0`, which
+ * sits -4 relative to the chip's PADDING edge (the containing block
+ * for `position: absolute` descendants). With a 1 px border the
+ * painted chip is 36 (desk) / 40 (phone) in border-box terms; the
+ * padding-box is 34 / 38; -4 top and -4 bottom gives a hit area of
+ * 34 + 8 = 42 and 38 + 8 = 46 - under the 44 / 48 floors.
+ *
+ * `-5px 0` reaches -5 off the padding edge = -4 off the outer BORDER
+ * edge. Hit area = border-box + 8 = 36 + 8 = 44 on desk, 40 + 8 = 48
+ * on phone. The painted chip is unchanged. */
 .kf-chip::before {
   content: "";
   position: absolute;
-  inset: -4px 0;
+  inset: -5px 0;
+}
+/* Train 5a: on a phone the painted chip is 40 px tall; the ::before
+ * halo above widens the hit target to 48 px (phone chef floor). */
+@media (max-width: 860px) {
+  .kf-chip { min-height: 40px; }
 }
 .kf-chip span { color: var(--sp-muted); font-weight: 400; }
 

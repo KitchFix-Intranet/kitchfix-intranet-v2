@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check, Pencil, Scale } from "lucide-react";
-import { fmtCount, fmtDate, fmtPackNumbersInText, fmtUsd, fmtUsdLong, monthsAgo } from "@/lib/fmt";
+import { fmtCount, fmtDate, fmtPackNumbersInText, fmtUsd, fmtUsdLong, monthsAgo, nameFromEmail } from "@/lib/fmt";
 import { canonicalFromBaseUnit } from "@/lib/ingredients/pack";
 import { uomLabel } from "@/lib/ingredients/pack";
 import { ReviewActions } from "./ReviewActions";
@@ -330,11 +330,13 @@ export function ReviewCard({
                     />
                   </div>
                   {it.flagged ? (
-                    // N9 round 2 fix 5: upright micro, no inline
-                    // icon - the row's flag toggle already carries
-                    // the flag glyph.
-                    <div className="kf-rvc__flag-note" title={it.flaggedBy ?? ""}>
-                      Flagged{it.flaggedBy ? ` by ${it.flaggedBy}` : ""}
+                    // T4 ruling 10: show a name, never an email.
+                    // Derived on the client for the review-card builder
+                    // (the server already strips elsewhere via
+                    // nameFromEmail). The title no longer carries the
+                    // address either.
+                    <div className="kf-rvc__flag-note">
+                      Flagged{it.flaggedBy ? ` by ${nameFromEmail(it.flaggedBy)}` : ""}
                       {it.flagNote ? `: "${it.flagNote}"` : ""}
                     </div>
                   ) : null}

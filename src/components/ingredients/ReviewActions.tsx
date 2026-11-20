@@ -21,7 +21,7 @@ import {
 import { uomLabel } from "@/lib/ingredients/pack";
 import { canonicalIngredientName } from "@/lib/ingredients/nameNorm";
 import { IngredientTypeahead, formatIngredientMeta } from "./IngredientTypeahead";
-import { postJson, saveErrorSentence } from "./panel/common";
+import { postJson, saveErrorSentence, undoViaEvent } from "./panel/common";
 import { anyDirty, discardAll, DirtyScopeProvider, useDirtyEditor } from "./panel/dirty";
 
 // Kept exported so other call sites that import it keep compiling even
@@ -236,6 +236,16 @@ export function ReviewActions({
   const [flagFormOpen, setFlagFormOpen] = useState(false);
   const [flagNote, setFlagNote] = useState("");
   const [flagError, setFlagError] = useState<string | null>(null);
+  // T4 §6: the four "not for recipes" buttons (Retail, Archive, One-off,
+  // Not food) and Keep separate used to report failure in a toast that
+  // was gone in six seconds. Now the sentence sits in the card, beside
+  // the buttons, until the next press. One state slot.
+  const [barError, setBarError] = useState<string | null>(null);
+  // T4 §6: Esc on a flag note with text asks before dropping the note,
+  // the same way the item-panel asks on every other typed field. Scoped
+  // to this component so it never reaches the item panel's dirty
+  // registry.
+  const [flagDiscardAsk, setFlagDiscardAsk] = useState(false);
   // N3: why the user opened the create panel. "confirm" is the plain
   // + Create flow (default). "retail" is set only by the markResale
   // fallback below when it cannot post directly (name < 2 chars or
@@ -319,42 +329,35 @@ export function ReviewActions({
       return;
     }
     if (!currentIngredientId) {
-      toast("No ingredient target for this group", { tone: "block" });
+      // T4 R2 §5: Confirm is a card button; sentence stays in the
+      // card, no toast.
+      setBarError("No ingredient target for this group");
       return;
     }
+    setBarError(null);
     setOp("confirming");
     const r = await postJson("/api/review/confirm", {
       ingredientId: currentIngredientId,
       itemIds: checkedIds,
     });
     if (!r.ok) {
-      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
+      // T4 R2 §5: card sentence, no toast.
+      setBarError(saveErrorSentence(r) ?? "Nothing was saved.");
       setOp(null);
       return;
     }
-    const d = r.data as { confirmed?: number; movedToResale?: number };
+    const d = r.data as { confirmed?: number; movedToResale?: number; event_id?: string | null };
     const confirmedIds = [...checkedIds];
     const movedToResale = d.movedToResale ?? 0;
     const base = `Confirmed ${fmtCount(d.confirmed ?? checkedCount)} items`;
+    const undoEventId = d.event_id ?? null;
     toast(
       movedToResale > 0
         ? `${base} (${fmtCount(movedToResale)} landed as retail)`
         : base,
       {
         tone: "good",
-        undo: async () => {
-          // T2 round 2 §1: a silent-fail loop. Collect the failures
-          // and refresh so what really came back is on the page; if
-          // any item failed, throw so the toaster says the undo did
-          // not finish.
-          const failures: string[] = [];
-          for (const id of confirmedIds) {
-            const u = await postJson("/api/review/undo", { itemId: id });
-            if (!u.ok) failures.push(saveErrorSentence(u) ?? "Nothing was saved.");
-          }
-          router.refresh();
-          if (failures.length > 0) throw new Error(failures[0]);
-        },
+        undo: undoEventId ? undoViaEvent(router, undoEventId) : undefined,
       }
     );
     setOp(null);
@@ -383,29 +386,27 @@ export function ReviewActions({
         itemIds: checkedIds,
       });
     } catch {
-      const msg = "Could not reach the server. Nothing was sent.";
-      setRelinkError(msg);
-      toast(msg, { tone: "block" });
+      // T4 §6: failed relink says it in the panel, not in a toast.
+      setRelinkError("Could not reach the server. Nothing was sent.");
       setOp(null);
       return;
     }
     if (!r.ok) {
-      const msg = saveErrorSentence(r) ?? "Nothing was saved.";
-      setRelinkError(msg);
-      toast(msg, { tone: "block" });
+      setRelinkError(saveErrorSentence(r) ?? "Nothing was saved.");
       setOp(null);
       return;
     }
     // T3 §8: count actual changes, report both.
-    const d = (r.data ?? {}) as { marked?: number; relinked?: number; skipped?: number };
+    const d = (r.data ?? {}) as { marked?: number; relinked?: number; skipped?: number; event_id?: string | null };
     const marked = Number(d.marked ?? d.relinked ?? 0);
     const skipped = Number(d.skipped ?? 0);
+    const undoCb = d.event_id ? undoViaEvent(router, d.event_id) : undefined;
     if (marked === 0) {
       toast("Nothing changed - already decided");
     } else if (skipped > 0) {
-      toast(`Relinked ${fmtCount(marked)} (${fmtCount(skipped)} already decided)`);
+      toast(`Relinked ${fmtCount(marked)} (${fmtCount(skipped)} already decided)`, { undo: undoCb });
     } else {
-      toast(`Relinked ${fmtCount(marked)}`);
+      toast(`Relinked ${fmtCount(marked)}`, { undo: undoCb });
     }
     setShowRelink(false);
     setOp(null);
@@ -429,16 +430,13 @@ export function ReviewActions({
         itemIds: checkedIds,
       });
     } catch {
-      const msg = "Could not reach the server. Nothing was sent.";
-      setRelinkError(msg);
-      toast(msg, { tone: "block" });
+      // T4 §6: failed relink says it in the panel, not in a toast.
+      setRelinkError("Could not reach the server. Nothing was sent.");
       setOp(null);
       return;
     }
     if (!r.ok) {
-      const msg = saveErrorSentence(r) ?? "Nothing was saved.";
-      setRelinkError(msg);
-      toast(msg, { tone: "block" });
+      setRelinkError(saveErrorSentence(r) ?? "Nothing was saved.");
       setOp(null);
       return;
     }
@@ -446,8 +444,8 @@ export function ReviewActions({
       confirmed?: number;
       movedToResale?: number;
       usd?: number;
+      event_id?: string | null;
     };
-    const confirmedIds = checkedIds.slice();
     const target = ingredients.find((i) => i.id === relinkId);
     const targetName = target?.name ?? "the chosen ingredient";
     const movedRetail = Number(d.movedToResale ?? 0);
@@ -455,25 +453,14 @@ export function ReviewActions({
       ? `Confirmed ${fmtCount(d.confirmed ?? checkedCount)} items on ${targetName}; ${fmtCount(movedRetail)} landed as retail`
       : `Confirmed ${fmtCount(d.confirmed ?? checkedCount)} items on ${targetName}`;
     toast(baseMsg, {
-      undo: async () => {
-        // T2 round 2 §1: same loop, same aggregation as the Confirm
-        // undo above. Refresh so the page shows what came back;
-        // throw on any failure so the toaster announces.
-        const failures: string[] = [];
-        for (const id of confirmedIds) {
-          const u = await postJson("/api/review/undo", { itemId: id });
-          if (!u.ok) failures.push(saveErrorSentence(u) ?? "Nothing was saved.");
-        }
-        router.refresh();
-        if (failures.length > 0) throw new Error(failures[0]);
-      },
+      undo: d.event_id ? undoViaEvent(router, d.event_id) : undefined,
     });
     setShowRelink(false);
     setRelinkId(null);
     setOp(null);
     setLastDone(Date.now());
     if (onLeaveStart) {
-      onLeaveStart(confirmedIds);
+      onLeaveStart(checkedIds);
     } else {
       router.refresh();
     }
@@ -531,16 +518,13 @@ export function ReviewActions({
       resale: isRetail,
     });
     } catch {
-      const msg = "Could not reach the server. Nothing was sent.";
-      setNewError(msg);
-      toast(msg, { tone: "block" });
+      // T4 R2 §5: New ingredient failure stays in the panel, not a toast.
+      setNewError("Could not reach the server. Nothing was sent.");
       setOp(null);
       return;
     }
     if (!r.ok) {
-      const msg = saveErrorSentence(r) ?? "Nothing was saved.";
-      setNewError(msg);
-      toast(msg, { tone: "block" });
+      setNewError(saveErrorSentence(r) ?? "Nothing was saved.");
       setOp(null);
       return;
     }
@@ -551,37 +535,38 @@ export function ReviewActions({
       marked?: number;
       movedToResale?: number;
       baseUnit?: string;
+      event_id?: string | null;
     };
     const moved = d.moved ?? checkedCount;
-    // N4: inferred unit suffix - empty string for "each" / missing,
-    // " (per lb)" / " (per gal)" / " (per dozen)" otherwise. R5
-    // keeps this ONLY on Created toasts; join toasts never emit it.
     const unit = unitSuffix(d.baseUnit);
-    // N10 R5: toast wording decided from the client's own name-match
-    // (which, per R2, agrees with the server's name_norm lookup).
     const isJoin = nameMatch != null;
+    // T4 R2: every Create success carries an Undo. The server
+    // returned the primary event id; undoViaEvent rolls the whole
+    // click back (split + confirm, or split + retail) as one.
+    const undoCb = d.event_id ? undoViaEvent(router, d.event_id) : undefined;
     if (isRetail) {
       const n = d.marked ?? d.confirmed ?? moved;
-      if (isJoin) {
-        toast(`Added ${fmtCount(n)} items to "${nameMatch!.name}" and marked as retail`);
-      } else {
-        toast(`Created "${name}"${unit} and marked ${fmtCount(n)} item${n === 1 ? "" : "s"} as retail`);
-      }
+      toast(
+        isJoin
+          ? `Added ${fmtCount(n)} items to "${nameMatch!.name}" and marked as retail`
+          : `Created "${name}"${unit} and marked ${fmtCount(n)} item${n === 1 ? "" : "s"} as retail`,
+        { undo: undoCb },
+      );
     } else if (confirmArg) {
       const confirmed = d.confirmed ?? moved;
-      if (isJoin) {
-        toast(`Added ${fmtCount(confirmed)} items to "${nameMatch!.name}" and confirmed`);
-      } else {
-        toast(`Created "${name}"${unit} and confirmed ${fmtCount(confirmed)} item${confirmed === 1 ? "" : "s"}`);
-      }
+      toast(
+        isJoin
+          ? `Added ${fmtCount(confirmed)} items to "${nameMatch!.name}" and confirmed`
+          : `Created "${name}"${unit} and confirmed ${fmtCount(confirmed)} item${confirmed === 1 ? "" : "s"}`,
+        { undo: undoCb },
+      );
     } else {
-      if (isJoin) {
-        toast(`Added ${fmtCount(moved)} items to "${nameMatch!.name}" - confirm them on its card.`);
-      } else {
-        toast(
-          `Created "${name}"${unit} - ${fmtCount(moved)} items moved; confirm them on the new card.`
-        );
-      }
+      toast(
+        isJoin
+          ? `Added ${fmtCount(moved)} items to "${nameMatch!.name}" - confirm them on its card.`
+          : `Created "${name}"${unit} - ${fmtCount(moved)} items moved; confirm them on the new card.`,
+        { undo: undoCb },
+      );
     }
     setShowNew(false);
     setCreateIntent("confirm");
@@ -594,25 +579,25 @@ export function ReviewActions({
 
   async function markNotFood() {
     if (op || noneChecked) return;
+    setBarError(null);
     setOp("notfood");
     const r = await postJson("/api/review/not-food", { itemIds: checkedIds });
     if (!r.ok) {
-      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
+      // T4 §6: sentence stays in the card. No toast.
+      setBarError(saveErrorSentence(r) ?? "Nothing was saved.");
       setOp(null);
       return;
     }
-    // T3 §8: server returns { marked, skipped }. When marked is 0 the
-    // UPDATE matched nothing (every item was already decided), so
-    // the toast says so instead of claiming success.
-    const d = (r.data ?? {}) as { marked?: number; skipped?: number };
+    const d = (r.data ?? {}) as { marked?: number; skipped?: number; event_id?: string | null };
     const marked = Number(d.marked ?? 0);
     const skipped = Number(d.skipped ?? 0);
+    const undoCb = d.event_id ? undoViaEvent(router, d.event_id) : undefined;
     if (marked === 0) {
       toast("Nothing changed - already decided");
     } else if (skipped > 0) {
-      toast(`Marked ${fmtCount(marked)} as not food (${fmtCount(skipped)} already decided)`);
+      toast(`Marked ${fmtCount(marked)} as not food (${fmtCount(skipped)} already decided)`, { undo: undoCb });
     } else {
-      toast(`Marked ${fmtCount(marked)} as not food`);
+      toast(`Marked ${fmtCount(marked)} as not food`, { undo: undoCb });
     }
     setOp(null);
     setLastDone(Date.now());
@@ -628,23 +613,25 @@ export function ReviewActions({
   // out of the coverage meters without inventing a new column.
   async function markOneOff() {
     if (op || noneChecked) return;
+    setBarError(null);
     setOp("oneoff");
     const r = await postJson("/api/review/one-off", { itemIds: checkedIds });
     if (!r.ok) {
-      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
+      // T4 §6: sentence stays in the card. No toast.
+      setBarError(saveErrorSentence(r) ?? "Nothing was saved.");
       setOp(null);
       return;
     }
-    // T3 §8: see markNotFood - count actual changes, report both.
-    const d = (r.data ?? {}) as { marked?: number; skipped?: number };
+    const d = (r.data ?? {}) as { marked?: number; skipped?: number; event_id?: string | null };
     const marked = Number(d.marked ?? 0);
     const skipped = Number(d.skipped ?? 0);
+    const undoCb = d.event_id ? undoViaEvent(router, d.event_id) : undefined;
     if (marked === 0) {
       toast("Nothing changed - already decided");
     } else if (skipped > 0) {
-      toast(`Marked ${fmtCount(marked)} as one-off purchase${marked === 1 ? "" : "s"} (${fmtCount(skipped)} already decided)`);
+      toast(`Marked ${fmtCount(marked)} as one-off purchase${marked === 1 ? "" : "s"} (${fmtCount(skipped)} already decided)`, { undo: undoCb });
     } else {
-      toast(`Marked ${fmtCount(marked)} as one-off purchase${marked === 1 ? "" : "s"}`);
+      toast(`Marked ${fmtCount(marked)} as one-off purchase${marked === 1 ? "" : "s"}`, { undo: undoCb });
     }
     setOp(null);
     setLastDone(Date.now());
@@ -700,19 +687,20 @@ export function ReviewActions({
         resale: true,
       });
       if (!r.ok) {
-        toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
+        // T4 §6: sentence stays in the card.
+        setBarError(saveErrorSentence(r) ?? "Nothing was saved.");
         setOp(null);
         return;
       }
-      const d = r.data as { confirmed?: number; marked?: number; baseUnit?: string };
+      const d = r.data as { confirmed?: number; marked?: number; baseUnit?: string; event_id?: string | null };
       const n = d.marked ?? d.confirmed ?? checkedCount;
-      // Name the master in the toast - the user did not see a form.
-      // N4: append the unit when it is not the common-case default
-      // "each" so the user sees that the server inferred something
-      // other than the usual.
+      // T4 R2: toast carries Undo, like every other decision.
       toast(
         `Created "${name}"${unitSuffix(d.baseUnit)} and marked ${fmtCount(n)} item${n === 1 ? "" : "s"} as retail`,
-        { tone: "good" }
+        {
+          tone: "good",
+          undo: d.event_id ? undoViaEvent(router, d.event_id) : undefined,
+        }
       );
       setOp(null);
       setLastDone(Date.now());
@@ -729,25 +717,30 @@ export function ReviewActions({
     // corrupt group shape and should block, not silently create a new
     // master.
     if (!currentIngredientId) {
-      toast("No ingredient target for this group", { tone: "block" });
+      setBarError("No ingredient target for this group");
       return;
     }
+    setBarError(null);
     setOp("resale");
     const r = await postJson("/api/review/resale", {
       ingredientId: currentIngredientId,
       itemIds: checkedIds,
     });
     if (!r.ok) {
-      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
+      // T4 §6: sentence stays in the card.
+      setBarError(saveErrorSentence(r) ?? "Nothing was saved.");
       setOp(null);
       return;
     }
-    const d = r.data as { confirmed?: number; marked?: number; ingredientIsRetail?: boolean };
+    const d = r.data as { confirmed?: number; marked?: number; ingredientIsRetail?: boolean; event_id?: string | null };
     const n = d.marked ?? d.confirmed ?? checkedCount;
     const msg = d.ingredientIsRetail
       ? `Marked ${fmtCount(n)} as retail`
       : `Marked ${fmtCount(n)} as retail - the ingredient is still a recipe ingredient. Flip its Retail toggle in the detail panel to move the whole ingredient.`;
-    toast(msg, { tone: "good" });
+    toast(msg, {
+      tone: "good",
+      undo: d.event_id ? undoViaEvent(router, d.event_id) : undefined,
+    });
     setOp(null);
     setLastDone(Date.now());
     if (onLeaveStart) {
@@ -764,23 +757,25 @@ export function ReviewActions({
   // link_status='rejected' keeps the matcher away.
   async function markArchived() {
     if (op || noneChecked) return;
+    setBarError(null);
     setOp("archived");
     const r = await postJson("/api/review/archive", { itemIds: checkedIds });
     if (!r.ok) {
-      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
+      // T4 §6: sentence stays in the card.
+      setBarError(saveErrorSentence(r) ?? "Nothing was saved.");
       setOp(null);
       return;
     }
-    // T3 §8: count actual changes, report both.
-    const d = (r.data ?? {}) as { marked?: number; skipped?: number };
+    const d = (r.data ?? {}) as { marked?: number; skipped?: number; event_id?: string | null };
     const marked = Number(d.marked ?? 0);
     const skipped = Number(d.skipped ?? 0);
+    const undoCb = d.event_id ? undoViaEvent(router, d.event_id) : undefined;
     if (marked === 0) {
       toast("Nothing changed - already decided");
     } else if (skipped > 0) {
-      toast(`Archived ${fmtCount(marked)} item${marked === 1 ? "" : "s"} (${fmtCount(skipped)} already decided)`);
+      toast(`Archived ${fmtCount(marked)} item${marked === 1 ? "" : "s"} (${fmtCount(skipped)} already decided)`, { undo: undoCb });
     } else {
-      toast(`Archived ${fmtCount(marked)} item${marked === 1 ? "" : "s"}`);
+      toast(`Archived ${fmtCount(marked)} item${marked === 1 ? "" : "s"}`, { undo: undoCb });
     }
     setOp(null);
     setLastDone(Date.now());
@@ -823,23 +818,25 @@ export function ReviewActions({
 
   async function keepSeparate() {
     if (op || noneChecked) return;
+    setBarError(null);
     setOp("keepsep");
     const r = await postJson("/api/review/keep-separate", { itemIds: checkedIds });
     if (!r.ok) {
-      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
+      // T4 §6: sentence stays in the card.
+      setBarError(saveErrorSentence(r) ?? "Nothing was saved.");
       setOp(null);
       return;
     }
-    // T3 §8: count actual changes, report both.
-    const d = (r.data ?? {}) as { marked?: number; skipped?: number };
+    const d = (r.data ?? {}) as { marked?: number; skipped?: number; event_id?: string | null };
     const marked = Number(d.marked ?? 0);
     const skipped = Number(d.skipped ?? 0);
+    const undoCb = d.event_id ? undoViaEvent(router, d.event_id) : undefined;
     if (marked === 0) {
       toast("Nothing changed - already decided");
     } else if (skipped > 0) {
-      toast(`${fmtCount(marked)} item${marked === 1 ? "" : "s"} held out of this group (${fmtCount(skipped)} already decided)`);
+      toast(`${fmtCount(marked)} item${marked === 1 ? "" : "s"} held out of this group (${fmtCount(skipped)} already decided)`, { undo: undoCb });
     } else {
-      toast(`${fmtCount(marked)} item${marked === 1 ? "" : "s"} held out of this group`);
+      toast(`${fmtCount(marked)} item${marked === 1 ? "" : "s"} held out of this group`, { undo: undoCb });
     }
     setOp(null);
     setLastDone(Date.now());
@@ -943,9 +940,16 @@ export function ReviewActions({
                 if (e.key === "Escape") {
                   e.preventDefault();
                   e.stopPropagation();
-                  setFlagFormOpen(false);
-                  setFlagNote("");
-                  setFlagError(null);
+                  // T4 §6: a typed note is typed work. Ask before
+                  // dropping it. Scoped to this component so the item
+                  // panel never asks on its own typed fields.
+                  if (flagNote.trim().length > 0) {
+                    setFlagDiscardAsk(true);
+                  } else {
+                    setFlagFormOpen(false);
+                    setFlagNote("");
+                    setFlagError(null);
+                  }
                 } else if (e.key === "Enter") {
                   e.preventDefault();
                   flagSave();
@@ -969,9 +973,14 @@ export function ReviewActions({
                 className="kf-btn kf-btn--line kf-btn--sm"
                 disabled={op === "flag"}
                 onClick={() => {
-                  setFlagFormOpen(false);
-                  setFlagNote("");
-                  setFlagError(null);
+                  // T4 §6: ask when the field has text.
+                  if (flagNote.trim().length > 0) {
+                    setFlagDiscardAsk(true);
+                  } else {
+                    setFlagFormOpen(false);
+                    setFlagNote("");
+                    setFlagError(null);
+                  }
                 }}
               >
                 Cancel
@@ -980,6 +989,34 @@ export function ReviewActions({
                 <span className="kf-dpn__flash kf-dpn__flash--err" role="alert">
                   {flagError}
                 </span>
+              ) : null}
+              {flagDiscardAsk ? (
+                // T4 §6: inline ask - stays scoped to this form so the
+                // item panel's own Discard ask never fires on this
+                // field. "Discard" drops the typed text and closes;
+                // "Keep editing" returns to the input.
+                <div className="kf-ing-note-form__discard-ask" role="alertdialog" aria-label="Discard what you typed?">
+                  <span className="kf-ing-note-form__ask-text">Discard what you typed?</span>
+                  <button
+                    type="button"
+                    className="kf-btn kf-btn--primary kf-btn--sm"
+                    onClick={() => setFlagDiscardAsk(false)}
+                  >
+                    Keep editing
+                  </button>
+                  <button
+                    type="button"
+                    className="kf-btn kf-btn--line kf-btn--sm"
+                    onClick={() => {
+                      setFlagDiscardAsk(false);
+                      setFlagFormOpen(false);
+                      setFlagNote("");
+                      setFlagError(null);
+                    }}
+                  >
+                    Discard
+                  </button>
+                </div>
               ) : null}
             </div>
           </div>
@@ -1044,6 +1081,13 @@ export function ReviewActions({
           <span className="kf-rvc__actions-status kf-rvc__actions-status--done" aria-live="polite">
             <Check size={12} strokeWidth={2.5} aria-hidden />
             Done
+          </span>
+        ) : barError ? (
+          // T4 §6: the sentence sits beside the buttons until the next
+          // press. No toast fires. Any of the five bar handlers clears
+          // this at the top of its call.
+          <span className="kf-dpn__flash kf-dpn__flash--err" role="alert">
+            {barError}
           </span>
         ) : null}
       </div>

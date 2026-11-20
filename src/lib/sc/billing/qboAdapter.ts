@@ -591,6 +591,19 @@ async function doGetCustomer(url: any, apiKey: any, { timeoutMs = CUSTOMER_READ_
   }
 }
 
+// Exported twin: same header (X-API-Key), same 8s timeout, same
+// "never throws / absorbed to {ok:false,status:0}" contract. Train 5
+// uses this for the reopen-time "is this invoice still in QuickBooks"
+// query so the header + timeout are the engine's, not a second
+// convention. One source of truth for how a SC call hits the relay.
+export async function qboGetJson(
+  url: string,
+  apiKey: string,
+  { timeoutMs = CUSTOMER_READ_TIMEOUT_MS }: { timeoutMs?: number } = {},
+): Promise<{ ok: boolean; status: number; body: string }> {
+  return doGetCustomer(url, apiKey, { timeoutMs });
+}
+
 // Read the customer's PrimaryEmailAddr.Address from QBO. Never throws;
 // returns the email string on success or null on any failure (missing
 // email, HTTP error, non-JSON body, timeout, network). Logs one line

@@ -146,6 +146,24 @@ export type ReviewGroupItem = {
   needsReviewLines?: number;
   firstSeen?: string | null;
   status?: string;
+  // T4: carried so the item-panel footer knows whether to disable
+  // Archive and One-off on a confirmed item with the sentence ruling 8
+  // asks for. Optional; readers that never set it are the Review queue
+  // builder (every queue item is link_status='proposed' there anyway).
+  linkStatus?: string;
+  // T4 R2 §3: server-computed via getVendorItemState so the panel,
+  // the row label and the chip filters all read the same answer from
+  // one source. Covers old-shape rows the one-time correction has not
+  // rewritten yet (old-shape one-off reads as "one_off"; old-shape
+  // person-marked not-food reads as "not_food"). Optional for pre-
+  // R2 builders; the panel treats "undefined" as "fall back to
+  // status/is_food directly" for back-compat during the deploy window.
+  state?: string;
+  // T4 R2 §3: server-computed via canRestore. True when the item is
+  // in a person's disposition (archived / one-off / person-marked
+  // not-food). Intake-flagged not-food (is_food=false) is not
+  // restorable from this surface.
+  canRestore?: boolean;
   // Tri-state: null = legacy / unknown; the "Not food" pill in the
   // item panel renders only on strict `false`.
   isFood?: boolean | null;

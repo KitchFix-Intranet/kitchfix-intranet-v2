@@ -25,9 +25,9 @@ import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   Check,
-  Search,
-  X,
 } from "lucide-react";
+import { Search } from "./Search";
+import { SortMenu, type SortKey } from "./SortMenu";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtUsd, fmtUsdLong } from "@/lib/fmt";
 import { ItemPanelById } from "./ItemPanelById";
@@ -140,14 +140,12 @@ export type MasterRow = {
   yieldSource: string | null;
 };
 
-type SortMode = "spend" | "name" | "links" | "spread";
-
-const SORT_LABEL: Record<SortMode, string> = {
-  spend: "Highest spend",
-  name: "Name A to Z",
-  links: "Most items",
-  spread: "Widest spread",
-};
+// Train 5a / F23: the local sort keys are the subset of the shared
+// SortKey this tab offers; the dropdown words come from SORT_WORDS
+// (one vocabulary across tabs). The internal key "links" retired to
+// "items" so it matches the shared word.
+type SortMode = Extract<SortKey, "spend" | "name" | "items" | "spread">;
+const MASTERS_SORT_OPTIONS: readonly SortMode[] = ["spend", "name", "items", "spread"];
 
 // N12 §R8 + §2b: badges for what the price sub-line cannot say.
 // "spread" / "coverage" are dropped - price sub-line names both.
@@ -264,24 +262,8 @@ export function IngredientMastersFilter({
   const [selId, setSelId] = useState<string | null>(null);
   const [paneOpen, setPaneOpen] = useState(false);
   const [openItemId, setOpenItemId] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  // "/" focuses the search; Esc clears it.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "/") {
-        const tag = (e.target as HTMLElement | null)?.tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA") return;
-        e.preventDefault();
-        inputRef.current?.focus();
-        inputRef.current?.select();
-      } else if (e.key === "Escape" && document.activeElement === inputRef.current) {
-        setQuery("");
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, []);
+  // Train 5a / F22: "/" focus and Esc clear live inside the shared
+  // Search component now; this file keeps no input ref or hotkey.
 
   const trimmed = query.trim();
   const filtered = useMemo(() => {
@@ -292,7 +274,7 @@ export function IngredientMastersFilter({
     if (onlyUnreviewed) out = out.filter((r) => r.allergensReviewedAt == null);
     if (onlyEmpty) out = out.filter((r) => r.issues.includes("empty"));
     if (sort === "name") out = [...out].sort((a, b) => a.name.localeCompare(b.name));
-    else if (sort === "links") out = [...out].sort((a, b) => b.linkedCount - a.linkedCount);
+    else if (sort === "items") out = [...out].sort((a, b) => b.linkedCount - a.linkedCount);
     else if (sort === "spread") out = [...out].sort((a, b) => (b.spreadRatio ?? 0) - (a.spreadRatio ?? 0));
     else out = [...out].sort((a, b) => b.usd12m - a.usd12m);
     return out;
@@ -373,7 +355,6 @@ export function IngredientMastersFilter({
     setOnlyFlagged(false);
     setOnlyUnreviewed(false);
     setOnlyEmpty(false);
-    inputRef.current?.focus();
   }
 
   // When the user picks a row that lives in the filtered set, scroll
@@ -446,35 +427,20 @@ export function IngredientMastersFilter({
     <div className={`kf-ingp__workspace${paneOpen ? " kf-ingp__workspace--detail-open" : ""}`}>
       {/* --- Toolbar -------------------------------------------- */}
       <div className="kf-ingp__tools">
-        <label className="kf-ingp__search">
-          <Search size={16} strokeWidth={1.75} aria-hidden />
-          <input
-            ref={inputRef}
-            type="search"
-            value={query}
-            onChange={(e) => {
-              const v = e.target.value;
-              setQuery(v);
-              
-            }}
-            placeholder={
-              mode === "resale"
-                ? "Filter retail by name, linked vendor or SKU"
-                : "Filter by name, parent, category, linked vendor or SKU"
-            }
-            aria-label="Filter ingredients"
-          />
-          {query ? (
-            <button
-              type="button"
-              className="kf-ingp__search-clear"
-              onClick={() => { setQuery(""); inputRef.current?.focus(); }}
-              aria-label="Clear search"
-            >
-              <X size={16} strokeWidth={1.75} />
-            </button>
-          ) : null}
-        </label>
+        {/* Train 5a / F22: shared Search. "/" focuses, Esc clears,
+            filters as you type. Placeholder names what this tab
+            actually searches. */}
+        <Search
+          kind="controlled"
+          value={query}
+          onChange={(v) => setQuery(v)}
+          placeholder={
+            mode === "resale"
+              ? "Filter retail by name, linked vendor or SKU"
+              : "Filter by name, parent, category, linked vendor or SKU"
+          }
+          label="Filter ingredients"
+        />
 
         <div className="kf-ingp__filters">
           <span className="kf-ingp__filters-label">Category</span>
@@ -569,21 +535,12 @@ export function IngredientMastersFilter({
                 )}
               </span>
             </div>
-            <select
-              className="kf-ingp__sort"
+            {/* Train 5a / F23: shared SortMenu, same words as every tab. */}
+            <SortMenu
               value={sort}
-              onChange={(e) => {
-                const v = e.target.value as SortMode;
-                setSort(v);
-                
-              }}
-              aria-label="Sort order"
-            >
-              <option value="spend">{SORT_LABEL.spend}</option>
-              <option value="name">{SORT_LABEL.name}</option>
-              <option value="links">{SORT_LABEL.links}</option>
-              <option value="spread">{SORT_LABEL.spread}</option>
-            </select>
+              options={MASTERS_SORT_OPTIONS}
+              onChange={(v) => setSort(v)}
+            />
           </div>
 
           <div className="kf-ingp__list-colhead">

@@ -9,7 +9,7 @@
 //   invoice or credit. Those are enforced by threading the site's
 //   active-code set and matching strict typing in the checker.
 
-import type { CheckError, CheckResult, DraftRow, FileRow, InvoiceKind } from "./types";
+import type { CheckError, ReadyResult, DraftRow, FileRow, InvoiceKind } from "./types";
 import { addsUp } from "./addUp";
 import { parseDateInput } from "./dateInput";
 
@@ -27,7 +27,7 @@ export interface ReadyInputs {
 
 const VALID_KINDS: readonly InvoiceKind[] = ["invoice", "credit"];
 
-export function runReadyCheck(inputs: ReadyInputs): CheckResult {
+export function runReadyCheck(inputs: ReadyInputs): ReadyResult {
   const { draft, files, activeCodesForSite, vendorInScope, copyError } = inputs;
   const errors: CheckError[] = [];
 

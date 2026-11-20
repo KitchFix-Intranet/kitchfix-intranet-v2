@@ -26,6 +26,7 @@ import { resolveFinalizeReviewSpan, mondayOfWeek } from "@/lib/sc/scWeekFinalize
 import { checkWeekSubmittable } from "@/lib/sc/submit/checkSubmit";
 import { resolveDayState } from "@/lib/sc/calendar/dayState";
 import { effectiveUnitEndedBeforeSiteToday } from "@/lib/sc/calendar/isAskedYet";
+import { sumBillablePretaxCents } from "@/lib/sc/billing/billableTotal";
 
 export interface ReviewLine {
   serviceId: string;
@@ -94,6 +95,11 @@ export interface ReviewView {
   finalizeRowId: string | null;
   submittedVia: string | null;
   pushGaveUp: boolean;
+  // Train 5: whether the viewer may reopen the week. Evaluated
+  // server-side (role never crosses the wire). The page uses this
+  // boolean to decide whether to render the reopen panel at all.
+  // Any failure to read the scope collapses to false.
+  canReopen: boolean;
 }
 
 interface SvcRow {
@@ -138,7 +144,7 @@ export async function loadReviewScreen(
   const unitDates = span.dates;
   const isBiweeklyUnit = span.isBiweekly && unitDates.length === 14;
 
-  const [servicesQ, groupsQ, actQ, projQ, metaQ, finQ, siteTodayQ, revQ, anyFinEverQ] = await Promise.all([
+  const [servicesQ, groupsQ, actQ, projQ, metaQ, finQ, siteTodayQ, revQ, anyFinEverQ, exclQ] = await Promise.all([
     sb.from("sc_services")
       .select("id, service_name, group_id, unit, is_flat_fee, is_non_revenue, sort_order")
       .eq("account_key", accountKey)
@@ -184,6 +190,14 @@ export async function loadReviewScreen(
       .select("id", { count: "exact", head: true })
       .eq("account_key", accountKey)
       .neq("status", "reverted"),
+    // Fix 2 (train 4b): services the invoice drops. Use the SAME
+    // exclusion set here the board + the finalize path already use,
+    // so the week check and the finish show what the invoice will
+    // bill, not a strictly higher number.
+    sb.from("sc_qbo_service_map")
+      .select("service_id, export_excluded")
+      .eq("account_key", accountKey)
+      .eq("export_excluded", true),
   ]);
 
   if (servicesQ.error) throw new Error(`sc_services: ${servicesQ.error.message}`);
@@ -196,6 +210,10 @@ export async function loadReviewScreen(
   if (revQ.error)      throw new Error(`sc_daily_revenue: ${revQ.error.message}`);
   if (anyFinEverQ.error) throw new Error(`sc_week_finalize (any ever): ${anyFinEverQ.error.message}`);
   const anyFinalizeRowEver = (anyFinEverQ.count ?? 0) > 0;
+  if (exclQ.error) throw new Error(`sc_qbo_service_map: ${exclQ.error.message}`);
+  const excludedServiceIds = new Set<string>(
+    ((exclQ.data ?? []) as Array<{ service_id: string }>).map((r) => String(r.service_id)),
+  );
 
   const services = (servicesQ.data ?? []) as SvcRow[];
   const groups = (groupsQ.data ?? []) as GroupRow[];
@@ -263,7 +281,6 @@ export async function loadReviewScreen(
 
     const lines: ReviewLine[] = [];
     let dayMeals = 0;
-    let dayCents = 0;
     for (const [sid, actRow] of actById) {
       const count = actRow.actual_count ?? 0;
       if (count <= 0) continue;
@@ -273,9 +290,16 @@ export async function loadReviewScreen(
       const priceCents = priceDollars == null ? null : Math.round(priceDollars * 100);
       const viewRow = revById.get(sid);
       const viewCents = viewRow?.actual_revenue != null ? Math.round(viewRow.actual_revenue * 100) : null;
-      const beforeTaxCents = svc.is_non_revenue ? null : viewCents;
+      // Fix 2 (train 4b): a line marked export_excluded in
+      // sc_qbo_service_map is left off the invoice. Treat it the
+      // same way on screen: no dollars shown, "Not billed" where
+      // the amount would be. Day/week totals use the same billing
+      // helper as the board + the engine so every surface stays
+      // in agreement.
+      const isExcluded = excludedServiceIds.has(sid);
+      const isNotBilled = !!svc.is_non_revenue || isExcluded;
+      const beforeTaxCents = isNotBilled ? null : viewCents;
       if (svc.unit === "meals" && !svc.is_flat_fee) dayMeals += count;
-      if (beforeTaxCents != null) dayCents += beforeTaxCents;
       lines.push({
         serviceId: sid,
         serviceName: svc.service_name,
@@ -286,11 +310,23 @@ export async function loadReviewScreen(
         actualCount: count,
         priceCents,
         beforeTaxCents,
-        isNotBilled: !!svc.is_non_revenue,
+        isNotBilled,
         sortOrder: sortOrderById.get(sid) ?? 0,
       });
     }
     lines.sort((a, b) => a.sortOrder - b.sortOrder);
+    // Day cents come from sumBillablePretaxCents over THIS day's
+    // revenue rows with the same excluded set the board uses, so
+    // the day total foots to what the invoice will carry.
+    const dayCents = sumBillablePretaxCents(
+      revs.map((r) => ({
+        service_id: r.service_id,
+        is_non_revenue: !!r.is_non_revenue,
+        has_actuals: !!r.has_actuals,
+        actual_revenue: r.actual_revenue ?? 0,
+      })),
+      excludedServiceIds,
+    );
 
     const notServedNames = Array.from(actById.entries())
       .filter(([, r]) => (r.actual_count ?? 0) === 0)
@@ -400,6 +436,11 @@ export async function loadReviewScreen(
     finalizeRowId,
     submittedVia,
     pushGaveUp,
+    // Train 5: defaults to false; the page server overwrites after
+    // calling canReopenForAccount. Loader stays transport-free of
+    // the scope helper so the test harness can exercise the loader
+    // without the people table.
+    canReopen: false,
   };
 }
 

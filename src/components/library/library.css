@@ -490,11 +490,25 @@
 .kf-docarticle__facts strong { color: var(--sp-ink); font-weight: 700; }
 
 /* -- STD-001 docbody (R-AC27). Document type scale, not the five-size
- * app ramp. Amendments the ramp for the article only. -- */
+ * app ramp. Amendments the ramp for the article only.
+ *
+ * L3: every colour below is a token. Two values resist a straight
+ * token swap (both noted in the report):
+ *   - the 26/18/16px headings use raw px values so the article's
+ *     five-size ramp holds (12/15/16/18/26 - count unchanged); no
+ *     type-size token fits 15 or 26 today without opening up the
+ *     shared ramp, which is a shared-foundation change.
+ *   - the heading underline tone (previously the raw #7DB9D5) has
+ *     no token at that weight; --sp-sky-line (#C9DBE6) is the only
+ *     "line on sky" token and reads too light. L3 uses --sp-sky-line
+ *     for the h2/h3 underlines and keeps --sp-navy-line on h1, both
+ *     tokens. A deeper "sky-mid" line token is the right answer and
+ *     is proposed in the L3 ledger line.
+ * -- */
 .kf-docbody {
   font-size: 15px;
   line-height: 1.6;
-  color: #1f2937;
+  color: var(--sp-ink);
   counter-reset: kf-docsec;
 }
 .kf-docbody h1 {
@@ -506,7 +520,7 @@
   letter-spacing: -.2px;
   line-height: 1.1;
   padding-bottom: 8px;
-  border-bottom: 2px solid #7DB9D5;
+  border-bottom: 2px solid var(--sp-navy-line);
   counter-increment: kf-docsec;
   text-transform: uppercase;
   scroll-margin-top: calc(var(--sp-topbar) + var(--sp-sp-4));
@@ -532,7 +546,7 @@
   letter-spacing: 0;
   margin: 28px 0 8px;
   padding-bottom: 4px;
-  border-bottom: 1px solid #7DB9D5;
+  border-bottom: 1px solid var(--sp-sky-line);
   scroll-margin-top: calc(var(--sp-topbar) + var(--sp-sp-4));
 }
 .kf-docbody h3 {
@@ -544,7 +558,7 @@
   letter-spacing: 0;
   margin: 20px 0 6px;
   padding-bottom: 3px;
-  border-bottom: 1px solid color-mix(in srgb, #7DB9D5 60%, transparent);
+  border-bottom: 1px solid var(--sp-line-soft);
   scroll-margin-top: calc(var(--sp-topbar) + var(--sp-sp-4));
 }
 .kf-docbody p { margin: 10px 0; }
@@ -554,7 +568,7 @@
 .kf-docbody code {
   font-family: ui-monospace, Menlo, Consolas, monospace;
   font-size: 13px;
-  background: #f1f5f9;
+  background: var(--sp-sky-soft);
   padding: 1px 5px;
   border-radius: 4px;
 }
@@ -576,29 +590,29 @@
 .kf-docbody blockquote.callout-anchor,
 .kf-docbody blockquote.anchor {
   border-left-color: var(--sp-navy);
-  background: #C4E3E8;
+  background: var(--sp-sky);
 }
 .kf-docbody blockquote.callout-critical,
 .kf-docbody blockquote.critical {
-  border-left-color: #B53030;
-  background: #FCE4E4;
+  border-left-color: var(--sp-block);
+  background: var(--sp-block-bg);
 }
 .kf-docbody blockquote.callout-critical b:first-child,
-.kf-docbody blockquote.critical b:first-child { color: #B53030; }
+.kf-docbody blockquote.critical b:first-child { color: var(--sp-block); }
 .kf-docbody blockquote.callout-note,
 .kf-docbody blockquote.note {
-  border-left-color: #2563eb;
-  background: #eff6ff;
+  border-left-color: var(--sp-link);
+  background: var(--sp-info-bg);
 }
 .kf-docbody blockquote.callout-note b:first-child,
-.kf-docbody blockquote.note b:first-child { color: #1d4ed8; }
+.kf-docbody blockquote.note b:first-child { color: var(--sp-link); }
 .kf-docbody blockquote.callout-warning,
 .kf-docbody blockquote.warning {
-  border-left-color: #d97706;
-  background: #FBEFD0;
+  border-left-color: var(--sp-warn-strong);
+  background: var(--sp-warn-bg);
 }
 .kf-docbody blockquote.callout-warning b:first-child,
-.kf-docbody blockquote.warning b:first-child { color: #8A5A0E; }
+.kf-docbody blockquote.warning b:first-child { color: var(--sp-warn); }
 .kf-docbody table {
   border-collapse: collapse;
   width: 100%;
@@ -613,13 +627,25 @@
   vertical-align: top;
 }
 .kf-docbody th {
-  background: #f8fafc;
+  background: var(--sp-raise);
   font-weight: 700;
   color: var(--sp-navy);
   text-transform: none;
   letter-spacing: 0;
   font-family: var(--sp-ui);
   font-size: 14px;
+}
+.kf-docbody .kf-doclink {
+  color: var(--sp-link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.95em;
+}
+.kf-docbody .kf-doclink:hover { color: var(--sp-navy); }
+.kf-docbody .kf-doclink--plain {
+  color: var(--sp-body);
+  text-decoration: none;
 }
 .kf-docbody td.r,
 .kf-docbody th.r { text-align: right; font-variant-numeric: tabular-nums; }
@@ -1026,3 +1052,720 @@
   .kf-lb-book__l { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 }
 
+/* ============================================================
+ * L3 - the document page: top bar, three-column layout, panels,
+ * end-of-document footer, owner's suggestions list.
+ * ============================================================ */
+
+/* Top bar slot: back + four controls, all 48px floor. */
+.kf-lb-topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sp-3);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.kf-lb-back {
+  min-height: var(--sp-floor-chef);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  padding: 0 var(--sp-sp-3);
+  color: var(--sp-navy);
+  text-decoration: none;
+}
+.kf-lb-back:hover { background: var(--sp-sky-tint); text-decoration: none; }
+.kf-lb-back__long { font-weight: var(--sp-w-bold); }
+.kf-lb-back__short { display: none; }
+@media (max-width: 860px) {
+  .kf-lb-back__long { display: none; }
+  .kf-lb-back__short { display: inline; font-weight: var(--sp-w-bold); }
+}
+
+.kf-lb-tools__row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  margin-left: auto;
+  min-height: var(--sp-floor-chef);
+}
+.kf-lb-ta {
+  min-height: var(--sp-floor-chef);
+  padding: 0 var(--sp-sp-3);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  font-size: var(--sp-t-table);
+  font-weight: var(--sp-w-bold);
+  color: var(--sp-navy);
+  background: var(--sp-card);
+  border: 1px solid var(--sp-navy);
+  border-radius: var(--sp-r-ctl);
+}
+.kf-lb-ta:hover { background: var(--sp-sky-tint); }
+/* Narrow desk: the three non-Details controls collapse to an icon.
+ * Their accessible name stays in aria-label + title; the visible
+ * word hides via the sibling selector so the span still contributes
+ * to accessibility tree width-independently. */
+@media (max-width: 1279px) {
+  .kf-lb-ta:not(.kf-lb-ta--details) {
+    padding: 0;
+    min-width: var(--sp-floor-chef);
+    justify-content: center;
+  }
+  .kf-lb-ta:not(.kf-lb-ta--details) > span { display: none; }
+}
+@media (max-width: 1023px) {
+  .kf-lb-ta--details { display: none; }
+  .kf-lb-ta--print { display: none; }
+}
+
+/* Three-column document layout.
+ *   left:   .kf-lb-doc__side (Contents - DocNav)
+ *   middle: .kf-lb-doc__art  (article + end footer)
+ *   right:  .kf-lb-doc__about (About card)
+ * At <= 1280 the About column stacks; at <= 1180 the Contents rail
+ * also stacks (the article leads). */
+.kf-lb-doc {
+  display: grid;
+  grid-template-columns: 252px minmax(0, 1fr) 272px;
+  gap: var(--sp-sp-5);
+  align-items: start;
+  max-width: 1360px;
+  margin: 0 auto;
+  width: 100%;
+}
+.kf-lb-doc__side { position: sticky; top: calc(var(--sp-topbar) + var(--sp-sp-3)); }
+.kf-lb-doc__about {
+  position: sticky;
+  top: calc(var(--sp-topbar) + var(--sp-sp-3));
+  min-width: 0;
+}
+.kf-lb-doc__about-card {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  padding: var(--sp-sp-4);
+  box-shadow: var(--sp-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+}
+.kf-lb-doc__about-eyebrow {
+  font-family: var(--sp-disp);
+  font-weight: var(--sp-w-bold);
+  font-size: var(--sp-t-label);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--sp-muted);
+}
+.kf-lb-doc__about-kv {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px var(--sp-sp-3);
+  margin: 0;
+  font-size: var(--sp-t-table);
+}
+.kf-lb-doc__about-kv dt { color: var(--sp-muted); font-weight: var(--sp-w-bold); }
+.kf-lb-doc__about-kv dd { margin: 0; color: var(--sp-body); font-weight: var(--sp-w-bold); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+@media (max-width: 1280px) {
+  .kf-lb-doc {
+    grid-template-columns: 252px minmax(0, 1fr);
+    max-width: 1024px;
+  }
+  .kf-lb-doc__about { display: none; }
+}
+@media (max-width: 1180px) {
+  .kf-lb-doc {
+    grid-template-columns: minmax(0, 1fr);
+    max-width: 848px;
+  }
+  .kf-lb-doc__side { position: static; order: -1; }
+}
+
+.kf-lb-doc__art {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  box-shadow: var(--sp-shadow);
+  padding: var(--sp-sp-6) 44px;
+  min-width: 0;
+}
+.kf-lb-doc__id-row {
+  display: inline-flex;
+  gap: var(--sp-sp-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--sp-sp-4);
+}
+.kf-lb-doc__title {
+  font-family: var(--sp-disp);
+  font-weight: var(--sp-w-heavy);
+  color: var(--sp-navy);
+  font-size: 30px;
+  line-height: 1.05;
+  text-transform: uppercase;
+  letter-spacing: .2px;
+  margin: 0 0 var(--sp-sp-3);
+}
+.kf-lb-doc__lede {
+  color: var(--sp-body);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-item);
+  line-height: var(--sp-lh-body);
+  margin: 0 0 var(--sp-sp-4);
+}
+.kf-lb-doc__lang { margin: 0 0 var(--sp-sp-3); font-size: var(--sp-t-table); }
+.kf-lb-doc__lang a { color: var(--sp-link); text-decoration: underline; text-underline-offset: 2px; }
+
+/* The L1 kept-for state uses the shared .kf-empty primitive, but
+ * centered inside the article column. */
+.kf-lb-restricted {
+  max-width: 848px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+/* End-of-document footer. */
+.kf-lb-end {
+  margin-top: var(--sp-sp-6);
+  padding-top: var(--sp-sp-4);
+  border-top: 1px solid var(--sp-line);
+}
+.kf-lb-end__row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+}
+.kf-lb-end__line { margin: 0; color: var(--sp-body); font-size: var(--sp-t-body); }
+.kf-lb-end__line strong { color: var(--sp-ink); font-weight: var(--sp-w-heavy); }
+.kf-lb-end__acts { display: flex; gap: var(--sp-sp-2); flex-wrap: wrap; }
+.kf-lb-end__acts .kf-btn { min-height: var(--sp-floor-chef); }
+
+/* --- the three panels: Details / Share / Suggest an edit --- */
+/* URL-param drawers animate their exit through <DrawerFrame>; the
+ * L3 panels are state-driven, which lets the island refocus the
+ * opener on close without the URL changing. The backdrop fades, the
+ * aside slides in. */
+.kf-lb-backdrop {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--sp-navy-deep) 60%, transparent);
+  z-index: var(--sp-z-drawer);
+  display: grid;
+  justify-items: end;
+  animation: kf-lb-backfade var(--sp-fast) var(--sp-ease) both;
+}
+@keyframes kf-lb-backfade { from { opacity: 0; } to { opacity: 1; } }
+.kf-lb-panel {
+  background: var(--sp-card);
+  width: min(480px, 100%);
+  max-width: 100%;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--sp-shadow-float);
+  animation: kf-lb-panelin var(--sp-base) var(--sp-ease) both;
+  outline: none;
+}
+@media (max-width: 860px) {
+  .kf-lb-panel { width: 100%; }
+}
+@keyframes kf-lb-panelin {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+.kf-lb-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  border-bottom: 1px solid var(--sp-line);
+  background: var(--sp-card);
+}
+.kf-lb-panel__title {
+  font-family: var(--sp-ui);
+  font-weight: var(--sp-w-heavy);
+  font-size: var(--sp-t-h3);
+  color: var(--sp-ink);
+  margin: 0;
+}
+.kf-lb-panel__close {
+  min-height: var(--sp-floor-chef);
+  min-width: var(--sp-floor-chef);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--sp-r-sm);
+  color: var(--sp-body);
+}
+.kf-lb-panel__close:hover { background: var(--sp-raise); color: var(--sp-navy); }
+.kf-lb-panel__body {
+  padding: var(--sp-sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+  overflow-y: auto;
+  flex: 1 1 auto;
+}
+.kf-lb-panel__foot {
+  display: flex;
+  gap: var(--sp-sp-2);
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  border-top: 1px solid var(--sp-line);
+  flex-wrap: wrap;
+}
+.kf-lb-panel__foot .kf-btn { min-height: var(--sp-floor-chef); }
+.kf-lb-panel__kick {
+  margin: 0;
+  color: var(--sp-body);
+  font-size: var(--sp-t-table);
+}
+.kf-lb-panel__kick strong { color: var(--sp-ink); }
+.kf-lb-panel__kick-id {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  color: var(--sp-muted);
+  margin-left: var(--sp-sp-2);
+}
+.kf-lb-panel__kv {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px var(--sp-sp-3);
+  margin: 0;
+  font-size: var(--sp-t-table);
+}
+.kf-lb-panel__kv dt { color: var(--sp-muted); font-weight: var(--sp-w-bold); }
+.kf-lb-panel__kv dd { margin: 0; color: var(--sp-body); font-weight: var(--sp-w-bold); min-width: 0; overflow-wrap: anywhere; }
+.kf-lb-panel__mono { font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--sp-navy); }
+
+/* Form fields inside the panel. */
+.kf-lb-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+  min-width: 0;
+}
+.kf-lb-field__l {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  font-weight: var(--sp-w-bold);
+  color: var(--sp-ink);
+}
+.kf-lb-field__ctl {
+  min-height: var(--sp-floor-chef);
+  padding: 0 var(--sp-sp-3);
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line-field);
+  border-radius: var(--sp-r-ctl);
+  color: var(--sp-ink);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+}
+.kf-lb-field__ctl:focus-visible {
+  outline: 3px solid var(--sp-sky);
+  outline-offset: 0;
+  border-color: var(--sp-navy);
+}
+.kf-lb-field__ctl--ta {
+  min-height: 120px;
+  padding: var(--sp-sp-3);
+  line-height: var(--sp-lh-body);
+  font-family: var(--sp-ui);
+  resize: vertical;
+}
+.kf-lb-field__count {
+  align-self: flex-end;
+  font-size: var(--sp-t-micro);
+  color: var(--sp-muted);
+  font-variant-numeric: tabular-nums;
+}
+.kf-lb-wording {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+  margin-top: var(--sp-sp-2);
+}
+.kf-lb-note {
+  margin: 0;
+  color: var(--sp-muted);
+  font-size: var(--sp-t-table);
+}
+.kf-lb-err {
+  margin: 0;
+  color: var(--sp-block);
+  font-size: var(--sp-t-table);
+  font-weight: var(--sp-w-bold);
+}
+
+/* Share: a row of equal-width controls. 48px floor + 100px flex-base
+ * so they wrap tidily on narrow panels. */
+.kf-lb-share {
+  display: flex;
+  gap: var(--sp-sp-2);
+  flex-wrap: wrap;
+}
+.kf-lb-share__ctl {
+  min-height: var(--sp-floor-chef);
+  flex: 1 1 130px;
+  justify-content: center;
+}
+@media (max-width: 860px) {
+  .kf-lb-share__ctl { flex: 1 1 100%; }
+}
+
+/* Tick (checkbox-ish row). */
+.kf-lb-tick {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  min-height: var(--sp-floor-chef);
+  padding: 0 var(--sp-sp-2);
+  font-size: var(--sp-t-table);
+  color: var(--sp-ink);
+}
+.kf-lb-tick input {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  accent-color: var(--sp-navy);
+}
+
+/* Owner's "Suggestions N waiting" snippet on the bookcase.
+ * Hidden entirely for non-owners (the server does not render it). */
+.kf-lb-sugsnip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  padding: 0 var(--sp-sp-3);
+  min-height: var(--sp-floor-chef);
+  background: var(--sp-info-bg);
+  color: var(--sp-navy);
+  border: 1px solid var(--sp-sky-line);
+  border-radius: var(--sp-r-pill);
+  text-decoration: none;
+  align-self: flex-start;
+  font-weight: var(--sp-w-bold);
+  font-size: var(--sp-t-table);
+}
+.kf-lb-sugsnip:hover { background: var(--sp-sky-tint); text-decoration: none; }
+.kf-lb-sugsnip__n {
+  font-family: var(--sp-disp);
+  font-size: var(--sp-t-item);
+}
+.kf-lb-sugsnip__l { color: var(--sp-muted); font-weight: var(--sp-w-regular); }
+
+/* --- /library/suggestions (owner page) --- */
+.kf-lb-sugs {
+  max-width: var(--sp-canvas-max);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-5);
+}
+.kf-lb-sugs__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+}
+.kf-lb-sugs__h1 {
+  font-family: var(--sp-disp);
+  font-weight: var(--sp-w-heavy);
+  color: var(--sp-navy);
+  font-size: 30px;
+  margin: 0;
+  letter-spacing: .2px;
+  text-transform: uppercase;
+}
+.kf-lb-sugs__sub { margin: 0; color: var(--sp-body); font-size: var(--sp-t-body); }
+.kf-lb-sugs__list { display: flex; flex-direction: column; gap: var(--sp-sp-3); }
+
+.kf-lb-sug-row {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-left: 4px solid var(--sp-navy);
+  border-radius: var(--sp-r-card);
+  box-shadow: var(--sp-shadow);
+  padding: var(--sp-sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+}
+.kf-lb-sug-row__head {
+  display: flex;
+  gap: var(--sp-sp-2);
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+.kf-lb-sug-row__id {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-weight: var(--sp-w-bold);
+  color: var(--sp-navy);
+}
+.kf-lb-sug-row__title { color: var(--sp-ink); font-weight: var(--sp-w-bold); overflow-wrap: anywhere; }
+.kf-lb-sug-row__meta { margin-left: auto; color: var(--sp-muted); font-size: var(--sp-t-table); }
+.kf-lb-sug-row__meta strong { color: var(--sp-ink); font-weight: var(--sp-w-bold); }
+.kf-lb-sug-row__body {
+  margin: 0;
+  color: var(--sp-body);
+  font-size: var(--sp-t-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.kf-lb-sug-row__wording summary {
+  cursor: pointer;
+  min-height: var(--sp-floor-chef);
+  display: flex;
+  align-items: center;
+  color: var(--sp-navy);
+  font-weight: var(--sp-w-bold);
+}
+.kf-lb-sug-row__pre {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  white-space: pre-wrap;
+  margin: 0;
+  padding: var(--sp-sp-3);
+  background: var(--sp-sky-soft);
+  border-radius: var(--sp-r-sm);
+  overflow-wrap: anywhere;
+}
+.kf-lb-sug-row__foot {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-sp-3);
+  align-items: center;
+  flex-wrap: wrap;
+}
+.kf-lb-sug-row__sender { color: var(--sp-muted); font-size: var(--sp-t-table); }
+.kf-lb-sug-row__sender strong { color: var(--sp-body); font-weight: var(--sp-w-bold); }
+.kf-lb-sug-row__acts { display: flex; gap: var(--sp-sp-2); flex-wrap: wrap; }
+.kf-lb-sug-row__acts .kf-btn { min-height: var(--sp-floor-chef); }
+.kf-lb-sug-row__acts > * { flex: 0 1 auto; min-width: 0; }
+/* Phone: every action spans the row, so four controls do not
+ * squeeze into a 360-wide viewport (hScroll). Each sits full-
+ * width stacked. */
+@media (max-width: 520px) {
+  .kf-lb-sug-row__acts { flex-direction: column; align-items: stretch; }
+  .kf-lb-sug-row__acts > * { width: 100%; justify-content: center; }
+}
+
+/* End-of-section "Suggest an edit" control inside the article body.
+ * Server-rendered inside dangerouslySetInnerHTML, picked up by the
+ * DocControlsIsland's delegated click listener. Must land at
+ * --sp-floor-chef (48px) so the control is tappable at every
+ * width; the label stays at an existing ramp size (--sp-t-label =
+ * 13px) so the article's distinct-size count does not grow. */
+.kf-docbody .kf-lb-sec-end {
+  display: flex;
+  justify-content: flex-start;
+  margin: var(--sp-sp-4) 0 var(--sp-sp-5);
+}
+.kf-docbody .kf-lb-sec-end__btn {
+  min-height: var(--sp-floor-chef);
+  padding: 0 var(--sp-sp-3);
+  background: transparent;
+  border: 1px dashed var(--sp-line-field);
+  border-radius: var(--sp-r-ctl);
+  color: var(--sp-muted);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  font-weight: var(--sp-w-bold);
+  cursor: pointer;
+}
+.kf-docbody .kf-lb-sec-end__btn:hover {
+  color: var(--sp-navy);
+  border-color: var(--sp-navy);
+}
+
+/* ============================================================
+ * L4b - suggestions that lead somewhere: three-list tabs, state
+ * pills, decline step, mailto Reply, "Your suggestions" entries,
+ * send-confirmation in the panel.
+ * ============================================================ */
+
+/* Tabs across the owner's board. Three equal-feel buttons, 48px
+ * floor, counts at --sp-t-label. The whole row inherits the five
+ * sizes already in the owner page's own content (13/14.5/16/18/30),
+ * so adding the tabs does not grow the count. */
+.kf-lb-sugs-tabs {
+  display: flex;
+  gap: var(--sp-sp-1);
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--sp-line);
+  margin-bottom: var(--sp-sp-3);
+}
+.kf-lb-sugs-tab {
+  min-height: var(--sp-floor-chef);
+  padding: 0 var(--sp-sp-3);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  background: transparent;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  color: var(--sp-body);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  font-weight: var(--sp-w-bold);
+  cursor: pointer;
+}
+.kf-lb-sugs-tab:hover { color: var(--sp-navy); }
+.kf-lb-sugs-tab[aria-current="page"] {
+  color: var(--sp-navy);
+  border-bottom-color: var(--sp-red);
+}
+.kf-lb-sugs-tab__c {
+  font-family: var(--sp-disp);
+  font-size: var(--sp-t-label);
+  font-weight: var(--sp-w-bold);
+  color: var(--sp-muted);
+  background: var(--sp-sky-tint);
+  padding: 2px var(--sp-sp-2);
+  border-radius: var(--sp-r-pill);
+  min-width: 24px;
+  text-align: center;
+}
+.kf-lb-sugs-tab[aria-current="page"] .kf-lb-sugs-tab__c {
+  background: var(--sp-navy);
+  color: var(--sp-on-navy);
+}
+
+/* State pills on a suggestion row - shape + colour pairs per the
+ * two-signal rule (R4 of DESIGN.md §6). Open has no pill (the tab
+ * already names it); the other three states each get a pill in a
+ * tone that fits the state. */
+.kf-pill--accepted {
+  background: var(--sp-info-bg);
+  color: var(--sp-link);
+  border: 1px solid var(--sp-sky-line);
+}
+.kf-pill--done {
+  background: var(--sp-good-bg);
+  color: var(--sp-good);
+  border: 1px solid var(--sp-good-bg);
+}
+.kf-pill--declined {
+  background: var(--sp-warn-bg);
+  color: var(--sp-warn);
+  border: 1px solid var(--sp-warn-bg);
+}
+.kf-pill--unknown {
+  background: var(--sp-sky-tint);
+  color: var(--sp-muted);
+  border: 1px solid var(--sp-line);
+}
+/* /mine mirrors the owner state pills with the same classes;
+ * .kf-pill--open gives the sender a plain neutral badge that lines
+ * up with the shared .kf-pill ramp. */
+.kf-pill--open {
+  background: var(--sp-sky-tint);
+  color: var(--sp-navy);
+  border: 1px solid var(--sp-sky-line);
+}
+
+/* The "Reader's wording" block (owner) and "Your wording" block
+ * (sender) share the same look - clearly set apart from the note,
+ * but still inside the row card so the context is obvious. */
+.kf-lb-sug-row__wordblock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+  padding: var(--sp-sp-3);
+  background: var(--sp-sky-soft);
+  border-radius: var(--sp-r-sm);
+  border-left: 3px solid var(--sp-sky-line);
+}
+.kf-lb-sug-row__wordblock .kf-lb-sug-row__pre {
+  background: transparent;
+  padding: 0;
+}
+.kf-lb-sug-row__reason {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+  padding: var(--sp-sp-3);
+  background: var(--sp-warn-bg);
+  border-radius: var(--sp-r-sm);
+  border-left: 3px solid var(--sp-warn-strong);
+}
+.kf-lb-sug-row__reason p {
+  margin: 0;
+  color: var(--sp-body);
+  font-size: var(--sp-t-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Meta row inside the row footer: sender + handled-at. */
+.kf-lb-sug-row__meta-row {
+  display: flex;
+  gap: var(--sp-sp-3);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.kf-lb-sug-row__title--link {
+  color: var(--sp-link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+.kf-lb-sug-row__title--link:hover { color: var(--sp-navy); }
+
+/* The decline step opens inside the row (not a full-page modal).
+ * It is a small focused form; Escape or Cancel closes it. */
+.kf-lb-sug-row__decline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+  padding: var(--sp-sp-3);
+  background: var(--sp-raise);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+  margin-top: var(--sp-sp-2);
+}
+.kf-lb-sug-row__decline-acts {
+  display: flex;
+  gap: var(--sp-sp-2);
+  flex-wrap: wrap;
+}
+.kf-lb-sug-row__decline-acts .kf-btn { min-height: var(--sp-floor-chef); }
+
+/* "Your suggestions" link in the end-of-document footer. Quiet by
+ * design - a reader who has never sent a note never sees it. */
+.kf-lb-end__your-row {
+  margin-top: var(--sp-sp-3);
+  display: flex;
+  justify-content: flex-start;
+}
+.kf-lb-end__your {
+  min-height: var(--sp-floor-chef);
+  padding: 0 var(--sp-sp-3);
+  color: var(--sp-muted);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  font-size: var(--sp-t-label);
+}
+.kf-lb-end__your:hover { color: var(--sp-navy); text-decoration: none; }
+
+/* Send-confirmation link inside the Suggest panel body. */
+.kf-lb-sent-link {
+  color: var(--sp-link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-weight: var(--sp-w-bold);
+}
+.kf-lb-sent-link:hover { color: var(--sp-navy); }
+
+/* Phone tweaks: tab labels wrap, sender-page title link stays
+ * underlined, decline textarea sits at a comfortable size. */
+@media (max-width: 860px) {
+  .kf-lb-sugs-tab {
+    flex: 1 1 100%;
+    justify-content: space-between;
+  }
+}

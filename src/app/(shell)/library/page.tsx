@@ -16,8 +16,11 @@
 //
 // READ-ONLY. No write path.
 
+import Link from "next/link";
 import { requireAppAccess } from "@/lib/gate";
+import { ownerEmails } from "@/lib/supabase/env";
 import { loadLibrary } from "@/lib/academy/library";
+import { countActiveSuggestions } from "@/lib/academy/suggestions";
 import { IdentBand } from "@/components/ui/IdentBand";
 import { Bookcase } from "@/components/library/Bookcase";
 import "@/components/library/library.css";
@@ -49,6 +52,13 @@ export default async function Page({
   const kick = "Each one is the current version.";
   const initialQuery = typeof sp.q === "string" ? sp.q : "";
 
+  // Owner-only "Suggestions" link. Hidden entirely when no notes
+  // need the owner's attention (Open + Accepted-not-changed-yet).
+  // Non-owners never see it; owners only when there is something
+  // to do. The shell menu is untouched.
+  const isOwner = ownerEmails().has(email);
+  const openSuggestions = isOwner ? await countActiveSuggestions() : 0;
+
   return (
     <div className="kf-library">
       <div className="kf-only-desktop">
@@ -58,6 +68,13 @@ export default async function Page({
         <h1 className="kf-lb-phonetop__t">{headline}</h1>
         <p className="kf-lb-phonetop__k">{kick}</p>
       </header>
+      {isOwner && openSuggestions > 0 ? (
+        <Link href="/library/suggestions" className="kf-lb-sugsnip">
+          <strong>Suggestions</strong>
+          <span className="kf-lb-sugsnip__n">{openSuggestions}</span>
+          <span className="kf-lb-sugsnip__l">waiting</span>
+        </Link>
+      ) : null}
 
       <Bookcase
         shelves={shelves}

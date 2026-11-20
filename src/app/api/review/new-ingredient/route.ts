@@ -58,12 +58,16 @@ export async function POST(req: NextRequest) {
 
   try {
     const client = serviceClient();
+    // T4 R2: one clickId for the whole create [+ confirm | + retail]
+    // request so Undo takes all three writes back as one.
+    const clickId = crypto.randomUUID();
     const result = await splitToNewIngredient(client, {
       name,
       parent,
       category,
       itemIds,
       actorEmail: gate.email,
+      clickId,
     });
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
     // Q2 §1 (+ N3 retail path): run the same-request follow-up when
@@ -88,6 +92,7 @@ export async function POST(req: NextRequest) {
             ingredientId: result.ingredientId,
             itemIds,
             actorEmail: gate.email,
+            clickId,
           });
           return NextResponse.json({
             ok: true,
@@ -99,12 +104,18 @@ export async function POST(req: NextRequest) {
             usd: retailResult.usd,
             ingredientIsRetail: retailResult.ingredientIsRetail,
             confirmErrors: retailResult.errors.length > 0 ? retailResult.errors : undefined,
+            // T4 R2: hand the toast the primary event id. The confirm
+            // (or retail) event is the natural user-facing decision;
+            // every sibling in the click shares the click id so Undo
+            // rolls the whole thing back.
+            event_id: retailResult.eventId ?? result.eventId ?? null,
           });
         }
         const confirmResult = await confirmItems(client, {
           ingredientId: result.ingredientId,
           itemIds,
           actorEmail: gate.email,
+          clickId,
         });
         return NextResponse.json({
           ok: true,
@@ -115,6 +126,7 @@ export async function POST(req: NextRequest) {
           usd: confirmResult.usd,
           movedToResale: confirmResult.movedToResale,
           confirmErrors: confirmResult.errors.length > 0 ? confirmResult.errors : undefined,
+          event_id: confirmResult.eventId ?? result.eventId ?? null,
         });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -129,6 +141,7 @@ export async function POST(req: NextRequest) {
       ingredientId: result.ingredientId,
       moved: result.moved,
       baseUnit: result.baseUnit,
+      event_id: result.eventId ?? null,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

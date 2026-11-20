@@ -91,11 +91,18 @@ export function NotesAndHistory({ accountKey, serviceDate, timezone, readOnly = 
     }
   }, [draft, accountKey, serviceDate, load]);
 
+  // Fix 5 (train 4b): the closed fold does not know whether the
+  // day has history until a load has run. Three states:
+  //   - never loaded   -> "Notes and history" only, no sub-line
+  //   - loaded empty   -> "Nothing here yet"
+  //   - loaded with N  -> "Last: <who>, <when>" and (N) on the label
   const latest = view?.items?.[0] ?? null;
   const totalLabel = view ? ` (${view.totalCount})` : "";
-  const subLine = latest
-    ? `Last: ${lastSubLabel(latest)}, ${shortClock(getAtOf(latest), timezone)}`
-    : "Nothing recorded yet";
+  const subLine = !loaded
+    ? null
+    : latest
+      ? `Last: ${lastSubLabel(latest)}, ${shortClock(getAtOf(latest), timezone)}`
+      : "Nothing here yet";
 
   return (
     <div className={`kf-sc-notebox${open ? " is-open" : ""}`}>
@@ -108,7 +115,7 @@ export function NotesAndHistory({ accountKey, serviceDate, timezone, readOnly = 
         <MessageSquare size={18} strokeWidth={1.5} aria-hidden />
         <span>
           <b>Notes and history{totalLabel}</b>
-          <small>{subLine}</small>
+          {subLine ? <small>{subLine}</small> : null}
         </span>
         {open ? <ChevronUp size={20} strokeWidth={1.5} aria-hidden /> : <ChevronDown size={20} strokeWidth={1.5} aria-hidden />}
       </button>

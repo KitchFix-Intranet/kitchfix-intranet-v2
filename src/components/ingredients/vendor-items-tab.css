@@ -311,6 +311,37 @@
   display: flex;
   gap: var(--sp-sp-2);
   flex-wrap: wrap;
+  align-items: center;
+}
+/* T4 ruling 8: sentence beside the disabled Archive / One-off buttons
+ * on a linked item. Muted so it reads as context, not a warning. */
+.kf-ipanel__footer-note {
+  font-size: var(--sp-t-label);
+  /* Train 5a / ruling 9: --sp-ink-dim was never defined; land on
+   * --sp-body so nothing on screen shifts. --sp-muted misses the
+   * contrast floor at 13 px on white. */
+  color: var(--sp-body);
+  padding: 0 var(--sp-sp-2);
+}
+/* T4 R2 §4: in-page "What happens" ask for Restore. Shape mirrors
+ * the Send back ask - one sentence then Restore / Cancel. */
+.kf-ipanel__footer-ask {
+  margin-top: var(--sp-sp-3);
+  padding: var(--sp-sp-3);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  background: var(--sp-card);
+}
+.kf-ipanel__footer-ask-text {
+  margin: 0 0 var(--sp-sp-3);
+  font-size: var(--sp-t-body);
+  color: var(--sp-ink);
+}
+.kf-ipanel__footer-ask-actions {
+  display: flex;
+  gap: var(--sp-sp-2);
+  flex-wrap: wrap;
+  align-items: center;
 }
 .kf-btn--soft {
   background: var(--sp-sky-tint);

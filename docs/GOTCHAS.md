@@ -312,6 +312,59 @@ return null. `default.tsx` stays for full-load behaviour. Next's route
 precedence (static > dynamic > catch-all) keeps every existing named
 slot page winning over the catch-all.
 
+## 23. Two shapes of the same disposition during the correction window
+
+Train 4 makes `one-off` and `not_food` first-class values of
+`pr_vendor_items.status`, but the one-time correction that rewrites
+old rows runs AFTER the deploy. During the window the database holds
+BOTH shapes and every reader has to answer them the same way.
+
+One-off:
+  old: `status='archived', link_status='rejected', link_reason='oneoff:<email>'`
+  new: `status='one_off',  link_status='rejected', link_reason='oneoff'`
+
+Not food (person-marked):
+  old: `status='active',   link_status='rejected', link_reason='notfood:<email>', is_food=true`
+  new: `status='not_food', link_status='rejected', link_reason='notfood', is_food=true`
+
+Readers must call `getVendorItemState` in
+`src/lib/ingredients/vendorItemState.ts`; none of them inlines a
+test on the raw columns. The segment filters on Vendor items widen
+the Archived chip to `status in ('archived','one_off')` and the Not
+food chip to `is_food=false OR status='not_food' OR (old-shape four-
+column expression)` so no row hides. Overview totals come from SQL
+views that test `status`; those views do NOT read the old shape.
+Between deploy and correction, Overview keeps counting the 9 person-
+marked not-food items as active food the way it does today; that is
+accepted and not a bug to patch. After the correction runs, Overview
+drops those 9 and coverage shares rise.
+
+The reason-verb cleanup is live from this train on: new writes use
+the verb only (`confirmed`, `split`, `relinked`, `archived`, `oneoff`,
+`notfood`, `keep_separate`, `undo`). Old rows still carry their email
+tails in the database; both `parseReason` functions drop everything
+after the first colon so the UI never renders them.
+
+## 24. A flex basis is a width in a row and a height in a column
+
+`flex-basis` is interpreted along the flex container's MAIN axis.
+In a flex row the main axis is width, so `flex: 1 1 280px` means
+"start at 280 px wide, grow and shrink." In a flex column the main
+axis is height, so the same declaration means "start at 280 px
+tall." The shared `.kf-search` label originally shipped with
+`flex: 1 1 280px` and sat happily in Review queue's row and
+Vendor items' grid; on Ingredients and Retail its parent
+`.kf-ingp__tools` is a column, so the 280 became a 280 px tall
+label wrapping a 44 px input (236 px of empty air above and below).
+
+Rule: a rule meant to size on the inline axis (width) uses
+`width` / `max-width` / `min-width`. `flex-basis` only earns its
+keep when the component is known to live in a row. Shared
+primitives that may land in either shape stay off `flex-basis`
+entirely. The chef-floor rule for `.kf-search` uses `max-width:
+none` on phone so the search fills the row without a basis that
+would double as a height.
+
 Branch-specific items we have already lived through on
 `step-1-shell-and-ingredients`:
 
@@ -372,3 +425,44 @@ onChange={(e) => {
 Same rule for `e.target.value`, `e.key`, anything else sourced from the
 event. If a handler needs multiple event fields, read them all into locals
 on line 1.
+
+## G-F `/api/admin/rescan-apply` can overwrite a person-set state
+
+The absorbed-row UPDATE in `src/app/api/admin/rescan-apply/route.ts`
+sets `status='duplicate', link_status='rejected',
+link_reason='rescan_merge:absorbed'` with no state guard. It can
+overwrite a `not_food` or `one_off` a reviewer set. Kevin's Nov 5
+ruling ended the invoice re-scan and the tool is not run today; it
+must gain a `status NOT IN ('not_food','one_off','archived')` guard
+before it is ever run again.
+
+## G-G Mail: sender domain, upload URI, Bcc, escaped key form
+
+Four things to know about `src/lib/mail.ts :: sendSystemMail`:
+
+1. The `sender` must be a mailbox in our own Google domain. The
+   service account has domain-wide delegation for that domain
+   only; the token's `sub` claim is `sender` and Google refuses
+   any outside address. If a lane needs to send as an outside
+   name, use `replyTo` and keep `sender` inside the domain.
+
+2. The sender POSTs to the upload URI, not the JSON `raw`
+   endpoint:
+   `https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media`
+   with `Content-Type: message/rfc822` and the RFC 5322 bytes
+   directly. The alternative (`users.messages.send` with a
+   base64url `raw` field in a JSON body) has been reported to
+   fail above about 5 MB, which invoice PDFs can exceed. The
+   upload path accepts up to the 25 MB cap enforced in
+   `mailMessage.ts`.
+
+3. `Bcc` is kept in the message handed to Gmail. Gmail strips
+   it from the delivered copy but still honours the address.
+   Nothing special is needed on the caller side; do not try to
+   suppress the header.
+
+4. `GOOGLE_PRIVATE_KEY` is read from the env as a string with
+   literal `\n` sequences escaped as backslash-n (the shape the
+   key export tool prints and Vercel stores). The sender does
+   `raw.replace(/\\n/g, "\n")` before signing. A key stored with
+   real newlines also works because the replace is a no-op.

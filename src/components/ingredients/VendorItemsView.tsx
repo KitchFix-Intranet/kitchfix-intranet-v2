@@ -15,10 +15,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronLeft, ChevronRight, Search, X } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { fmtCount, fmtDate, fmtUsd, fmtUsdLong, monthsAgo } from "@/lib/fmt";
 import { uomLabel } from "@/lib/ingredients/pack";
 import { ItemPanelById } from "./ItemPanelById";
+import { Search } from "./Search";
+import { SortMenu, type SortKey as SharedSortKey } from "./SortMenu";
 import "./vendor-items-tab.css";
 
 // Every segment the two chip rows may select, one URL enum.
@@ -37,7 +39,11 @@ export type VendorSeg =
   | "not_food"
   | "archived";
 
-export type SortKey = "spend" | "lines" | "last_seen";
+// Train 5a / F23: this tab's URL values are protected ("spend",
+// "lines", "last_seen"); the shared SortMenu renders them with the
+// one vocabulary via SORT_WORDS. Bookmarks keep working.
+export type SortKey = Extract<SharedSortKey, "spend" | "lines" | "last_seen">;
+const VENDOR_SORT_OPTIONS: readonly SortKey[] = ["spend", "lines", "last_seen"];
 
 export type LinkCell =
   | { kind: "duplicate"; main: string; sub: string }
@@ -89,11 +95,8 @@ export type VendorItemsViewProps = {
   vendorFilterId: string;
 };
 
-const SORT_LABEL: Record<SortKey, string> = {
-  spend: "Highest 12-month spend",
-  lines: "Most lines",
-  last_seen: "Most recently bought",
-};
+// Train 5a: the local SORT_LABEL retired; words come from SORT_WORDS
+// in SortMenu, one vocabulary across every tab.
 
 // Precedence from VendorItemDrawer / StatusChip, verbatim per §2b.
 // Round 2 fix 9: "Not linked" is main WARN 800 + sub plain.
@@ -135,16 +138,17 @@ export function VendorItemsView(props: VendorItemsViewProps) {
   // the browser, react to subsequent client-side changes.
   const liveOpenId = params.get("drawer") ?? props.openId;
 
-  // Search input is controlled client-side; commit on Enter or Clear.
-  const [search, setSearch] = useState(props.q);
-  const searchRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    setSearch(props.q);
-  }, [props.q]);
+  // Train 5a / ruling 6: the live string lives inside the shared
+  // Search component in debounced mode. It calls commitSearch after
+  // ~250 ms of quiet; Enter commits at once. props.q is the URL
+  // value the server rendered with and resets the input when the
+  // user goes back / reloads.
 
   const push = useCallback(
-    (patch: Partial<Record<string, string | null>>) => {
+    (
+      patch: Partial<Record<string, string | null>>,
+      mode: "push" | "replace" = "push",
+    ) => {
       const next = new URLSearchParams(params.toString());
       for (const [k, v] of Object.entries(patch)) {
         if (v == null || v === "") next.delete(k);
@@ -155,7 +159,9 @@ export function VendorItemsView(props: VendorItemsViewProps) {
         next.delete("page");
       }
       const qs = next.toString();
-      router.push(qs ? `?${qs}` : "?");
+      const href = qs ? `?${qs}` : "?";
+      if (mode === "replace") router.replace(href);
+      else router.push(href);
     },
     [params, router],
   );
@@ -169,13 +175,13 @@ export function VendorItemsView(props: VendorItemsViewProps) {
   function onSelectSort(s: SortKey) {
     push({ sort: s === "spend" ? null : s });
   }
-  function onSubmitSearch() {
-    push({ q: search.trim() || null });
-  }
-  function onClearSearch() {
-    setSearch("");
-    push({ q: null });
-    searchRef.current?.focus();
+  // Train 5a / ruling 6: filter as you type. Debounce ~250 ms after
+  // the last keystroke, REPLACE the current history entry (not push),
+  // so Back still leaves the page in one press and a reload / shared
+  // link still restores the search. Enter commits at once.
+  function commitSearch(v: string, mode: "push" | "replace" = "replace") {
+    const trimmed = v.trim();
+    push({ q: trimmed || null }, mode);
   }
   function onClearAll() {
     router.push("?");
@@ -208,7 +214,11 @@ export function VendorItemsView(props: VendorItemsViewProps) {
           return;
         }
       }
-      searchRef.current?.focus();
+      // Train 5a: the shared Search owns its own input ref; this
+      // fallback focus-on-close goes to the page's main region so
+      // nothing is left focused inside a drawer that just closed.
+      const main = document.getElementById("main");
+      main?.focus();
     });
   }
 
@@ -223,67 +233,31 @@ export function VendorItemsView(props: VendorItemsViewProps) {
       {/* --- Toolbar ----------------------------------------- */}
       <div className="kf-vi__tools">
         <div className="kf-vi__tools-row">
-          <label className="kf-vi__search">
-            <Search size={16} strokeWidth={1.75} aria-hidden />
-            <input
-              ref={searchRef}
-              type="search"
-              value={search}
-              onChange={(e) => {
-                const v = e.target.value;
-                setSearch(v);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  onSubmitSearch();
-                } else if (e.key === "Escape" && search.length > 0) {
-                  e.preventDefault();
-                  onClearSearch();
-                }
-              }}
-              placeholder="Description or item number"
-              aria-label="Filter vendor items"
-            />
-            {search ? (
-              <button
-                type="button"
-                onClick={onClearSearch}
-                aria-label="Clear search"
-                style={{
-                  position: "absolute",
-                  right: "var(--sp-sp-2)",
-                  top: "50%",
-                  transform: "translateY(-50%)",
-                  width: "var(--sp-floor-corp)",
-                  height: "var(--sp-floor-corp)",
-                  background: "transparent",
-                  border: 0,
-                  color: "var(--sp-muted)",
-                  cursor: "pointer",
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                <X size={16} strokeWidth={1.75} />
-              </button>
-            ) : null}
+          {/* Train 5a / F22 + ruling 6: shared Search in debounced mode.
+              Filters as you type with a 250 ms URL replace; Enter is
+              immediate; Back still leaves the page in one press; a
+              reload / shared link restores the search. */}
+          <Search
+            kind="debounced"
+            initial={props.q}
+            onCommit={(v) => commitSearch(v)}
+            placeholder="Description or item number"
+            label="Filter vendor items"
+          />
+          <label className="kf-labelled">
+            Vendor
+            <select
+              className="kf-ctl"
+              value={props.vendorFilterId}
+              onChange={(e) => onSelectVendor(e.target.value)}
+              aria-label="Filter by vendor"
+            >
+              <option value="all">All vendors</option>
+              {props.vendors.map((v) => (
+                <option key={v.id} value={v.id}>{v.name}</option>
+              ))}
+            </select>
           </label>
-          <select
-            className="kf-vi__vendor-select"
-            value={props.vendorFilterId}
-            onChange={(e) => {
-              const v = e.target.value;
-              onSelectVendor(v);
-            }}
-            aria-label="Filter by vendor"
-          >
-            <option value="all">All vendors</option>
-            {props.vendors.map((v) => (
-              <option key={v.id} value={v.id}>{v.name}</option>
-            ))}
-          </select>
         </div>
 
         <div className="kf-vi__filters">
@@ -508,19 +482,11 @@ function CardBar({
       )}
       <div className={isFooter ? "kf-vi__card-foot-right" : "kf-vi__card-head-right"}>
         {isTitle ? (
-          <select
-            className="kf-vi__sort"
+          <SortMenu
             value={sort}
-            onChange={(e) => {
-              const s = e.target.value as SortKey;
-              onSelectSort(s);
-            }}
-            aria-label="Sort order"
-          >
-            <option value="spend">{SORT_LABEL.spend}</option>
-            <option value="lines">{SORT_LABEL.lines}</option>
-            <option value="last_seen">{SORT_LABEL.last_seen}</option>
-          </select>
+            options={VENDOR_SORT_OPTIONS}
+            onChange={(v) => onSelectSort(v)}
+          />
         ) : null}
         <Pager page={page} last={last} onPage={onPage} />
       </div>
