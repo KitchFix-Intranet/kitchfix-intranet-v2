@@ -16,6 +16,8 @@
 // - Rows are returned in team_key order (deterministic export filenames
 //   and Summary sort).
 
+import { pagedSelect } from "@/lib/kpi/shared/pagedSelect";
+
 export const PORTFOLIO_KEYS = new Set(["ALL", "EAST", "WEST"]);
 
 /**
@@ -34,16 +36,22 @@ export async function resolvePortfolioMembers(supa: any, pseudoKey: any) {
   // .eq true) matches the SC + Academy pattern - NULL treats as
   // active so a new account inserted without the flag set does not
   // silently disappear from the dashboard.
-  let q = supa.from("accounts")
-    .select("team_key, region")
-    .neq("team_key", "CORP")
-    .neq("active", false)
-    .order("team_key");
-  if (pseudoKey !== "ALL") {
-    // Region values in PG are capitalized ('East' / 'West').
-    const regionValue = pseudoKey === "EAST" ? "East" : "West";
-    q = q.eq("region", regionValue);
-  }
-  const res = await q;
-  return { data: res.data || [], error: res.error || null };
+  //
+  // Train 2c: paged via pagedSelect. team_key is the accounts PK so
+  // the sort is unique.
+  const regionValue = pseudoKey === "ALL"
+    ? null
+    : (pseudoKey === "EAST" ? "East" : "West");
+  const r = await pagedSelect((from: number, to: number) => {
+    let q: any = supa.from("accounts")
+      .select("team_key, region")
+      .neq("team_key", "CORP")
+      .neq("active", false)
+      .order("team_key")
+      .range(from, to);
+    if (regionValue) q = q.eq("region", regionValue);
+    return q;
+  });
+  if (r.error) return { data: [], error: r.error };
+  return { data: r.data, error: null };
 }

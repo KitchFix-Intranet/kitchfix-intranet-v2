@@ -31,7 +31,8 @@ import type { FiscalYear } from "./shared/fiscalYear";
 // Labor imports.
 import { resolveWorkerMeta } from "./resolveWorkerMeta";
 import { resolvePortfolioMembers } from "./portfolioMembers";
-import { fetchAllOffset } from "./shared/paginate";
+import { pagedSelect } from "./shared/pagedSelect";
+import { DOLLAR_COVERAGE_FLOOR } from "./floors";
 import { buildWorkerToEmail } from "./labor/personCount";
 import { buildBoard, buildWeekBudgets, buildAggregateWeekBudgets } from "./labor/board";
 import {
@@ -301,17 +302,17 @@ export async function getOverview({
 
 const LABOR_D26_SALARIED_ONLY = new Set(["CIN - KY", "TBJ - NY"]);
 const LABOR_D17_OUT_OF_SCOPE = new Set(["CORP"]);
-// FY2026 window used to scope staleness banner + daily floor reads.
-// Train 2c carries the v1 hardcodes; commit 2 will replace with fy-derived bounds.
-const LABOR_FY_START_ISO = "2025-12-29";
-const LABOR_FY_END_ISO = "2026-12-27";
 
+// Train 2c: paged via pagedSelect. accounts.team_key is the PK so
+// the sort is unique.
 async function fetchAccountsDirectoryLabor(supa: any): Promise<any> {
-  const q = await supa.from("accounts")
+  const q = await pagedSelect((from: number, to: number) => supa
+    .from("accounts")
     .select("team_key, region, name, city, state, timezone")
     .neq("team_key", "CORP")
     .neq("active", false)
-    .order("team_key");
+    .order("team_key")
+    .range(from, to));
   if (q.error) return { error: q.error };
   const salaried = new Set(["CIN - KY", "TBJ - NY"]);
   return {
@@ -335,7 +336,7 @@ export async function getLabor({
   let account = (q.account || "").trim();
   const previewParam = (q.preview || "").trim();
   // Range inputs with FY start default + today fallback.
-  let start = (q.start || "").trim() || LABOR_FY_START_ISO;
+  let start = (q.start || "").trim() || fiscalYear.startISO;
   let end = (q.end || "").trim() || today;
   // Snap any non-aligned (start, end) to the fiscal period containing end.
   const _labSnap: any = snapRange(start, end, today, fiscalYear);
@@ -406,6 +407,8 @@ export async function getLabor({
   }
 
   // Preamble batch: psWalkGlobal, weeklyMax, dailyMax, daily floor.
+  // Train 2c: each read is `.maybeSingle()` (one row by definition) so
+  // all four are exempt from pagedSelect.
   const [psWalkGlobal, weeklyMaxQ, dailyMaxQ, floorQ]: any = await Promise.all([
     supa.from("rippling_walks")
       .select("completed_at")
@@ -415,15 +418,15 @@ export async function getLabor({
       .limit(1)
       .maybeSingle(),
     supa.from("labor_actuals").select("derived_at")
-      .gte("week_start", LABOR_FY_START_ISO).lte("week_start", LABOR_FY_END_ISO)
+      .gte("week_start", fiscalYear.startISO).lte("week_start", fiscalYear.endISO)
       .order("derived_at", { ascending: false }).limit(1).maybeSingle(),
     supa.from("labor_actuals_daily").select("derived_at")
-      .gte("week_start", LABOR_FY_START_ISO).lte("week_start", LABOR_FY_END_ISO)
+      .gte("week_start", fiscalYear.startISO).lte("week_start", fiscalYear.endISO)
       .order("derived_at", { ascending: false }).limit(1).maybeSingle(),
     supa.from("labor_actuals")
       .select("week_start")
       .eq("week_source", "sc_day_metadata")
-      .gte("week_start", LABOR_FY_START_ISO).lte("week_start", LABOR_FY_END_ISO)
+      .gte("week_start", fiscalYear.startISO).lte("week_start", fiscalYear.endISO)
       .order("week_start")
       .limit(1)
       .maybeSingle(),
@@ -441,26 +444,44 @@ export async function getLabor({
   const mergeSalary = salary_available && includeSalary;
 
   if (floorQ.error) return { status: 500, body: safeErrorLabor("daily_floor", floorQ.error) };
-  const dailyFloorISO = floorQ.data?.week_start || "2026-04-20";
+  // Train 2c: rule date (daily-labor floor) kept via DOLLAR_COVERAGE_FLOOR
+  // from src/lib/kpi/floors.ts. Not a fiscal-year date.
+  const dailyFloorISO = floorQ.data?.week_start || DOLLAR_COVERAGE_FLOOR;
 
   // Homestand branch.
   let homestandSplice: any = null;
   let allHomestands: any = null;
   let homestandBank: any = null;
   let homestandGameDatesByStand: any = null;
-  try { allHomestands = await listHomestands(supa, account, 2026, { includeSalary: mergeSalary }); }
+  try { allHomestands = await listHomestands(supa, account, fiscalYear, { includeSalary: mergeSalary }); }
   catch (e: any) { return { status: 500, body: safeErrorLabor("homestand_list", e) }; }
   if (allHomestands && allHomestands.length > 0) {
+    // Train 2c: paged via pagedSelect. labor_actuals_daily grain
+    // (account_key, worker_id, work_date, line_code) - account_key
+    // fixed. sc_homestand_schedule grain (account_key, service_date) -
+    // account_key fixed.
     let dailyRows: any, schedRows: any;
     try {
-      [dailyRows, schedRows] = await Promise.all([
-        fetchAllOffset(supa, "labor_actuals_daily",
-          "work_date, amount, hours_regular, hours_overtime, dollars_overtime",
-          [(qq: any) => qq.eq("account_key", account)]),
-        fetchAllOffset(supa, "sc_homestand_schedule",
-          "service_date, day_type, day_night, game_time, opponent",
-          [(qq: any) => qq.eq("account_key", account)]),
+      const [dR, sR]: any = await Promise.all([
+        pagedSelect((from: number, to: number) => supa
+          .from("labor_actuals_daily")
+          .select("work_date, amount, hours_regular, hours_overtime, dollars_overtime, worker_id, line_code")
+          .eq("account_key", account)
+          .order("work_date")
+          .order("worker_id")
+          .order("line_code")
+          .range(from, to)),
+        pagedSelect((from: number, to: number) => supa
+          .from("sc_homestand_schedule")
+          .select("service_date, day_type, day_night, game_time, opponent")
+          .eq("account_key", account)
+          .order("service_date")
+          .range(from, to)),
       ]);
+      if (dR.error) throw new Error(`labor_actuals_daily: ${dR.error.message}`);
+      if (sR.error) throw new Error(`sc_homestand_schedule: ${sR.error.message}`);
+      dailyRows = dR.data;
+      schedRows = sR.data;
     } catch (e: any) {
       return { status: 500, body: safeErrorLabor("homestand_daily_or_schedule", { message: e.message }) };
     }
@@ -469,7 +490,7 @@ export async function getLabor({
     const actMap = new Map<any, any>(hourlyActMap);
     const salaryX10000ByStand = new Map<any, any>();
     if (mergeSalary) {
-      const salActuals: any = await loadSalaryActuals(supa, [account], "2025-12-29", "2026-12-27");
+      const salActuals: any = await loadSalaryActuals(supa, [account], fiscalYear.startISO, fiscalYear.endISO);
       if (salActuals.error) return { status: 500, body: safeErrorLabor("homestand_salary_actuals", { message: salActuals.error }) };
       for (const h of allHomestands) {
         if (h.pre_floor) continue;
@@ -658,7 +679,7 @@ export async function getLabor({
       is_future_range,
       homestandSplice, homestandsList, homestandBank,
       previewParam,
-      fiscalYear,
+      fy: fiscalYear,
     });
     if (out.error) return { status: out.error.status, body: out.error.payload };
     const body: any = { ...out.body };
@@ -679,23 +700,44 @@ export async function getLabor({
       return { status: 400, body: { error: "no_members_in_region", account } };
     }
     const canonAcct = members[0];
+    // Train 2c paged reads below:
+    //   sc_day_metadata grain (account_key, service_date) - account_key
+    //     fixed so service_date is unique.
+    //   labor_unattributed grain (reason_code, department_id,
+    //     worker_id, first_seen_date, line_code) - (worker_id,
+    //     first_seen_date, reason_code, department_id) orders uniquely
+    //     in practice; add `id` tie-breaker if row grain expands.
+    //   earning_type_unmapped grain (merged_earning_type_name) -
+    //     unique per row.
     let aQ: any, periodDays: any, unattrRowsAgg: any, unmapped: any, memberBudgetResults: any;
     try {
       [aQ, periodDays, unattrRowsAgg, unmapped, memberBudgetResults] = await Promise.all([
         paginateLaborActuals(supa, { members, start, end, pageSize: pageSizeParam }),
-        supa.from("sc_day_metadata")
+        pagedSelect((from: number, to: number) => supa
+          .from("sc_day_metadata")
           .select("service_date, period")
           .eq("account_key", canonAcct)
-          .gte("service_date", "2025-12-29")
-          .lte("service_date", "2026-12-27")
-          .not("period", "is", null),
-        fetchAllOffset(supa, "labor_unattributed",
-          "reason_code, department_id, worker_id, amount, hours, segment_count, first_seen_date, last_seen_date, derived_at, notes",
-          [(qq: any) => qq.order("amount", { ascending: false })]),
-        supa.from("earning_type_unmapped")
+          .gte("service_date", fiscalYear.startISO)
+          .lte("service_date", fiscalYear.endISO)
+          .not("period", "is", null)
+          .order("service_date")
+          .range(from, to)),
+        pagedSelect((from: number, to: number) => supa
+          .from("labor_unattributed")
+          .select("reason_code, department_id, worker_id, amount, hours, segment_count, first_seen_date, last_seen_date, derived_at, notes")
+          .order("amount", { ascending: false })
+          .order("worker_id")
+          .order("first_seen_date")
+          .order("reason_code")
+          .order("department_id")
+          .range(from, to)),
+        pagedSelect((from: number, to: number) => supa
+          .from("earning_type_unmapped")
           .select("merged_earning_type_name, occurrence_count, total_hours, total_amount, first_seen_at, last_seen_at, resolved_at")
           .is("resolved_at", null)
-          .order("total_amount", { ascending: false }),
+          .order("total_amount", { ascending: false })
+          .order("merged_earning_type_name")
+          .range(from, to)),
         resolveMemberBudgets(supa, members, fiscalYear),
       ]);
     } catch (e: any) {
@@ -704,6 +746,8 @@ export async function getLabor({
     if (aQ.error) return { status: 500, body: safeErrorLabor("labor_actuals_aggregate", aQ.error) };
     const actualsRows: any = aQ.data;
     if (periodDays.error) return { status: 500, body: safeErrorLabor("sc_day_metadata_period_bounds_aggregate", periodDays.error) };
+    if (unattrRowsAgg.error) return { status: 500, body: safeErrorLabor("labor_unattributed_aggregate", unattrRowsAgg.error) };
+    if (unmapped.error) return { status: 500, body: safeErrorLabor("earning_type_unmapped_aggregate", unmapped.error) };
     for (const [, r] of memberBudgetResults as any) {
       if (r?.error) return { status: 500, body: safeErrorLabor(r.scope, r.error) };
     }
@@ -719,10 +763,10 @@ export async function getLabor({
       }
     }
     const account_periods = [...periodBounds.entries()]
-      .map(([p, b]: any) => ({ fiscal_year: 2026, period_no: parseInt(p, 10), start: b.start, end: b.end }))
+      .map(([p, b]: any) => ({ fiscal_year: fiscalYear.year, period_no: parseInt(p, 10), start: b.start, end: b.end }))
       .sort((a: any, b: any) => a.period_no - b.period_no);
 
-    const unattr: any = { data: unattrRowsAgg };
+    const unattr: any = { data: unattrRowsAgg.data || [] };
 
     const memberBudgets = new Map<any, any>();
     for (const m of members) {
@@ -923,8 +967,8 @@ export async function getLabor({
         }
       }
       const [d26Pnl, d26Status]: any = await Promise.all([
-        loadPnlActuals(supa, { members: [account], periods: d26RangePeriods, fiscalYear: 2026 } as any),
-        loadPeriodStatus(supa, 2026 as any),
+        loadPnlActuals(supa, { members: [account], periods: d26RangePeriods, fiscalYear: fiscalYear.year } as any),
+        loadPeriodStatus(supa, fiscalYear.year as any),
       ]);
       const d26PnlMap = d26Pnl?.data || new Map();
       const d26StatusMap = d26Status?.data || new Map();
@@ -959,48 +1003,84 @@ export async function getLabor({
   }
 
   // Single-account weekly path.
+  // Train 2c paged reads:
+  //   labor_actuals_latest grain (account_key, worker_id, week_start)
+  //     - account_key fixed so (week_start, worker_id) is unique.
+  //   labor_unattributed grain - ordered by (amount desc, worker_id,
+  //     first_seen_date, reason_code, department_id).
+  //   sc_day_metadata grain (account_key, service_date) - account_key
+  //     fixed so service_date is unique.
+  //   earning_type_unmapped - merged_earning_type_name is unique per row.
+  //   kpi_budgets PK (account_key, fiscal_year, period_no, line_code)
+  //     - all three fixed so period_no is unique.
+  //   sc_labor_budgets PK is the uuid id; sort chain
+  //     (period, effective_from, id) is unique.
   let actualsRows: any, unattrRows: any, periodDays: any, unmapped: any, pnlQ: any, scQ: any;
   try {
     [actualsRows, unattrRows, periodDays, unmapped, pnlQ, scQ] = await Promise.all([
-      fetchAllOffset(supa, "labor_actuals_latest",
-        "account_key, worker_id, week_label, week_start, week_end, fiscal_year, hours_regular, hours_overtime, hours_double_time, hours_premium_other, dollars_regular, dollars_overtime, dollars_double_time, dollars_premium_other, amount, hours_without_dollars, coverage_state, draft_entry_count, draft_hours, anomaly_no_clockout, anomaly_under_1h, anomaly_over_16h, approved_hours, oldest_draft_date, still_costing_hours, derived_at",
-        [
-          (qq: any) => qq.eq("account_key", account),
-          (qq: any) => qq.lte("week_start", end),
-          (qq: any) => qq.gte("week_end", start),
-          (qq: any) => qq.order("week_start", { ascending: true }).order("worker_id", { ascending: true }),
-        ]),
-      fetchAllOffset(supa, "labor_unattributed",
-        "reason_code, department_id, worker_id, amount, hours, segment_count, first_seen_date, last_seen_date, derived_at, notes",
-        [(qq: any) => qq.order("amount", { ascending: false })]),
-      supa.from("sc_day_metadata")
+      pagedSelect((from: number, to: number) => supa
+        .from("labor_actuals_latest")
+        .select("account_key, worker_id, week_label, week_start, week_end, fiscal_year, hours_regular, hours_overtime, hours_double_time, hours_premium_other, dollars_regular, dollars_overtime, dollars_double_time, dollars_premium_other, amount, hours_without_dollars, coverage_state, draft_entry_count, draft_hours, anomaly_no_clockout, anomaly_under_1h, anomaly_over_16h, approved_hours, oldest_draft_date, still_costing_hours, derived_at")
+        .eq("account_key", account)
+        .lte("week_start", end)
+        .gte("week_end", start)
+        .order("week_start", { ascending: true })
+        .order("worker_id", { ascending: true })
+        .range(from, to)),
+      pagedSelect((from: number, to: number) => supa
+        .from("labor_unattributed")
+        .select("reason_code, department_id, worker_id, amount, hours, segment_count, first_seen_date, last_seen_date, derived_at, notes")
+        .order("amount", { ascending: false })
+        .order("worker_id")
+        .order("first_seen_date")
+        .order("reason_code")
+        .order("department_id")
+        .range(from, to)),
+      pagedSelect((from: number, to: number) => supa
+        .from("sc_day_metadata")
         .select("service_date, period")
         .eq("account_key", account)
-        .gte("service_date", "2025-12-29")
-        .lte("service_date", "2026-12-27")
-        .not("period", "is", null),
-      supa.from("earning_type_unmapped")
+        .gte("service_date", fiscalYear.startISO)
+        .lte("service_date", fiscalYear.endISO)
+        .not("period", "is", null)
+        .order("service_date")
+        .range(from, to)),
+      pagedSelect((from: number, to: number) => supa
+        .from("earning_type_unmapped")
         .select("merged_earning_type_name, occurrence_count, total_hours, total_amount, first_seen_at, last_seen_at, resolved_at")
         .is("resolved_at", null)
-        .order("total_amount", { ascending: false }),
-      supa.from("kpi_budgets")
+        .order("total_amount", { ascending: false })
+        .order("merged_earning_type_name")
+        .range(from, to)),
+      pagedSelect((from: number, to: number) => supa
+        .from("kpi_budgets")
         .select("period_no, amount")
         .eq("account_key", account)
         .eq("line_code", "3100.1")
-        .eq("fiscal_year", 2026),
-      supa.from("sc_labor_budgets")
-        .select("period, hourly_budget, reason")
+        .eq("fiscal_year", fiscalYear.year)
+        .order("period_no")
+        .range(from, to)),
+      pagedSelect((from: number, to: number) => supa
+        .from("sc_labor_budgets")
+        .select("period, hourly_budget, reason, id, effective_from")
         .eq("account_key", account)
         .is("superseded_at", null)
-        .gte("effective_from", LABOR_FY_START_ISO)
-        .lte("effective_from", LABOR_FY_END_ISO),
+        .gte("effective_from", fiscalYear.startISO)
+        .lte("effective_from", fiscalYear.endISO)
+        .order("period")
+        .order("effective_from")
+        .order("id")
+        .range(from, to)),
     ]);
   } catch (e: any) {
     return { status: 500, body: safeErrorLabor("labor_actuals", { message: e.message }) };
   }
-  const actuals: any = { data: actualsRows };
-  const unattr: any = { data: unattrRows };
+  if (actualsRows.error) return { status: 500, body: safeErrorLabor("labor_actuals_latest", actualsRows.error) };
+  if (unattrRows.error) return { status: 500, body: safeErrorLabor("labor_unattributed", unattrRows.error) };
+  const actuals: any = { data: actualsRows.data };
+  const unattr: any = { data: unattrRows.data };
   if (periodDays.error) return { status: 500, body: safeErrorLabor("sc_day_metadata_period_bounds_single", periodDays.error) };
+  if (unmapped.error) return { status: 500, body: safeErrorLabor("earning_type_unmapped", unmapped.error) };
   if (pnlQ.error) return { status: 500, body: safeErrorLabor("kpi_budgets_3100_1", pnlQ.error) };
   if (scQ.error) return { status: 500, body: safeErrorLabor("sc_labor_budgets", scQ.error) };
 
@@ -1015,7 +1095,7 @@ export async function getLabor({
     }
   }
   const account_periods = [...periodBounds.entries()]
-    .map(([p, b]: any) => ({ fiscal_year: 2026, period_no: parseInt(p, 10), start: b.start, end: b.end }))
+    .map(([p, b]: any) => ({ fiscal_year: fiscalYear.year, period_no: parseInt(p, 10), start: b.start, end: b.end }))
     .sort((a: any, b: any) => a.period_no - b.period_no);
 
   const derive_freshness: any = {
@@ -1107,8 +1187,8 @@ export async function getLabor({
     revenueBasisPromiseSingle,
     loadWeeklyRevenueBasis(supa, { members: [account], start, end, today, fy: fiscalYear }),
     loadOverviewBudgets(supa, { members: [account] } as any),
-    loadPnlActuals(supa, { members: [account], periods: rangePeriodsSingle, fiscalYear: 2026 } as any),
-    loadPeriodStatus(supa, 2026 as any),
+    loadPnlActuals(supa, { members: [account], periods: rangePeriodsSingle, fiscalYear: fiscalYear.year } as any),
+    loadPeriodStatus(supa, fiscalYear.year as any),
   ]);
   const pnlMapSingle = pnlResp?.data || new Map();
   const periodStatusMapSingle = periodStatusResp?.data || new Map();
@@ -1472,7 +1552,7 @@ export async function getPurchasing({
   let account = (q.account || "").trim();
   const previewParam = (q.preview || "").trim();
   // Default start = FY-start from fiscalYear; default end = today.
-  let start = (q.start || "").trim() || (fiscalYear?.startISO ?? "2025-12-29");
+  let start = (q.start || "").trim() || fiscalYear.startISO;
   let end = (q.end || "").trim() || today;
   const _purSnap: any = snapRange(start, end, today, fiscalYear);
   const _purSnapped = _purSnap.snapped;
@@ -1551,7 +1631,7 @@ export async function getPurchasing({
     })()
     : end;
 
-  const fyForRange = 2026;
+  const fyForRange = fiscalYear.year;
 
   const rangeSelectionEarly: any = inferRangeSelection(start, end, fiscalYear);
   const isSinglePeriodRange = rangeSelectionEarly?.kind === "period" && rangeSelectionEarly.value != null;
@@ -1806,7 +1886,7 @@ export async function getPurchasing({
   const periods: any[] = [];
   let fyWeekly: any;
   {
-    const fyStartISO = fiscalYear?.startISO ?? "2025-12-29";
+    const fyStartISO = fiscalYear.startISO;
     if (start === fyStartISO && end === today) {
       fyWeekly = weekly;
     } else {
@@ -1972,9 +2052,14 @@ export async function getPurchasing({
     const glCodesToName = reimb_categories_raw.map(r => r.gl_line_code);
     let namesByCode = new Map();
     if (glCodesToName.length > 0) {
-      const nq: any = await supa.from("billcom_ref_accounts")
+      // Train 2c: paged via pagedSelect. billcom_ref_accounts.account_number
+      // is the PK so the sort is unique.
+      const nq: any = await pagedSelect((from: number, to: number) => supa
+        .from("billcom_ref_accounts")
         .select("account_number, name")
-        .in("account_number", glCodesToName);
+        .in("account_number", glCodesToName)
+        .order("account_number")
+        .range(from, to));
       if (nq.error) return { status: 500, body: safeErrorPurchasing("billcom_ref_accounts", nq.error) };
       for (const r of nq.data || []) namesByCode.set(String(r.account_number), r.name || null);
     }
@@ -2005,7 +2090,7 @@ export async function getPurchasing({
 
   let weekly_by_source: any = null;
   if (includeTable) {
-    const fyStartISO = fiscalYear?.startISO ?? "2025-12-29";
+    const fyStartISO = fiscalYear.startISO;
     function weekStartFromTxnDate(txnDate: any) {
       const t = new Date(txnDate + "T00:00:00Z").getTime();
       const fs = new Date(fyStartISO + "T00:00:00Z").getTime();

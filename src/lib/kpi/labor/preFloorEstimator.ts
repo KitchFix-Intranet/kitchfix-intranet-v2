@@ -47,6 +47,8 @@
 //     game days. Slightly inflates game-day slices vs off days.
 //     The popover copy is meant to state this plainly.
 
+import { pagedSelect } from "@/lib/kpi/shared/pagedSelect";
+
 const MS_PER_DAY = 86400000;
 
 function parseIso(iso: any) { return new Date(`${iso}T00:00:00.000Z`); }
@@ -90,19 +92,33 @@ export async function deriveAccountBaseRates(supa: any, accountKey: any, homesta
   // ruling 2026-08-21 after PR #773 v1 shipped `amount` and inflated
   // CIN - OH day base from [amount] to [amount] - the +[amount] that
   // compounded through HS 1's partial-week weighting.
-  const dQ = await supa.from("labor_actuals_daily")
-    .select("work_date, dollars_regular")
+  // Train 2c: paged via pagedSelect. labor_actuals_daily row grain is
+  // (account_key, worker_id, work_date, line_code); account_key is
+  // fixed so (work_date, worker_id, line_code) is unique.
+  const dQ = await pagedSelect((from: number, to: number) => supa
+    .from("labor_actuals_daily")
+    .select("work_date, dollars_regular, worker_id, line_code")
     .eq("account_key", accountKey)
     .gte("work_date", windowStart)
-    .lte("work_date", windowEnd);
+    .lte("work_date", windowEnd)
+    .order("work_date")
+    .order("worker_id")
+    .order("line_code")
+    .range(from, to));
   if (dQ.error) throw new Error(`preFloorEstimator daily read (${accountKey}): ${dQ.error.message}`);
   const dailyByDate = new Map<string, number>();
   for (const r of dQ.data || []) {
     dailyByDate.set(r.work_date, (dailyByDate.get(r.work_date) || 0) + Number(r.dollars_regular || 0));
   }
-  const sQ = await supa.from("sc_homestand_schedule")
+  // Train 2c: paged via pagedSelect. sc_homestand_schedule row grain
+  // is (account_key, service_date); account_key fixed so service_date
+  // is unique.
+  const sQ = await pagedSelect((from: number, to: number) => supa
+    .from("sc_homestand_schedule")
     .select("service_date, day_type, day_night")
-    .eq("account_key", accountKey);
+    .eq("account_key", accountKey)
+    .order("service_date")
+    .range(from, to));
   if (sQ.error) throw new Error(`preFloorEstimator schedule read (${accountKey}): ${sQ.error.message}`);
   const gameByDate = new Map<string, any>();
   for (const r of sQ.data || []) {
@@ -341,11 +357,18 @@ export async function foldPreFloorEstimates(supa: any, accountKey: any, homestan
   const wkStarts = [...weeksTouched].sort();
   const minWk = wkStarts[0];
   const maxWk = wkStarts[wkStarts.length - 1];
-  const wQ = await supa.from("labor_actuals_latest")
-    .select("week_start, amount")
+  // Train 2c: paged via pagedSelect. labor_actuals_latest row grain
+  // is (account_key, worker_id, week_start); account_key fixed so
+  // (week_start, worker_id) is unique.
+  const wQ = await pagedSelect((from: number, to: number) => supa
+    .from("labor_actuals_latest")
+    .select("week_start, amount, worker_id")
     .eq("account_key", accountKey)
     .gte("week_start", minWk)
-    .lte("week_start", maxWk);
+    .lte("week_start", maxWk)
+    .order("week_start")
+    .order("worker_id")
+    .range(from, to));
   if (wQ.error) throw new Error(`preFloorEstimator weekly read (${accountKey}): ${wQ.error.message}`);
   const weekTotals = new Map<string, number>();
   for (const r of wQ.data || []) {
@@ -353,9 +376,14 @@ export async function foldPreFloorEstimates(supa: any, accountKey: any, homestan
   }
 
   // Schedule map + prep days (used again for weighting).
-  const sQ = await supa.from("sc_homestand_schedule")
+  // Train 2c: paged via pagedSelect. See deriveAccountBaseRates for
+  // the uniqueness note on (account_key, service_date).
+  const sQ = await pagedSelect((from: number, to: number) => supa
+    .from("sc_homestand_schedule")
     .select("service_date, day_type, day_night")
-    .eq("account_key", accountKey);
+    .eq("account_key", accountKey)
+    .order("service_date")
+    .range(from, to));
   if (sQ.error) throw new Error(`preFloorEstimator schedule read (${accountKey}): ${sQ.error.message}`);
   const gameByDate = new Map<string, any>();
   for (const r of sQ.data || []) {

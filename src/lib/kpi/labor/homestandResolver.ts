@@ -47,6 +47,9 @@
 //     sum(kpi_budgets for account, line_code) to the cent.
 //   H4 asserts this invariant.
 
+import { pagedSelect } from "@/lib/kpi/shared/pagedSelect";
+import type { FiscalYear } from "@/lib/kpi/shared/fiscalYear";
+
 const MS_PER_DAY = 86400000;
 const PERIOD_LENGTH_DAYS = 28;
 
@@ -79,6 +82,14 @@ export const HOMESTAND_ACCOUNTS_FY2026 = new Set([
 // Fiscal-year boundaries. Duplicated from deriveActuals.js (which
 // doesn't export them); trap-avoidance is that these are always 364
 // days = 13 * 28, never derived from data.
+//
+// Train 2c: no longer read by listHomestands - the caller now
+// threads `fy: FiscalYear` and the engine reads year/startISO/endISO
+// from that. The table stays here per the train 2c prompt direction
+// ("Leave the table as-is"); its remaining role is a human-readable
+// reference for the three fiscal years deriveActuals.js operates on.
+// No branch in this file calls FY_BOUNDARIES.get(...) anymore.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const FY_BOUNDARIES = new Map([
   [2025, { start: "2024-12-30", end: "2025-12-28" }],
   [2026, { start: "2025-12-29", end: "2026-12-27" }],
@@ -114,19 +125,17 @@ function mondayIsoFor(iso: any) {
   return dateToIso(new Date(d.getTime() - daysBackToMon * MS_PER_DAY));
 }
 
-async function fetchAllRange(supa: any, table: any, cols: any, filters: any) {
-  let out: any[] = [], from = 0;
-  while (true) {
-    let q = supa.from(table).select(cols).range(from, from + 999);
-    for (const [k, v] of filters) q = q.eq(k, v);
-    const { data, error } = await q;
-    if (error) throw new Error(`homestandResolver ${table}: ${error.message}`);
-    if (!data?.length) break;
-    out.push(...data);
-    if (data.length < 1000) break;
-    from += 1000;
-  }
-  return out;
+// Train 2c: pagedSelect-backed read helper. Every caller sorts on a
+// unique key; see each call site's comment below.
+async function fetchAllRange(supa: any, table: any, cols: any, filters: any, orders: any[]) {
+  const q = await pagedSelect((from: number, to: number) => {
+    let qy: any = supa.from(table).select(cols);
+    for (const [k, v] of filters) qy = qy.eq(k, v);
+    for (const [col] of orders) qy = qy.order(col);
+    return qy.range(from, to);
+  });
+  if (q.error) throw new Error(`homestandResolver ${table}: ${q.error.message}`);
+  return q.data;
 }
 
 // ─── budget arithmetic (mille-cent accumulator) ─────────────────────
@@ -218,32 +227,40 @@ function classifyDN(v: any) {
  *
  * @param {SupabaseClient} supa
  * @param {string} accountKey
- * @param {number} fiscalYear (default 2026)
+ * @param {FiscalYear} fy  the fiscal year object the caller is serving
  * @param {{ includeSalary?: boolean }} [opts]
  * @returns {Promise<Array>} ordered stands
  */
-export async function listHomestands(supa: any, accountKey: any, fiscalYear = 2026, opts: any = {}) {
+export async function listHomestands(supa: any, accountKey: any, fy: FiscalYear, opts: any = {}) {
   const includeSalary = !!opts.includeSalary;
   // Owner ruling 2026-08-21 (final): the homestand view is available
   // on the four accounts in HOMESTAND_ACCOUNTS_FY2026 and nobody else
   // for this season. See the constant's own comment for why this is a
   // hardcoded list, not a data-derived gate.
   if (!HOMESTAND_ACCOUNTS_FY2026.has(accountKey)) return [];
-  const fy = FY_BOUNDARIES.get(fiscalYear);
   if (!fy) return [];
+  const fiscalYear = fy.year;
 
   const budgetFetches = [
+    // Train 2c: sc_homestand_schedule row grain is
+    // (account_key, service_date); account_key fixed so service_date
+    // is unique.
     fetchAllRange(
       supa,
       "sc_homestand_schedule",
       "service_date, day_type, opponent, homestand_id, day_night, is_doubleheader, game_pk",
       [["account_key", accountKey]],
+      [["service_date"]],
     ),
+    // Train 2c: kpi_budgets PK is (account_key, fiscal_year, period_no,
+    // line_code); all three are fixed by the eq filters so period_no
+    // alone is unique.
     fetchAllRange(
       supa,
       "kpi_budgets",
       "period_no, amount",
       [["account_key", accountKey], ["line_code", LINE_CODE], ["fiscal_year", fiscalYear]],
+      [["period_no"]],
     ),
   ];
   if (includeSalary) {
@@ -252,6 +269,7 @@ export async function listHomestands(supa: any, accountKey: any, fiscalYear = 20
       "kpi_budgets",
       "period_no, amount",
       [["account_key", accountKey], ["line_code", LINE_CODE_SALARY], ["fiscal_year", fiscalYear]],
+      [["period_no"]],
     ));
   }
   const results = await Promise.all(budgetFetches);
@@ -261,8 +279,8 @@ export async function listHomestands(supa: any, accountKey: any, fiscalYear = 20
 
   const games = sched
     .filter((r: any) => r.day_type === "GAME"
-                 && r.service_date >= fy!.start
-                 && r.service_date <= fy!.end)
+                 && r.service_date >= fy.startISO
+                 && r.service_date <= fy.endISO)
     .sort((a: any, b: any) => a.service_date.localeCompare(b.service_date));
   if (!games.length) return [];
 
@@ -334,10 +352,10 @@ export async function listHomestands(supa: any, accountKey: any, fiscalYear = 20
     // that hourly-only figures never move when the toggle flips.
     const hourlyBudgetCents = preFloor
       ? null
-      : Math.round(sumWindowMilleCents(budgetByPeriod, windowStart, windowEnd, fy!.start) / 1000);
+      : Math.round(sumWindowMilleCents(budgetByPeriod, windowStart, windowEnd, fy.startISO) / 1000);
     const salaryBudgetCents = (preFloor || !includeSalary)
       ? null
-      : Math.round(sumWindowMilleCents(salaryBudgetByPeriod, windowStart, windowEnd, fy!.start) / 1000);
+      : Math.round(sumWindowMilleCents(salaryBudgetByPeriod, windowStart, windowEnd, fy.startISO) / 1000);
     const totalBudgetCents = hourlyBudgetCents == null
       ? null
       : hourlyBudgetCents + (salaryBudgetCents || 0);
@@ -372,18 +390,22 @@ export async function listHomestands(supa: any, accountKey: any, fiscalYear = 20
 // earliest week_start where week_source='sc_day_metadata'. Falls back
 // to the DOLLAR_COVERAGE_FLOOR constant if the read errors, matching
 // the route's pattern.
+//
+// Train 2c: exempt from pagedSelect via `.maybeSingle()` - one row
+// by definition.
 async function resolveDailyFloor(supa: any) {
   const q = await supa
     .from("labor_actuals_latest")
     .select("week_start")
     .eq("week_source", "sc_day_metadata")
     .order("week_start", { ascending: true })
-    .limit(1);
-  if (q.error || !q.data?.length) {
+    .limit(1)
+    .maybeSingle();
+  if (q.error || !q.data) {
     const { DOLLAR_COVERAGE_FLOOR } = await import("@/lib/kpi/floors");
     return DOLLAR_COVERAGE_FLOOR;
   }
-  return q.data[0].week_start;
+  return q.data.week_start;
 }
 
 /**
@@ -476,11 +498,19 @@ export async function foldPerStandSplits(supa: any, accountKey: any, homestands:
   const windowStart = targets.reduce((min: any, h: any) => h.window_start < min ? h.window_start : min, targets[0].window_start);
   const windowEnd   = targets.reduce((max: any, h: any) => h.window_end   > max ? h.window_end   : max, targets[0].window_end);
 
-  const dQ = await supa.from("labor_actuals_daily")
-    .select("account_key, work_date, amount")
+  // Train 2c: paged via pagedSelect. labor_actuals_daily row grain is
+  // (account_key, worker_id, work_date, line_code); account_key fixed
+  // so (work_date, worker_id, line_code) is unique.
+  const dQ = await pagedSelect((from: number, to: number) => supa
+    .from("labor_actuals_daily")
+    .select("account_key, work_date, amount, worker_id, line_code")
     .eq("account_key", accountKey)
     .gte("work_date", windowStart)
-    .lte("work_date", windowEnd);
+    .lte("work_date", windowEnd)
+    .order("work_date")
+    .order("worker_id")
+    .order("line_code")
+    .range(from, to));
   if (dQ.error) throw new Error(`foldPerStandSplits daily read (${accountKey}): ${dQ.error.message}`);
   const dailyRows = dQ.data || [];
 

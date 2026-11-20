@@ -36,6 +36,7 @@
 // guarantees the keys line up by construction.
 
 import { dedupePaySegments } from "./paySegmentDedupe";
+import { pagedSelect } from "@/lib/kpi/shared/pagedSelect";
 
 // Which earning-type labels count as the worker's REGULAR hourly rate.
 // `Regular` is the current post-cutover label; `Base Pay` is the
@@ -99,19 +100,19 @@ export async function loadWorkerWeekRates(supa: any, { actualsRows }: any) {
 
   // Load presence + pay_segments + dedupe. One source of truth
   // (dedupePaySegments) so this helper cannot drift from the derive.
+  //
+  // Train 2c: paged via pagedSelect. rippling_id is the table's PK so
+  // the sort is unique.
   const presenceSet = new Set<any>();
   {
-    const PAGE = 1000;
-    let from = 0;
-    while (true) {
-      const q = await supa.from("rippling_current_presence")
-        .select("rippling_id").eq("kind", "pay_segments").range(from, from + PAGE - 1);
-      if (q.error) throw new Error(`loadWorkerWeekRates presence: ${q.error.message}`);
-      const rows = q.data || [];
-      for (const r of rows) presenceSet.add(r.rippling_id);
-      if (rows.length < PAGE) break;
-      from += PAGE;
-    }
+    const q = await pagedSelect((from: number, to: number) => supa
+      .from("rippling_current_presence")
+      .select("rippling_id")
+      .eq("kind", "pay_segments")
+      .order("rippling_id")
+      .range(from, to));
+    if (q.error) throw new Error(`loadWorkerWeekRates presence: ${q.error.message}`);
+    for (const r of q.data || []) presenceSet.add(r.rippling_id);
   }
   // PERF 2026-10-16. Three-stage history:
   //   #1291 (narrowed columns):  40 MB -> 3.8 MB  per call
@@ -171,37 +172,33 @@ export async function loadWorkerWeekRates(supa: any, { actualsRows }: any) {
     "owner_role_id:payload->owner_role->>id",
   ].join(",");
 
+  // Train 2c: paged via pagedSelect. rippling_id is the raw table's
+  // PK so the sort is unique.
   const raw: any[] = [];
   {
-    const PAGE = 1000;
-    let from = 0;
-    while (true) {
-      const q = await supa
-        .from("rippling_raw_pay_segments")
-        .select(RATE_SEG_COLS)
-        .in("payload->owner_role->>id", workerIds)
-        .gte("payload->>segment_date", minDate)
-        .lte("payload->>segment_date", maxDate)
-        .range(from, from + PAGE - 1);
-      if (q.error) throw new Error(`loadWorkerWeekRates raw: ${q.error.message}`);
-      const rows = q.data || [];
-      for (const r of rows) {
-        raw.push({
-          rippling_id: r.rippling_id,
-          payload: {
-            external_id: r.external_id,
-            system_updated_at: r.system_updated_at,
-            updated_at: r.updated_at,
-            segment_date: r.segment_date,
-            merged_earning_type_name: r.merged_earning_type_name,
-            estimated_hourly_rate: r.estimated_hourly_rate,
-            segment_duration_hours: r.segment_duration_hours,
-            owner_role: { id: r.owner_role_id },
-          },
-        });
-      }
-      if (rows.length < PAGE) break;
-      from += PAGE;
+    const q = await pagedSelect((from: number, to: number) => supa
+      .from("rippling_raw_pay_segments")
+      .select(RATE_SEG_COLS)
+      .in("payload->owner_role->>id", workerIds)
+      .gte("payload->>segment_date", minDate)
+      .lte("payload->>segment_date", maxDate)
+      .order("rippling_id")
+      .range(from, to));
+    if (q.error) throw new Error(`loadWorkerWeekRates raw: ${q.error.message}`);
+    for (const r of q.data || []) {
+      raw.push({
+        rippling_id: r.rippling_id,
+        payload: {
+          external_id: r.external_id,
+          system_updated_at: r.system_updated_at,
+          updated_at: r.updated_at,
+          segment_date: r.segment_date,
+          merged_earning_type_name: r.merged_earning_type_name,
+          estimated_hourly_rate: r.estimated_hourly_rate,
+          segment_duration_hours: r.segment_duration_hours,
+          owner_role: { id: r.owner_role_id },
+        },
+      });
     }
   }
   const dedupe = dedupePaySegments(raw, presenceSet);

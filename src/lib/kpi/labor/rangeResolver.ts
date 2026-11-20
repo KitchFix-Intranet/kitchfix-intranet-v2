@@ -27,10 +27,10 @@
 // This module is pure - no DB, no fetches. Callers (the labor route)
 // hand it the resolved daily floor and range endpoints.
 
-// Fiscal week starts land on a Monday (spec §periods.js: FY_START is
-// 2025-12-29, a Monday). A range aligns to whole fiscal weeks iff its
-// start is a Monday and its end is a Sunday (start + N*7 - 1 days,
-// N >= 1).
+// Fiscal week starts land on a Monday (the fiscal year's first day is
+// a Monday; shared/fiscalYear.ts carries the per-year start). A range
+// aligns to whole fiscal weeks iff its start is a Monday and its end
+// is a Sunday (start + N*7 - 1 days, N >= 1).
 function isFiscalWeekMonday(iso: any) {
   const d = new Date(`${iso}T00:00:00.000Z`);
   return d.getUTCDay() === 1;

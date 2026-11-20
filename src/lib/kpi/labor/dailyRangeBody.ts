@@ -14,8 +14,9 @@ import { buildWeekBudgets } from "./board";
 import { loadSalaryActuals } from "./salaryBoard";
 import { proRateBudget } from "./budgetProRate";
 import { salaryProRate } from "./salaryProRate";
-import { fetchAllOffset } from "@/lib/kpi/shared/paginate";
+import { pagedSelect } from "@/lib/kpi/shared/pagedSelect";
 import { countDistinctPeople, buildWorkerToEmail } from "./personCount";
+import type { FiscalYear } from "@/lib/kpi/shared/fiscalYear";
 
 const V6_PSEUDO_KEYS = new Set(["ALL", "EAST", "WEST"]);
 const MS_PER_DAY = 86400000;
@@ -36,23 +37,35 @@ export async function buildDailyRangeBody(ctx: any) {
     includeSalary,
     resolveWorkerMeta,
   } = ctx;
-  // FIN-2027 W1 PR-A year-safety: fiscalYear read from ctx with
-  // FY2026 default. Route does not pass it yet; behavior preserved.
-  const fiscalYear = ctx.fiscalYear ?? 2026;
+  // Train 2c: fiscalYear is a FiscalYear object threaded from the
+  // entry; no default or typed-in year. Caller always passes it.
+  const fy: FiscalYear = ctx.fy ?? ctx.fiscalYear;
+  if (!fy || typeof fy !== "object" || !fy.year) {
+    return { error: safeErr("daily_range_body_fy", { message: "fy input missing" }) };
+  }
+  const fiscalYear = fy.year;
 
   // 1. Resolve members.
+  // Train 2c: paged via pagedSelect. team_key is the accounts PK so
+  // the sort is unique.
   let members;
   if (V6_PSEUDO_KEYS.has(account)) {
     // Kevin ruling 2026-10-06: retired accounts (active=false, today
     // CHI - IL + CIN - FL) are not portfolio members. Mirrors the
     // filter on resolvePortfolioMembers.
-    let memberQ;
-    if (account === "ALL") {
-      memberQ = await supa.from("accounts").select("team_key").neq("team_key", "CORP").neq("active", false).order("team_key");
-    } else {
-      const regionValue = account === "EAST" ? "East" : "West";
-      memberQ = await supa.from("accounts").select("team_key").neq("team_key", "CORP").neq("active", false).eq("region", regionValue).order("team_key");
-    }
+    const regionValue = account === "ALL"
+      ? null
+      : (account === "EAST" ? "East" : "West");
+    const memberQ: any = await pagedSelect((from: number, to: number) => {
+      let q: any = supa.from("accounts")
+        .select("team_key")
+        .neq("team_key", "CORP")
+        .neq("active", false)
+        .order("team_key")
+        .range(from, to);
+      if (regionValue) q = q.eq("region", regionValue);
+      return q;
+    });
     if (memberQ.error) return { error: safeErr("v6_members_daily", memberQ.error) };
     members = (memberQ.data || []).map((r: any) => r.team_key);
   } else {
@@ -60,20 +73,23 @@ export async function buildDailyRangeBody(ctx: any) {
   }
 
   // 2. Fetch daily rows for the range + members.
-  // 2026-08-28 pagination sweep: paginated via fetchAllOffset. Members
-  // (up to 11 for portfolio ALL) x workers x days x lines can exceed
-  // 1000 on wider daily-branch windows; prior bare select truncated.
-  let dailyRows;
-  try {
-    dailyRows = await fetchAllOffset(supa, "labor_actuals_daily",
-      "account_key, worker_id, work_date, line_code, hours_regular, hours_overtime, hours_double_time, hours_premium_other, dollars_regular, dollars_overtime, dollars_double_time, dollars_premium_other, amount, segment_count",
-      [
-        (q: any) => q.in("account_key", members),
-        (q: any) => q.gte("work_date", start),
-        (q: any) => q.lte("work_date", end),
-      ]);
-  } catch (e: any) {
-    return { error: safeErr("labor_actuals_daily", { message: e.message }) };
+  // Train 2c: paged via pagedSelect. labor_actuals_daily row grain is
+  // (account_key, worker_id, work_date, line_code).
+  let dailyRows: any[];
+  {
+    const q = await pagedSelect((from: number, to: number) => supa
+      .from("labor_actuals_daily")
+      .select("account_key, worker_id, work_date, line_code, hours_regular, hours_overtime, hours_double_time, hours_premium_other, dollars_regular, dollars_overtime, dollars_double_time, dollars_premium_other, amount, segment_count")
+      .in("account_key", members)
+      .gte("work_date", start)
+      .lte("work_date", end)
+      .order("account_key")
+      .order("worker_id")
+      .order("work_date")
+      .order("line_code")
+      .range(from, to));
+    if (q.error) return { error: safeErr("labor_actuals_daily", q.error) };
+    dailyRows = q.data;
   }
 
   // 3. Aggregate per (worker, line) - integer-cent accumulator so
@@ -118,11 +134,18 @@ export async function buildDailyRangeBody(ctx: any) {
   }));
 
   // 4. Pro-rated budget.
-  const budgetPeriodsQ = await supa.from("kpi_budgets")
+  // Train 2c: paged via pagedSelect. kpi_budgets PK is
+  // (account_key, fiscal_year, period_no, line_code); line_code +
+  // fiscal_year are fixed so (account_key, period_no) is unique.
+  const budgetPeriodsQ: any = await pagedSelect((from: number, to: number) => supa
+    .from("kpi_budgets")
     .select("account_key, period_no, amount")
     .in("account_key", members)
     .eq("line_code", "3100.1")
-    .eq("fiscal_year", fiscalYear);
+    .eq("fiscal_year", fiscalYear)
+    .order("account_key")
+    .order("period_no")
+    .range(from, to));
   if (budgetPeriodsQ.error) return { error: safeErr("kpi_budgets_daily", budgetPeriodsQ.error) };
   const perAccountBudgets = new Map<string, Map<number, number>>();
   for (const b of (budgetPeriodsQ.data || [])) {

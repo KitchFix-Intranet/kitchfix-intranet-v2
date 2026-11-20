@@ -140,6 +140,9 @@ export async function loadReportOnlyPending(supa: any, { members, start, end, IN
       const chunk = members.slice(i, i + IN_CHUNK);
       let from = 0;
       while (true) {
+        // Train 2c: this is a database function call (supa.rpc), not a
+        // paged select. It is NOT routed through pagedSelect per prompt
+        // ruling; the manual range loop stays as v1 shipped it.
         const q = await supa
           .rpc("rippling_report_only_pending_v1_fn", {
             p_start: start,
