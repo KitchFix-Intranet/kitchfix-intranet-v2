@@ -6,7 +6,7 @@ import { resolveRecipients } from "../recipients.ts";
 // `a@example.test` (the .test TLD is reserved for testing).
 
 const AP = "ap@example.test";
-const TEST_TO = "kevin-test@example.test";
+const TEST_TO = "test-to@example.test";
 const SUB = "sub@example.test";
 const EXTRA = "cc1@example.test";
 const EXTRA2 = "cc2@example.test";
