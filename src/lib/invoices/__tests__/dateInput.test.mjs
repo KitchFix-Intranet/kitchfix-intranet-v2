@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import { strict as assert } from "node:assert";
-import { parseDateInput } from "../dateInput.ts";
+import { parseDateInput, toBoxDate } from "../dateInput.ts";
 
 // Pin "today" (Chicago) at 2026-11-17. Use noon UTC so the Chicago
 // date is 06:00 same day regardless of DST shenanigans.
@@ -72,4 +72,27 @@ test("parseDateInput: leap-day boundary", () => {
   assert.equal(good.iso, "2028-02-29");
   const bad = parseDateInput("02/29/2027", today);  // not a leap year
   assert.equal(bad.iso, null);
+});
+
+test("toBoxDate: formats ISO to MM/DD/YYYY without timezone shift", () => {
+  assert.equal(toBoxDate("2026-11-17"), "11/17/2026");
+  assert.equal(toBoxDate("2026-01-05"), "01/05/2026");
+  assert.equal(toBoxDate("2026-12-31"), "12/31/2026");
+});
+
+test("toBoxDate: empty / malformed returns empty string", () => {
+  assert.equal(toBoxDate(null), "");
+  assert.equal(toBoxDate(undefined), "");
+  assert.equal(toBoxDate(""), "");
+  assert.equal(toBoxDate("11/17/2026"), "");
+  assert.equal(toBoxDate("2026-11-17T00:00:00Z"), "");
+});
+
+test("toBoxDate <-> parseDateInput: round trip", () => {
+  const today = new Date("2026-11-17T18:00:00Z");
+  for (const iso of ["2026-11-17", "2026-01-05", "2026-12-31", "2028-02-29"]) {
+    const box = toBoxDate(iso);
+    const back = parseDateInput(box, today);
+    assert.equal(back.iso, iso, `round trip failed for ${iso}`);
+  }
 });

@@ -14,6 +14,7 @@ import { insertFile } from "@/lib/invoices/draftWrite";
 import { detectKind } from "@/lib/invoices/fileKind";
 import { sha256Hex } from "@/lib/invoices/fileSha";
 import { pdfPageCount } from "@/lib/invoices/pdfPages";
+import { pickSortOrder } from "@/lib/invoices/sortOrder";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -97,14 +98,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "unsupported_type" }, { status: 415 });
   }
 
-  // The stored path must agree with the real kind. A browser that
-  // uploaded a PDF with a .jpg name (or swapped files between slot
-  // and PUT) is caught here.
-  const expectedExt = EXT_FROM_MIME[kind.kind.mime];
-  if (!storagePath.endsWith("." + expectedExt) && !(expectedExt === "jpg" && storagePath.endsWith(".jpeg"))) {
-    await sb.storage.from(BUCKET).remove([storagePath]);
-    return NextResponse.json({ error: "kind_mismatch" }, { status: 415 });
-  }
+  // Train 2b correction 4.4: the storage path's ending does not
+  // decide the file's kind. The first bytes do. `mime_type` is
+  // written from `kind.kind.mime`; `file_name` is given the real
+  // extension so the user's download works. No storage move.
+  const realExt = EXT_FROM_MIME[kind.kind.mime];
 
   const sha = sha256Hex(bytes);
   let pageCount: number | null = null;
@@ -123,17 +121,20 @@ export async function POST(req: Request) {
   // Compute the next sort_order on this draft.
   const existing = await listFilesForDraft(sb, ownerEmail, draft.id);
   const nextOrder = existing.length === 0 ? 0 : Math.max(...existing.map((f) => f.sort_order)) + 1;
+  // Train 2b correction 4.3 / fix-before-push #8: shared helper
+  // picks the whole-number input or falls back to nextOrder.
+  const sortOrder = pickSortOrder(body.sort_order, nextOrder);
 
   const result = await insertFile(sb, {
     id: body.file_id,
     draftId: draft.id,
     storagePath,
-    fileName: safeFileName(body.file_name, expectedExt),
+    fileName: safeFileName(body.file_name, realExt),
     mimeType: kind.kind.mime,
     sizeBytes: bytes.length,
     sha256: sha,
     pageCount,
-    sortOrder: typeof body.sort_order === "number" ? body.sort_order : nextOrder,
+    sortOrder,
     uploadedBy: ownerEmail,
   });
 

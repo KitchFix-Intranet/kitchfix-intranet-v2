@@ -25,9 +25,14 @@ async function loadPdfjs(): Promise<PdfjsModule> {
 export function PdfPage({
   url,
   rotation,
+  onExpired,
 }: {
   url: string;
   rotation: 0 | 90 | 180 | 270;
+  // Called when the fetch for the current URL fails. The parent
+  // responds by asking the view route for a fresh 60s link. Train 2b
+  // correction 4.5 + acceptance clause 5-minute test.
+  onExpired?: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -57,6 +62,7 @@ export function PdfPage({
         if (!cancelled) {
           setErr(e instanceof Error ? e.message : "Could not show the page");
           setLoading(false);
+          onExpired?.();
         }
       }
     })();

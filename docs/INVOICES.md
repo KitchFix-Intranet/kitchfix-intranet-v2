@@ -259,3 +259,194 @@ An upload slot that is finished leaves an `invoice_files` row + a storage object
 - `src/components/invoices/` - added `CaptureLanding.tsx`, `WhichSiteChooser.tsx`, `CaptureSittingRoot.tsx`, `DropZone.tsx`, `PdfPage.tsx`, `VendorPicker.tsx`, `capture.css`. Modified `HeadBand.tsx` + `InvoicesSurface.tsx` to add the "Add invoices" CTA to the list's band.
 - `supabase/migrations/20261117211626_invoices_t2_drafts_files_2026_11_17.sql` (record only; applied 2026-11-17 by Chat-Claude).
 - `package.json` + lockfile - `pdfjs-dist` added.
+
+## Train 2b: the Capture screen, as approved
+
+Train 2b takes Capture from the first-cut screen train 2a left behind
+to the screen Kevin and Chat-Claude approved. **Nothing is sent and
+nothing lands on `invoice_submissions` in this train** - the fence and
+the no-writes list from train 2 still hold. No new dependency, no new
+migration, no package.json change.
+
+### Section-6 pieces
+
+- **A1/A2/A3 "Which site?"** - `WhichSiteChooser.tsx` renders the
+  shared `IdentBand` on desk and a plain phone head (red tick) at
+  860 px and under. Each site row shows a draft count when there is
+  one. The kick is 48 characters: `"Pick one. It stays with every
+  invoice you add."` (correction 10).
+- **B1 landing headline** - server-computed: when a viewer has
+  drafts, `"{ready} ready, {rest} still to finish"`; else
+  `"Add this week's invoices"`. Readiness is `runReadyCheck`'s
+  output, not a client-side copy of the rule (correction 6).
+- **B2 needs-fix note** - `latestSent.ts :: loadReturnedForSite`
+  returns the returned invoices for this site in oldest-first order;
+  each becomes `"{vendor} #{number} was sent back."` + a quiet
+  `"See it"` link. No `"Fix it"` button (the prompt overrides the
+  render here).
+- **B3 landing grid** - `.kf-inv-capture` carries `container-type:
+  inline-size`; at a content width of 980 px the drop zone sits
+  beside Latest sent. Below that, they stack.
+- **B4 drop zone** - `DropZone.tsx` reads two screens worth of
+  wording: desk `"Drop the vendor's copy or a clean scan here.
+  Several at once is fine."`, phone `"The vendor's emailed copy
+  or a clean scan."` with a singular `"Choose a file"`. The second
+  "Add invoices" heading the render carries is dropped so the phrase
+  appears once on the page.
+- **B5 Latest sent** - five rows (both desk and phone; correction
+  11 overrides the render's three on phone), 48 px each, token
+  type. A quiet `"See all"` link under the list.
+- **B6 Drafts waiting** - `DraftsWaitingList.tsx` (client). Each
+  row: vendor name or `"No vendor yet"`, invoice number or
+  `"No number"`, a short status (`"Ready"` / `"Vendor, Date left"`),
+  `timeAgo(updated_at)`. Remove discards immediately and raises
+  an Undo toast through the shared `Toaster`. No `confirm()`.
+- **B7 upload tray** - four states (`"Uploading"`, `"Checking"`,
+  `"Added"`, a failure line). Failed rows get a `"Try again"`
+  button that re-runs the same `File` object.
+- **B8 refused file reasons** - `"Over 50 MB"`, HEIC = `"Save it
+  as a PDF or a JPEG and add it again."`, `"Not a PDF or a
+  picture."` Same copy on both the pre-signing and the finish
+  side.
+- **B9 same-file-twice** - the finish route returns `dupe_of`
+  when another of this viewer's drafts already holds a file with
+  the same SHA. The row is kept; the lane `Sheet` opens with
+  `"You already added this file"` and two choices: `"Remove this
+  one"` and `"Use it anyway"`.
+- **B10 phone landing order** - no band; plain head; one column
+  in order needs-fix, drop zone, Drafts waiting, Latest sent.
+- **E "You are set"** - the landing itself, when `drafts.length >
+  0 && every draft.ready`. Band / head `"{N} ready"` + `"Nothing
+  has been sent yet. Sending is switched on in the next update."`
+  Each ready draft opens its sitting. `"Add more"` + `"See the
+  list"`. Survives a reload because readiness is server-computed
+  (correction 6).
+
+- **C1** slim top row with the fixed-order `N-of-M` pager
+  (created_at ASC + id tie-break), prev/next chevrons, Back and a
+  `...` menu. Delete-this-invoice is the one item in that menu
+  today; it fires an Undo toast.
+- **C2** two columns on desk (`minmax(0, 1fr) 420px`); form is a
+  `--sp-r-card` card.
+- **C3** page box: Zoom (fit/100%, zoom scrolls inside the box,
+  correction 12), Rotate, "Change the page" menu through the lane
+  `Menu` with `"Add pages to it"` / `"Replace the file"` /
+  `"Remove the file"`. Add-pages + Replace reuse `/api/invoices/uploads`
+  with the existing draft id. Replace adds first; only after the
+  new row lands does the old one go to `removed_at` (correction
+  12). Remove-the-file raises an Undo toast backed by the new
+  `/api/invoices/files/[id]/unremove` route.
+- **C4 vendor picker** - lane `Sheet`, grouped by `This site` /
+  `Other vendors`, picked row marked with a tick, arrow-key nav,
+  Escape closes, focus returns to the invoice-number box on pick.
+- **C5** kind line with a 48 px tap area on the link (the 20 px
+  defect from section 5).
+- **C6** number, date, total in that order with labels above
+  (correction 14, the prompt numbering restored).
+- **C7 date** - text box plus a calendar button that opens the
+  lane `Calendar` inside a `Sheet`. Future dates are blocked
+  inline with `"That is in the future. Check the year."` (render
+  wording). The 60-day confirmation is a two-button prompt:
+  `"Yes, that is right"` and `"Fix the date"`. On mount the stored
+  ISO is formatted by `toBoxDate()` in `dateInput.ts` so a reload
+  still shows MM/DD/YYYY (correction 5).
+- **C7 coding** - `"Usual for {vendor}"` heading; single-chip
+  `"All of it to {code}"` when there is one usual code; row chips
+  otherwise. `"Add a code"` link. `"Put the rest, $X, on {code}"`
+  button when there is a balance and a top code is known. Balance
+  reads `"$X left to code"` / `"Adds up"` with a tick / `"Over
+  by $X"`. The 9-in-10 fill fires on total entry and shows as the
+  active chip - one tap to change (correction 12).
+- **C8** `"Lines are read after it is sent."`
+- **C9 copy stop block** - reads `copy_match` from the check
+  route. Two kinds (correction 4): `same_invoice` ("You already
+  sent this one") carries three ways out including "It is the
+  credit for that invoice"; `same_draft` ("You already have this
+  one in your drafts") drops the credit path. The answer keys are
+  the ones `duplicateCheck.ts` + `readyCheck.ts` already use:
+  `is_different_invoice`, `is_credit_for` (correction 3).
+- **C10 error list** - above the Check-and-send button. Pressing
+  an item moves focus to the field.
+- **C11 Check and send** - shared `toast()` reads exactly `"Ready.
+  Sending is switched on in the next update."` Focus stays on the
+  button during the check; on ready, routes to `next_draft_id`
+  (server-computed by the check route) or to the landing (which
+  shows E). Enter in the total box does the same (correction 12).
+- **C12 "..." menu** - lane `Menu` with Delete-this-invoice.
+- **C13 save line** - four states near the button: `"Saved"`,
+  `"Saving"`, `"No signal. Your typing is kept on this device."`,
+  `"Not saved. Changes are kept on this device."` The last is the
+  terminal state of the retry loop (0.5 / 1 / 2 / 4 s backoff,
+  correction 12).
+
+Phone sitting pieces D1-D7 live in the same component. `useIsPhone()`
++ `useKeyboardOffset()` cover the React-level decisions; the rest is
+CSS. D4's keyboard-lift uses `window.visualViewport` and does not
+touch `layout.tsx` (correction 7).
+
+### Section-4 server changes
+
+1. `gl_codes.is_purchasing = true` filtered on `loadActiveCodesForSite`;
+   `loadUsualCodes` now takes an optional active set and runs the
+   pure helper `filterUsualByActiveSet` so the UI never offers a
+   non-purchasing chip (unit-tested).
+2. `patchDraft` now returns `{status: "error", detail}` for a DB
+   error; the PATCH route returns 500 `save_failed` with a short
+   code string, no SQL. The client retries with backoff
+   (0.5 / 1 / 2 / 4 s) then stops.
+3. `sort_order` on the finish route: a whole number of zero or
+   more is used; anything else quietly falls back to `nextOrder`.
+   The PATCH route gets the same whole-number rule; a bad PATCH
+   `sort_order` is ignored (no 400 unless the whole body ends up
+   empty). A good file can never leave the bucket because the
+   browser sent a rubbish number (correction 1).
+4. The ending of `storage_path` no longer decides the file's kind.
+   The first bytes do. `mime_type` carries the detected kind;
+   `file_name` is given the detected extension; no storage move
+   (correction 2).
+5. No signed URL is built in server HTML. `CaptureSittingRoot`
+   fetches `/api/invoices/files/[id]/view` for the active file on
+   mount and again if the draw fails. `PdfPage` calls back via
+   `onExpired` when `getDocument` throws so the parent asks for a
+   fresh 60 s link.
+6. `duplicateCheck.ts :: copyCheck` returns the matched row's
+   client-safe fields (`vendor_name`, `invoice_number`,
+   `invoice_date`, `submission_id`), not just a boolean. The
+   check route decorates `runReadyCheck`'s pure result with
+   `copy_match` and `next_draft_id`. `CheckResult` extends
+   `ReadyResult` (correction 4 + 6).
+7. `POST /api/invoices/files/[id]/unremove` clears `removed_at`
+   only when currently set. No DELETE on either table.
+
+### Files touched for train 2b
+
+- `src/lib/invoices/dateInput.ts` (toBoxDate helper + tests).
+- `src/lib/invoices/draftLoad.ts` (fixed-order list + loadVendorNames).
+- `src/lib/invoices/draftListView.ts` (new).
+- `src/lib/invoices/duplicateCheck.ts` (returns matched metadata).
+- `src/lib/invoices/draftWrite.ts` (error vs conflict + unremoveFile).
+- `src/lib/invoices/glCodes.ts` (is_purchasing filter + filterUsualByActiveSet).
+- `src/lib/invoices/latestSent.ts` (loadReturnedForSite).
+- `src/lib/invoices/readyCheck.ts` + `types.ts` (ReadyResult / CheckResult + CopyMatchView + DraftListView).
+- `src/app/api/invoices/drafts/[id]/route.ts` (500 on save_failed).
+- `src/app/api/invoices/drafts/[id]/check/route.ts` (copy_match + next_draft_id).
+- `src/app/api/invoices/files/route.ts` (drop ending check + whole-number sort_order).
+- `src/app/api/invoices/files/[id]/route.ts` (whole-number sort_order).
+- `src/app/api/invoices/files/[id]/unremove/route.ts` (new).
+- `src/app/api/invoices/gl-codes/route.ts` (active set threaded to usual).
+- `src/app/(shell)/invoices/page.tsx` (no signed URL; threads DraftListView, pager, siteName).
+- `src/app/(shell)/invoices/loading.tsx` (new, landing skeleton).
+- `src/app/(shell)/invoices/error.tsx` (new).
+- `src/components/invoices/CaptureLanding.tsx` (A/B/E).
+- `src/components/invoices/DraftsWaitingList.tsx` (new, client B6).
+- `src/components/invoices/DropZone.tsx` (4-state tray + Try again + B9 sheet).
+- `src/components/invoices/WhichSiteChooser.tsx` (band + phone head + counts).
+- `src/components/invoices/CaptureSittingRoot.tsx` (C1-C13 + D1-D7).
+- `src/components/invoices/Sheet.tsx` (new, lane sheet primitive).
+- `src/components/invoices/Menu.tsx` (new, lane menu primitive).
+- `src/components/invoices/Calendar.tsx` (new, lane calendar).
+- `src/components/invoices/VendorPicker.tsx` (grouped, keyboard-first, picked-marked).
+- `src/components/invoices/PdfPage.tsx` (onExpired callback).
+- `src/components/invoices/OwnerPreviewBanner.tsx` (F3 wording).
+- `src/components/invoices/useIsPhone.ts` + `useKeyboardOffset.ts` (new).
+- `src/components/invoices/capture.css` (band-free phone head, grid-980 landing, D4 sticky bar with --kb-offset, Sheet / Menu / Calendar, vendor picker, coding chip + rows + balance, copy-stop, errors list, etc.).

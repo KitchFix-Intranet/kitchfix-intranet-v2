@@ -20,10 +20,11 @@ export async function GET(req: Request) {
   const { sb, accountKey } = open;
   if (!accountKey) return NextResponse.json({ codes: [], usual: null });
 
-  const [codes, usual] = await Promise.all([
-    loadActiveCodesForSite(sb, accountKey),
-    vendorId ? loadUsualCodes(sb, accountKey, vendorId) : Promise.resolve({ codes: [], singleCodeFill: null, sampleSize: 0 }),
-  ]);
+  const codes = await loadActiveCodesForSite(sb, accountKey);
+  const activeSet = new Set(codes.map((c) => c.code));
+  const usual = vendorId
+    ? await loadUsualCodes(sb, accountKey, vendorId, activeSet)
+    : { codes: [], singleCodeFill: null, sampleSize: 0 };
 
   return NextResponse.json({ codes, usual });
 }

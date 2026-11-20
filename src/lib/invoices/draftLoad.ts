@@ -32,7 +32,8 @@ export async function getDraftById(
 }
 
 // Live drafts (not discarded) for this viewer, scoped to a site.
-// Newest first. Owner_email + account_key both filtered on the server.
+// Newest first (updated_at). Owner_email + account_key both
+// filtered on the server. Use this for the landing's B6 pane.
 export async function listDraftsForOwnerSite(
   sb: SupabaseClient,
   ownerEmail: string,
@@ -48,6 +49,49 @@ export async function listDraftsForOwnerSite(
     .limit(500);
   if (q.error) return [];
   return (q.data as unknown as DraftRow[]) ?? [];
+}
+
+// Live drafts (not discarded) for this viewer, scoped to a site, in
+// a stable fixed order: created_at ASC, then id as tie-break. The
+// sitting's "N of M" pager (C1) and the "next draft" cursor use
+// this ordering so cursors do not jump when a draft is re-saved.
+export async function listDraftsForOwnerSiteFixedOrder(
+  sb: SupabaseClient,
+  ownerEmail: string,
+  accountKey: string,
+): Promise<DraftRow[]> {
+  const q = await sb
+    .from("invoice_drafts")
+    .select(DRAFT_COLS)
+    .eq("owner_email", ownerEmail)
+    .eq("account_key", accountKey)
+    .eq("status", "draft")
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true })
+    .limit(500);
+  if (q.error) return [];
+  return (q.data as unknown as DraftRow[]) ?? [];
+}
+
+// Vendor names for a set of vendor_ids. Returns a Map from id to
+// name. Reads only (id, name) - never selects portal_* or any
+// contact field (train 1 §"vendor picker" discipline carries over).
+export async function loadVendorNames(
+  sb: SupabaseClient,
+  vendorIds: readonly string[],
+): Promise<Map<string, string>> {
+  const unique = Array.from(new Set(vendorIds.filter(Boolean)));
+  const out = new Map<string, string>();
+  if (unique.length === 0) return out;
+  const q = await sb
+    .from("vendors")
+    .select("id, name")
+    .in("id", unique);
+  if (q.error) return out;
+  for (const row of (q.data as Array<{ id: string; name: string }>) ?? []) {
+    out.set(row.id, row.name);
+  }
+  return out;
 }
 
 // Every live draft for this viewer across every site. Used by the
