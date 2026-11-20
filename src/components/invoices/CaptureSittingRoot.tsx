@@ -1,30 +1,52 @@
 "use client";
 
-// The sitting: one invoice at a time, page beside the fields on
-// desk, stacked on phone.
+// The sitting: one invoice at a time. Desk: slim top row, page
+// beside the fields. Phone paths (D1-D7) are the same component -
+// CSS branches at 860 px. All of section 6's C1..C13 rules + the
+// corrections (keyboard, shared toaster, no browser dialogs, no
+// signed URLs in server HTML, retry-with-backoff) land here.
 //
-// Save loop (correction 7, 8): one in-flight PATCH at a time; the
-// If-Match header carries the exact updated_at string the DB
-// returned. New field changes merge into a staged patch until the
-// current save returns.
-//
-// Local persistence (correction 7): a per-draft "dirty" flag in
-// localStorage + a merged-patch body. On mount, if dirty: flush to
-// server; otherwise server wins. Flag cleared on successful save.
+// Save loop (train 2a + correction 4.2): one in-flight PATCH per
+// draft, If-Match on updated_at. On a 500 ("save_failed") the
+// client retries with growing backoff (0.5, 1, 2, 4 s) then stops
+// and shows "Not saved. Changes are kept on this device." On 409
+// ("conflict") the page re-reads, preserving the staged patch.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Files,
+  Image as ImageIcon,
+  MoreHorizontal,
+  Plus,
+  RotateCw,
+  Trash2,
+  Upload,
+  Calendar as CalIcon,
+  Check,
+  AlertTriangle,
+} from "lucide-react";
+import { toast } from "@/components/ui/Toaster";
 import { fmtDate } from "@/lib/fmt";
 import { fmtUsdExact } from "@/lib/invoices/money";
-import type { CheckResult, DraftView, FileView, GlLineDraft, InvoiceKind } from "@/lib/invoices/types";
+import type {
+  CheckResult, CopyMatchView, DraftView, FileView, GlLineDraft, InvoiceKind,
+} from "@/lib/invoices/types";
 import { addsUp, leftToCode } from "@/lib/invoices/addUp";
-import { parseDateInput } from "@/lib/invoices/dateInput";
+import { parseDateInput, toBoxDate } from "@/lib/invoices/dateInput";
 import { parseMoneyInput } from "@/lib/invoices/moneyInput";
 import type { SiteGlCode } from "@/lib/invoices/glCodes";
 import type { UsualCode } from "@/lib/invoices/usualCodes";
 import { VendorPicker } from "./VendorPicker";
 import { OwnerPreviewBanner } from "./OwnerPreviewBanner";
+import { Sheet } from "./Sheet";
+import { Menu } from "./Menu";
+import { Calendar as InvCalendar } from "./Calendar";
 
 const PdfPage = dynamic(() => import("./PdfPage").then((m) => m.PdfPage), { ssr: false });
 
@@ -38,12 +60,19 @@ type Staged = Partial<{
   answers: DraftView["answers"];
 }>;
 
+interface Pager {
+  position: number;
+  total: number;
+  prevDraftId: string | null;
+  nextDraftId: string | null;
+}
+
 const SAVE_DEBOUNCE_MS = 700;
+const SAVE_BACKOFF_MS = [500, 1000, 2000, 4000] as const;
 
 function ls(): Storage | null {
   try { return typeof window !== "undefined" ? window.localStorage : null; } catch { return null; }
 }
-
 function lsKey(draftId: string): string { return `kf.invoices.draft.${draftId}`; }
 
 export function CaptureSittingRoot({
@@ -54,9 +83,11 @@ export function CaptureSittingRoot({
   initialUsual,
   siteSlug,
   siteAccountKey,
+  siteName,
   asParam,
   previewName,
   isPreview,
+  pager,
 }: {
   initialDraft: DraftView;
   initialFiles: FileView[];
@@ -65,38 +96,54 @@ export function CaptureSittingRoot({
   initialUsual: { codes: UsualCode[]; singleCodeFill: UsualCode | null; sampleSize: number };
   siteSlug: string;
   siteAccountKey: string;
+  siteName: string;
   asParam: string | null;
   previewName: string | null;
   isPreview: boolean;
+  pager: Pager;
 }) {
   const router = useRouter();
   const [draft, setDraft] = useState<DraftView>(initialDraft);
   const [files, setFiles] = useState<FileView[]>(initialFiles);
   const [vendorName, setVendorName] = useState<string | null>(initialVendorName);
-  // Train 2b correction 4.5: signed URLs are never rendered into
-  // the server HTML. The sitting fetches a 60s link per file the
-  // moment it appears on screen, and again if a draw fails because
-  // the link ran out. One-at-a-time: only the active file is
-  // requested, not every file on mount.
+  // Train 2b correction 4.5: client fetches the signed URL only
+  // for the active file, and again if the draw fails.
   const [viewUrls, setViewUrls] = useState<Record<string, string>>({});
   const [usual, setUsual] = useState(initialUsual);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [errors, setErrors] = useState<CheckResult["errors"]>([]);
-  const [readyToast, setReadyToast] = useState<string | null>(null);
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "error" | "offline">("idle");
-  const [copyBanner, setCopyBanner] = useState<string | null>(null);
+  const [copyMatch, setCopyMatch] = useState<CopyMatchView | null>(null);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "offline" | "stopped">("idle");
+  const [checking, setChecking] = useState(false);
+  const [zoomed, setZoomed] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [pageMenuOpen, setPageMenuOpen] = useState(false);
+  const [calOpen, setCalOpen] = useState(false);
+  const [pagePhoneSheetOpen, setPagePhoneSheetOpen] = useState(false);
 
-  // Save queue state - refs so the loop doesn't restart on every render.
+  // Refs for focus management.
   const stagedRef = useRef<Staged>({});
   const inflightRef = useRef<boolean>(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const backoffAttemptRef = useRef<number>(0);
   const draftRef = useRef<DraftView>(draft);
+  const invNumRef = useRef<HTMLInputElement | null>(null);
+  const invDateRef = useRef<HTMLInputElement | null>(null);
+  const totalRef = useRef<HTMLInputElement | null>(null);
+  const vendorButtonRef = useRef<HTMLButtonElement | null>(null);
+  const moreTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const pageTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const sendButtonRef = useRef<HTMLButtonElement | null>(null);
+  const addFileInputRef = useRef<HTMLInputElement | null>(null);
+  const replaceFileInputRef = useRef<HTMLInputElement | null>(null);
+
   useEffect(() => { draftRef.current = draft; }, [draft]);
 
   const asQ = asParam ? `?as=${encodeURIComponent(asParam)}` : "";
+  const asQAmp = asParam ? `&as=${encodeURIComponent(asParam)}` : "";
   const draftId = initialDraft.id;
 
-  // On mount: if a dirty local copy exists for this draft, flush it.
+  // On mount: flush any dirty local patch.
   useEffect(() => {
     const store = ls();
     if (!store) return;
@@ -109,7 +156,7 @@ export function CaptureSittingRoot({
         scheduleFlush();
       }
     } catch { /* ignore */ }
-
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const writeLocal = useCallback((dirty: boolean) => {
@@ -124,9 +171,10 @@ export function CaptureSittingRoot({
     } catch { /* ignore */ }
   }, [draftId]);
 
-  const scheduleFlush = useCallback(() => {
+  const scheduleFlush = useCallback((delay: number = SAVE_DEBOUNCE_MS) => {
     if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => { void flush(); }, SAVE_DEBOUNCE_MS);
+    timerRef.current = setTimeout(() => { void flush(); }, delay);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const flush = useCallback(async () => {
@@ -134,7 +182,7 @@ export function CaptureSittingRoot({
     const body = stagedRef.current;
     if (!body || Object.keys(body).length === 0) return;
     if (isPreview) {
-      setSaveState("error");
+      setSaveState("stopped");
       return;
     }
     inflightRef.current = true;
@@ -153,28 +201,42 @@ export function CaptureSittingRoot({
         const out = (await res.json()) as { draft: DraftView };
         setDraft(out.draft);
         setSaveState("idle");
+        backoffAttemptRef.current = 0;
         writeLocal(false);
       } else if (res.status === 409) {
-        // Another tab saved. Reload the page so we start from the
-        // newer state; the local "dirty" flag is cleared on the
-        // other side of the reload only if the server wins.
-        setSaveState("error");
-        setCopyBanner("The draft was changed in another tab. Reloading...");
-        setTimeout(() => router.refresh(), 500);
+        // Train 2b correction F2: preserve typing in progress.
+        stagedRef.current = { ...body, ...stagedRef.current };
+        writeLocal(true);
+        toast("This invoice changed in another tab. Showing the newest.", { tone: "ink" });
+        setTimeout(() => router.refresh(), 300);
+      } else if (res.status === 500) {
+        // Train 2b correction 4.2: DB error, not a conflict. Retry
+        // a few times with growing backoff; then stop and say so.
+        stagedRef.current = { ...body, ...stagedRef.current };
+        writeLocal(true);
+        const attempt = backoffAttemptRef.current;
+        if (attempt < SAVE_BACKOFF_MS.length) {
+          backoffAttemptRef.current = attempt + 1;
+          setSaveState("saving");
+          scheduleFlush(SAVE_BACKOFF_MS[attempt]);
+        } else {
+          setSaveState("stopped");
+        }
       } else {
-        setSaveState("error");
+        setSaveState("stopped");
       }
     } catch {
+      // Offline. Keep the patch, let the online listener retry.
       setSaveState("offline");
-      // Merge back the body we tried so it gets retried.
       stagedRef.current = { ...body, ...stagedRef.current };
       writeLocal(true);
     } finally {
       inflightRef.current = false;
-      // If new edits piled up during the request, run again.
-      if (Object.keys(stagedRef.current).length > 0) scheduleFlush();
+      if (Object.keys(stagedRef.current).length > 0 && saveState !== "stopped") {
+        scheduleFlush();
+      }
     }
-  }, [asQ, draftId, isPreview, router, scheduleFlush, writeLocal]);
+  }, [asQ, draftId, isPreview, router, saveState, scheduleFlush, writeLocal]);
 
   const stage = useCallback(<K extends keyof Staged>(key: K, value: Staged[K]) => {
     stagedRef.current = { ...stagedRef.current, [key]: value };
@@ -182,19 +244,23 @@ export function CaptureSittingRoot({
     scheduleFlush();
   }, [scheduleFlush, writeLocal]);
 
-  // Online/offline banner.
+  // Online / offline listeners. On coming online, retry.
   useEffect(() => {
-    const on = () => { if (saveState === "offline") void flush(); };
+    const on = () => { if (saveState === "offline" || saveState === "stopped") { backoffAttemptRef.current = 0; void flush(); } };
     const off = () => setSaveState("offline");
     window.addEventListener("online", on);
     window.addEventListener("offline", off);
     return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
   }, [flush, saveState]);
 
-  // Field handlers.
+  // ─── Field state ────────────────────────────────────────────────
+  // Train 2b correction 5: date box always shows MM/DD/YYYY after
+  // a reload. toBoxDate converts the stored ISO without timezone shift.
   const [invNumLocal, setInvNumLocal] = useState<string>(draft.invoice_number ?? "");
-  const [invDateLocal, setInvDateLocal] = useState<string>(draft.invoice_date ?? "");
-  const [totalLocal, setTotalLocal] = useState<string>(draft.total_amount != null ? String(draft.total_amount) : "");
+  const [invDateLocal, setInvDateLocal] = useState<string>(toBoxDate(draft.invoice_date));
+  const [totalLocal, setTotalLocal] = useState<string>(
+    draft.total_amount != null ? draft.total_amount.toFixed(2) : "",
+  );
 
   const invDateParsed = useMemo(() => parseDateInput(invDateLocal), [invDateLocal]);
   const totalParsed = useMemo(() => parseMoneyInput(totalLocal), [totalLocal]);
@@ -208,6 +274,14 @@ export function CaptureSittingRoot({
   const onInvDateChange = (v: string) => {
     setInvDateLocal(v);
     const parsed = parseDateInput(v);
+    // Future dates: block the save - do not stage; UI shows the
+    // inline bad hint.
+    if (parsed.iso && parsed.future) {
+      // Still stage the raw string? No - staging invoice_date=null
+      // when the user types a nonsense date avoids half-saved state.
+      stage("invoice_date", null);
+      return;
+    }
     stage("invoice_date", parsed.iso);
   };
 
@@ -215,8 +289,9 @@ export function CaptureSittingRoot({
     setTotalLocal(v);
     const parsed = parseMoneyInput(v);
     stage("total_amount", parsed);
-
-    // Single-code fill (§6 "the fill rule").
+    // 9-in-10 fill: when the usual's singleCodeFill is set and the
+    // breakdown is empty, drop the code in. The chip renders as
+    // "filled, with one tap to change it."
     if (parsed != null && usual.singleCodeFill && (draft.gl_breakdown ?? []).length === 0) {
       const code = usual.singleCodeFill;
       const nextGl: GlLineDraft[] = [{ code: code.code, name: code.name, amount: parsed }];
@@ -231,22 +306,34 @@ export function CaptureSittingRoot({
     setDraft((d) => ({ ...d, type: next }));
   };
 
+  const pickCalendarDate = (iso: string) => {
+    const box = toBoxDate(iso);
+    setInvDateLocal(box);
+    stage("invoice_date", iso);
+    setCalOpen(false);
+    // Focus moves to the total box after a pick.
+    window.setTimeout(() => totalRef.current?.focus(), 0);
+  };
+
   const onVendorPicked = async (v: { id: string; name: string }) => {
     setVendorName(v.name);
     setPickerOpen(false);
     stage("vendor_id", v.id);
     setDraft((d) => ({ ...d, vendor_id: v.id }));
-    // Refetch usual codes for the new vendor (fire and forget).
     try {
-      const res = await fetch(`/api/invoices/gl-codes?site=${encodeURIComponent(siteSlug)}&vendor_id=${encodeURIComponent(v.id)}${asQ ? `&${asQ.slice(1)}` : ""}`);
+      const res = await fetch(
+        `/api/invoices/gl-codes?site=${encodeURIComponent(siteSlug)}&vendor_id=${encodeURIComponent(v.id)}${asQAmp}`,
+      );
       if (res.ok) {
-        const body = await res.json() as { usual: typeof usual };
+        const body = (await res.json()) as { usual: typeof usual };
         if (body.usual) setUsual(body.usual);
       }
     } catch { /* ignore */ }
+    // Focus moves to the invoice number box after a vendor is picked.
+    window.setTimeout(() => invNumRef.current?.focus(), 0);
   };
 
-  // Coding helpers.
+  // ─── Coding ─────────────────────────────────────────────────────
   const gl = draft.gl_breakdown ?? [];
   const totalNum = draft.total_amount ?? null;
 
@@ -254,9 +341,8 @@ export function CaptureSittingRoot({
     stage("gl_breakdown", next);
     setDraft((d) => ({ ...d, gl_breakdown: next }));
   };
-
   const putAllToCode = (code: UsualCode) => {
-    if (totalNum == null) return;
+    if (totalNum == null) { toast("Type the total first.", { tone: "ink" }); return; }
     updateGl([{ code: code.code, name: code.name, amount: totalNum }]);
   };
   const addSplitLine = (code: UsualCode) => {
@@ -264,159 +350,446 @@ export function CaptureSittingRoot({
     const amount = left > 0 ? Math.round(left * 100) / 100 : 0;
     updateGl([...gl, { code: code.code, name: code.name, amount }]);
   };
+  const addEmptyRow = () => {
+    updateGl([...gl, { code: "", name: "", amount: 0 }]);
+  };
+  const putRestOn = (code: string, name: string) => {
+    const left = totalNum != null ? leftToCode(totalNum, gl) : 0;
+    if (left <= 0) return;
+    updateGl([...gl, { code, name, amount: Math.round(left * 100) / 100 }]);
+  };
   const updateLine = (idx: number, patch: Partial<GlLineDraft>) => {
-    const next = gl.map((l, i) => (i === idx ? { ...l, ...patch } : l));
-    updateGl(next);
+    updateGl(gl.map((l, i) => (i === idx ? { ...l, ...patch } : l)));
   };
   const removeLine = (idx: number) => {
-    const next = gl.filter((_, i) => i !== idx);
-    updateGl(next);
+    updateGl(gl.filter((_, i) => i !== idx));
   };
 
-  // Files.
+  const leftNow = totalNum != null ? leftToCode(totalNum, gl) : null;
+  const addedUp = addsUp(totalNum, gl);
+  // Top code for "Put the rest on {code}". Prefer the vendor's
+  // singleCodeFill; then the first already-coded line; then null.
+  const topCode: { code: string; name: string } | null =
+    usual.singleCodeFill
+      ? { code: usual.singleCodeFill.code, name: usual.singleCodeFill.name }
+      : gl.find((l) => l.code)
+        ? { code: gl.find((l) => l.code)!.code, name: gl.find((l) => l.code)!.name }
+        : null;
+
+  // ─── Files (page) ───────────────────────────────────────────────
   const [activeFileId, setActiveFileId] = useState<string | null>(initialFiles[0]?.id ?? null);
   const activeFile = useMemo(() => files.find((f) => f.id === activeFileId) ?? null, [files, activeFileId]);
+  const activeIndex = activeFile ? files.findIndex((f) => f.id === activeFile.id) : -1;
 
-  // Fetch a short-lived signed URL for just the active file. Re-fetch
-  // when the active file changes or when we are asked (handleViewExpired
-  // below). Does not refresh on rotate - rotate re-renders the same URL.
   const fetchViewUrl = useCallback(async (fileId: string) => {
     try {
-      const u = `/api/invoices/files/${encodeURIComponent(fileId)}/view?draft=${encodeURIComponent(draftId)}${asQ ? `&${asQ.slice(1)}` : ""}`;
+      const u = `/api/invoices/files/${encodeURIComponent(fileId)}/view?draft=${encodeURIComponent(draftId)}${asQAmp}`;
       const res = await fetch(u);
       if (!res.ok) return;
       const body = (await res.json()) as { url: string };
       if (body.url) setViewUrls((m) => ({ ...m, [fileId]: body.url }));
-    } catch { /* ignore - PdfPage / img onError will ask again */ }
-  }, [asQ, draftId]);
+    } catch { /* PdfPage / img onError will call back */ }
+  }, [asQAmp, draftId]);
 
   useEffect(() => {
     if (activeFileId && !viewUrls[activeFileId]) {
       void fetchViewUrl(activeFileId);
     }
-    // We intentionally only re-run on active-file change, not on
-    // viewUrls change (that would loop every time a URL lands).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeFileId]);
 
   const handleViewExpired = useCallback(() => {
-    if (activeFileId) void fetchViewUrl(activeFileId);
+    if (activeFileId) {
+      setViewUrls((m) => { const n = { ...m }; delete n[activeFileId]; return n; });
+      void fetchViewUrl(activeFileId);
+    }
   }, [activeFileId, fetchViewUrl]);
 
   const rotateActive = async () => {
     if (!activeFile || isPreview) return;
     const next = ((activeFile.rotation + 90) % 360) as 0 | 90 | 180 | 270;
-    const res = await fetch(`/api/invoices/files/${activeFile.id}${asQ ? asQ + "&" : "?"}draft=${draftId}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ rotation: next }),
-    });
+    const res = await fetch(
+      `/api/invoices/files/${activeFile.id}?draft=${draftId}${asQAmp}`,
+      { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ rotation: next }) },
+    );
     if (res.ok) {
       const out = (await res.json()) as { file: FileView };
       setFiles((fs) => fs.map((f) => (f.id === out.file.id ? out.file : f)));
+      toast("Rotated.", { tone: "ink" });
     }
   };
-  const removeActive = async () => {
+
+  const removeActive = async (): Promise<void> => {
     if (!activeFile || isPreview) return;
-    await fetch(`/api/invoices/files/${activeFile.id}/remove${asQ ? asQ + "&" : "?"}draft=${draftId}`, { method: "POST" });
-    setFiles((fs) => fs.filter((f) => f.id !== activeFile.id));
+    const snapshot = activeFile;
+    setFiles((fs) => fs.filter((f) => f.id !== snapshot.id));
     setActiveFileId((prev) => {
-      if (prev !== activeFile.id) return prev;
-      const next = files.filter((f) => f.id !== activeFile.id)[0];
+      if (prev !== snapshot.id) return prev;
+      const next = files.filter((f) => f.id !== snapshot.id)[0];
       return next?.id ?? null;
+    });
+    const res = await fetch(
+      `/api/invoices/files/${snapshot.id}/remove?draft=${draftId}${asQAmp}`,
+      { method: "POST" },
+    );
+    if (!res.ok) {
+      setFiles((fs) => [...fs, snapshot]);
+      toast("Could not remove that. Try again.", { tone: "block" });
+      return;
+    }
+    toast("File removed. What you typed is still here.", {
+      tone: "ink",
+      undo: async () => {
+        const r = await fetch(`/api/invoices/files/${snapshot.id}/unremove?draft=${draftId}${asQAmp}`, { method: "POST" });
+        if (r.ok) {
+          const out = (await r.json()) as { file: FileView };
+          setFiles((fs) => [out.file, ...fs.filter((f) => f.id !== out.file.id)]);
+          setActiveFileId(out.file.id);
+        } else {
+          toast("Could not put it back.", { tone: "block" });
+        }
+      },
     });
   };
 
-  // Check and send.
-  const [checking, setChecking] = useState(false);
-  const check = async () => {
-    setChecking(true);
-    try {
-      // Flush any pending save first so the server sees the latest.
-      if (Object.keys(stagedRef.current).length > 0) await flush();
-      const res = await fetch(`/api/invoices/drafts/${draftId}/check${asQ}`, { method: "POST" });
-      if (!res.ok) { setErrors([{ field: "files", message: "Could not run the check." }]); return; }
-      const result = (await res.json()) as CheckResult;
-      setErrors(result.errors);
-      if (result.ready) {
-        setReadyToast("Ready. Sending is switched on in the next update.");
-        setTimeout(() => setReadyToast(null), 4000);
-      }
-    } finally {
-      setChecking(false);
+  // "Add pages to it" and "Replace the file" both reuse the uploads
+  // route with this draft's id. For Replace the new file is added
+  // and confirmed first; only after the new file row lands do we
+  // mark the old one removed (correction 12).
+  const uploadOneTo = useCallback(async (f: File, mode: "add" | "replace") => {
+    const oldFile = activeFile;
+    const nameLower = f.name.toLowerCase();
+    if (f.size > 52_428_800) { toast("Over 50 MB.", { tone: "block" }); return; }
+    if (nameLower.endsWith(".heic") || nameLower.endsWith(".heif")) {
+      toast("Save it as a PDF or a JPEG and add it again.", { tone: "block" });
+      return;
     }
-  };
+    const r2 = await fetch(`/api/invoices/uploads${asQ}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ draft_id: draftId, file_name: f.name, size_bytes: f.size, mime_type_hint: f.type }),
+    });
+    if (!r2.ok) { toast("Could not prepare the upload.", { tone: "block" }); return; }
+    const slot = (await r2.json()) as { file_id: string; signed_url: string };
 
-  const canSave = !isPreview;
-  const leftNow = totalNum != null ? leftToCode(totalNum, gl) : null;
-  const addedUp = addsUp(totalNum, gl);
+    const put = await fetch(slot.signed_url, { method: "PUT", body: f, headers: { "content-type": f.type || "application/octet-stream" } });
+    if (!put.ok) { toast("Upload was cut off. Try again.", { tone: "block" }); return; }
+
+    const r4 = await fetch(`/api/invoices/files${asQ}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ draft_id: draftId, file_id: slot.file_id, file_name: f.name }),
+    });
+    if (!r4.ok) { toast("Could not read the file.", { tone: "block" }); return; }
+    const out = (await r4.json()) as { file: FileView };
+    setFiles((fs) => [...fs, out.file]);
+    if (mode === "replace" && oldFile) {
+      // New file is in place - now mark the old one removed.
+      await fetch(`/api/invoices/files/${oldFile.id}/remove?draft=${draftId}${asQAmp}`, { method: "POST" });
+      setFiles((fs) => fs.filter((f) => f.id !== oldFile.id));
+      setActiveFileId(out.file.id);
+      toast("File replaced. What you typed is still here.", { tone: "ink" });
+    } else {
+      setActiveFileId(out.file.id);
+      toast("Page added.", { tone: "ink" });
+    }
+  }, [activeFile, asQ, asQAmp, draftId]);
+
+  // ─── Check and send ─────────────────────────────────────────────
+  const invDateErrorInline =
+    invDateParsed.iso && invDateParsed.future
+      ? "That is in the future. Check the year."
+      : null;
+  const show60DayPrompt =
+    invDateParsed.iso
+    && invDateParsed.moreThan60DaysBack
+    && !draft.answers.date_confirmed_at_more_than_60_days;
 
   const invDateErr = errors.find((e) => e.field === "invoice_date" || e.field === "date_more_than_60") ?? null;
   const invNumErr = errors.find((e) => e.field === "invoice_number") ?? null;
   const totalErr = errors.find((e) => e.field === "total_amount") ?? null;
   const vendorErr = errors.find((e) => e.field === "vendor_id") ?? null;
   const codingErr = errors.find((e) => e.field === "gl_breakdown") ?? null;
-  const copyErr = errors.find((e) => e.field === "copy") ?? null;
   const fileErr = errors.find((e) => e.field === "files") ?? null;
-  const dateConfirmErr = errors.find((e) => e.field === "date_more_than_60") ?? null;
+
+  const focusField = useCallback((field: string) => {
+    switch (field) {
+      case "vendor_id": vendorButtonRef.current?.focus(); break;
+      case "invoice_number": invNumRef.current?.focus(); break;
+      case "invoice_date":
+      case "date_more_than_60":
+        invDateRef.current?.focus(); break;
+      case "total_amount": totalRef.current?.focus(); break;
+      default: sendButtonRef.current?.focus();
+    }
+  }, []);
+
+  const check = async () => {
+    if (checking) return;
+    setChecking(true);
+    try {
+      if (Object.keys(stagedRef.current).length > 0) await flush();
+      const res = await fetch(`/api/invoices/drafts/${draftId}/check${asQ}`, { method: "POST" });
+      if (!res.ok) {
+        setErrors([{ field: "files", message: "Could not run the check." }]);
+        return;
+      }
+      const result = (await res.json()) as CheckResult;
+      setErrors(result.errors);
+      setCopyMatch(result.copy_match ?? null);
+      if (result.ready) {
+        toast("Ready. Sending is switched on in the next update.", { tone: "good" });
+        if (result.next_draft_id) {
+          router.push(`/invoices?site=${siteSlug}&draft=${result.next_draft_id}${asQAmp}`);
+        } else {
+          router.push(`/invoices?site=${siteSlug}${asQAmp}`);
+        }
+      } else {
+        // Move focus to the first field in error.
+        const first = result.errors[0]?.field;
+        if (first) window.setTimeout(() => focusField(first), 0);
+      }
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  // Enter in the total box triggers Check and send (correction 12).
+  const onTotalKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void check();
+    }
+  };
+
+  const confirm60Days = () => {
+    const ans = { ...draft.answers, date_confirmed_at_more_than_60_days: true as const };
+    stage("answers", ans);
+    setDraft((d) => ({ ...d, answers: ans }));
+    window.setTimeout(() => totalRef.current?.focus(), 0);
+  };
+
+  const discard = async () => {
+    const res = await fetch(`/api/invoices/drafts/${draftId}/discard${asQ}`, { method: "POST" });
+    if (res.ok) {
+      toast("Removed.", {
+        tone: "ink",
+        undo: async () => {
+          const r = await fetch(`/api/invoices/drafts/${draftId}/undo${asQ}`, { method: "POST" });
+          if (r.ok) {
+            router.push(`/invoices?site=${siteSlug}&draft=${draftId}${asQAmp}`);
+          } else {
+            toast("Could not put it back.", { tone: "block" });
+          }
+        },
+      });
+      if (pager.nextDraftId) router.push(`/invoices?site=${siteSlug}&draft=${pager.nextDraftId}${asQAmp}`);
+      else router.push(`/invoices?site=${siteSlug}${asQAmp}`);
+    }
+  };
+
+  // C9 copy-stop block ways out.
+  const copyRemove = () => { void discard(); setCopyMatch(null); };
+  const copyDifferent = () => {
+    const ans = { ...draft.answers, is_different_invoice: true as const };
+    stage("answers", ans);
+    setDraft((d) => ({ ...d, answers: ans }));
+    setCopyMatch(null);
+    setErrors((es) => es.filter((e) => e.field !== "copy"));
+  };
+  const copyCreditFor = () => {
+    if (!copyMatch?.submission_id) return;
+    const ans = { ...draft.answers, is_credit_for: copyMatch.submission_id };
+    stage("answers", ans);
+    stage("type", "credit");
+    setDraft((d) => ({ ...d, answers: ans, type: "credit" }));
+    setCopyMatch(null);
+    setErrors((es) => es.filter((e) => e.field !== "copy"));
+  };
+
+  const canSave = !isPreview;
+
+  // ─── Render ─────────────────────────────────────────────────────
+  const saveLine =
+    saveState === "saving" ? "Saving"
+    : saveState === "offline" ? "No signal. Your typing is kept on this device."
+    : saveState === "stopped" ? "Not saved. Changes are kept on this device."
+    : "Saved";
 
   return (
     <div className="kf-invoices-surface kf-inv-sitting-wrap">
       {previewName ? <OwnerPreviewBanner name={previewName} exitHref="/invoices" /> : null}
+
+      {/* C1: slim top row (desk) + D1 phone head */}
       <div className="kf-inv-sitting__nav">
-        <span className="kf-inv-sitting__which">{vendorName ?? "Pick a vendor"} <span className="kf-inv-sitting__site">· {siteAccountKey}</span></span>
-        <div style={{ display: "flex", gap: "var(--sp-sp-2)" }}>
-          <a href={`/invoices?site=${siteSlug}${asQ ? `&${asQ.slice(1)}` : ""}`} className="kf-btn kf-btn--sm kf-btn--line">Back</a>
-          {!isPreview ? (
+        <div className="kf-inv-sitting__nav__left">
+          <Link href={`/invoices?site=${siteSlug}${asQAmp}`} className="kf-btn kf-btn--sm kf-btn--line">
+            <ChevronLeft size={16} aria-hidden /> Back
+          </Link>
+          <span className="kf-inv-sitting__nav__site">
+            <span className="kf-inv-sitting__nav__key">{siteAccountKey}</span>
+            <span className="kf-inv-sitting__nav__name">· {siteName}</span>
+          </span>
+        </div>
+        <div className="kf-inv-sitting__nav__right">
+          <span className="kf-inv-sitting__nav__pager" aria-label={`Invoice ${pager.position} of ${pager.total}`}>
+            <PagerButton to={pager.prevDraftId} siteSlug={siteSlug} asQAmp={asQAmp} label="Previous" icon={<ChevronLeft size={16} aria-hidden />} />
+            {pager.position} of {pager.total}
+            <PagerButton to={pager.nextDraftId} siteSlug={siteSlug} asQAmp={asQAmp} label="Next" icon={<ChevronRight size={16} aria-hidden />} />
+          </span>
+          <div className="kf-inv-sitting__nav__more">
             <button
+              ref={moreTriggerRef}
               type="button"
-              className="kf-btn kf-btn--sm kf-btn--ghost"
-              onClick={async () => {
-                if (!confirm("Discard this draft?")) return;
-                const res = await fetch(`/api/invoices/drafts/${draftId}/discard${asQ}`, { method: "POST" });
-                if (res.ok) router.push(`/invoices?site=${siteSlug}${asQ ? `&${asQ.slice(1)}` : ""}`);
-              }}
+              className="kf-inv-sitting__more-trigger"
+              aria-haspopup="menu"
+              aria-expanded={moreMenuOpen ? true : undefined}
+              aria-label="More for this invoice"
+              onClick={() => setMoreMenuOpen((v) => !v)}
             >
-              Discard
+              <MoreHorizontal size={18} aria-hidden />
             </button>
-          ) : null}
+            {moreMenuOpen ? (
+              <Menu
+                label="More for this invoice"
+                anchorRef={moreTriggerRef}
+                align="down-right"
+                onClose={() => setMoreMenuOpen(false)}
+                items={canSave ? [
+                  {
+                    key: "delete",
+                    label: "Delete this invoice",
+                    icon: <Trash2 size={18} aria-hidden />,
+                    destructive: true,
+                    onPick: () => void discard(),
+                  },
+                ] : []}
+              />
+            ) : null}
+          </div>
         </div>
       </div>
 
-      {saveState === "offline" ? <p className="kf-inv-sitting__hint">No signal. Your typing is kept on this device.</p> : null}
-      {saveState === "error" && copyBanner ? <p className="kf-inv-sitting__err">{copyBanner}</p> : null}
-
       <div className="kf-inv-sitting">
+        {/* C3: page box */}
         <section className="kf-inv-sitting__page">
           <div className="kf-inv-sitting__page-tools">
-            {files.length > 1 ? (
-              <select
-                value={activeFileId ?? ""}
-                onChange={(e) => setActiveFileId(e.currentTarget.value)}
-                aria-label="Pick a page"
+            <span className="kf-inv-sitting__page-tools__name">
+              {activeFile?.file_name ?? "No file yet"}
+              {files.length > 1 ? ` · Page ${activeIndex + 1} of ${files.length}` : ""}
+            </span>
+            <div className="kf-inv-sitting__page-tools__actions kf-only-desktop">
+              <button
+                type="button"
+                className="kf-btn kf-btn--sm kf-btn--line"
+                aria-pressed={zoomed ? true : undefined}
+                onClick={() => setZoomed((z) => !z)}
+                disabled={!activeFile}
               >
-                {files.map((f, i) => (
-                  <option key={f.id} value={f.id}>Page {i + 1}: {f.file_name}</option>
-                ))}
-              </select>
-            ) : null}
-            {activeFile && canSave ? (
-              <>
-                <button type="button" className="kf-btn kf-btn--sm kf-btn--line" onClick={rotateActive}>Rotate</button>
-                <button type="button" className="kf-btn kf-btn--sm kf-btn--line" onClick={removeActive}>Remove the file</button>
-              </>
-            ) : null}
+                Zoom
+              </button>
+              {canSave && activeFile ? (
+                <>
+                  <button
+                    type="button"
+                    className="kf-btn kf-btn--sm kf-btn--line"
+                    onClick={rotateActive}
+                  >
+                    <RotateCw size={14} aria-hidden /> Rotate
+                  </button>
+                  <div className="kf-inv-sitting__page-tools__menuwrap">
+                    <button
+                      ref={pageTriggerRef}
+                      type="button"
+                      className="kf-btn kf-btn--sm kf-btn--line"
+                      aria-haspopup="menu"
+                      aria-expanded={pageMenuOpen ? true : undefined}
+                      onClick={() => setPageMenuOpen((v) => !v)}
+                    >
+                      <Files size={14} aria-hidden /> Change the page
+                      <ChevronDown size={14} aria-hidden />
+                    </button>
+                    {pageMenuOpen ? (
+                      <Menu
+                        label="Change the page"
+                        anchorRef={pageTriggerRef}
+                        onClose={() => setPageMenuOpen(false)}
+                        items={[
+                          {
+                            key: "add",
+                            label: "Add pages to it",
+                            icon: <Plus size={18} aria-hidden />,
+                            onPick: () => addFileInputRef.current?.click(),
+                          },
+                          {
+                            key: "replace",
+                            label: "Replace the file",
+                            icon: <Upload size={18} aria-hidden />,
+                            onPick: () => replaceFileInputRef.current?.click(),
+                          },
+                          {
+                            key: "remove",
+                            label: "Remove the file",
+                            icon: <Trash2 size={18} aria-hidden />,
+                            destructive: true,
+                            onPick: () => void removeActive(),
+                          },
+                        ]}
+                      />
+                    ) : null}
+                  </div>
+                </>
+              ) : null}
+            </div>
+            {/* D5 phone page tools: Replace only + one-line reason */}
+            <div className="kf-inv-sitting__page-tools__actions kf-only-phone">
+              {canSave ? (
+                <button
+                  type="button"
+                  className="kf-btn kf-btn--sm kf-btn--line"
+                  onClick={() => replaceFileInputRef.current?.click()}
+                >
+                  <Upload size={14} aria-hidden /> Replace the file
+                </button>
+              ) : null}
+            </div>
           </div>
-          <div className="kf-inv-sitting__canvas">
+
+          {files.length > 1 ? (
+            <div className="kf-inv-sitting__page-pager" role="group" aria-label="Pages">
+              {files.map((f, i) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  className={`kf-inv-sitting__page-pager__btn${f.id === activeFileId ? " is-active" : ""}`}
+                  aria-current={f.id === activeFileId ? "page" : undefined}
+                  onClick={() => setActiveFileId(f.id)}
+                >
+                  {i + 1}
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          <div className={`kf-inv-sitting__canvas${zoomed ? " is-zoom" : ""}`} tabIndex={0}>
             {activeFile == null ? (
-              <p className="kf-inv-sitting__no-file">No file yet.</p>
+              <div className="kf-inv-sitting__nofile">
+                <ImageIcon size={32} strokeWidth={1.5} aria-hidden />
+                <p className="kf-inv-sitting__nofile__title">No page on this invoice</p>
+                <p className="kf-inv-sitting__hint">What you typed is still here. Add the right file to send it.</p>
+                {canSave ? (
+                  <button
+                    type="button"
+                    className="kf-btn kf-btn--primary"
+                    onClick={() => replaceFileInputRef.current?.click()}
+                  >
+                    Choose a file
+                  </button>
+                ) : null}
+              </div>
             ) : activeFile.mime_type === "application/pdf" ? (
               viewUrls[activeFile.id] ? (
-                <PdfPage
-                  url={viewUrls[activeFile.id]}
-                  rotation={activeFile.rotation}
-                  onExpired={handleViewExpired}
-                />
+                <PdfPage url={viewUrls[activeFile.id]} rotation={activeFile.rotation} onExpired={handleViewExpired} />
               ) : (
                 <p className="kf-inv-sitting__hint">Preparing the page...</p>
               )
@@ -433,128 +806,221 @@ export function CaptureSittingRoot({
               )
             )}
           </div>
+
+          <input
+            ref={addFileInputRef}
+            type="file"
+            accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const f = e.currentTarget.files?.[0];
+              if (f) void uploadOneTo(f, "add");
+              e.currentTarget.value = "";
+            }}
+          />
+          <input
+            ref={replaceFileInputRef}
+            type="file"
+            accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const f = e.currentTarget.files?.[0];
+              if (f) void uploadOneTo(f, "replace");
+              e.currentTarget.value = "";
+            }}
+          />
+
+          {/* D2 phone: "See the page" opens a full-sheet view. */}
+          <div className="kf-only-phone">
+            {activeFile ? (
+              <button
+                type="button"
+                className="kf-btn kf-btn--sm kf-btn--line kf-inv-sitting__page-full"
+                onClick={() => setPagePhoneSheetOpen(true)}
+              >
+                See the page
+              </button>
+            ) : null}
+          </div>
         </section>
 
-        <section className="kf-inv-sitting__form">
-          {/* Vendor */}
+        {/* The form */}
+        <section className="kf-inv-sitting__form kf-card">
+          {/* C4 Vendor */}
           <div className="kf-inv-sitting__field">
-            <label>Vendor</label>
+            <label htmlFor="inv-vendor">Vendor</label>
             <button
+              id="inv-vendor"
+              ref={vendorButtonRef}
               type="button"
               data-vendor
+              aria-haspopup="dialog"
               aria-invalid={vendorErr ? true : false}
               aria-describedby={vendorErr ? "err-vendor" : undefined}
               onClick={() => setPickerOpen(true)}
               disabled={isPreview}
             >
-              {vendorName ?? "Pick a vendor"}
+              {vendorName ?? "Pick the vendor"}
+              <ChevronDown size={16} aria-hidden />
             </button>
             {vendorErr ? <span id="err-vendor" className="kf-inv-sitting__err">{vendorErr.message}</span> : null}
           </div>
 
-          {/* Kind toggle */}
+          {/* C5 kind line with 48px tap area on the link */}
           <p className="kf-inv-sitting__kind">
-            {draft.type === "invoice" ? "This is an invoice. " : "This is a credit. "}
-            <button type="button" onClick={onKindFlip} disabled={isPreview}>
+            {draft.type === "invoice" ? "This is an invoice." : "This is a credit."}
+            <button type="button" className="kf-inv-sitting__kind-link" onClick={onKindFlip} disabled={isPreview}>
               {draft.type === "invoice" ? "It is a credit" : "It is an invoice"}
             </button>
           </p>
 
-          {/* Invoice number */}
+          {/* C6 number, date, total in that order */}
           <div className="kf-inv-sitting__field">
-            <label htmlFor="inv-num">Invoice number</label>
+            <label htmlFor="inv-num">{draft.type === "credit" ? "Credit number" : "Invoice number"}</label>
             <input
               id="inv-num"
+              ref={invNumRef}
               value={invNumLocal}
               onChange={(e) => onInvNumChange(e.currentTarget.value)}
               aria-invalid={invNumErr ? true : false}
               aria-describedby={invNumErr ? "err-num" : undefined}
               maxLength={50}
+              autoCapitalize="characters"
+              autoComplete="off"
               disabled={isPreview}
             />
             {invNumErr ? <span id="err-num" className="kf-inv-sitting__err">{invNumErr.message}</span> : null}
           </div>
 
-          {/* Invoice date */}
           <div className="kf-inv-sitting__field">
-            <label htmlFor="inv-date">Invoice date</label>
-            <input
-              id="inv-date"
-              value={invDateLocal}
-              onChange={(e) => onInvDateChange(e.currentTarget.value)}
-              placeholder="MM/DD/YYYY"
-              aria-invalid={invDateErr ? true : false}
-              aria-describedby={invDateErr ? "err-date" : undefined}
-              disabled={isPreview}
-            />
-            {invDateParsed.iso && invDateParsed.future ? (
-              <span id="err-date-future" className="kf-inv-sitting__err">The date is in the future.</span>
+            <label htmlFor="inv-date">{draft.type === "credit" ? "Credit date" : "Invoice date"}</label>
+            <div className="kf-inv-sitting__field-datewrap">
+              <input
+                id="inv-date"
+                ref={invDateRef}
+                value={invDateLocal}
+                onChange={(e) => onInvDateChange(e.currentTarget.value)}
+                inputMode="numeric"
+                placeholder="MM/DD/YYYY"
+                maxLength={10}
+                aria-invalid={invDateErr || invDateErrorInline ? true : false}
+                aria-describedby={invDateErr || invDateErrorInline ? "err-date" : undefined}
+                autoComplete="off"
+                disabled={isPreview}
+              />
+              <button
+                type="button"
+                className="kf-inv-sitting__field-datebtn"
+                aria-label="Pick the date on a calendar"
+                aria-haspopup="dialog"
+                aria-expanded={calOpen ? true : undefined}
+                onClick={() => setCalOpen(true)}
+                disabled={isPreview}
+              >
+                <CalIcon size={18} aria-hidden />
+              </button>
+            </div>
+            {invDateErrorInline ? (
+              <span id="err-date" className="kf-inv-sitting__err">{invDateErrorInline}</span>
+            ) : invDateErr ? (
+              <span id="err-date" className="kf-inv-sitting__err">{invDateErr.message}</span>
             ) : null}
-            {invDateParsed.iso && invDateParsed.moreThan60DaysBack && !draft.answers.date_confirmed_at_more_than_60_days ? (
-              <div className="kf-inv-sitting__err">
-                This date is more than 60 days back. Is that right?
-                <button
-                  type="button"
-                  className="kf-btn kf-btn--sm kf-btn--line"
-                  style={{ marginLeft: "var(--sp-sp-2)" }}
-                  onClick={() => {
-                    const ans = { ...draft.answers, date_confirmed_at_more_than_60_days: true as const };
-                    stage("answers", ans);
-                    setDraft((d) => ({ ...d, answers: ans }));
-                  }}
-                >
-                  Yes, it is
-                </button>
+            {/* 60-day confirmation */}
+            {show60DayPrompt ? (
+              <div className="kf-inv-sitting__sixty" role="status">
+                <p>This date is more than 60 days back. Is that right?</p>
+                <div className="kf-inv-sitting__sixty__btns">
+                  <button
+                    type="button"
+                    className="kf-btn kf-btn--sm kf-btn--primary"
+                    onClick={confirm60Days}
+                  >
+                    Yes, that is right
+                  </button>
+                  <button
+                    type="button"
+                    className="kf-btn kf-btn--sm kf-btn--line"
+                    onClick={() => invDateRef.current?.focus()}
+                  >
+                    Fix the date
+                  </button>
+                </div>
               </div>
             ) : null}
-            {invDateErr && !dateConfirmErr ? <span id="err-date" className="kf-inv-sitting__err">{invDateErr.message}</span> : null}
           </div>
 
-          {/* Total */}
           <div className="kf-inv-sitting__field">
-            <label htmlFor="inv-total">Total</label>
-            <input
-              id="inv-total"
-              value={totalLocal}
-              onChange={(e) => onTotalChange(e.currentTarget.value)}
-              placeholder="$0.00"
-              aria-invalid={totalErr ? true : false}
-              aria-describedby={totalErr ? "err-total" : undefined}
-              disabled={isPreview}
-            />
+            <label htmlFor="inv-total">{draft.type === "credit" ? "Credit total" : "Total"}</label>
+            <div className="kf-inv-sitting__money">
+              <span className="kf-inv-sitting__money__sign" aria-hidden>$</span>
+              <input
+                id="inv-total"
+                ref={totalRef}
+                value={totalLocal}
+                onChange={(e) => onTotalChange(e.currentTarget.value)}
+                onKeyDown={onTotalKeyDown}
+                onBlur={(e) => {
+                  const v = parseMoneyInput(e.currentTarget.value);
+                  if (v != null) setTotalLocal(v.toFixed(2));
+                }}
+                inputMode="decimal"
+                placeholder="0.00"
+                aria-invalid={totalErr ? true : false}
+                aria-describedby={totalErr ? "err-total" : undefined}
+                autoComplete="off"
+                disabled={isPreview}
+              />
+            </div>
             {totalParsed != null ? <span className="kf-inv-sitting__hint">{fmtUsdExact(totalParsed)}</span> : null}
             {totalErr ? <span id="err-total" className="kf-inv-sitting__err">{totalErr.message}</span> : null}
           </div>
 
-          {/* Coding */}
+          {/* C7 Coding */}
           <div className="kf-inv-sitting__coding">
-            <label>Coding</label>
-            {usual.codes.length > 0 ? (
+            <h4 className="kf-inv-sitting__coding__title">
+              {vendorName ? `Usual for ${vendorName}` : "Coding"}
+            </h4>
+            {usual.codes.length === 1 ? (
               <div className="kf-inv-sitting__coding-chips">
-                {usual.codes.slice(0, 6).map((c) => (
-                  <button
-                    key={c.code}
-                    type="button"
-                    className="kf-inv-sitting__coding-chip"
-                    onClick={() => {
-                      // "All of it to" when the chip equals singleCodeFill's code
-                      if (usual.singleCodeFill?.code === c.code && totalNum != null) {
-                        putAllToCode(c);
-                      } else {
-                        addSplitLine(c);
-                      }
-                    }}
-                    disabled={isPreview}
-                  >
-                    {c.code} · {c.name}
-                  </button>
-                ))}
+                <button
+                  type="button"
+                  className={`kf-inv-sitting__coding-chip${gl.length === 1 && gl[0].code === usual.codes[0].code && addedUp ? " is-active" : ""}`}
+                  onClick={() => putAllToCode(usual.codes[0])}
+                  disabled={isPreview}
+                >
+                  <Check size={16} aria-hidden />
+                  <span>All of it to <strong>{usual.codes[0].code}</strong> {usual.codes[0].name}</span>
+                </button>
               </div>
-            ) : null}
+            ) : usual.codes.length > 1 ? (
+              <>
+                <p className="kf-inv-sitting__hint">Usual for {vendorName}. Tap to add.</p>
+                <div className="kf-inv-sitting__coding-chips">
+                  {usual.codes.slice(0, 6).map((c) => (
+                    <button
+                      key={c.code}
+                      type="button"
+                      className={`kf-inv-sitting__coding-chip${gl.some((l) => l.code === c.code) ? " is-active" : ""}`}
+                      onClick={() => addSplitLine(c)}
+                      disabled={isPreview}
+                    >
+                      <Plus size={16} aria-hidden />
+                      <span><strong>{c.code}</strong> {c.name}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : vendorName ? (
+              <p className="kf-inv-sitting__hint">No history for this vendor here yet. Pick a code below.</p>
+            ) : (
+              <p className="kf-inv-sitting__hint">Pick the vendor to see where its invoices usually go.</p>
+            )}
+
             <div className="kf-inv-sitting__coding-rows">
               {gl.map((line, i) => (
                 <div key={i} className="kf-inv-sitting__coding-row">
                   <select
+                    aria-label={`Code, line ${i + 1}`}
                     value={line.code}
                     onChange={(e) => {
                       const code = e.currentTarget.value;
@@ -563,84 +1029,240 @@ export function CaptureSittingRoot({
                     }}
                     disabled={isPreview}
                   >
+                    <option value="">Pick a code</option>
                     {activeCodes.map((c) => (
                       <option key={c.code} value={c.code}>{c.code} · {c.name}</option>
                     ))}
                   </select>
-                  <input
-                    inputMode="decimal"
-                    value={String(line.amount)}
-                    onChange={(e) => {
-                      const amt = parseMoneyInput(e.currentTarget.value);
-                      if (amt != null) updateLine(i, { amount: amt });
-                    }}
+                  <div className="kf-inv-sitting__money kf-inv-sitting__money--sm">
+                    <span className="kf-inv-sitting__money__sign" aria-hidden>$</span>
+                    <input
+                      aria-label={`Amount, line ${i + 1}`}
+                      inputMode="decimal"
+                      value={Number.isFinite(line.amount) ? String(line.amount) : ""}
+                      onChange={(e) => {
+                        const amt = parseMoneyInput(e.currentTarget.value);
+                        updateLine(i, { amount: amt ?? 0 });
+                      }}
+                      disabled={isPreview}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    className="kf-inv-sitting__coding-row__remove"
+                    aria-label={`Remove line ${i + 1}`}
+                    onClick={() => removeLine(i)}
                     disabled={isPreview}
-                  />
-                  <button type="button" onClick={() => removeLine(i)} disabled={isPreview}>Remove</button>
+                  >
+                    <Trash2 size={16} aria-hidden />
+                  </button>
                 </div>
               ))}
             </div>
-            <p className={`kf-inv-sitting__left-to-code${leftNow === 0 ? " is-done" : (leftNow ?? 0) < 0 ? " is-over" : ""}`}>
-              {leftNow == null ? "Type the total first." : leftNow === 0 ? "Adds up" : `${fmtUsdExact(leftNow)} left to code`}
-            </p>
+
+            <div className="kf-inv-sitting__coding-add">
+              <button
+                type="button"
+                className="kf-inv-sitting__linkbtn"
+                onClick={addEmptyRow}
+                disabled={isPreview}
+              >
+                <Plus size={16} aria-hidden /> Add a code
+              </button>
+              {leftNow != null && leftNow > 0 && topCode ? (
+                <button
+                  type="button"
+                  className="kf-btn kf-btn--sm kf-btn--line"
+                  onClick={() => putRestOn(topCode.code, topCode.name)}
+                  disabled={isPreview}
+                >
+                  Put the rest, {fmtUsdExact(leftNow)}, on {topCode.code}
+                </button>
+              ) : null}
+            </div>
+
+            <div
+              className={`kf-inv-sitting__bal${leftNow === 0 ? " is-ok" : (leftNow ?? 0) < 0 ? " is-over" : ""}`}
+              aria-live="polite"
+            >
+              {leftNow == null ? (
+                <span className="kf-inv-sitting__bal__label">Type the total first.</span>
+              ) : leftNow === 0 ? (
+                <span className="kf-inv-sitting__bal__ok">
+                  <Check size={18} aria-hidden /> Adds up
+                </span>
+              ) : leftNow < 0 ? (
+                <>
+                  <span className="kf-inv-sitting__bal__label">Over by</span>
+                  <span className="kf-inv-sitting__bal__n">{fmtUsdExact(-leftNow)}</span>
+                </>
+              ) : (
+                <>
+                  <span className="kf-inv-sitting__bal__n">{fmtUsdExact(leftNow)}</span>
+                  <span className="kf-inv-sitting__bal__label">left to code</span>
+                </>
+              )}
+            </div>
+
             {codingErr ? <span className="kf-inv-sitting__err">{codingErr.message}</span> : null}
           </div>
 
-          {/* Files */}
-          <div className="kf-inv-sitting__coding">
-            <label>Files</label>
-            <ul className="kf-inv-sitting__files">
-              {files.map((f) => (
-                <li
-                  key={f.id}
-                  className={`kf-inv-sitting__file${f.id === activeFileId ? " is-active" : ""}`}
-                >
-                  <button type="button" className="kf-btn kf-btn--ghost kf-btn--sm" onClick={() => setActiveFileId(f.id)}>
-                    {f.file_name}
+          {/* C8 lines note */}
+          <p className="kf-inv-sitting__hint">Lines are read after it is sent.</p>
+
+          {/* C9 Duplicate stop block */}
+          {copyMatch ? (
+            <aside
+              className="kf-inv-sitting__copystop"
+              role="group"
+              aria-label="Possible copy"
+            >
+              <p className="kf-inv-sitting__copystop__title">
+                {copyMatch.kind === "same_invoice"
+                  ? "You already sent this one"
+                  : "You already have this one in your drafts"}
+              </p>
+              <p>
+                {copyMatch.vendor_name ?? "The same vendor"}
+                {copyMatch.invoice_number ? ` #${copyMatch.invoice_number}` : ""}
+                {copyMatch.kind === "same_invoice" && copyMatch.invoice_date
+                  ? ` on ${fmtDate(copyMatch.invoice_date, "short")}` : ""}
+                .
+              </p>
+              <div className="kf-inv-sitting__copystop__btns">
+                <button type="button" className="kf-btn kf-btn--line" onClick={copyRemove}>
+                  Remove this one
+                </button>
+                <button type="button" className="kf-btn kf-btn--ghost" onClick={copyDifferent}>
+                  It is a different invoice
+                </button>
+                {copyMatch.kind === "same_invoice" && copyMatch.submission_id ? (
+                  <button type="button" className="kf-btn kf-btn--ghost" onClick={copyCreditFor}>
+                    It is the credit for that invoice
                   </button>
-                  <span>{f.page_count != null ? `${f.page_count} ${f.page_count === 1 ? "page" : "pages"}` : "?"}</span>
+                ) : null}
+              </div>
+            </aside>
+          ) : null}
+
+          {/* C10 Error list (above the button) */}
+          {errors.length > 0 && !copyMatch ? (
+            <ul className="kf-inv-sitting__errs" role="alert">
+              {errors.map((e, i) => (
+                <li key={i}>
+                  <button
+                    type="button"
+                    className="kf-inv-sitting__errs__item"
+                    onClick={() => focusField(e.field)}
+                  >
+                    <AlertTriangle size={16} aria-hidden /> {e.message}
+                  </button>
                 </li>
               ))}
             </ul>
-            {fileErr ? <span className="kf-inv-sitting__err">{fileErr.message}</span> : null}
-          </div>
+          ) : null}
 
-          {/* Copy banner */}
-          {copyErr ? <p className="kf-inv-sitting__err">{copyErr.message}</p> : null}
-
-          {/* Actions */}
+          {/* C11 Check and send + C13 save line */}
           <div className="kf-inv-sitting__actions">
             <button
+              ref={sendButtonRef}
               type="button"
               className="kf-btn kf-btn--primary"
-              onClick={check}
+              onClick={() => void check()}
               disabled={checking || isPreview}
+              aria-live="polite"
             >
-              {checking ? "Checking..." : "Check and send"}
+              {checking ? "Checking" : "Check and send"}
             </button>
-            <span className="kf-inv-sitting__hint">
-              {saveState === "saving" ? "Saving..." : saveState === "offline" ? "No signal" : "Saved"}
-              {addedUp && totalNum != null ? " · Adds up" : ""}
+            <span className={`kf-inv-sitting__saveline${saveState === "stopped" ? " is-bad" : ""}`}>
+              {saveLine}
             </span>
           </div>
-          <p className="kf-inv-sitting__hint">Lines are read after it is sent.</p>
+          {fileErr ? <span className="kf-inv-sitting__err">{fileErr.message}</span> : null}
         </section>
       </div>
+
+      {/* Calendar: desk popover + phone full-sheet, same Calendar
+          component inside. Correction 7 + D7. */}
+      {calOpen ? (
+        <Sheet
+          title="Pick the date"
+          onClose={() => setCalOpen(false)}
+          variant="centered"
+        >
+          <InvCalendar
+            selectedIso={invDateParsed.iso ?? draft.invoice_date}
+            onPick={pickCalendarDate}
+          />
+        </Sheet>
+      ) : null}
 
       {pickerOpen ? (
         <VendorPicker
           siteSlug={siteSlug}
           asParam={asParam}
+          currentVendorId={draft.vendor_id}
           onPick={(v) => void onVendorPicked(v)}
           onClose={() => setPickerOpen(false)}
         />
       ) : null}
 
-      {readyToast ? (
-        <div className="kf-invoices-preview" role="status" style={{ position: "fixed", bottom: 24, right: 24, zIndex: 100 }}>
-          <span className="kf-invoices-preview__name">{readyToast}</span>
-        </div>
+      {/* D2 phone page sheet */}
+      {pagePhoneSheetOpen && activeFile ? (
+        <Sheet
+          title="The page"
+          onClose={() => setPagePhoneSheetOpen(false)}
+          variant="fullsheet"
+        >
+          <div className={`kf-inv-sitting__canvas${zoomed ? " is-zoom" : ""}`} tabIndex={0}>
+            {activeFile.mime_type === "application/pdf" ? (
+              viewUrls[activeFile.id] ? (
+                <PdfPage url={viewUrls[activeFile.id]} rotation={activeFile.rotation} onExpired={handleViewExpired} />
+              ) : (
+                <p className="kf-inv-sitting__hint">Preparing the page...</p>
+              )
+            ) : (
+              viewUrls[activeFile.id] ? (
+                <img src={viewUrls[activeFile.id]} alt="Invoice page" style={{ transform: `rotate(${activeFile.rotation}deg)` }} onError={handleViewExpired} />
+              ) : (
+                <p className="kf-inv-sitting__hint">Preparing the page...</p>
+              )
+            )}
+          </div>
+          <p className="kf-inv-sitting__hint">To add, turn or remove pages, use a computer.</p>
+        </Sheet>
       ) : null}
     </div>
+  );
+}
+
+function PagerButton({
+  to,
+  siteSlug,
+  asQAmp,
+  label,
+  icon,
+}: {
+  to: string | null;
+  siteSlug: string;
+  asQAmp: string;
+  label: string;
+  icon: React.ReactNode;
+}) {
+  if (!to) {
+    return (
+      <span className="kf-inv-sitting__nav__pager-btn is-off" aria-hidden>
+        {icon}
+      </span>
+    );
+  }
+  return (
+    <Link
+      className="kf-inv-sitting__nav__pager-btn"
+      href={`/invoices?site=${siteSlug}&draft=${to}${asQAmp}`}
+      aria-label={label}
+    >
+      {icon}
+    </Link>
   );
 }

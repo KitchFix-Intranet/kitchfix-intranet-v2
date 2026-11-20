@@ -23,7 +23,7 @@ import { resolveInvoiceScope, sitesInScope, isManySites } from "@/lib/invoices/s
 import { slugToAccountKey, accountKeyToSlug } from "@/lib/invoices/slug";
 import { isInvoiceAdmin } from "@/lib/invoices/load";
 import {
-  listDraftsForOwnerSite, toDraftView,
+  listDraftsForOwnerSite, listDraftsForOwnerSiteFixedOrder, toDraftView,
   getDraftById, listFilesForDraft, toFileView,
 } from "@/lib/invoices/draftLoad";
 import { buildDraftListView } from "@/lib/invoices/draftListView";
@@ -140,12 +140,13 @@ export default async function Page({
       redirect(`/invoices?site=${slug}${asParam ? `&as=${encodeURIComponent(asParam)}` : ""}`);
     }
 
-    const [files, codes, vendorRow] = await Promise.all([
+    const [files, codes, vendorRow, fixedOrder] = await Promise.all([
       listFilesForDraft(sb, ownerEmail, draft.id),
       loadActiveCodesForSite(sb, accountKey),
       draft.vendor_id
         ? sb.from("vendors").select("name").eq("id", draft.vendor_id).maybeSingle()
         : Promise.resolve({ data: null, error: null } as { data: { name: string } | null; error: null }),
+      listDraftsForOwnerSiteFixedOrder(sb, ownerEmail, accountKey),
     ]);
     const vendorName = (vendorRow.data as { name: string } | null)?.name ?? null;
     const liveFiles = files.filter((f) => f.removed_at == null);
@@ -157,6 +158,13 @@ export default async function Page({
       ? await loadUsualCodes(sb, accountKey, draft.vendor_id, activeSet)
       : { codes: [], singleCodeFill: null, sampleSize: 0 };
 
+    // C1 pager: N-of-M over the fixed-order list of this (owner,
+    // site)'s drafts.
+    const totalInSitting = fixedOrder.length;
+    const idx = Math.max(0, fixedOrder.findIndex((d) => d.id === draft.id));
+    const prevDraftId = idx > 0 ? fixedOrder[idx - 1].id : null;
+    const nextDraftId = idx >= 0 && idx < totalInSitting - 1 ? fixedOrder[idx + 1].id : null;
+
     return (
       <CaptureSittingRoot
         initialDraft={toDraftView(draft)}
@@ -166,9 +174,16 @@ export default async function Page({
         initialUsual={usual}
         siteSlug={slug}
         siteAccountKey={accountKey}
+        siteName={siteName}
         asParam={asParam}
         previewName={previewName}
         isPreview={isPreview}
+        pager={{
+          position: idx + 1,
+          total: totalInSitting,
+          prevDraftId,
+          nextDraftId,
+        }}
       />
     );
   }
