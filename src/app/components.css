@@ -428,8 +428,17 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--sp-navy); }
 /* ---------- Control (train 5a) ---------- */
 /* The shared control shape every select / numeric input inside Stockpot
  * uses. 44 px high, body-sized type, 12 px rounded corners, line-field
- * border. select.kf-ctl leaves room for the native caret on the right. */
-.kf-ctl {
+ * border. select.kf-ctl leaves room for the native caret on the right.
+ *
+ * Train 5a R2: scoped to `.kf-labelled .kf-ctl` because the plain
+ * `.kf-ctl` collided on phone with the review card's pre-existing
+ * `.kf-rvc__panel-form .kf-ctl { height: 44px }` - the phone bump
+ * `min-height: 48px` was overriding the fixed 44 px and growing
+ * controls inside the New ingredient panel. Every new `.kf-ctl` use
+ * lands inside a `.kf-labelled` label (SortMenu's labelled select,
+ * Vendor items' Vendor picker), so this scope matches the real uses
+ * and leaves the review card untouched. */
+.kf-labelled .kf-ctl {
   min-height: var(--sp-floor-corp);
   padding: 0 var(--sp-sp-3);
   border: 1px solid var(--sp-line-field);
@@ -440,13 +449,13 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--sp-navy); }
   color: var(--sp-ink);
   max-width: 100%;
 }
-select.kf-ctl { padding-right: var(--sp-sp-6); }
-.kf-ctl:disabled {
+.kf-labelled select.kf-ctl { padding-right: var(--sp-sp-6); }
+.kf-labelled .kf-ctl:disabled {
   background: var(--sp-raise);
   color: var(--sp-muted);
 }
 @media (max-width: 860px) {
-  .kf-ctl { min-height: var(--sp-floor-chef); }
+  .kf-labelled .kf-ctl { min-height: var(--sp-floor-chef); }
 }
 
 /* ---------- Search (train 5a) ---------- */

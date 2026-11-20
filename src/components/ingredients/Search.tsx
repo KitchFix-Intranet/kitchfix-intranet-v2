@@ -59,6 +59,22 @@ export function Search(props: SearchProps) {
   );
   const value = props.kind === "controlled" ? props.value : internal;
 
+  // Train 5a R2 / fix 2: the box must always show the search the
+  // address holds. `lastCommittedRef` tracks what we last pushed
+  // upstream so the next `initial` change is classifiable:
+  //   - if it equals lastCommitted, the URL is catching up with
+  //     our own debounced commit; leave `internal` alone (the user
+  //     is still typing in a newer string).
+  //   - if it differs, the address changed from outside this box
+  //     (Back / Forward, a link, a clear-from-elsewhere). Reset
+  //     `internal` to the new initial and align lastCommitted.
+  // Enter, the clear button and the three keystrokes a one-shot
+  // commit cycle both go through `commitNow()` so lastCommitted is
+  // always in step.
+  const lastCommittedRef = useRef<string>(
+    props.kind === "debounced" ? props.initial : "",
+  );
+
   // Keep local state in sync with a controlled parent (back/forward
   // navigation can swap the value underneath).
   useEffect(() => {
@@ -66,12 +82,25 @@ export function Search(props: SearchProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.kind === "controlled" ? props.value : undefined]);
 
+  // Train 5a R2 / fix 2: watch `initial` in debounced mode. On
+  // external change, match the box to the address.
+  useEffect(() => {
+    if (props.kind !== "debounced") return;
+    if (props.initial === lastCommittedRef.current) return;
+    lastCommittedRef.current = props.initial;
+    setInternal(props.initial);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.kind === "debounced" ? props.initial : undefined]);
+
   // Debounced commit.
   useEffect(() => {
     if (props.kind !== "debounced") return;
     const ms = props.debounceMs ?? 250;
     const h = window.setTimeout(() => {
-      if (internal !== props.initial) props.onCommit(internal);
+      if (internal !== lastCommittedRef.current) {
+        lastCommittedRef.current = internal;
+        props.onCommit(internal);
+      }
     }, ms);
     return () => window.clearTimeout(h);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -107,6 +136,7 @@ export function Search(props: SearchProps) {
       props.onChange("");
     } else {
       setInternal("");
+      lastCommittedRef.current = "";
       props.onCommit("");
     }
   }
@@ -132,6 +162,7 @@ export function Search(props: SearchProps) {
             }
           } else if (e.key === "Enter" && props.kind === "debounced") {
             e.preventDefault();
+            lastCommittedRef.current = internal;
             props.onCommit(internal);
           }
         }}
