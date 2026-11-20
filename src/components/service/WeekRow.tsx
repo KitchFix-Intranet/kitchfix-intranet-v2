@@ -25,7 +25,7 @@ import { shortDollarsFromCents } from "@/lib/sc/calendar/billable";
 import { fmtDate, fmtCount } from "@/lib/fmt";
 
 export function WeekRow({
-  week, isCurrent, isBilled, foldableShort, foldablePhone, dayHrefs,
+  week, isCurrent, isBilled, foldableShort, foldablePhone, dayHrefs, reviewHref,
 }: {
   week: WeekView;
   isCurrent: boolean;
@@ -37,6 +37,10 @@ export function WeekRow({
   // boundary. An iso missing from the map means the cell stays
   // non-interactive.
   dayHrefs: Record<string, string>;
+  // Train 3: the week's "Check and submit" link (or "See what was
+  // submitted" when the week has a live finalize row). Null when the
+  // week should not expose a review link (e.g. a week with no service).
+  reviewHref: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const foldable = foldableShort || foldablePhone;
@@ -131,6 +135,17 @@ export function WeekRow({
         <p className="kf-sc-wkrow__phone-open-sub">
           {[dollarsLabel, phaseLabel].filter(Boolean).join(" · ")}
         </p>
+      ) : null}
+
+      {/* Train 3: Check-and-submit link. On a submitted week the
+       * same link reads "See what was submitted". Null when there
+       * is no review to run (no service; not started yet). */}
+      {reviewHref ? (
+        <a href={reviewHref} className="kf-sc-wkrow__review">
+          {week.state === "submitted" || week.state === "push_failed"
+            ? "See what was submitted"
+            : "Check and submit"}
+        </a>
       ) : null}
 
       <ol className="kf-sc-wkrow__days" role="list">

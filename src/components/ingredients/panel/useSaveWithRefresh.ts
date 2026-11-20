@@ -1,72 +1,54 @@
 "use client";
 
-// T4 §3: one shared helper so "Saved" and the new number arrive
-// together. Before T4 every save called `toast("Saved")` then
-// `onDone()` -> `router.refresh()`; the toast fired immediately, the
-// number moved about 1.6s later. The pattern below keeps the control
-// in its busy state until the refreshed server data has rendered, and
-// fires the success toast at that moment.
+// The one save path for the Stockpot lane. Every save in list A of
+// train 2's Part 1 report reaches the server through this hook so the
+// save rule holds across editors, row buttons and long jobs:
 //
-// Pattern:
-//   const { save, busy, savedAt, error } = useSaveWithRefresh();
-//   await save({
-//     op: () => postJson("/api/review/set-grade", { itemId, grade }),
-//     successMessage: "Saved: grade",
-//     onDone,                        // invalidate upstream (ItemPanelById re-fetch)
-//     onAfterSuccess: dropParents,   // optional side effect (cache drop)
-//   });
+//   - the control always comes back (no more "Saving..." for good);
+//   - what was typed stays (the editor does not unmount on failure);
+//   - words beside the control say what did not happen, from one
+//     vocabulary in panel/common.ts::saveErrorSentence;
+//   - no status numbers and no code names on the page;
+//   - no block toast for a failure whose control is still on the page
+//     (the caller renders the sentence in place);
+//   - a second press while saving does nothing;
+//   - trying again works from the same open editor.
 //
-// `busy` combines the local in-flight flag AND useTransition's
-// isPending so the primary stays "Saving..." through both the POST
-// and the refresh. `savedAt` and `error` feed <SaveFlash /> unchanged.
-//
-// Error path releases the control immediately with the error toast
-// (same contract the old code had).
+// Long jobs (matcher, intake, backfills, the one-time migrate) pass
+// `timeoutMs: null` into their op so the 30 s timeout does not apply.
 
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/ui/Toaster";
+import { saveErrorSentence } from "./common";
+import type { SaveOutcome } from "./common";
 
-// The POST returns an unknown body; callers that need a shape cast it
-// in the two callbacks (successMessage, onAfterSuccess, fireSuccessToast)
-// the same way the old inline saves did. No new unsafe casts in the
-// hook itself.
-type SaveOp = () => Promise<{ ok: boolean; status: number; data: unknown }>;
+type SaveOp = () => Promise<SaveOutcome>;
 
 export type SaveOptions = {
   op: SaveOp;
-  // Message to toast once the refreshed data has rendered. String or
-  // a function of the response body (same options the old inline
-  // toast() calls had). Ignored when `fireSuccessToast` is supplied.
+  // Fired once the refreshed data has rendered. String or a function
+  // of the response body (merge, create, etc. all read a count out of
+  // the server echo).
   successMessage: string | ((data: unknown) => string);
-  // Fallback error text when the server body does not carry one. The
-  // hook still appends the HTTP status when it fires the fallback.
+  // Legacy prop from the pre-T2 helper. T2 §1 replaces the per-site
+  // "Save failed (status)" fallback with one vocabulary in
+  // panel/common.ts::saveErrorSentence; accepting the field keeps old
+  // callers compiling while the sentence is ignored.
   errorFallback?: string;
-  // Caller's existing onDone (ItemPanelById's invalidate; DetailPanel's
-  // router.refresh() passthrough; etc.). Fired AFTER the POST ok but
-  // BEFORE the transition - so the refresh picks up the write.
+  // Caller's existing onDone (the panel's refresh invalidator; etc.).
+  // Fired AFTER ok but BEFORE the transition so the refresh picks up
+  // the write.
   onDone?: () => void;
-  // Optional side effect run on success BEFORE the refresh starts
-  // (e.g. dropParents() after a create/rename/merge).
+  // Optional side effect run on success BEFORE the refresh (e.g.
+  // dropParents() after a create/rename/merge).
   onAfterSuccess?: (data: unknown) => void;
-  // Optional toast tone override for success.
+  // Optional success tone.
   toastTone?: "good" | "block" | "ink";
-  // Optional escape hatch for callers whose success toast carries
-  // options the simple string API cannot express (merge: undo).
-  // When provided, the hook calls this at the moment the refreshed
-  // data has rendered instead of firing its own toast; the plain
-  // `successMessage` is still used as a stable fallback string so
-  // the caller does not have to rebuild it inside the callback.
+  // Escape hatch when the success toast carries Undo or other options
+  // the plain-string API cannot express.
   fireSuccessToast?: (data: unknown, message: string) => void;
 };
-
-function errMsg(data: unknown, fallback: string): string {
-  if (data && typeof data === "object" && "error" in data) {
-    const e = (data as { error?: unknown }).error;
-    if (typeof e === "string") return e;
-  }
-  return fallback;
-}
 
 export function useSaveWithRefresh() {
   const router = useRouter();
@@ -75,12 +57,6 @@ export function useSaveWithRefresh() {
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Toast queue: when a save succeeds we set `pendingToast` + start the
-  // refresh transition. The effect below watches `isPending` and, when
-  // it goes from true back to false, fires the toast + stamps savedAt
-  // + releases the control. That is the moment the new server data
-  // has rendered into the tree - the user sees the toast and the new
-  // number together.
   const pendingToast = useRef<{
     message: string;
     tone?: "good" | "block" | "ink";
@@ -104,13 +80,29 @@ export function useSaveWithRefresh() {
 
   const save = useCallback(
     async (opts: SaveOptions): Promise<{ ok: boolean; data: unknown }> => {
+      // Rule: "A second press while saving does nothing." The hook's
+      // own `busy` already disables the control; this guard catches a
+      // race where a caller races two save() calls without reading
+      // busy.
+      if (busyLocal || isPending) return { ok: false, data: null };
       setBusyLocal(true);
       setError(null);
-      const r = await opts.op();
-      if (!r.ok) {
-        const msg = errMsg(r.data, opts.errorFallback ?? `Save failed (${r.status})`);
+      // T2 round 2 §5: defence in depth. Every op today is the
+      // shared postJson which does not throw, but a future caller
+      // could wrap it; a thrown op must still release the control
+      // and show the no-reply sentence.
+      let r: SaveOutcome;
+      try {
+        r = await opts.op();
+      } catch {
+        const msg = "Could not reach the server. Nothing was saved.";
         setError(msg);
-        toast(msg, { tone: "block" });
+        setBusyLocal(false);
+        return { ok: false, data: null };
+      }
+      if (!r.ok) {
+        const msg = saveErrorSentence(r) ?? "Nothing was saved.";
+        setError(msg);
         setBusyLocal(false);
         return { ok: false, data: null };
       }
@@ -131,7 +123,7 @@ export function useSaveWithRefresh() {
       });
       return { ok: true, data: r.data };
     },
-    [router],
+    [router, busyLocal, isPending]
   );
 
   return {
@@ -139,8 +131,8 @@ export function useSaveWithRefresh() {
     busy: busyLocal || isPending,
     savedAt,
     error,
-    // Exposed so blocks that need a manual error reset (Cancel) can
-    // clear it without a save.
+    // Callers whose Cancel resets a draft also want to clear the
+    // in-place error without firing a save.
     clearError: () => setError(null),
   };
 }

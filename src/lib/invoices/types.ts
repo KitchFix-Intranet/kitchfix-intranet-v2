@@ -138,3 +138,127 @@ export interface ChipCounts {
 export interface SiteFixCounts {
   byAccountKey: Record<string, number>;
 }
+
+// ─── Train 2: Capture ────────────────────────────────────────────
+
+// invoice_drafts.status. Train 2 only writes 'draft' and 'discarded';
+// 'sent' is train 3's. The DB check ties status='sent' to submission_id.
+export type DraftStatus = "draft" | "sent" | "discarded";
+
+// invoice_drafts.screen - the no-names signal.
+export type DraftScreen = "desk" | "phone";
+
+// How a draft reaches the client. owner_email and uploaded_by never
+// leave the server; the client gets `is_mine` only.
+export interface DraftRow {
+  id: string;
+  account_key: string;
+  owner_email: string;             // server only
+  vendor_id: string | null;
+  type: InvoiceKind;
+  invoice_number: string | null;
+  invoice_date: string | null;
+  total_amount: number | null;
+  gl_breakdown: GlLineDraft[];
+  answers: DraftAnswers;
+  screen: DraftScreen | null;
+  status: DraftStatus;
+  submission_id: string | null;
+  created_at: string;
+  updated_at: string;
+  discarded_at: string | null;
+}
+
+// Client-safe view of a draft. No owner_email.
+export interface DraftView {
+  id: string;
+  account_key: string;
+  vendor_id: string | null;
+  type: InvoiceKind;
+  invoice_number: string | null;
+  invoice_date: string | null;
+  total_amount: number | null;
+  gl_breakdown: GlLineDraft[];
+  answers: DraftAnswers;
+  screen: DraftScreen | null;
+  status: DraftStatus;
+  submission_id: string | null;
+  created_at: string;
+  updated_at: string;              // the If-Match concurrency key
+  discarded_at: string | null;
+}
+
+// GL line on a draft. Train 2 stores amount as entered (positive);
+// train 3 owns the credit sign.
+export interface GlLineDraft {
+  code: string;
+  name: string;
+  amount: number;
+}
+
+// Answers to one-time questions the server keeps on the draft.
+// Shape is open; these keys are the only ones this train reads/writes.
+export interface DraftAnswers {
+  // STOP question: "This date is N days back. Is that right?"
+  date_confirmed_at_more_than_60_days?: true;
+  // Copy-check answers (user chose one):
+  is_different_invoice?: true;
+  is_credit_for?: string;          // submission_id of the originating invoice
+}
+
+// invoice_files row + client view.
+export interface FileRow {
+  id: string;
+  draft_id: string | null;
+  submission_id: string | null;
+  kind: "original" | "outbound";
+  storage_path: string;
+  file_name: string;
+  mime_type: string;
+  size_bytes: number;
+  sha256: string;
+  page_count: number | null;
+  sort_order: number;
+  rotation: 0 | 90 | 180 | 270;
+  uploaded_by: string;             // server only
+  created_at: string;
+  removed_at: string | null;
+}
+
+export interface FileView {
+  id: string;
+  draft_id: string;
+  file_name: string;
+  mime_type: string;
+  size_bytes: number;
+  page_count: number | null;
+  sort_order: number;
+  rotation: 0 | 90 | 180 | 270;
+  created_at: string;
+  removed_at: string | null;
+  // sha256 is deliberately absent from the client view - internal.
+}
+
+// Server-side check result for the "Check and send" path. Train 2
+// does not send; Ready is the only outcome the client needs.
+export interface CheckResult {
+  ready: boolean;
+  errors: ReadonlyArray<CheckError>;
+}
+
+export interface CheckError {
+  // field hint for focus-on-error. 'files' = no file attached; 'coding'
+  // = adds-up mismatch or unknown code; 'copy' = copy check failed.
+  field:
+    | "vendor_id"
+    | "type"
+    | "invoice_number"
+    | "invoice_date"
+    | "total_amount"
+    | "gl_breakdown"
+    | "files"
+    | "copy"
+    | "date_more_than_60";
+  message: string;
+}
+

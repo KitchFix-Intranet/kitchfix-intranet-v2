@@ -1,12 +1,12 @@
 -- Invoices V2 - the review flag (lane master, ruling 9)
 -- Written by Chat-Claude on 2026-11-17. Kevin applies it in Supabase Studio.
 -- CC never runs this file. It is in the repo as the record of what was applied.
+-- Names removed from this record on 2026-11-17. The applied statements are unchanged.
 --
 -- What it does, in plain words:
 --   Marks five people as invoice reviewers by setting people.is_invoice_admin
---   to true: Joshua Katt, Joseph Lessard, Brittany Chernikovich, Kevin Fietek
---   and Sebastian Castro. In V2 this one flag means "sees every site's
---   invoices and can review them". Nothing else is changed.
+--   to true. In V2 this one flag means "sees every site's invoices and can
+--   review them". Nothing else is changed.
 --
 -- What it does not do:
 --   No table, column or permission is added. No other row is touched.
@@ -26,11 +26,11 @@ select count(*) as flagged_now from people where is_invoice_admin is true;
 select worker_id, display_name, title, status, is_invoice_admin
 from people
 where worker_id in (
-  '5c13e30292dabb4b9cc1078e',  -- Joshua Katt
-  '5c13e30129624856a64d4fa6',  -- Joseph Lessard
-  '5c13e301c592912c3a7afea4',  -- Brittany Chernikovich
-  '6418e1e52a44e07c8b303f7b',  -- Kevin Fietek
-  '5e53e9313ca04e6e44ba3165'   -- Sebastian Castro
+  '5c13e30292dabb4b9cc1078e',
+  '5c13e30129624856a64d4fa6',
+  '5c13e301c592912c3a7afea4',
+  '6418e1e52a44e07c8b303f7b',
+  '5e53e9313ca04e6e44ba3165'
 )
 order by display_name;
 

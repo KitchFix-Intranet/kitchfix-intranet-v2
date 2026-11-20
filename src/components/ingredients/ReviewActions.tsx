@@ -7,7 +7,7 @@
 // every item row carries a visible checkbox now (ReviewCard owns the
 // per-row rendering).
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Check, X as XIcon, Ban, ShoppingBag, Archive, Loader2, Clock,
@@ -21,6 +21,8 @@ import {
 import { uomLabel } from "@/lib/ingredients/pack";
 import { canonicalIngredientName } from "@/lib/ingredients/nameNorm";
 import { IngredientTypeahead, formatIngredientMeta } from "./IngredientTypeahead";
+import { postJson, saveErrorSentence } from "./panel/common";
+import { anyDirty, discardAll, DirtyScopeProvider, useDirtyEditor } from "./panel/dirty";
 
 // Kept exported so other call sites that import it keep compiling even
 // though ReviewCard no longer passes a memberItems prop.
@@ -91,23 +93,12 @@ type Props = {
 // lands on the Relink panel's primary, not on the bar's Confirm.
 type Op = null | "confirming" | "relinking" | "relinkandconfirm" | "creating" | "notfood" | "resale" | "archived" | "oneoff" | "keepsep" | "flag";
 
-async function postJson(url: string, body: unknown): Promise<{ ok: boolean; status: number; data: unknown }> {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  let data: unknown = null;
-  try { data = await res.json(); } catch { /* ignore */ }
-  return { ok: res.ok, status: res.status, data };
-}
+// T2 §1: ReviewActions now goes through the shared postJson in
+// ./panel/common, so a dropped connection is a caught outcome and
+// the three failure sentences come from one vocabulary. The local
+// copy is retired; the toast / in-panel error paths below call
+// saveErrorSentence(r) to produce the words.
 
-function errMsg(data: unknown, fallback: string): string {
-  if (data && typeof data === "object" && "error" in data && typeof (data as { error?: unknown }).error === "string") {
-    return (data as { error: string }).error;
-  }
-  return fallback;
-}
 
 // N4: Create-success toasts that name a master append the inferred
 // unit when it is not the common-case default "each". Keeps the usual
@@ -139,6 +130,12 @@ export function ReviewActions({
 }: Props) {
   const router = useRouter();
   const [op, setOp] = useState<Op>(null);
+  // T2 round 2 §3-§4: each card has its own dirty-registry scope.
+  // Relink + New-ingredient panels both live inside this card, so
+  // they share the one scope. useId() gives us a React-stable string
+  // across renders and between cards.
+  const scopeBase = useId();
+  const dirtyScope = `rvc-${scopeBase}`;
   // Shared save-status strip. `lastDone` is the clock stamp of the
   // most recent successful action; a 2.5s window after that renders
   // the inline "Done" chip. The strip renders "Saving..." any time
@@ -192,6 +189,53 @@ export function ReviewActions({
   // or next submit. Renders the error band above the foot.
   const [relinkError, setRelinkError] = useState<string | null>(null);
   const [newError, setNewError] = useState<string | null>(null);
+
+  // T2 round 2 §3: the review-card panels register their drafts with
+  // the card's dirty scope so Esc + the panel's Cancel ask "Discard
+  // what you typed?" when anything has been typed. Discard resets
+  // the fields and closes the panel.
+  useDirtyEditor(
+    "relink",
+    showRelink && relinkId != null && op === null,
+    () => {
+      setRelinkId(null);
+      setRelinkError(null);
+      setShowRelink(false);
+    },
+    dirtyScope
+  );
+  const newInitialSuper: SuperCategory | "" = splitSourceIng
+    ? (((splitSourceIng.category as SuperCategory | null) ?? "") as SuperCategory | "")
+    : ((categoryForParent(proposedParent) as SuperCategory | null) ?? "");
+  const newInitialSub = splitSourceIng?.parent ?? proposedParent ?? "";
+  const newIsDirty =
+    showNew && op === null && (
+      newName.trim() !== (proposedName ?? "").trim() ||
+      newSuper !== newInitialSuper ||
+      subMode === "new" ||
+      subPick !== newInitialSub ||
+      subNew.trim().length > 0
+    );
+  useDirtyEditor(
+    "new",
+    newIsDirty,
+    () => {
+      setNewName(proposedName ?? "");
+      setNewSuper(newInitialSuper);
+      setSubMode("pick");
+      setSubPick(newInitialSub);
+      setSubNew("");
+      setNewError(null);
+      setShowNew(false);
+    },
+    dirtyScope
+  );
+
+  // T2 §5: batch-flag in-page note form (replaces the former
+  // window.prompt). Open on Flag click; Save posts; Cancel closes.
+  const [flagFormOpen, setFlagFormOpen] = useState(false);
+  const [flagNote, setFlagNote] = useState("");
+  const [flagError, setFlagError] = useState<string | null>(null);
   // N3: why the user opened the create panel. "confirm" is the plain
   // + Create flow (default). "retail" is set only by the markResale
   // fallback below when it cannot post directly (name < 2 chars or
@@ -284,7 +328,7 @@ export function ReviewActions({
       itemIds: checkedIds,
     });
     if (!r.ok) {
-      toast(errMsg(r.data, `Confirm failed (${r.status})`), { tone: "block" });
+      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
       setOp(null);
       return;
     }
@@ -299,10 +343,17 @@ export function ReviewActions({
       {
         tone: "good",
         undo: async () => {
+          // T2 round 2 §1: a silent-fail loop. Collect the failures
+          // and refresh so what really came back is on the page; if
+          // any item failed, throw so the toaster says the undo did
+          // not finish.
+          const failures: string[] = [];
           for (const id of confirmedIds) {
-            await postJson("/api/review/undo", { itemId: id });
+            const u = await postJson("/api/review/undo", { itemId: id });
+            if (!u.ok) failures.push(saveErrorSentence(u) ?? "Nothing was saved.");
           }
           router.refresh();
+          if (failures.length > 0) throw new Error(failures[0]);
         },
       }
     );
@@ -325,7 +376,7 @@ export function ReviewActions({
     if (op || noneChecked || !relinkId) return;
     setRelinkError(null);
     setOp("relinking");
-    let r: { ok: boolean; status: number; data: unknown };
+    let r: Awaited<ReturnType<typeof postJson>>;
     try {
       r = await postJson("/api/review/relink", {
         ingredientId: relinkId,
@@ -339,7 +390,7 @@ export function ReviewActions({
       return;
     }
     if (!r.ok) {
-      const msg = errMsg(r.data, `Relink failed (${r.status})`);
+      const msg = saveErrorSentence(r) ?? "Nothing was saved.";
       setRelinkError(msg);
       toast(msg, { tone: "block" });
       setOp(null);
@@ -371,7 +422,7 @@ export function ReviewActions({
     if (op || noneChecked || !relinkId) return;
     setRelinkError(null);
     setOp("relinkandconfirm");
-    let r: { ok: boolean; status: number; data: unknown };
+    let r: Awaited<ReturnType<typeof postJson>>;
     try {
       r = await postJson("/api/review/confirm", {
         ingredientId: relinkId,
@@ -385,7 +436,7 @@ export function ReviewActions({
       return;
     }
     if (!r.ok) {
-      const msg = errMsg(r.data, `Save failed (${r.status})`);
+      const msg = saveErrorSentence(r) ?? "Nothing was saved.";
       setRelinkError(msg);
       toast(msg, { tone: "block" });
       setOp(null);
@@ -405,10 +456,16 @@ export function ReviewActions({
       : `Confirmed ${fmtCount(d.confirmed ?? checkedCount)} items on ${targetName}`;
     toast(baseMsg, {
       undo: async () => {
+        // T2 round 2 §1: same loop, same aggregation as the Confirm
+        // undo above. Refresh so the page shows what came back;
+        // throw on any failure so the toaster announces.
+        const failures: string[] = [];
         for (const id of confirmedIds) {
-          await postJson("/api/review/undo", { itemId: id });
+          const u = await postJson("/api/review/undo", { itemId: id });
+          if (!u.ok) failures.push(saveErrorSentence(u) ?? "Nothing was saved.");
         }
         router.refresh();
+        if (failures.length > 0) throw new Error(failures[0]);
       },
     });
     setShowRelink(false);
@@ -453,7 +510,7 @@ export function ReviewActions({
     // N10 round 2 fix 10: panel submits catch network throws so a
     // dropped connection does not leave the panel on "Saving..."
     // forever. Other handlers are untouched.
-    let r: { ok: boolean; status: number; data: unknown };
+    let r: Awaited<ReturnType<typeof postJson>>;
     try {
       r = await postJson("/api/review/new-ingredient", {
       name,
@@ -481,7 +538,7 @@ export function ReviewActions({
       return;
     }
     if (!r.ok) {
-      const msg = errMsg(r.data, `Save failed (${r.status})`);
+      const msg = saveErrorSentence(r) ?? "Nothing was saved.";
       setNewError(msg);
       toast(msg, { tone: "block" });
       setOp(null);
@@ -540,7 +597,7 @@ export function ReviewActions({
     setOp("notfood");
     const r = await postJson("/api/review/not-food", { itemIds: checkedIds });
     if (!r.ok) {
-      toast(errMsg(r.data, `Mark failed (${r.status})`), { tone: "block" });
+      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
       setOp(null);
       return;
     }
@@ -574,7 +631,7 @@ export function ReviewActions({
     setOp("oneoff");
     const r = await postJson("/api/review/one-off", { itemIds: checkedIds });
     if (!r.ok) {
-      toast(errMsg(r.data, `Mark failed (${r.status})`), { tone: "block" });
+      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
       setOp(null);
       return;
     }
@@ -643,7 +700,7 @@ export function ReviewActions({
         resale: true,
       });
       if (!r.ok) {
-        toast(errMsg(r.data, `Mark failed (${r.status})`), { tone: "block" });
+        toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
         setOp(null);
         return;
       }
@@ -681,7 +738,7 @@ export function ReviewActions({
       itemIds: checkedIds,
     });
     if (!r.ok) {
-      toast(errMsg(r.data, `Mark failed (${r.status})`), { tone: "block" });
+      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
       setOp(null);
       return;
     }
@@ -710,7 +767,7 @@ export function ReviewActions({
     setOp("archived");
     const r = await postJson("/api/review/archive", { itemIds: checkedIds });
     if (!r.ok) {
-      toast(errMsg(r.data, `Mark failed (${r.status})`), { tone: "block" });
+      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
       setOp(null);
       return;
     }
@@ -733,28 +790,33 @@ export function ReviewActions({
   // Flag. Orthogonal to disposition - doesn't move anything, just
   // stamps flagged/flag_note/flagged_by/flagged_at. A follow-up
   // reviewer sees these on the Overview flagged panel. Unflag/resolve
-  // happens from that panel. Prompts for an optional short note.
-  async function flagChecked() {
+  // happens from that panel. T2 §5: the former window.prompt is now
+  // an in-page note form (see the render below); flagSave posts the
+  // chosen note.
+  function openFlagForm() {
     if (op || noneChecked) return;
-    // eslint-disable-next-line no-alert
-    const note = window.prompt(
-      `Flag ${checkedCount} item${checkedCount === 1 ? "" : "s"} for a second look. Optional note:`,
-      ""
-    );
-    if (note === null) return; // user cancelled
+    setFlagError(null);
+    setFlagNote("");
+    setFlagFormOpen(true);
+  }
+  async function flagSave() {
+    if (op || noneChecked) return;
     setOp("flag");
+    setFlagError(null);
     const r = await postJson("/api/review/flag", {
       itemIds: checkedIds,
       flagged: true,
-      note: note.trim() || null,
+      note: flagNote.trim() || null,
     });
     if (!r.ok) {
-      toast(errMsg(r.data, `Flag failed (${r.status})`), { tone: "block" });
+      setFlagError(saveErrorSentence(r) ?? "Nothing was saved.");
       setOp(null);
       return;
     }
     toast(`Flagged ${fmtCount(checkedCount)} item${checkedCount === 1 ? "" : "s"} for review`);
     setOp(null);
+    setFlagFormOpen(false);
+    setFlagNote("");
     setLastDone(Date.now());
     router.refresh();
   }
@@ -764,7 +826,7 @@ export function ReviewActions({
     setOp("keepsep");
     const r = await postJson("/api/review/keep-separate", { itemIds: checkedIds });
     if (!r.ok) {
-      toast(errMsg(r.data, `Mark failed (${r.status})`), { tone: "block" });
+      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
       setOp(null);
       return;
     }
@@ -861,11 +923,67 @@ export function ReviewActions({
           type="button"
           className={`kf-btn kf-btn--ghost kf-btn--sm${op === "flag" ? " is-busy" : ""}`}
           disabled={op !== null || noneChecked}
-          onClick={flagChecked}
+          onClick={openFlagForm}
           title="Mark for a second look (optional note); stays in the queue, shows on the Overview flagged panel"
         >
           {op === "flag" ? "Saving..." : "Flag"}
         </button>
+        {flagFormOpen ? (
+          <div className="kf-ing-note-form" role="group" aria-label="Flag note">
+            <label className="kf-ing-note-form__label" htmlFor="rvc-flag-note">
+              {`Flag ${checkedCount} item${checkedCount === 1 ? "" : "s"} for a second look. Optional note:`}
+            </label>
+            <input
+              id="rvc-flag-note"
+              type="text"
+              className="kf-ing-note-form__input"
+              value={flagNote}
+              onChange={(e) => setFlagNote(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setFlagFormOpen(false);
+                  setFlagNote("");
+                  setFlagError(null);
+                } else if (e.key === "Enter") {
+                  e.preventDefault();
+                  flagSave();
+                }
+              }}
+              disabled={op === "flag"}
+              placeholder="(optional)"
+              autoFocus
+            />
+            <div className="kf-ing-note-form__actions">
+              <button
+                type="button"
+                className={`kf-btn kf-btn--primary kf-btn--sm${op === "flag" ? " is-busy" : ""}`}
+                disabled={op === "flag"}
+                onClick={flagSave}
+              >
+                {op === "flag" ? "Saving..." : "Flag"}
+              </button>
+              <button
+                type="button"
+                className="kf-btn kf-btn--line kf-btn--sm"
+                disabled={op === "flag"}
+                onClick={() => {
+                  setFlagFormOpen(false);
+                  setFlagNote("");
+                  setFlagError(null);
+                }}
+              >
+                Cancel
+              </button>
+              {flagError ? (
+                <span className="kf-dpn__flash kf-dpn__flash--err" role="alert">
+                  {flagError}
+                </span>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
 
         {/* Divider before "not for recipes" group. */}
         <span className="kf-rvc__actions-sep" aria-hidden />
@@ -960,6 +1078,7 @@ export function ReviewActions({
           }}
           onPrimary={relinkAndConfirm}
           onQuietLink={relinkChecked}
+          scope={dirtyScope}
         />
       ) : null}
 
@@ -1000,6 +1119,7 @@ export function ReviewActions({
           }}
           onPrimary={() => doCreateSplit(true)}
           onQuietLink={() => doCreateSplit(false)}
+          scope={dirtyScope}
         />
       ) : null}
     </div>
@@ -1023,26 +1143,48 @@ function ReviewCardPanelShell({
   foot,
   onClose,
   busy,
+  scope,
 }: {
   title: string;
   retailPill?: boolean;
   body: React.ReactNode;
   error: string | null;
-  foot: React.ReactNode;
+  // T2 round 2 §3: foot is a render prop so the shell can hand its
+  // own tryClose to every Cancel button. Callers that do not need it
+  // can ignore the argument.
+  foot: (tryClose: () => void) => React.ReactNode;
   onClose: () => void;
   busy: boolean;
+  // T2 round 2 §3-§4: the scope this panel's typed fields register
+  // under. tryClose checks anyDirty(scope); Discard calls
+  // discardAll(scope).
+  scope: string;
 }) {
+  const [askOpen, setAskOpen] = useState(false);
+  const keepRef = useRef<HTMLButtonElement>(null);
+  const tryClose = () => {
+    if (anyDirty(scope)) {
+      setAskOpen(true);
+      return;
+    }
+    onClose();
+  };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (e.defaultPrevented) return; // R1: typeahead already handled it
       if (busy) return;
       e.preventDefault();
-      onClose();
+      tryClose();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onClose, busy]);
+    // tryClose closes over scope + onClose + busy; re-register when any change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onClose, busy, scope]);
+  useEffect(() => {
+    if (askOpen) keepRef.current?.focus();
+  }, [askOpen]);
 
   return (
     <div className="kf-rvc__panel" role="group" aria-label={title}>
@@ -1052,14 +1194,16 @@ function ReviewCardPanelShell({
         <button
           type="button"
           className="kf-rvc__panel-close"
-          onClick={onClose}
+          onClick={tryClose}
           disabled={busy}
           aria-label="Close panel"
         >
           <XIcon size={18} strokeWidth={1.5} aria-hidden />
         </button>
       </div>
-      <div className="kf-rvc__panel-body">{body}</div>
+      <DirtyScopeProvider scope={scope}>
+        <div className="kf-rvc__panel-body">{body}</div>
+      </DirtyScopeProvider>
       {error ? (
         <div className="kf-rvc__panel-err" role="alert">
           <AlertOctagon size={18} strokeWidth={1.75} aria-hidden />
@@ -1068,7 +1212,34 @@ function ReviewCardPanelShell({
           </span>
         </div>
       ) : null}
-      <div className="kf-rvc__panel-foot">{foot}</div>
+      <div className="kf-rvc__panel-foot">{foot(tryClose)}</div>
+      {askOpen ? (
+        <div className="kf-rvc__panel-ask" role="alertdialog" aria-modal="true">
+          <h5>Discard what you typed?</h5>
+          <p>Your changes have not been saved.</p>
+          <div className="kf-rvc__panel-ask-actions">
+            <button
+              ref={keepRef}
+              type="button"
+              className="kf-btn kf-btn--primary kf-btn--sm"
+              onClick={() => setAskOpen(false)}
+            >
+              Keep editing
+            </button>
+            <button
+              type="button"
+              className="kf-btn kf-btn--line kf-btn--sm"
+              onClick={() => {
+                discardAll(scope);
+                setAskOpen(false);
+                onClose();
+              }}
+            >
+              Discard
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1255,6 +1426,7 @@ function RelinkPanel({
   onClose,
   onPrimary,
   onQuietLink,
+  scope,
 }: {
   ingredients: Ingredient[];
   currentIngredientId: string | null;
@@ -1271,6 +1443,7 @@ function RelinkPanel({
   onClose: () => void;
   onPrimary: () => void;
   onQuietLink: () => void;
+  scope: string;
 }) {
   const picked = pickedId ? ingredients.find((i) => i.id === pickedId) ?? null : null;
   // N10 round 2 fix 4: when Change clears the pick, the typeahead
@@ -1354,7 +1527,8 @@ function RelinkPanel({
         </>
       }
       error={error}
-      foot={
+      scope={scope}
+      foot={(tryClose) => (
         <>
           <button
             type="button"
@@ -1367,7 +1541,7 @@ function RelinkPanel({
           <button
             type="button"
             className="kf-btn kf-btn--ghost kf-btn--sm"
-            onClick={onClose}
+            onClick={tryClose}
             disabled={busy}
           >
             Cancel
@@ -1384,7 +1558,7 @@ function RelinkPanel({
               : `Relink and confirm ${fmtCount(checkedCount)} item${checkedCount === 1 ? "" : "s"}`}
           </button>
         </>
-      }
+      )}
       onClose={onClose}
       busy={busy}
     />
@@ -1422,6 +1596,7 @@ function NewIngredientPanel({
   onClose,
   onPrimary,
   onQuietLink,
+  scope,
 }: {
   intent: "confirm" | "retail";
   newName: string;
@@ -1452,6 +1627,7 @@ function NewIngredientPanel({
   onClose: () => void;
   onPrimary: () => void;
   onQuietLink: () => void;
+  scope: string;
 }) {
   const busy = op !== null;
   const matchDisabled = nameMatch != null;
@@ -1637,7 +1813,8 @@ function NewIngredientPanel({
         </>
       }
       error={error}
-      foot={
+      scope={scope}
+      foot={(tryClose) => (
         <>
           {intent !== "retail" ? (
             <button
@@ -1652,7 +1829,7 @@ function NewIngredientPanel({
           <button
             type="button"
             className="kf-btn kf-btn--ghost kf-btn--sm"
-            onClick={onClose}
+            onClick={tryClose}
             disabled={busy}
           >
             Cancel
@@ -1666,7 +1843,7 @@ function NewIngredientPanel({
             {primaryLabel}
           </button>
         </>
-      }
+      )}
       onClose={onClose}
       busy={busy}
     />

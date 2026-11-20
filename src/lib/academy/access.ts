@@ -41,6 +41,69 @@ import { resolveAcademyIdentity, type AcademyIdentity } from "./identity";
 
 export type ViewerRole = "owner" | "lead" | "learner" | "denied";
 
+// ---------------------------------------------------------------------
+// Document reader levels - the "may this viewer read this document"
+// rule, in one place.
+//
+// Levels (coarse to fine, so a third one below can slot in later
+// without touching callers):
+//
+//   reads_all           - every live document, restricted or not.
+//                         Owners only, per Kevin's ruling for L1.
+//
+//   reads_unrestricted  - only live documents whose access_level is
+//                         exactly 'unrestricted'. Every other signed-
+//                         in person the app gate lets in - region
+//                         leads and library_admin / academy_admin
+//                         grant holders included. Lifting them back
+//                         to reads_all is a later ruling, not L1.
+//
+// Future: a third, lower level will sit beneath reads_unrestricted
+// for the phone-link audience once that train lands. Callers do not
+// need to change; only the enum widens and resolveReaderLevel grows
+// one branch. The same shape lets a later ruling lift region leads
+// or grant holders back into reads_all without touching the loaders.
+// ---------------------------------------------------------------------
+
+export type ReaderLevel = "reads_all" | "reads_unrestricted";
+
+/**
+ * Decide the viewer's reader level.
+ *
+ *   reads_all when:
+ *     - email is in OWNER_EMAILS.
+ *
+ *   reads_unrestricted otherwise.
+ *
+ * `identity` is accepted (and still typed) so a later ruling can
+ * widen the rule - lifting region leads (identity.scope.kind ===
+ * "region") or library_admin / academy_admin grant holders
+ * (identity.grants) back into reads_all - without changing callers.
+ * For L1 the identity parameter is intentionally unused on the
+ * non-owner path.
+ */
+export function resolveReaderLevel(
+  email: string,
+  _identity: AcademyIdentity | null,
+): ReaderLevel {
+  const e = String(email || "").trim().toLowerCase();
+  if (e && ownerEmails().has(e)) return "reads_all";
+  return "reads_unrestricted";
+}
+
+/**
+ * The one rule, in one place. Fails closed - a null or unknown
+ * access_level counts as restricted. Callers pass the viewer's
+ * level and the document's stored access_level string.
+ */
+export function canReadDocument(
+  level: ReaderLevel,
+  access_level: string | null | undefined,
+): boolean {
+  if (level === "reads_all") return true;
+  return access_level === "unrestricted";
+}
+
 export interface ViewerAccess {
   email: string;
   role: ViewerRole;

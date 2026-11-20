@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, useSyncExternalStore } from "react";
-import { Check } from "lucide-react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { Check, X as XIcon } from "lucide-react";
 
 type ToastTone = "ink" | "block" | "good";
 type Toast = {
@@ -9,16 +9,15 @@ type Toast = {
   message: string;
   tone: ToastTone;
   undo?: () => void | Promise<void>;
-  leaving?: boolean;
 };
 
 type Store = {
-  toasts: Toast[];
+  current: Toast | null;
   listeners: Set<() => void>;
   nextId: number;
 };
 
-const store: Store = { toasts: [], listeners: new Set(), nextId: 1 };
+const store: Store = { current: null, listeners: new Set(), nextId: 1 };
 
 function subscribe(fn: () => void) {
   store.listeners.add(fn);
@@ -26,26 +25,21 @@ function subscribe(fn: () => void) {
     store.listeners.delete(fn);
   };
 }
-function getSnapshot() {
-  return store.toasts;
+function getSnapshot(): Toast | null {
+  return store.current;
+}
+function getServerSnapshot(): Toast | null {
+  return null;
 }
 function emit() {
   for (const fn of store.listeners) fn();
 }
-function push(t: Toast) {
-  store.toasts = [...store.toasts, t];
+function setCurrent(next: Toast | null) {
+  store.current = next;
   emit();
-  const id = t.id;
-  // Mark leaving first so the exit keyframe plays, then remove.
-  const EXIT_MS = 200;
-  window.setTimeout(() => {
-    store.toasts = store.toasts.map((x) => (x.id === id ? { ...x, leaving: true } : x));
-    emit();
-    window.setTimeout(() => {
-      store.toasts = store.toasts.filter((x) => x.id !== id);
-      emit();
-    }, EXIT_MS);
-  }, 6000 - EXIT_MS);
+}
+function dismiss(id: number) {
+  if (store.current?.id === id) setCurrent(null);
 }
 
 export function toast(
@@ -53,7 +47,7 @@ export function toast(
   options: { tone?: ToastTone; undo?: () => void | Promise<void> } = {}
 ) {
   if (typeof window === "undefined") return;
-  push({
+  setCurrent({
     id: store.nextId++,
     message,
     tone: options.tone ?? "ink",
@@ -61,50 +55,138 @@ export function toast(
   });
 }
 
+// Two live regions sit in the document from the first paint, empty. A toast
+// with tone === "block" renders into the assertive region (role="alert");
+// everything else goes into the polite region (role="status"). The regions
+// are always present so a screen reader does not miss the first message.
 export function Toaster() {
-  const toasts = useSyncExternalStore(subscribe, getSnapshot, () => [] as Toast[]);
-  if (toasts.length === 0) return null;
+  const current = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  const politeToast = current && current.tone !== "block" ? current : null;
+  const alertToast = current && current.tone === "block" ? current : null;
   return (
-    <div className="kf-toaster" aria-live="polite" role="status">
-      {toasts.map((t) => (
-        <ToastView
-          key={t.id}
-          toast={t}
-          onDismiss={() => {
-            store.toasts = store.toasts.filter((x) => x.id !== t.id);
-            emit();
-          }}
-        />
-      ))}
+    <div className="kf-toaster">
+      <div className="kf-toaster__region" role="status" aria-live="polite">
+        {politeToast ? <ToastView key={politeToast.id} toast={politeToast} /> : null}
+      </div>
+      <div className="kf-toaster__region" role="alert" aria-live="assertive">
+        {alertToast ? <ToastView key={alertToast.id} toast={alertToast} /> : null}
+      </div>
     </div>
   );
 }
 
-function ToastView({ toast: t, onDismiss }: { toast: Toast; onDismiss: () => void }) {
-  const [busy, setBusy] = useState(false);
+function ToastView({ toast: t }: { toast: Toast }) {
+  const [undoing, setUndoing] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const hoverRef = useRef(false);
+  const focusRef = useRef(false);
+  const undoingRef = useRef(false);
+  const timerRef = useRef<number | null>(null);
+  const startedAtRef = useRef<number | null>(null);
+  const remainingRef = useRef<number>(t.undo ? 10000 : 6000);
+  const syncRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const paused = () => hoverRef.current || focusRef.current || undoingRef.current;
+    const clear = () => {
+      if (timerRef.current !== null) {
+        window.clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+    const sync = () => {
+      if (paused()) {
+        if (timerRef.current !== null && startedAtRef.current !== null) {
+          remainingRef.current = Math.max(
+            0,
+            remainingRef.current - (Date.now() - startedAtRef.current)
+          );
+        }
+        clear();
+      } else if (timerRef.current === null && remainingRef.current > 0) {
+        startedAtRef.current = Date.now();
+        timerRef.current = window.setTimeout(() => {
+          timerRef.current = null;
+          dismiss(t.id);
+        }, remainingRef.current);
+      }
+    };
+    syncRef.current = sync;
+
+    const onEnter = () => {
+      hoverRef.current = true;
+      sync();
+    };
+    const onLeave = () => {
+      hoverRef.current = false;
+      sync();
+    };
+    const onFocusIn = () => {
+      focusRef.current = true;
+      sync();
+    };
+    const onFocusOut = (e: FocusEvent) => {
+      if (el.contains(e.relatedTarget as Node | null)) return;
+      focusRef.current = false;
+      sync();
+    };
+    el.addEventListener("mouseenter", onEnter);
+    el.addEventListener("mouseleave", onLeave);
+    el.addEventListener("focusin", onFocusIn);
+    el.addEventListener("focusout", onFocusOut);
+    sync();
+    return () => {
+      clear();
+      el.removeEventListener("mouseenter", onEnter);
+      el.removeEventListener("mouseleave", onLeave);
+      el.removeEventListener("focusin", onFocusIn);
+      el.removeEventListener("focusout", onFocusOut);
+    };
+  }, [t.id]);
+
+  useEffect(() => {
+    undoingRef.current = undoing;
+    syncRef.current();
+  }, [undoing]);
+
   const toneClass =
     t.tone === "block" ? " kf-toast--block" : t.tone === "good" ? " kf-toast--good" : "";
+  const runUndo = async () => {
+    if (!t.undo) return;
+    setUndoing(true);
+    try {
+      await t.undo();
+      dismiss(t.id);
+    } catch {
+      toast("The undo did not finish. Check it before you go on.", { tone: "block" });
+    } finally {
+      setUndoing(false);
+    }
+  };
   return (
-    <div className={`kf-toast${toneClass}${t.leaving ? " is-leaving" : ""}`}>
+    <div className={`kf-toast${toneClass}`} ref={rootRef}>
       {t.tone === "good" ? <Check size={16} strokeWidth={2.5} aria-hidden /> : null}
       <span>{t.message}</span>
       {t.undo ? (
         <button
           type="button"
           className="kf-toast__undo"
-          disabled={busy}
-          onClick={async () => {
-            try {
-              setBusy(true);
-              await t.undo?.();
-            } finally {
-              onDismiss();
-            }
-          }}
+          disabled={undoing}
+          onClick={runUndo}
         >
           Undo
         </button>
       ) : null}
+      <button
+        type="button"
+        className="kf-toast__x"
+        aria-label="Dismiss"
+        onClick={() => dismiss(t.id)}
+      >
+        <XIcon size={16} strokeWidth={2} aria-hidden />
+      </button>
     </div>
   );
 }

@@ -1,11 +1,23 @@
+import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { requireAppAccess } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
 import { currentPeriod } from "@/lib/fiscalPeriod";
-import { fmtDate } from "@/lib/fmt";
+import { fmtDate, nameFromEmail } from "@/lib/fmt";
 import { Shell } from "@/components/shell/Shell";
 import { RevealGate } from "@/components/ui/RevealGate";
+import { tabTitleFor } from "@/components/shell/routeTitles";
 import { resolveAcademyIdentity } from "@/lib/academy/identity";
+
+// Full-load browser-tab title. Shares tabTitleFor() with the client-side
+// TabTitle island so both prongs produce the same string. Reads x-pathname
+// (set by the middleware); the x-invoke-path fallback preserves the same
+// defence this file's shell-patch-3 fix already relies on.
+export async function generateMetadata(): Promise<Metadata> {
+  const h = await headers();
+  const pathname = h.get("x-pathname") ?? h.get("x-invoke-path") ?? "/";
+  return { title: tabTitleFor(pathname) };
+}
 
 // Shell patch 3 (2026-11-12): the topbar title + crumb map moved to
 // src/components/shell/routeTitles.tsx. Shell.tsx now owns the
@@ -33,14 +45,21 @@ export default async function ShellLayout({
   const { email, role } = await requireAppAccess(pathname);
 
   // Pull the user's display name once at the layout boundary so Shell can
-  // render it in the account button and Home can read it in its band.
+  // render it in the account button. The shell never sees the address -
+  // when pr_users.name is missing we derive a name from the local part on
+  // the server (same helper Home uses for its greeting) and pass only the
+  // result down. Section 6: nothing that carries a person's address
+  // reaches the browser unless the screen needs it; this screen does not.
   const client = serviceClient();
   const { data: userRow } = await client
     .from("pr_users")
     .select("name")
     .eq("email", email)
     .maybeSingle();
-  const name = (userRow as { name: string | null } | null)?.name ?? "";
+  const dbName = (userRow as { name: string | null } | null)?.name ?? "";
+  const derived = nameFromEmail(email);
+  // Account row fallback: "Account" when the derivation yields "there".
+  const name = dbName && dbName.length > 0 ? dbName : derived === "there" ? "Account" : derived;
 
   const period = await currentPeriod();
   const dateLong = fmtDate(new Date().toISOString(), "long");
@@ -87,7 +106,6 @@ export default async function ShellLayout({
 
   return (
     <Shell
-      email={email}
       name={name}
       dateLong={dateLong}
       periodTag={periodTag}

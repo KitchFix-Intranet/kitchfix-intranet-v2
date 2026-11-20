@@ -11,6 +11,7 @@ import { useRouter } from "next/navigation";
 import { Play, Check, AlertTriangle } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount } from "@/lib/fmt";
+import { postJson, saveErrorSentence } from "./panel/common";
 
 type Counts = { ok: number; check: number; none: number; skipped: number; nameMatched?: number };
 
@@ -41,25 +42,17 @@ export function PackBackfillButton() {
       error?: string;
     };
     for (let safety = 0; safety < 1000; safety += 1) {
-      let data: Resp | null = null;
-      let status = 0;
-      try {
-        const res = await fetch("/api/admin/pack-backfill", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ offset }),
-        });
-        status = res.status;
-        data = (await res.json().catch(() => null)) as Resp | null;
-        if (!res.ok || !data?.ok) {
-          const msg = data?.error ?? `Backfill failed (${status})`;
-          toast(msg, { tone: "block" });
-          setState({ kind: "error", message: msg, processed: total, counts: sum });
-          return;
-        }
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        toast(msg, { tone: "block" });
+      // T2 §1 long-job path: no 30 s cap (each batch can hold the
+      // connection past the default); dropped connection and 5xx
+      // reach the error branch below with one of the three sentences.
+      const r = await postJson(
+        "/api/admin/pack-backfill",
+        { offset },
+        { timeoutMs: null }
+      );
+      const data = (r.data ?? null) as Resp | null;
+      if (!r.ok || !data?.ok) {
+        const msg = saveErrorSentence(r) ?? "Nothing was saved.";
         setState({ kind: "error", message: msg, processed: total, counts: sum });
         return;
       }

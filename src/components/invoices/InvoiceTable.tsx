@@ -1,12 +1,20 @@
 // The desktop invoice table. Server-rendered. 48px rows, fixed
-// layout, sticky header. Whole-row-clickable through <RowOpen>; the
-// vendor cell holds a real button for the keyboard. "Credit" word
-// precedes credit-row numbers (no second minus - credits already
-// store negative).
+// layout, sticky header. Whole-row-clickable through <TableRowOpen>;
+// the vendor cell holds a real button for the keyboard. "Credit"
+// word precedes credit-row numbers (no second minus - credits
+// already store negative).
 //
-// Column sets:
-//   One site: Vendor, Invoice, Invoice date, Sent, Total, Status
-//   Many sites: Site, Vendor, Invoice, Sent, Total, Status
+// Column widths (fix pass 1, Chat-Claude ruling for a 940 px
+// container):
+//   Many-site: Site 100, Vendor fluid, Invoice 196, Sent 150,
+//              Total 116, Status 172
+//   One-site:  Vendor fluid, Invoice 196, Invoice date 112,
+//              Sent 104, Total 116, Status 172
+//
+// Status and Total never clip. Invoice numbers past what 196 holds
+// ellipsis with the full value in `title` and in the drawer. Vendor
+// names ellipsis with the full value in the button's `title` and in
+// the drawer.
 
 import { fmtDate } from "@/lib/fmt";
 import { fmtUsdExact } from "@/lib/invoices/money";
@@ -31,13 +39,13 @@ export function InvoiceTable({
     <div className="kf-invoices-tablewrap">
       <table className="kf-invoices-table">
         <colgroup>
-          {manySites ? <col style={{ width: "128px" }} /> : null}
+          {manySites ? <col style={{ width: "100px" }} /> : null}
           <col />
-          <col style={{ width: "160px" }} />
-          {!manySites ? <col style={{ width: "120px" }} /> : null}
-          <col style={{ width: "160px" }} />
-          <col style={{ width: "120px" }} />
-          <col style={{ width: "148px" }} />
+          <col style={{ width: "196px" }} />
+          {!manySites ? <col style={{ width: "112px" }} /> : null}
+          <col style={{ width: manySites ? "150px" : "104px" }} />
+          <col style={{ width: "116px" }} />
+          <col style={{ width: "172px" }} />
         </colgroup>
         <thead>
           <tr>
@@ -64,7 +72,10 @@ export function InvoiceTable({
                 <td className="kf-invoices-tcell kf-invoices-tcell--vendor">
                   <RowVendorButton invId={r.id} href={href} vendorName={r.vendorName} />
                 </td>
-                <td className="kf-invoices-tcell kf-invoices-tcell--num kf-invoices-tcell--invnum">
+                <td
+                  className="kf-invoices-tcell kf-invoices-tcell--num kf-invoices-tcell--invnum"
+                  title={invLabel}
+                >
                   {invLabel}
                 </td>
                 {!manySites ? (

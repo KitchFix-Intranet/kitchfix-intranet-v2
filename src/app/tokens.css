@@ -29,6 +29,9 @@
   --sp-good-on-navy:#8FD3B4;
   --sp-bad-on-navy:#FF9D94;
   --sp-floor-chef:48px; --sp-floor-corp:44px;
+  --sp-w-regular:400; --sp-w-semi:600; --sp-w-bold:700; --sp-w-heavy:800;
+  --sp-lh-flat:1; --sp-lh-tight:1.1; --sp-lh-snug:1.3; --sp-lh-body:1.5;
+  --sp-z-skip:100;
   color-scheme:light}
 *:focus-visible{outline:2px solid var(--sp-navy);outline-offset:2px}
 @media (prefers-reduced-motion:reduce){:root{--sp-fast:0ms;--sp-base:0ms;--sp-slow:0ms;--sp-rise:0ms;--sp-stagger:0ms}}

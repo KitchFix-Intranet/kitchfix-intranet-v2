@@ -1,6 +1,8 @@
 import { ReservedDoor } from "@/components/reserved/ReservedDoor";
+import { requireOwnerPage } from "@/lib/gate";
 
-export default function Page() {
+export default async function Page() {
+  await requireOwnerPage();
   return (
     <ReservedDoor
       slug="kpi"

@@ -130,3 +130,111 @@ fields: `last_seen_at`, `started_at`, `rendered_at`, `issued_at`,
 `attempted_at`, and `module.questions[*].options` order (shuffled
 server-side per request). Any other difference between v1 and v2 on
 the same email is a port error.
+
+## Library: the may-read rule
+
+Every Library read path answers "may this viewer read this document?"
+through one function in `src/lib/academy/access.ts`:
+
+    resolveReaderLevel(email, identity) -> "reads_all" | "reads_unrestricted"
+    canReadDocument(level, access_level) -> boolean
+
+Reader levels (coarse to fine, so a third one can slot in below
+without touching callers):
+
+- `reads_all`          - owner only, per Kevin's ruling 2026-11-17.
+                         Region leads and `library_admin` /
+                         `academy_admin` grant holders read the 70
+                         unrestricted documents like everyone else.
+                         Lifting them back to reads_all is a later
+                         ruling, not L1.
+- `reads_unrestricted` - every other signed-in person the app gate
+                         lets in - region leads and the two admin
+                         grant holders included. Fails closed: a
+                         null or unknown `access_level` is treated
+                         as restricted.
+
+`loadLibrary`, `loadLibraryIndex` and `loadDocument` all enforce it
+server-side; a restricted row never reaches the client payload for a
+viewer whose level is `reads_unrestricted`. `loadDocument` runs a
+stage-1 gate fetch (`id, status, access_level` only) before fetching
+title / card_line / summary / content / siblings / attestations, so a
+restricted doc's row and content are never read for a viewer who may
+not read it. For such a viewer, `/library/<id>` serves the kept-for
+state built from the shared `.kf-empty` primitive - the number only,
+no title, card_line, summary, owner, approver, dates, contents list
+or body.
+
+`resolveReaderLevel` still accepts `identity` so a later ruling can
+widen the rule without changing callers: lifting
+`identity.scope.kind === "region"` or `library_admin` /
+`academy_admin` grant holders into `reads_all` is a one-branch edit
+inside this file. A future `reads_operator` level will sit below
+`reads_unrestricted` for `audience='operator'` documents once the
+phone link ships; the enum widens, callers do not.
+
+The Academy readers (`room`, `records`, `module`, `sign`, the
+certificate route) do not yet filter by `access_level`; a restricted
+doc can surface to a non-owner through the requirement-assignment
+channel if one is ever assigned. An access-level gate at
+cycle-publish time (or per-surface) is a follow-up train.
+
+## Library: the bookcase
+
+`/library` is one landing page - IdentBand (desktop) or a plain phone
+heading, then a search field, a sticky shelf list, and the shelves of
+tiles - all fed by one `loadLibrary` in `src/lib/academy/library.ts`
+(the L1 split into `loadLibrary` + `loadLibraryIndex` is folded; a
+single call powers the count, the shelf list, the shelves and the
+search list). The may-read rule above runs first: a restricted
+document never reaches the payload for a viewer whose level is
+`reads_unrestricted`, so every count on the page is the same count
+the viewer could reach by navigating. Empty shelves are dropped. The
+old `LibraryFind.tsx`, `ShelvesBrowser.tsx` and
+`/library/shelves/loading.tsx` are deleted; `/library/shelves` 308s
+to `/library`.
+
+The `LibraryDoc` shape carries two derived tile marks - `has_es`
+("another live readable doc with id `<id>-ES` is in the catalogue")
+and `posted_on_wall` (mirrors `documents.print_required`) - rendered
+as shape + words, never colour alone. R-AC26 keeps the reading-level
+mark and the Academy mark off the tile. Filled-in-by-a-leader is
+omitted: no column in `documents` or `academy_obligations` encodes it
+today.
+
+Headline reads `<N> documents on <M> shelves`, kick `Each one is the
+current version.` Search is document-level (R-AC10) via `?q=`. The
+match-count line is one visible `<p role="status">` directly under
+the search field - the sighted reader and the screen reader read the
+same words once ("`No documents match "<q>"`" or "`N documents match
+"<q>"`"). There is no second `sr-only` region; the SR never announces
+the same words twice. Pressing a shelf in the sticky list scrolls the
+page to it and moves focus to that shelf's `h2`.
+
+Phone opens with a plain heading (the shell hides the band), then
+the kick, the search field, a horizontally-scrolling shelf-jump
+strip, and tiles stacked one per row. The shelf heading keeps
+`--sp-t-title` on phone so the bookcase stays at five distinct type
+sizes on every width (13 / 14.5 / 16 / 18 / 24).
+
+A new-and-changed row is not built. `documents.updated_at` carries
+seven distinct days across 82 Live docs with 27 docs sharing one day
+(batch rewrites, no honest signal); `effective_date` and
+`approved_date` are similar; `next_review` is uniformly null. The row
+waits for a per-doc `last_substantive_edit` column or a supersedes
+chain.
+
+Evidence lives in `scripts/_library_l1_probe.ts` (updated for the
+one-loader API; owner 82, every other kind 70, restricted kept_for,
+unknown 404) and `scripts/_l2_battery.mjs` (Playwright chromium
+headless, signed in via Supabase admin `generateLink` + `@supabase/ssr`
+`setSession` cookies, sweeps 360-1920 step 40 x four states against a
+local build on `:3100`, reports sideways scroll, under-48 controls,
+distinct type sizes, clipped text, contrast pairs and console
+errors).
+
+Not in this train: L3 (document page), L4 ("Suggest an edit" +
+"Share"), editing / publishing / Changes / Reviews, section-level
+search, the IdentBand right-slot for the search, and the shell-menu
+link to `/library/shelves` (the 308 keeps clicks correct). These are
+shared-foundation or later-train work.

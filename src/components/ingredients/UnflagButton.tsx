@@ -9,6 +9,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { X } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
+import { postJson, saveErrorSentence } from "./panel/common";
 
 export function UnflagButton({ itemId }: { itemId: string }) {
   const router = useRouter();
@@ -17,24 +18,9 @@ export function UnflagButton({ itemId }: { itemId: string }) {
   async function unflag() {
     if (busy) return;
     setBusy(true);
-    type Resp = { marked?: number; error?: string };
-    let data: Resp | null = null;
-    let status = 0;
-    try {
-      const res = await fetch("/api/review/flag", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ itemIds: [itemId], flagged: false }),
-      });
-      status = res.status;
-      data = (await res.json().catch(() => null)) as Resp | null;
-    } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), { tone: "block" });
-      setBusy(false);
-      return;
-    }
-    if (status < 200 || status >= 300) {
-      toast(data?.error ?? `Unflag failed (${status})`, { tone: "block" });
+    const r = await postJson("/api/review/flag", { itemIds: [itemId], flagged: false });
+    if (!r.ok) {
+      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
       setBusy(false);
       return;
     }

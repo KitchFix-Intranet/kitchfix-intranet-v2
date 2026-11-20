@@ -108,7 +108,7 @@
 .kf-band-fact__value {
   font-family: var(--sp-disp);
   font-weight: 800;
-  font-size: var(--sp-t-num);
+  font-size: var(--sp-t-h1);
   color: var(--sp-on-navy);
   line-height: 1;
   display: inline-flex;
@@ -152,12 +152,14 @@
 
 /*
  * Compact-desktop rule: at and below 1280px the facts + separators disappear
- * and the headline drops to --sp-t-title; the CTA stays. The band itself
- * stays visible down to the 860px phone breakpoint where .kf-only-desktop
- * hides it.
+ * and the headline drops to --sp-t-title; the lead button and Retry stay.
+ * A right column holding no button is collapsed so the grid's auto track
+ * does not leave an empty gap. The band itself stays visible down to the
+ * 860px phone breakpoint where .kf-only-desktop hides it.
  */
 @media (max-width: 1280px) {
-  .kf-band__right { display: none; }
+  .kf-band__right:not(:has(.kf-band__cta)) { display: none; }
+  .kf-band__right > .kf-band-fact { display: none; }
   .kf-band__title { font-size: var(--sp-t-title); }
 }
 

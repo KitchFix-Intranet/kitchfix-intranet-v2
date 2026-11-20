@@ -12,6 +12,7 @@ import { WEIGHT_UOMS, VOLUME_UOMS, uomLabel } from "@/lib/ingredients/pack";
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 import { SaveFlash } from "./SaveFlash";
 import { postJson } from "./common";
+import { useDirtyEditor } from "./dirty";
 import { ingredientBaseUom } from "./packHelpers";
 import { useSaveWithRefresh } from "./useSaveWithRefresh";
 
@@ -63,6 +64,8 @@ export function PriceOverrideBlock({
     perBaseStr !== initialPerBaseStr ||
     baseUom !== seedBaseUom ||
     reason.trim().length > 0;
+  // T2 §3: panel Discard ask -> resetDrafts().
+  useDirtyEditor(`price-override-${item.id}`, dirty && !busy, resetDrafts);
 
   const perBaseN = Number(perBaseStr);
   const perBaseValid = Number.isFinite(perBaseN) && perBaseN > 0;

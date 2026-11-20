@@ -25,7 +25,7 @@ import { EvidenceSection } from "./EvidenceSection";
 import { ItemHistoryRows } from "./ItemHistoryRows";
 import { LedgerBlock } from "./LedgerBlock";
 import { MasterSendAllBackButton } from "../MasterSendAllBackButton";
-import { postJson, errMsg } from "./common";
+import { postJson, errMsg, saveErrorSentence } from "./common";
 import { SaveFlash } from "./SaveFlash";
 import { useSaveWithRefresh } from "./useSaveWithRefresh";
 import { dropParents } from "../parentsStore";
@@ -203,7 +203,9 @@ function MergeRow({
   // until the list has read the new membership. The toast here
   // carries an undo (fireSuccessToast below), so the hook holds the
   // plain-string message as fallback only.
-  const { save: runSave, busy } = useSaveWithRefresh();
+  const { save: runSave, busy, error: saveError, savedAt } = useSaveWithRefresh();
+  // T2 §5: in-page "What happens" ask replaces the former window.confirm.
+  const [askOpen, setAskOpen] = useState(false);
 
   const choices = useMemo(
     () => parents.filter((p) => p.id !== ingredient.id),
@@ -214,10 +216,6 @@ function MergeRow({
     if (busy || !target) return;
     const targetRow = parents.find((p) => p.id === target);
     const targetName = targetRow?.name ?? "the chosen ingredient";
-    const confirmed = window.confirm(
-      `Merge "${ingredient.name}" into "${targetName}"?\n\nEvery item on "${ingredient.name}" will move to "${targetName}". This is reversible from the Recent decisions ledger.`
-    );
-    if (!confirmed) return;
     const srcId = ingredient.id;
     await runSave({
       op: () =>
@@ -233,22 +231,19 @@ function MergeRow({
         }
         return `Merged ${movedItems} items into ${targetName}`;
       },
-      errorFallback: "Merge failed",
       // T4 §2a: a merge removes one ingredient from the active set,
       // so Merge + Sub-category dropdowns both need the fresh list on
       // their next open.
       onAfterSuccess: dropParents,
-      // Merge's success toast carries an undo, which the plain-string
-      // helper toast cannot express. Fire a custom toast at the same
-      // moment the helper would have fired the plain one.
+      // Merge's success toast carries an undo. T2 §1 ruling 5: a
+      // failed undo must be told (the toaster's own "The undo did
+      // not finish" wording, T1). Throw from the undo callback so
+      // the toast layer reports it.
       fireSuccessToast: (_d, message) => {
         toast(message, {
           undo: async () => {
-            await fetch("/api/review/undo-merge", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ sourceId: srcId }),
-            });
+            const u = await postJson("/api/review/undo-merge", { sourceId: srcId });
+            if (!u.ok) throw new Error(saveErrorSentence(u) ?? "Nothing was saved.");
             dropParents();
             onDone();
           },
@@ -256,6 +251,7 @@ function MergeRow({
       },
       onDone,
     });
+    setAskOpen(false);
   }
 
   if (loadState === "loading") {
@@ -286,14 +282,51 @@ function MergeRow({
         name here automatically. Undoable from Recent decisions.
       </div>
       <div className="kf-dpn__btns">
-        <button
-          type="button"
-          className={`kf-btn kf-btn--primary kf-btn--sm${busy ? " is-busy" : ""}`}
-          disabled={busy || !target}
-          onClick={doMerge}
-        >
-          {busy ? "Saving..." : "Merge into chosen"}
-        </button>
+        {askOpen ? (
+          <div className="kf-ing-ask" role="group" aria-label="Confirm merge">
+            <p className="kf-ing-ask__body">
+              {(() => {
+                const targetRow = parents.find((p) => p.id === target);
+                const targetName = targetRow?.name ?? "the chosen ingredient";
+                return (
+                  <>
+                    Every item on &ldquo;{ingredient.name}&rdquo; will move to
+                    &ldquo;{targetName}&rdquo;. This is reversible from Recent
+                    decisions.
+                  </>
+                );
+              })()}
+            </p>
+            <div className="kf-ing-ask__actions">
+              <button
+                type="button"
+                className={`kf-btn kf-btn--primary kf-btn--sm${busy ? " is-busy" : ""}`}
+                disabled={busy || !target}
+                onClick={doMerge}
+              >
+                {busy ? "Saving..." : "Merge"}
+              </button>
+              <button
+                type="button"
+                className="kf-btn kf-btn--line kf-btn--sm"
+                disabled={busy}
+                onClick={() => setAskOpen(false)}
+              >
+                Cancel
+              </button>
+              <SaveFlash savedAt={savedAt} error={saveError} />
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className={`kf-btn kf-btn--primary kf-btn--sm${busy ? " is-busy" : ""}`}
+            disabled={busy || !target}
+            onClick={() => setAskOpen(true)}
+          >
+            Merge into chosen
+          </button>
+        )}
       </div>
     </>
   );

@@ -15,9 +15,12 @@
 // still mid-flight; the success toast fires at the moment the refreshed
 // data has rendered.
 
+import { useRouter } from "next/navigation";
+import { toast } from "@/components/ui/Toaster";
 import { WEIGHT_UOMS, VOLUME_UOMS, uomLabel } from "@/lib/ingredients/pack";
-import { postJson } from "./common";
+import { postJson, saveErrorSentence } from "./common";
 import { useSaveWithRefresh } from "./useSaveWithRefresh";
+import { SaveFlash } from "./SaveFlash";
 
 export type BaseUnitControlRow = {
   id: string;
@@ -40,40 +43,71 @@ export function BaseUnitControl({
   row: BaseUnitControlRow;
   onSaved?: () => void;
 }) {
-  const { save: runSave, busy } = useSaveWithRefresh();
+  const router = useRouter();
+  const { save: runSave, busy, savedAt, error } = useSaveWithRefresh();
 
   async function save(next: string) {
     if (next === row.baseUnit || busy) return;
+    const prev = row.baseUnit;
+    const name = row.name;
     await runSave({
       op: () =>
         postJson("/api/review/set-base-unit", {
           ingredientId: row.id,
           baseUnit: next,
         }),
-      successMessage: `${row.name} is now costed per ${next}`,
+      successMessage: `${name} is now costed per ${next}`,
       onDone: onSaved,
+      // T2 §4: a Costed-per change is reversible. The success toast
+      // carries Undo for 10 s; Undo re-posts the previous unit
+      // through the same shared path. setIngredientBaseUnit has no
+      // cascade (one UPDATE + one audit row), so Undo fully restores
+      // the state.
+      fireSuccessToast: (_d, message) => {
+        toast(message, {
+          undo: async () => {
+            // T2 round 2 §1: check the answer and throw on failure
+            // so the toaster's "The undo did not finish" fires.
+            const u = await postJson("/api/review/set-base-unit", {
+              ingredientId: row.id,
+              baseUnit: prev,
+            });
+            if (!u.ok) {
+              throw new Error(saveErrorSentence(u) ?? "Nothing was saved.");
+            }
+            // T2 round 2 §2: refresh the page so the menu, the
+            // price tile and every row that reads this ingredient's
+            // base_unit shows the previous unit without a reload.
+            router.refresh();
+            if (onSaved) onSaved();
+          },
+        });
+      },
     });
   }
 
   return (
-    <select
-      id={`bu-${row.id}`}
-      className="kf-ipanel__ctl"
-      value={row.baseUnit}
-      disabled={busy}
-      onChange={(e) => {
-        const v = e.target.value;
-        save(v);
-      }}
-      aria-label="Costed per"
-    >
-      {BASE_UNIT_GROUPS.map((g) => (
-        <optgroup key={g.label} label={g.label}>
-          {g.options.map((u) => (
-            <option key={u} value={u}>{uomLabel(u)}</option>
-          ))}
-        </optgroup>
-      ))}
-    </select>
+    <>
+      <select
+        id={`bu-${row.id}`}
+        className="kf-ipanel__ctl"
+        value={row.baseUnit}
+        disabled={busy}
+        onChange={(e) => {
+          const v = e.target.value;
+          save(v);
+        }}
+        aria-label="Costed per"
+      >
+        {BASE_UNIT_GROUPS.map((g) => (
+          <optgroup key={g.label} label={g.label}>
+            {g.options.map((u) => (
+              <option key={u} value={u}>{uomLabel(u)}</option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+      <SaveFlash savedAt={savedAt} error={error} />
+    </>
   );
 }

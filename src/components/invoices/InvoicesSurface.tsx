@@ -90,6 +90,12 @@ export function InvoicesSurface({
 
   const drawerCloseHref = buildDrawerCloseHref({ show, q, site, more, asParam });
 
+  // Train 2: "Add invoices" shown on the list's band when nothing
+  // needs a fix, for site / regional viewers (and the owner). The
+  // office does not Capture - office viewers get no Capture CTA here.
+  const addInvoicesHref = scope.kind === "office" ? null
+    : (site ? `/invoices?site=${site}${asParam ? `&as=${encodeURIComponent(asParam)}` : ""}` : `/invoices${asParam ? `?as=${encodeURIComponent(asParam)}` : ""}`);
+
   return (
     <div className={`kf-invoices-surface ${manySites ? "is-manysites" : "is-onesite"}`}>
       {previewName ? <OwnerPreviewBanner name={previewName} exitHref="/invoices/list" /> : null}
@@ -99,6 +105,7 @@ export function InvoicesSurface({
         listView={listView}
         eyebrow={eyebrow}
         showFixHref={showFixHref}
+        addInvoicesHref={addInvoicesHref}
         manySites={manySites}
         singleSiteName={singleSiteName}
       />

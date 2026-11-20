@@ -1,4 +1,5 @@
 import { IngredientMasters } from "@/components/ingredients/IngredientMasters";
+import { requireOwnerPage } from "@/lib/gate";
 
 export const dynamic = "force-dynamic";
 
@@ -10,5 +11,6 @@ export const dynamic = "force-dynamic";
 // One workbench, two consumers; no new component tree, no new
 // query shape - just a server-side filter on pr_ingredients.resale.
 export default async function Page() {
+  await requireOwnerPage();
   return <IngredientMasters mode="resale" />;
 }
