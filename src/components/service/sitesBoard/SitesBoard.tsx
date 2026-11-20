@@ -155,8 +155,11 @@ function SiteRow({ row }: { row: BoardRow }) {
 }
 
 function BigLeagueSiteRow({ row }: { row: BigLeagueRow }) {
-  const seasonNote = row.seasonOver && row.seasonOverIso
-    ? `2026 season ended ${shortDate(row.seasonOverIso)}`
+  // Fix 4 (train 4b): one fact per phrase. Past-season sites read
+  // "Last home game <date>"; in-season reads "in season". The date
+  // is the last GAME row for the account.
+  const seasonNote = row.seasonOver && row.lastHomeGameIso
+    ? `Last home game ${shortDate(row.lastHomeGameIso)}`
     : "in season";
   return (
     <Link href={row.goHref} className="kf-sc-site kf-sc-site--big">
