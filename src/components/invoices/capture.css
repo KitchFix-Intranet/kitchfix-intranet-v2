@@ -15,10 +15,15 @@
   gap: var(--sp-sp-5);
 }
 
+.kf-inv-dropzone-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-3);
+}
 .kf-inv-capture__dropzone {
   border: 2px dashed var(--sp-line-field);
   border-radius: var(--sp-r-card);
-  padding: var(--sp-sp-7) var(--sp-sp-6);
+  padding: var(--sp-sp-6) var(--sp-sp-5);
   background: var(--sp-sky-soft);
   display: flex;
   flex-direction: column;
@@ -32,19 +37,16 @@
   background: var(--sp-sky-tint);
   border-color: var(--sp-navy);
 }
-.kf-inv-capture__dropzone h3 {
-  margin: 0;
-  font-family: var(--sp-disp);
-  font-size: var(--sp-t-h1);
-  color: var(--sp-navy);
-  text-transform: uppercase;
-  letter-spacing: .2px;
-  line-height: 1;
-}
 .kf-inv-capture__dropzone p {
   margin: 0;
   color: var(--sp-body);
   font-size: var(--sp-t-body);
+  max-width: 520px;
+}
+.kf-inv-capture__dropzone-hint {
+  margin: 0;
+  color: var(--sp-muted);
+  font-size: var(--sp-t-label);
 }
 .kf-inv-capture__dropzone-input {
   position: absolute;
@@ -52,15 +54,26 @@
   clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
 }
 
-.kf-inv-capture__columns {
+/* Train 2b B3: container-query landing grid. Drop zone beside
+   Latest sent when the content area is >= 980 px; stacked when
+   narrower. The surface is already container-typed at a parent
+   level (train 1). Add one here for Capture. */
+.kf-inv-capture { container-type: inline-size; }
+.kf-inv-landing-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-sp-5);
+  align-items: start;
 }
-@media (max-width: 860px) {
-  .kf-inv-capture__columns {
-    grid-template-columns: minmax(0, 1fr);
+@container (min-width: 980px) {
+  .kf-inv-landing-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 360px);
   }
+}
+.kf-inv-landing-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-5);
 }
 
 .kf-inv-capture__pane h3 {
@@ -72,33 +85,139 @@
   color: var(--sp-body);
 }
 
+/* Phone head (A2 / B1 phone / E phone). Shared pattern from the
+   list lane (PhoneHead.tsx) tuned for Capture. */
+.kf-inv-phonehead {
+  padding: var(--sp-sp-4) var(--sp-sp-5) var(--sp-sp-2);
+}
+.kf-inv-phonehead__title {
+  margin: 0;
+  font-family: var(--sp-disp);
+  font-size: var(--sp-t-h1);
+  color: var(--sp-navy);
+  text-transform: uppercase;
+  letter-spacing: 0.2px;
+  line-height: var(--sp-lh-flat);
+}
+.kf-inv-phonehead__tick {
+  display: block;
+  width: 56px;
+  height: 5px;
+  margin-top: var(--sp-sp-1);
+  background: var(--sp-red);
+  transform: skewX(-30deg);
+  transform-origin: left center;
+}
+.kf-inv-phonehead__kick {
+  margin: var(--sp-sp-2) 0 0;
+  color: var(--sp-body);
+  font-size: var(--sp-t-body);
+}
+
+/* B2 needs-fix note. Each row: vendor name + number + a quiet "See it". */
+.kf-inv-needsfix {
+  background: var(--sp-warn-bg);
+  border: 1px solid var(--sp-warn);
+  border-radius: var(--sp-r-ctl);
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+}
+.kf-inv-needsfix__row {
+  margin: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--sp-sp-3);
+  min-height: var(--sp-floor-chef);
+  color: var(--sp-warn);
+  font-size: var(--sp-t-body);
+}
+.kf-inv-needsfix__name { font-weight: var(--sp-w-semi); color: var(--sp-ink); }
+.kf-inv-needsfix__num { color: var(--sp-body); font-weight: var(--sp-w-regular); }
+.kf-inv-needsfix__see {
+  padding: 0 var(--sp-sp-3);
+  min-height: var(--sp-floor-chef);
+  display: inline-flex;
+  align-items: center;
+  color: var(--sp-link);
+  font-size: var(--sp-t-label);
+  text-decoration: underline;
+}
+
+/* B6 Drafts waiting. */
 .kf-inv-capture__drafts {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-sp-3);
+  gap: var(--sp-sp-2);
 }
 .kf-inv-capture__draft {
   display: flex;
-  justify-content: space-between;
   align-items: center;
   gap: var(--sp-sp-3);
-  padding: var(--sp-sp-3) var(--sp-sp-4);
+  padding: var(--sp-sp-2) var(--sp-sp-3) var(--sp-sp-2) var(--sp-sp-4);
   border: 1px solid var(--sp-line);
   border-radius: var(--sp-r-card);
   background: var(--sp-card);
   min-height: var(--sp-floor-chef);
 }
-.kf-inv-capture__draft a {
-  color: var(--sp-ink);
+.kf-inv-capture__draft__main {
   flex: 1 1 auto;
   min-width: 0;
-  font-weight: 700;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: var(--sp-floor-chef);
+  justify-content: center;
+  color: var(--sp-ink);
 }
-.kf-inv-capture__draft a:hover { color: var(--sp-navy); }
+.kf-inv-capture__draft__main:hover { color: var(--sp-navy); }
+.kf-inv-capture__draft__name {
+  font-weight: var(--sp-w-bold);
+  font-size: var(--sp-t-body);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kf-inv-capture__draft__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-sp-2);
+  color: var(--sp-muted);
+  font-size: var(--sp-t-label);
+}
+.kf-inv-capture__draft__status {
+  color: var(--sp-body);
+}
+.kf-inv-capture__draft__status.is-ready {
+  color: var(--sp-good);
+  font-weight: var(--sp-w-semi);
+}
+.kf-inv-capture__draft__when { color: var(--sp-muted); }
+.kf-inv-capture__draft__remove {
+  min-width: var(--sp-floor-chef);
+  min-height: var(--sp-floor-chef);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--sp-r-ctl);
+  color: var(--sp-body);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.kf-inv-capture__draft__remove:hover,
+.kf-inv-capture__draft__remove:focus-visible {
+  background: var(--sp-block-bg);
+  border-color: var(--sp-block-line);
+  color: var(--sp-block);
+}
 
+/* B5 Latest sent. 48 px rows, token type. */
 .kf-inv-capture__latest {
   list-style: none;
   margin: 0;
@@ -108,21 +227,44 @@
   gap: var(--sp-sp-2);
 }
 .kf-inv-capture__latest li {
-  padding: var(--sp-sp-3);
   border: 1px solid var(--sp-line);
   border-radius: var(--sp-r-ctl);
   background: var(--sp-card);
+}
+.kf-inv-capture__latest li a {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-sp-2) var(--sp-sp-3);
+  min-height: var(--sp-floor-chef);
+  justify-content: center;
+  color: var(--sp-ink);
   font-size: var(--sp-t-label);
 }
-.kf-inv-capture__latest a { color: var(--sp-ink); }
+.kf-inv-capture__latest__name {
+  font-weight: var(--sp-w-bold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .kf-inv-capture__latest__meta { color: var(--sp-muted); }
+.kf-inv-capture__latest__all {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--sp-floor-chef);
+  margin-top: var(--sp-sp-2);
+  padding: 0 var(--sp-sp-3);
+  font-size: var(--sp-t-label);
+  color: var(--sp-link);
+  text-decoration: underline;
+}
 
-/* ─── Which site chooser ──────────────────────────────────────── */
+/* Which-site rows (A1/A3) */
 
 .kf-inv-capture__sites {
   list-style: none; margin: 0; padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: var(--sp-sp-3);
 }
 .kf-inv-capture__sites a {
@@ -130,18 +272,36 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-sp-3);
-  padding: var(--sp-sp-4);
+  padding: var(--sp-sp-3) var(--sp-sp-4);
   background: var(--sp-card);
   border: 1px solid var(--sp-line);
   border-radius: var(--sp-r-card);
   min-height: var(--sp-floor-chef);
   color: var(--sp-ink);
-  font-weight: 700;
+  font-weight: var(--sp-w-bold);
 }
 .kf-inv-capture__sites a:hover {
   background: var(--sp-sky-tint);
   color: var(--sp-navy);
 }
+.kf-inv-capture__sites__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.kf-inv-capture__sites__name { font-weight: var(--sp-w-bold); }
+.kf-inv-capture__sites__sub {
+  font-weight: var(--sp-w-regular);
+  color: var(--sp-body);
+  font-size: var(--sp-t-label);
+}
+.kf-inv-capture__sites__count {
+  color: var(--sp-good);
+  font-size: var(--sp-t-label);
+  font-weight: var(--sp-w-semi);
+}
+.kf-inv-capture__sites__chev { color: var(--sp-muted); }
 
 /* ─── Sitting ─────────────────────────────────────────────────── */
 
@@ -372,29 +532,42 @@
 /* ─── Upload queue (landing + sitting) ────────────────────────── */
 
 .kf-inv-uploads {
+  list-style: none; margin: 0; padding: 0;
   display: flex;
   flex-direction: column;
   gap: var(--sp-sp-2);
 }
 .kf-inv-uploads__row {
-  padding: var(--sp-sp-3);
+  padding: var(--sp-sp-2) var(--sp-sp-3);
   border: 1px solid var(--sp-line);
   border-radius: var(--sp-r-ctl);
   background: var(--sp-card);
   font-size: var(--sp-t-label);
   display: flex;
-  justify-content: space-between;
-  gap: var(--sp-sp-2);
+  align-items: center;
+  gap: var(--sp-sp-3);
+  min-height: var(--sp-floor-chef);
 }
+.kf-inv-uploads__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--sp-w-semi);
+}
+.kf-inv-uploads__status { color: var(--sp-body); }
 .kf-inv-uploads__row.is-failed {
   background: var(--sp-block-bg);
   border-color: var(--sp-block-line);
   color: var(--sp-block);
 }
+.kf-inv-uploads__row.is-failed .kf-inv-uploads__status { color: var(--sp-block); }
 .kf-inv-uploads__row.is-done {
   background: var(--sp-good-bg);
   color: var(--sp-good);
 }
+.kf-inv-uploads__row.is-done .kf-inv-uploads__status { color: var(--sp-good); }
 
 /* ─── Vendor picker dialog ────────────────────────────────────── */
 
@@ -453,30 +626,38 @@
   font-size: var(--sp-t-label);
 }
 
-/* ─── You are set ─────────────────────────────────────────────── */
+/* ─── E "You are set" ─────────────────────────────────────────── */
 
 .kf-inv-youareset {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-sp-4);
-}
-.kf-inv-youareset h2 {
-  font-family: var(--sp-disp);
-  font-size: var(--sp-t-h1);
-  color: var(--sp-navy);
-  text-transform: uppercase;
-}
-.kf-inv-youareset ul {
   list-style: none; margin: 0; padding: 0;
   display: flex;
   flex-direction: column;
   gap: var(--sp-sp-2);
 }
 .kf-inv-youareset li {
-  padding: var(--sp-sp-3);
   border: 1px solid var(--sp-good);
   border-radius: var(--sp-r-ctl);
   background: var(--sp-good-bg);
+}
+.kf-inv-youareset li a {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-sp-2) var(--sp-sp-4);
+  min-height: var(--sp-floor-chef);
+  justify-content: center;
+  color: var(--sp-ink);
+}
+.kf-inv-youareset li a strong {
+  font-weight: var(--sp-w-bold);
+  color: var(--sp-good);
+}
+.kf-inv-youareset li a span { color: var(--sp-body); font-size: var(--sp-t-label); }
+
+.kf-inv-youareset__cta {
+  display: flex;
+  gap: var(--sp-sp-3);
+  flex-wrap: wrap;
 }
 
 /* ─── Preview-banner + helpers (reuse train 1's .kf-invoices-preview) ── */

@@ -26,7 +26,8 @@ import {
   listDraftsForOwnerSite, toDraftView,
   getDraftById, listFilesForDraft, toFileView,
 } from "@/lib/invoices/draftLoad";
-import { loadLatestSent } from "@/lib/invoices/latestSent";
+import { buildDraftListView } from "@/lib/invoices/draftListView";
+import { loadLatestSent, loadReturnedForSite } from "@/lib/invoices/latestSent";
 import { loadActiveCodesForSite, loadUsualCodes } from "@/lib/invoices/glCodes";
 import { CaptureLanding } from "@/components/invoices/CaptureLanding";
 import { WhichSiteChooser } from "@/components/invoices/WhichSiteChooser";
@@ -91,13 +92,34 @@ export default async function Page({
   const nav = sitesInScope(scope, sites);
   const many = isManySites(scope);
 
+  const ownerEmailLower = (viewer.work_email ?? "").trim().toLowerCase();
+
   if (!site) {
     if (nav.length === 1) {
       const only = nav[0];
       const qs = as ? `&as=${encodeURIComponent(as)}` : "";
       redirect(`/invoices?site=${only.slug}${qs}`);
     }
-    return <WhichSiteChooser sites={nav} asParam={as} previewName={previewName} />;
+    // Per-site draft counts for A3 ("2 drafts" under the site row).
+    const draftCountsBySlug: Record<string, number> = {};
+    await Promise.all(nav.map(async (s) => {
+      const q = await sb
+        .from("invoice_drafts")
+        .select("id", { count: "exact", head: true })
+        .eq("owner_email", ownerEmailLower)
+        .eq("account_key", s.accountKey)
+        .eq("status", "draft");
+      draftCountsBySlug[s.slug] = q.count ?? 0;
+    }));
+    return (
+      <WhichSiteChooser
+        sites={nav}
+        draftCountsBySlug={draftCountsBySlug}
+        scope={scope}
+        asParam={as}
+        previewName={previewName}
+      />
+    );
   }
 
   const accountKey = slugToAccountKey(site, scope.accountKeys);
@@ -105,7 +127,9 @@ export default async function Page({
 
   const asParam = as;
   const slug = accountKeyToSlug(accountKey);
-  const ownerEmail = (viewer.work_email ?? "").trim().toLowerCase();
+  const ownerEmail = ownerEmailLower;
+  const navSite = nav.find((s) => s.accountKey === accountKey);
+  const siteName = navSite?.name ?? accountKey;
 
   // Sitting
   if (draftId) {
@@ -150,13 +174,21 @@ export default async function Page({
   }
 
   // Landing
-  const [drafts, latestSent, needsFix] = await Promise.all([
+  const activeCodes = await loadActiveCodesForSite(sb, accountKey);
+  const activeCodesSet = new Set(activeCodes.map((c) => c.code));
+  const [drafts, latestSent, needsFix, returnedForSite] = await Promise.all([
     listDraftsForOwnerSite(sb, ownerEmail, accountKey),
     loadLatestSent(sb, accountKey, 5),
     sb.from("invoice_submissions").select("*", { count: "exact", head: true })
       .eq("account_key", accountKey).eq("status", "returned"),
+    loadReturnedForSite(sb, accountKey, 4),
   ]);
   const fixCount = needsFix.count ?? 0;
+
+  // Train 2b correction 6: server-computed Ready + vendor name per
+  // draft. B1 headline, B6 rows and E all read these fields; no
+  // client-side copy of the Ready rule.
+  const draftList = await buildDraftListView(sb, ownerEmail, drafts, activeCodesSet);
 
   return (
     <CaptureLanding
@@ -164,11 +196,14 @@ export default async function Page({
       sites={nav}
       siteSlug={slug}
       siteAccountKey={accountKey}
-      drafts={drafts.map(toDraftView)}
+      siteName={siteName}
+      drafts={draftList}
       latestSent={latestSent}
       needsFixCount={fixCount}
+      needsFixPreview={returnedForSite}
       asParam={asParam}
       previewName={previewName}
+      manySites={many}
     />
   );
 }
