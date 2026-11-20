@@ -925,4 +925,5 @@ function n1LegacyRecipients({ accountKey, submitterEmail }: any) {
 export const _internals = {
   emailShell, n1Body, n2Body, n2SlackText, sendSlack, formatCents,
   fmtWeekTitle, fmtWeekRange, escapeHtml,
+  EMAIL_SENDER, EMAIL_DISPLAY_NAME,
 };

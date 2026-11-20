@@ -353,6 +353,7 @@ export function ReviewPage({ view, backHref, outboundBlock, canPushAgain }: Prop
           isBiweekly={view.isBiweeklyUnit}
           unitStart={view.unitStart}
           unitEnd={view.unitEnd}
+          siteTimezone={view.site.timezone ?? "America/Chicago"}
           onBackToCalendar={() => router.replace(backHref)}
         />
       ) : null}

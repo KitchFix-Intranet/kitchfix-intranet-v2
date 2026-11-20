@@ -2,6 +2,111 @@
 
 Lane: Service Calendar (SC). This file is updated in the same PR as the SC work it describes.
 
+## Train 6 - reminders and notifications (2026-11-20)
+
+Behind the existing `SC_V2_OUTBOUND` gate. Inert in production until the gate flips; test mode routes every send to Kevin only. Wires the new shared `src/lib/mail.ts :: sendSystemMail` through the lane's single door (`src/lib/sc/outbound.ts`).
+
+### The two cron reminders
+
+- **Friday 3 PM Central**. If the current week at a calendar site is not submitted yet, mail the salaried site leaders. One send per (account, week, is_test). Biweekly sites only fire on the pair's CLOSING Friday (week_label "Week 2" or "Week 4" on `sc_day_metadata`); opening weeks are skipped.
+- **Monday 9 AM local**. If last week is still not submitted, mail the leaders + any regional directors for the region. The body branches on `isBilled`: billed sites read "accounting reviews today, invoices go out Tuesday"; non-billed sites read "so it is on record". Trailer line reads `tell <RD first name>` for a single RD, `tell your regional director` for multiple, and `tell the office` when none are on record (Kevin ruling 2026-11-20).
+
+Dates and the closing-week decision come from `resolveFinalizeReviewSpan` (the engine helper the submit, the sites board and the reopen already use). "Asked yet" delegates to `src/lib/sc/calendar/isAskedYet` with the site's Chicago-stable today, so the calendar, the sites board and the reminders agree on the verb.
+
+Cron entries (vercel.json):
+
+```
+/api/service/reminder-friday  0 20,21 * * 5
+/api/service/reminder-monday  0 13-17 * * 1
+```
+
+The Friday window covers CST + CDT with one firing at 15:00 Central. The Monday window covers 9 AM in America/New_York, America/Chicago and America/Phoenix across both standard and daylight time. Each handler asks `isFridayCentralHour(now)` / `isMondayNineAtTz(now, site.timezone)` and no-ops off-hour ticks. All day/hour decisions flow through `Intl.DateTimeFormat`; no hand-coded DST.
+
+### Auth
+
+Real runs are cron-only (`isCronAuthorized` or the route returns 401 `CRON_ONLY`). An owner session is accepted only with `?dry=1`. The dry run composes the full decision for every site under any mode (including `off`), writes nothing, sends nothing.
+
+### Dry-run output shape (per site)
+
+```json
+{
+  "accountKey": "SITE - XY",
+  "weekStart": "YYYY-MM-DD",
+  "unitStart": "YYYY-MM-DD",
+  "unitEnd":   "YYYY-MM-DD",
+  "decision":  "remind" | "skip",
+  "reason":    "already_submitted" | "not_asked_yet" | "no_service" |
+               "not_closing_week" | "already_reminded" | "no_recipients" |
+               "wrong_hour" | "error" | null,
+  "leaders":   <count>,
+  "directors": <count>,
+  "mode":      "off" | "test" | "live"
+}
+```
+
+No `to`, no `cc`, no names, no `subject`, no `html`. The real run's response is the same shape plus `outcome: "mode_off" | "sent" | "failed" | "skipped"`; it carries no addresses either.
+
+### Skip ladder (in order)
+
+1. `not_closing_week` - biweekly opening week (week_label "Week 1" or "Week 3").
+2. `already_submitted` - sc_week_finalize row with status <> 'reverted'.
+3. `not_asked_yet` - `isAskedYet` returns false for the site's today.
+4. `no_service` - every row in `sc_daily_revenue` across the unit has `actual_count = 0` AND `projected_count = 0` (the Dec 21 + Dec 28 holiday weeks sit here).
+5. `no_recipients` - leaders + directors both empty under `live`; recorded with `email_result='skipped_no_recipients'`.
+6. `already_reminded` - sc_v2_reminder_sent row already present for (account, week, stage, is_test).
+7. `error` - one site threw; the route moves on to the next (per-site try/catch).
+
+### Ledger table
+
+`sc_v2_reminder_sent` (9 columns, RLS on, service_role only). One row per reminder actually attempted. `is_test` is part of the unique index so a test-mode reminder does not "use up" the real one. Record of the applied migration lives at `supabase/migrations/20261120193256_sc_v2_reminder_sent_2026_11_20.sql`. V1's `sc_week_chase_sent` is untouched.
+
+### The no-invoice notice (owner only)
+
+A submit on a NON-billed site tells Kevin ONLY (Kevin ruling 2026-11-20). Billed sites already get the engine's N1 inside the push pipeline; this is the counterpart for the sites v1 did not notify about at all. Fires from the submit-week route's `after()` block when `!site.isBilled`. The submitter is named from `people.display_name` ("Someone" fallback) - no email address in the body. No dollars, no cents, no before-tax line. Meals stay.
+
+### Carry-in: FinishOverlay SR line
+
+The overlay previously read raw ISO. The SR span now reads plain words in the site's timezone via `finishOverlaySr()`:
+
+- Weekly: `Submitted Monday, Nov 23 at 9:35 AM. Week of Nov 16 - Nov 22.`
+- Biweekly: `Submitted Monday, Nov 23 at 7:35 AM. Two weeks of Nov 9 - Nov 22.`
+
+No year, no zone letters, no "Unit span". ReviewPage passes `view.site.timezone`; the overlay re-uses its existing `isBiweekly` prop to select the pair variant.
+
+### Divergences from the engine
+
+Three engine files carry additions:
+
+- `src/lib/sc/scWeekFinalize.ts` - `buildScWeekLink` + `buildRetryLink` rewrite to emit V2's `/service/review?site=<slug>&week=<Monday>` via a lane-local `appBaseUrl()` helper (`SC_APP_BASE_URL` with the V2 production domain as fallback). V1 built against `NEXT_PUBLIC_APP_BASE_URL` which is not set on V2's Vercel project.
+- `src/lib/sc/billing/qboNotifications.ts` - added `EMAIL_SENDER` + `EMAIL_DISPLAY_NAME` to the `_internals` export so lane code can reuse the engine's sender constant by import instead of copying the literal.
+- `src/lib/sc/outbound.ts` - the lane seam's `sendEmailSA` in `test` and `live` is a thin call to `sendSystemMail`; `off` remains byte-identical to train 1.
+
+### Files added
+
+- `src/lib/sc/submit/appBaseUrl.ts`
+- `src/lib/sc/submit/reminderMode.ts`
+- `src/lib/sc/submit/reminderGreeting.ts`
+- `src/lib/sc/submit/reminderScheduler.ts`
+- `src/lib/sc/submit/reminderRecipients.ts`
+- `src/lib/sc/submit/reminderRender.ts`
+- `src/lib/sc/submit/reminderSend.ts`
+- `src/lib/sc/submit/n1NoInvoice.ts`
+- `src/lib/sc/submit/finishOverlaySr.ts`
+- `src/app/api/service/reminder-friday/route.ts`
+- `src/app/api/service/reminder-monday/route.ts`
+- `supabase/migrations/20261120193256_sc_v2_reminder_sent_2026_11_20.sql` (record of applied change)
+- 12 test files under `src/lib/sc/submit/__tests__/`
+
+### Files modified
+
+- `src/lib/sc/scWeekFinalize.ts` (link builders)
+- `src/lib/sc/billing/qboNotifications.ts` (`_internals` export adds `EMAIL_SENDER`, `EMAIL_DISPLAY_NAME`)
+- `src/lib/sc/outbound.ts` (`sendEmailSA` now calls `sendSystemMail` for test + live)
+- `src/app/api/service/submit-week/route.ts` (after() owner notice; resolves submitter name from `people`)
+- `src/components/service/review/FinishOverlay.tsx` (siteTimezone prop; isPair passed through to SR)
+- `src/components/service/review/ReviewPage.tsx` (pass timezone)
+- `vercel.json` (two cron lines)
+
 ## Train 5 - reopen a submitted week (2026-11-20)
 
 One action: a submitted week goes back to open so its numbers can be corrected and submitted again. In v1 the word was "revert"; in V2 the word on screen is **reopen**. The master's rule set from the arc kickoff is unchanged — this train lands the plumbing.

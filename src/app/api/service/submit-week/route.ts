@@ -42,6 +42,7 @@ import { attemptPushForRow } from "@/lib/sc/submit/push";
 import { loadReviewTotals } from "@/lib/sc/submit/reviewLoader";
 import { mondayOfWeek } from "@/lib/sc/scWeekFinalize";
 import { isSubmitAllowed } from "@/lib/sc/submit/billedOutboundGate";
+import { sendNoInvoiceNotice, resolveSubmitterName } from "@/lib/sc/submit/n1NoInvoice";
 import type { AccountLite, SiteInfo, ViewerLite } from "@/lib/sc/calendar/types";
 import type { SubmitBlock } from "@/lib/sc/types";
 
@@ -134,6 +135,26 @@ export async function POST(req: Request): Promise<Response> {
         await attemptPushForRow(row.id);
       } catch (err) {
         console.error(`[submit-week] attemptPushForRow after() threw: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    });
+  } else if (!site.isBilled) {
+    // Train 6: a submit on a NON-billed site tells the owner only.
+    // Kevin ruling 2026-11-20. Billed sites already get N1 from the
+    // engine's push pipeline. Notice names the submitter via
+    // `people.display_name`; "Someone" fallback. No dollars.
+    after(async () => {
+      try {
+        const submittedByName = await resolveSubmitterName(sb, email);
+        await sendNoInvoiceNotice({
+          accountKey: row.account_key,
+          siteName: site.name ?? row.account_key,
+          weekStart: row.week_start,
+          unitSpanDays: totals.unitSpanDays,
+          totalMeals: totals.totalMeals,
+          submittedByName,
+        });
+      } catch (err) {
+        console.error(`[submit-week] sendNoInvoiceNotice after() threw: ${err instanceof Error ? err.message : String(err)}`);
       }
     });
   }
