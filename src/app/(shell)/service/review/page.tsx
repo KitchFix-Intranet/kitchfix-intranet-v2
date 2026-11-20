@@ -18,6 +18,7 @@ import { slugToAccountKey } from "@/lib/sc/calendar/slug";
 import { canWriteForAccount } from "@/lib/sc/access/canWriteForAccount";
 import { loadReviewScreen } from "@/lib/sc/submit/reviewLoader";
 import { isSubmitAllowed } from "@/lib/sc/submit/billedOutboundGate";
+import { canPushAgainDb } from "@/lib/sc/submit/pushAgainScope";
 import type { AccountLite, ViewerLite } from "@/lib/sc/calendar/types";
 import { ReviewPage } from "@/components/service/review/ReviewPage";
 import "../service.css";
@@ -88,7 +89,21 @@ export default async function Page({
 
   const backHref = `/service?site=${site.slug}`;
 
-  return <ReviewPage view={view} backHref={backHref} outboundBlock={outboundBlock} />;
+  // Train 4 carry-in 1: who may press "Push to QuickBooks again" on
+  // the week-check headline. Evaluated server-side so the client
+  // never sees a button it is not entitled to press.
+  const canPushAgain = view.pushGaveUp && view.submittedVia === "v2"
+    ? await canPushAgainDb(sb, ownerEmail)
+    : false;
+
+  return (
+    <ReviewPage
+      view={view}
+      backHref={backHref}
+      outboundBlock={outboundBlock}
+      canPushAgain={canPushAgain}
+    />
+  );
 }
 
 function pickOne(v: string | string[] | undefined): string | null {

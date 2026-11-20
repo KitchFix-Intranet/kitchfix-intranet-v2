@@ -2,6 +2,105 @@
 
 Lane: Service Calendar (SC). This file is updated in the same PR as the SC work it describes.
 
+## Train 4 - the Sites board, big-league calendar, notes and history (2026-11-20)
+
+Three mostly read-only surfaces, plus four carry-ins from train 3. Nothing here bills, emails or changes a submitted week; the only writes are an authored note, two system notes, and the push-again reset on `sc_week_finalize`.
+
+### The Sites board
+
+The office and the two regional directors land at `/service` with no `?site=` on the Sites board. A site leader with one site in scope still redirects straight to their calendar, unchanged. The board shows:
+
+- The week beside the filter: Monday of today in **America/Chicago** (`mondayCentralToday()`), one label for everyone. Each site still uses its own `sc_site_today` for the day squares and the late / exempt rule.
+- One row per site, grouped under four plain headings in order of need: **Needs someone** (`push`, `late`, `stuck`, `flag`), **This week** (`open`, `entered`, `ready`), **Submitted** (`sent`, `noinv`), **Not serving** (`off`, reserved `over`). Row kind is decided by `classifyRow()` in `src/lib/sc/sitesBoard/bucket.ts`; the state word on the right is still the one `resolveWeekState` word.
+- Each row's seven squares reuse `resolveDayState` and the shared `.kf-sc-sq` + `is-*` classes. A `home` day gets the home-game mark via `sc_day_metadata.game_type IN ('DAY','NIGHT')` (the calendar's own source for the four PDC + MiLB accounts that carry it; the four big-league clubhouses do not sit on this list).
+- `push` is keyed on a V2 row only: `submitted_via = 'v2' AND push_gave_up_at IS NOT NULL`. Office viewers only (`is_corp && !is_regional_director`); a regional director sees the row read as `sent`. The row's right side reads **See the push** and links to `/service/review?site=&week=` — the week check page, where the "Push to QuickBooks again" button lives.
+- `late` fires only when `isAskedYet()` returns true. Before fiscal 2027 (2026-12-28), a site that has never submitted stays `open`, not `late`, until the cutover. One pure function, called on the board, on the calendar home, and on the week check — same answer at all three.
+- The All / East / West region filter (a segmented control, phone-friendly) shows only for an office viewer whose in-scope set has more than one region.
+- A "Big league clubhouses - calendar only" sub-card lists the MLB accounts the viewer may see, with a season home-game count and a "season over" note when the last schedule row is in the past. Each row links to `/service/mlb?site=<slug>`.
+- A small five-word legend sits under the main card at ≥ 861 px; narrow screens drop it and the per-row state word carries the signal.
+
+**Reads.** One loader, one wave. For N in-scope sites + M big-league sites:
+
+1. `sc_services` (narrows to accounts with at least one row; no `active` filter for the same reason the calendar loader keeps the inactive-row units).
+2. `people` (one read for the active site leader of every N + M; display name only).
+3. `sc_qbo_account_map` for the N set.
+4. `sc_qbo_service_map` (export-excluded only) for the N set.
+5. `sc_daily_revenue` for the N × 7 week dates, `{ count: 'exact' }` with paging (every >1000 case throws an explicit short-read error, the only shape train 1b does).
+6. `sc_day_metadata` for the N × 7.
+7. `sc_week_finalize` bounded to (weekStart - 7, weekEnd), `status <> 'reverted'`.
+8. `sc_week_finalize` head-count per account (`status <> 'reverted'`) for the any-finalize-ever map.
+9. N × `rpc sc_site_today(p_account_key)`.
+10. N × `rpc sc_is_period_closed_fy` for the period that holds `weekStart`.
+11. M × `sc_homestand_schedule` head-count (GAME rows).
+12. M × `sc_homestand_schedule` last-row (GAME or EXHIBITION) for the "season over" flag.
+
+No new SQL. No new database function. `sc_current_week` is not a function on this project; the central Monday is computed in-process via `Intl.DateTimeFormat`.
+
+**Preview leans carried forward** (asked on Kevin's reply 2026-11-20, approved as-drawn): the two-line account-key mark beside the site name, the region segmented control, the mini legend, the per-row sub-line copy, and the "Big league clubhouses - calendar only" sub-card.
+
+### The big-league calendar (`/service/mlb`)
+
+A sibling page, not a branch of `CalendarPage`. **Monthly**, as the preview draws it: twelve months, prev/next month arrows, DOW column headers, cells carry a day number + every game on that day. A sidebar on wide screens lists the home stands overlapping the month.
+
+**One source: `sc_homestand_schedule`.** The table ends 2026-09-27 and has no 2027 rows yet; the normal landing today is the season-over state. `sc_day_metadata.game_type` is **not read on this page** — it disagrees with the schedule on away days (the metadata carries ~20 more "away" days per account than there are away games). The schedule table holds rows for the four **big-league** clubhouses (MLB level, this train's screen) and for MiLB accounts (the PDC-side calendar's home stands, not touched here). Per-day_type counts in the four MLB-level accounts today: 81 GAME, 81 AWAY, 2 EXHIBITION (the two Texas accounts only). MiLB-only day_type values (`PREP`, `OPEN`, `CLOSE`, `CLEAN`) are dropped at the loader for this page.
+
+Three day_type values are drawn, one per cell:
+
+- `GAME` → "vs <opponent>" on a navy cell, with `game_time` rendered in the account's own `accounts.timezone` (never the server's). The `day_night` column is on the row but is not drawn — the time is the fact that matters.
+- `AWAY` → "at <opponent>" on a muted outlined cell, no time.
+- `EXHIBITION` → "vs <opponent>" on a sky-tint cell, with the time when set, and the word "exhibition" appended.
+- `OFF` / `null` / MiLB-only values (`PREP`, `OPEN`, `CLOSE`, `CLEAN`) → not drawn. A plain day cell.
+
+**Home stands.** Grouped by `homestand_id` when every `GAME` row carries one; falls back to runs of consecutive home dates (GAME or EXHIBITION, a one-day gap breaks the run) when any GAME row is missing an id. The `groupedBy` flag is returned on each stand so a future audit can report the mode without re-walking the data. Today, on every one of the four accounts, every GAME row has a `homestand_id`, so the grouper runs in id mode. A doubleheader flag is read but every row today is `false`; the cell renders a second game underneath without breaking the layout and appends "doubleheader" to the sub-line.
+
+**Season-over state.** When today is past `lastGameIso`, the band reads "The 2026 season is done" with the last-game date in the kick; the notice below says "The 2027 games show here by themselves once the league posts them." The month pager still works across the loaded span.
+
+**No schedule loaded** state (no rows at all for the account) says so plainly and names what will show up once the 2027 data lands.
+
+### Notes and history
+
+A folded line sits at the foot of the day drawer's body: **Notes and history**, closed by default. Opening it fires one wave of three reads bounded to that (account, date), and renders newest-first. The fold stays closed → zero reads.
+
+- `sc_daily_actuals_history` (the audit trigger's per-service update + delete receipts, written as `change_type='update'` or `'delete'`).
+- `sc_day_note_entries` (authored notes + system notes, append-only; no DELETE grant on this table).
+- `sc_daily_actuals` for the earliest `(created_at, created_by)` — the first-entered synthesis (the UPDATE trigger does not fire on an INSERT per sc-1).
+
+**Authors.** Every `changed_by` / `author` / `created_by` is a work email. The loader resolves each via `people.work_email` (case-insensitive, trim, prefer the ACTIVE row) to a display name. Unresolved → `"Someone"` at render. A legacy note with `author = NULL` from the sc-9 backfill renders with no name.
+
+**Grouping.** `groupHistory()` collapses a run of consecutive `actual_delete` entries by the same author within 2 seconds into one "Reset by <name>: N services cleared" line. A non-delete entry between two deletes, or a change of author, or a ≥ 2.001 s gap, breaks the group.
+
+**Adding a note.** `POST /api/service/day-note` with `{ accountKey, serviceDate, note }`. Gate order: `requireOwnerApi()` → `canWriteForAccount` → insert. The author is the signed-in session email; the client cannot spoof it. No period lock, no week lock — sc-25 is explicit: "Notes stay open on a locked period." The response carries the fresh loader payload so the fold updates in place without a reload.
+
+**Companion system notes** (written server-side, log-and-continue on failure, author = signed-in session email, `source = null`):
+
+- `DELETE /api/service/day-actuals` (the drawer's "Back to projections") → inserts `"Cleared back to projections"` after the delete succeeds.
+- `POST /api/service/day-actuals` that leaves every actual at 0 for the day → inserts `"Marked not served"` after the save.
+
+Nothing in this surface writes to `sc_daily_actuals_history` directly — that table is driver-trigger-only.
+
+### Carry-ins from train 3
+
+1. **Push to QuickBooks again.** On the week check's headline (not the calendar band). Renders only when the page's finalize row has `submitted_via = 'v2' AND push_gave_up_at IS NOT NULL`. Gated by `canPushAgainDb()` in `src/lib/sc/submit/pushAgainScope.ts`: the three people with `is_sc_lock_override = true` on an ACTIVE `people` row (case-insensitive, trim, any-row), AND `SC_V2_OUTBOUND != "off"`. Route: `POST /api/service/push-again { rowId }` → delegates to `pushAgain(rowId)` in `src/lib/sc/submit/push.ts` which already enforces not_v2 / already_done / not_given_up / reverted / race_lost refusals.
+2. **`review.css` raw pixels** move to file-local tokens prefixed `--kf-sc-rv-*` (scoped to `:root` because the pinned foot sits outside `.kf-sc-rv-surface`): `--kf-sc-rv-foot: 80px`, `--kf-sc-rv-foot-phone: 110px`, `--kf-sc-rv-dl-p: 150px`, `--kf-sc-rv-dl-a: 118px`, `--kf-sc-rv-dl-q: 72px`, `--kf-sc-rv-dl-cell-y: var(--sp-sp-1)`. Every raw `4px` and `6px` swaps to `var(--sp-sp-1)` where applicable.
+3. **No-day-record message** rewrites in `src/lib/sc/submit/dayFixFlag.ts` to: "That day has no record yet. Enter it from the calendar first."
+4. **Back to projections hit area.** The button is a plain `.kf-btn.kf-btn--line` inside `.kf-sc-dr__acts`; the shared `.kf-btn` base already carries `min-height: var(--sp-floor-chef)` (48 px) and there is no absolute element above it inside the drawer. The remote-click miss on Nov 17 would not reproduce with this markup; a Playwright assertion is queued with the `tests/.auth/user.json` refresh.
+
+### Files
+
+**New:** `src/lib/sc/calendar/isAskedYet.ts`, `src/lib/sc/sitesBoard/{types,bucket,load}.ts`, `src/components/service/sitesBoard/SitesBoard.tsx`, `src/lib/sc/mlb/{types,gameMark,homeStands,load}.ts`, `src/app/(shell)/service/mlb/{page.tsx,mlb.css}`, `src/components/service/mlb/BigLeagueCalendar.tsx`, `src/lib/sc/notesHistory/{types,formatHistoryLine,load}.ts`, `src/components/service/drawer/NotesAndHistory.tsx`, `src/app/api/service/day-note/route.ts`, `src/lib/sc/submit/pushAgainScope.ts`, `src/app/api/service/push-again/route.ts`. Tests in each module's `__tests__/`.
+
+**Changed:** `src/app/(shell)/service/page.tsx` (no-site branch renders `SitesBoard`, plus loads MLB accounts; retires `SiteList`), `src/app/(shell)/service/service.css` (adds `.kf-sc-sites*`, `.kf-sc-site*`, `.kf-sc-mark`, `.kf-sc-mini*`, `.kf-sc-seg a`, `.kf-sc-region`, `.kf-sc-legend--mini`, `.kf-sc-notebox`, `.kf-sc-fold`, `.kf-sc-ledger*`), `src/app/(shell)/service/review/review.css` (file-local tokens + raw-pixel sweep + `.kf-sc-rv-pushfail`), `src/components/service/review/ReviewPage.tsx` (push-again headline + handler + `canPushAgain` prop), `src/app/(shell)/service/review/page.tsx` (server-side push-again scope), `src/lib/sc/submit/reviewLoader.ts` (carries `finalizeRowId`, `submittedVia`, `pushGaveUp`), `src/components/service/DayDrawer.tsx` (mounts `NotesAndHistory`), `src/app/api/service/day-actuals/route.ts` (companion system notes on DELETE + allZero POST), `src/lib/sc/submit/dayFixFlag.ts` (no-day-record copy).
+
+**Removed:** `src/components/service/SiteList.tsx` (stand-in, retired by `SitesBoard`).
+
+**Not touched:** `src/app/tokens.css`, `src/app/components.css`, `src/components/shell/**`, `src/lib/fmt.ts`, `src/app/globals.css`, `package.json`, `vercel.json`, `docs/DESIGN.md`, `docs/GOTCHAS.md`, `docs/GOVERNANCE.md`, `docs/OWNERSHIP.md`. One shared file touched by convention: `docs/LEDGER.md` carries the one-line pointer.
+
+### Tests
+
+Four new test files, 44 cases (all pass): `isAskedYet` (nine branches + cutover boundary), `bucket.classifyRow` (twelve kinds + override), `gameMark` (four `day_type` values + three time-zone cases + the null-input branch), `homeStands` (five cases including the mode-switch), `formatHistoryLine` (eleven cases including the 2-second boundary in both directions).
+
+`package.json` is a shared file and I did not touch it; the `test:sc` script's glob still only matches `src/lib/sc/billing/**`. A one-line glob extension (e.g. `'src/lib/sc/**/__tests__/*.test.mjs'`) belongs to the shared-foundation lane — flagged in the PR body.
+
 ## Train 1 - the billing engine moves (2026-11-15)
 
 v1's billing engine at commit `c3c1b902` is copied into `src/lib/sc/**` with its tests. Nothing in V2 calls the engine yet. No screen, no route, no scheduled job. Rule changes belong to train 2.

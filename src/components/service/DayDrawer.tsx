@@ -15,6 +15,7 @@ import { ChevronLeft, ChevronRight, X, Lock, Flag, House, Pencil, TriangleAlert,
 import { fmtCount } from "@/lib/fmt";
 import type { DayDrawerView, DrawerService, SaveResult, TheirRow } from "@/lib/sc/dayActuals/types";
 import { readDraft, writeDraft, clearDraft, isKept, markKept } from "./dayDraftStore";
+import { NotesAndHistory } from "./drawer/NotesAndHistory";
 
 type CountsMap = Record<string, number | null>;
 
@@ -493,6 +494,13 @@ export function DayDrawer({ view, basePath, closeHref, movedFromDow }: Props) {
               ) : null}
             </div>
           ) : null}
+
+          <NotesAndHistory
+            accountKey={view.site.accountKey}
+            serviceDate={view.serviceDate}
+            timezone={view.site.timezone}
+            readOnly={ro}
+          />
         </div>
 
         {/* Foot */}

@@ -25,6 +25,7 @@ import type { SubmitBlock } from "@/lib/sc/types";
 import { resolveFinalizeReviewSpan, mondayOfWeek } from "@/lib/sc/scWeekFinalize";
 import { checkWeekSubmittable } from "@/lib/sc/submit/checkSubmit";
 import { resolveDayState } from "@/lib/sc/calendar/dayState";
+import { effectiveUnitEndedBeforeSiteToday } from "@/lib/sc/calendar/isAskedYet";
 
 export interface ReviewLine {
   serviceId: string;
@@ -86,6 +87,13 @@ export interface ReviewView {
   isBilled: boolean;
   preflight: SubmitBlock[];
   siteToday: string;
+  // Train 4: a submitted V2 week whose push gave up carries its
+  // finalize row so the headline can offer "Push to QuickBooks
+  // again". A v1-era submitted row has `submittedVia = null` and
+  // the button does not render.
+  finalizeRowId: string | null;
+  submittedVia: string | null;
+  pushGaveUp: boolean;
 }
 
 interface SvcRow {
@@ -130,7 +138,7 @@ export async function loadReviewScreen(
   const unitDates = span.dates;
   const isBiweeklyUnit = span.isBiweekly && unitDates.length === 14;
 
-  const [servicesQ, groupsQ, actQ, projQ, metaQ, finQ, siteTodayQ, revQ] = await Promise.all([
+  const [servicesQ, groupsQ, actQ, projQ, metaQ, finQ, siteTodayQ, revQ, anyFinEverQ] = await Promise.all([
     sb.from("sc_services")
       .select("id, service_name, group_id, unit, is_flat_fee, is_non_revenue, sort_order")
       .eq("account_key", accountKey)
@@ -155,7 +163,7 @@ export async function loadReviewScreen(
     // param, not span.spanStart). This is the write the submit route
     // makes too.
     sb.from("sc_week_finalize")
-      .select("status, finalized_at")
+      .select("id, status, finalized_at, submitted_via, push_gave_up_at")
       .eq("account_key", accountKey)
       .eq("week_start", weekStart)
       .neq("status", "reverted")
@@ -169,6 +177,13 @@ export async function loadReviewScreen(
       .select("service_date, service_id, actual_revenue, is_non_revenue, has_actuals")
       .eq("account_key", accountKey)
       .in("service_date", unitDates),
+    // Fix 1 (train 4): the exempt rule's input — any non-reverted
+    // finalize row ever for this account. head:true + exact count,
+    // bounded.
+    sb.from("sc_week_finalize")
+      .select("id", { count: "exact", head: true })
+      .eq("account_key", accountKey)
+      .neq("status", "reverted"),
   ]);
 
   if (servicesQ.error) throw new Error(`sc_services: ${servicesQ.error.message}`);
@@ -179,6 +194,8 @@ export async function loadReviewScreen(
   if (finQ.error)      throw new Error(`sc_week_finalize: ${finQ.error.message}`);
   if (siteTodayQ.error) throw new Error(`sc_site_today: ${siteTodayQ.error.message}`);
   if (revQ.error)      throw new Error(`sc_daily_revenue: ${revQ.error.message}`);
+  if (anyFinEverQ.error) throw new Error(`sc_week_finalize (any ever): ${anyFinEverQ.error.message}`);
+  const anyFinalizeRowEver = (anyFinEverQ.count ?? 0) > 0;
 
   const services = (servicesQ.data ?? []) as SvcRow[];
   const groups = (groupsQ.data ?? []) as GroupRow[];
@@ -212,9 +229,18 @@ export async function loadReviewScreen(
   );
   const siteToday = String(siteTodayQ.data ?? unitEnd);
 
-  const finalizeRow = finQ.data as { status: string; finalized_at: string } | null;
+  const finalizeRow = finQ.data as {
+    id: string;
+    status: string;
+    finalized_at: string;
+    submitted_via: string | null;
+    push_gave_up_at: string | null;
+  } | null;
   const isAlreadySubmitted = !!finalizeRow;
   const submittedAt = finalizeRow?.finalized_at ?? null;
+  const finalizeRowId = finalizeRow?.id ?? null;
+  const submittedVia = finalizeRow?.submitted_via ?? null;
+  const pushGaveUp = !!finalizeRow?.push_gave_up_at;
 
   let totalMeals = 0;
   let totalCents = 0;
@@ -290,7 +316,14 @@ export async function loadReviewScreen(
       // The review screen is reachable only while the period is open
       // from the leader's side. isPeriodClosed = false here.
       isPeriodClosed: false,
-      unitEndedBeforeSiteToday: unitEnd < siteToday,
+      // Fix 1: the same exempt helper as the calendar + the sites
+      // board, so a never-submitted site reads the same verb on
+      // all three.
+      unitEndedBeforeSiteToday: effectiveUnitEndedBeforeSiteToday(
+        siteToday,
+        unitEnd,
+        anyFinalizeRowEver,
+      ),
     });
 
     // Rule 5 look reasons.
@@ -364,6 +397,9 @@ export async function loadReviewScreen(
     isBilled: site.isBilled,
     preflight,
     siteToday,
+    finalizeRowId,
+    submittedVia,
+    pushGaveUp,
   };
 }
 

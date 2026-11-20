@@ -57,7 +57,7 @@ export async function flagDayForFix(sb: SupabaseClient, input: DayFixInput): Pro
     return {
       ok: false,
       code: "NO_DAY_RECORD",
-      message: "That day has no record yet. Enter it from the calendar, then mark it for a fix.",
+      message: "That day has no record yet. Enter it from the calendar first.",
     };
   }
   return { ok: true, mode: "flagged" };

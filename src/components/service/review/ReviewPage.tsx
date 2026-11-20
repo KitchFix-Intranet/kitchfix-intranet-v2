@@ -37,9 +37,12 @@ interface Props {
   // Round 3: server-evaluated OUTBOUND_OFF, surfaced on load so the
   // person sees Submitting is not switched on yet BEFORE pressing.
   outboundBlock: { code: string; message: string } | null;
+  // Train 4 carry-in 1: whether the signed-in viewer may press
+  // "Push to QuickBooks again" on a V2 week that gave up.
+  canPushAgain: boolean;
 }
 
-export function ReviewPage({ view, backHref, outboundBlock }: Props) {
+export function ReviewPage({ view, backHref, outboundBlock, canPushAgain }: Props) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [finish, setFinish] = useState<null | {
@@ -54,6 +57,9 @@ export function ReviewPage({ view, backHref, outboundBlock }: Props) {
     return m;
   });
   const [flagBusy, setFlagBusy] = useState<string | null>(null);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushResult, setPushResult] = useState<"queued" | "refused" | "err" | null>(null);
+  const [pushRefusedReason, setPushRefusedReason] = useState<string | null>(null);
 
   // Rule 5: every called-out day must be ticked before Submit lights.
   const unticked = useMemo(
@@ -155,6 +161,35 @@ export function ReviewPage({ view, backHref, outboundBlock }: Props) {
     }
   }, [view.site.accountKey, router]);
 
+  const onPushAgain = useCallback(async () => {
+    if (!view.finalizeRowId) return;
+    setPushBusy(true);
+    setPushResult(null);
+    setPushRefusedReason(null);
+    try {
+      const res = await fetch("/api/service/push-again", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ rowId: view.finalizeRowId }),
+      });
+      const payload = await res.json();
+      if (payload.ok) {
+        setPushResult("queued");
+      } else if (payload.code === "REFUSED") {
+        setPushResult("refused");
+        setPushRefusedReason(typeof payload.reason === "string" ? payload.reason : null);
+      } else {
+        setPushResult("err");
+        setNetErr(typeof payload.message === "string" ? payload.message : "The push did not queue. Try again.");
+      }
+    } catch {
+      setPushResult("err");
+      setNetErr("The push did not queue. Nothing was changed.");
+    } finally {
+      setPushBusy(false);
+    }
+  }, [view.finalizeRowId]);
+
   const onClearFlag = useCallback(async (iso: string) => {
     setFlagBusy(iso);
     try {
@@ -200,6 +235,38 @@ export function ReviewPage({ view, backHref, outboundBlock }: Props) {
           <section className="kf-sc-rv-already" role="status">
             <Lock size={18} strokeWidth={1.5} aria-hidden />
             <span>Submitted and on record. Actuals are locked until the office reopens the week.</span>
+          </section>
+        ) : null}
+
+        {view.pushGaveUp && view.submittedVia === "v2" ? (
+          <section className="kf-sc-rv-pushfail" role="status" aria-label="QuickBooks push failed">
+            <TriangleAlert size={18} strokeWidth={1.5} aria-hidden />
+            <div className="kf-sc-rv-pushfail__body">
+              <b>The QuickBooks push did not land.</b>
+              <p>
+                The week is submitted and on record. The draft invoice is not in QuickBooks yet.
+              </p>
+              {pushResult === "queued" ? (
+                <p className="kf-sc-rv-pushfail__ok" role="status">The push is queued. Reload the page in a minute to see it land.</p>
+              ) : null}
+              {pushResult === "refused" ? (
+                <p className="kf-sc-rv-pushfail__err" role="alert">
+                  The push cannot run again from here
+                  {pushRefusedReason ? ` (${pushRefusedReason.replace(/_/g, " ")})` : ""}.
+                </p>
+              ) : null}
+            </div>
+            {canPushAgain ? (
+              <button
+                type="button"
+                className={`kf-btn kf-btn--primary${pushBusy ? " is-busy" : ""}`}
+                onClick={onPushAgain}
+                disabled={pushBusy || pushResult === "queued"}
+              >
+                {pushBusy ? <RefreshCw size={18} strokeWidth={1.5} aria-hidden /> : <Send size={18} strokeWidth={1.5} aria-hidden />}
+                <span>{pushBusy ? "Queuing" : "Push to QuickBooks again"}</span>
+              </button>
+            ) : null}
           </section>
         ) : null}
 
