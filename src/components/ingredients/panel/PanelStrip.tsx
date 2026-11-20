@@ -33,7 +33,9 @@ export function PanelStrip({
   return (
     <div className="kf-ipanel__strip" aria-label="Item summary">
       <div className="kf-ipanel__strip-cell">
-        <span className="kf-ipanel__strip-label">Unit price</span>
+        {/* T6 round 2 item 7: labels follow the reference's facts
+            on vItemPanel - Price, Pack, 12 months, Last bought. */}
+        <span className="kf-ipanel__strip-label">Price</span>
         <span className="kf-ipanel__strip-value kf-ipanel__strip-value--accent">
           {facts.primaryValue != null && facts.primaryUnit != null ? (
             <>
@@ -52,7 +54,7 @@ export function PanelStrip({
       </div>
 
       <div className="kf-ipanel__strip-cell">
-        <span className="kf-ipanel__strip-label">Annual spend</span>
+        <span className="kf-ipanel__strip-label">12 months</span>
         <span className="kf-ipanel__strip-value">{facts.annualSpend}</span>
       </div>
 

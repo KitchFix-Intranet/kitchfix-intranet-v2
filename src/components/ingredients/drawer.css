@@ -313,7 +313,10 @@
   font-size: var(--sp-t-label);
   letter-spacing: 2px;
   text-transform: uppercase;
-  color: var(--sp-red-deep);
+  /* T6 round 2 item 7: not red. Red is reserved for a wrong cost or
+   * a failure; the vendor + item-number line is just context. Was
+   * --sp-red-deep. */
+  color: var(--sp-body);
 }
 .kf-ipanel__name {
   margin: 0;
@@ -1641,4 +1644,27 @@
   font-size: var(--sp-t-label);
   font-style: italic;
   margin-right: auto;
+}
+
+/* T6 round 2 item 1: per-editor Discard ask. One sentence + Keep
+ * editing / Discard. Inline bar inside the editor so each editor
+ * asks about its own typed work and closes its own row - the
+ * panel-level ask still fires when the panel itself is closed
+ * (Esc from outside the editor, Close button, backdrop click). */
+.kf-ipanel__editor-ask {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-sp-2);
+  padding: var(--sp-sp-3);
+  background: var(--sp-warn-bg);
+  border: 1px solid var(--sp-warn-strong);
+  border-radius: var(--sp-r-sm);
+  color: var(--sp-ink);
+}
+.kf-ipanel__editor-ask-text {
+  flex: 1 1 220px;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  font-weight: 700;
 }

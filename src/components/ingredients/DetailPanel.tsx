@@ -73,6 +73,7 @@ export function DetailPanel({
   stepTotal = null,
   onPrev,
   onNext,
+  onFocusReturn,
 }: {
   open: Exclude<DetailPanelOpen, null>;
   onClose: () => void;
@@ -98,18 +99,16 @@ export function DetailPanel({
   // change the data the wrapper fetched. ReviewCard leaves it
   // undefined and router.refresh() handles the server path.
   onInvalidate?: () => void;
-  // N13 R5 + T6 ruling 1: Archive + Mark one-off now ride at the end
-  // of zone 1 as a "Put this item away" row (not the retired footer).
-  // The flag carries through to PanelItemZone unchanged: true only
-  // on the Vendor items surface.
   showStatusActions?: boolean;
-  // T6 item 8 + ruling 4: Prev/Next within the surface's own list.
-  // Null index or <= 1 list disables both. Steps run within the
-  // caller's list; the panel never crosses a page boundary.
   stepIndex?: number | null;
   stepTotal?: number | null;
   onPrev?: () => void;
   onNext?: () => void;
+  // T6 round 2 item 2: focus returns to the opener row on close.
+  // Callers pass a callback that focuses the row they opened (or
+  // the row the user last stepped to). Fired AFTER the exit
+  // animation runs so the panel has released the focus trap.
+  onFocusReturn?: () => void;
 }) {
   const router = useRouter();
   const labelId = useId();
@@ -160,12 +159,12 @@ export function DetailPanel({
     if (onInvalidate) onInvalidate();
   };
 
-  // T2 §3: the discard-what-you-typed ask. Opened by any of the three
-  // doors (Esc, close button, backdrop click) when at least one editor
-  // under the panel reports a changed value. Keep editing is the
-  // default (focus lands on it); Discard resets every dirty editor to
-  // its baseline and closes the panel.
+  // T2 §3 + T6 round 2 item 1: the discard-what-you-typed ask.
+  // Three doors open it with any editor dirty: Esc / Close / backdrop
+  // click (kind="close"), and Prev / Next (kind="step"). The step
+  // path runs the saved step function after the user discards.
   const [discardAskOpen, setDiscardAskOpen] = useState(false);
+  const [pendingStep, setPendingStep] = useState<(() => void) | null>(null);
   const keepEditingRef = useRef<HTMLButtonElement>(null);
 
   const close = () => {
@@ -174,15 +173,44 @@ export function DetailPanel({
     // T2 round 2 §4: no clearAll here. Every editor's useEffect
     // cleanup already removes its entry on unmount; closing the
     // panel must not touch editors outside this scope.
-    window.setTimeout(onClose, EXIT_MS);
+    window.setTimeout(() => {
+      onClose();
+      // T6 round 2 item 2: return focus to the opener row AFTER
+      // the panel has closed so the focus trap has released.
+      // Scheduled on a microtask to run after the parent re-renders.
+      if (onFocusReturn) {
+        window.setTimeout(() => {
+          try {
+            onFocusReturn();
+          } catch {
+            /* non-fatal */
+          }
+        }, 0);
+      }
+    }, EXIT_MS);
   };
 
   const tryClose = () => {
     if (anyDirty(PANEL_SCOPE)) {
+      setPendingStep(null);
       setDiscardAskOpen(true);
       return;
     }
     close();
+  };
+
+  // T6 round 2 item 1: Prev / Next ask first when something is typed.
+  // On Discard, run the step. On Keep editing, stay put.
+  const stepWithAsk = (step?: () => void) => {
+    if (!step) return undefined;
+    return () => {
+      if (anyDirty(PANEL_SCOPE)) {
+        setPendingStep(() => step);
+        setDiscardAskOpen(true);
+        return;
+      }
+      step();
+    };
   };
 
   useEffect(() => {
@@ -283,8 +311,8 @@ export function DetailPanel({
             onClose={tryClose}
             stepIndex={stepIndex}
             stepTotal={stepTotal}
-            onPrev={onPrev}
-            onNext={onNext}
+            onPrev={stepWithAsk(onPrev)}
+            onNext={stepWithAsk(onNext)}
           />
         </div>
 
@@ -300,7 +328,12 @@ export function DetailPanel({
           <PanelStrip item={item} ingredient={ingredient} />
         ) : null}
 
-        {open.kind === "item" && item ? (
+        {/* T6 round 2 item 4: on a put-away item, Attention is
+            already hidden (attention.tsx's isAway gate); zone 1 is
+            not rendered; and zone 2 ("How it prices on ...") must
+            not render either, since Costed per + Measures save and
+            would change every item on that ingredient. */}
+        {open.kind === "item" && item && !itemIsAway(item) ? (
           <PanelAttention
             item={item}
             ingredient={ingredient}
@@ -328,7 +361,12 @@ export function DetailPanel({
           />
         ) : null}
 
-        {ingredient ? (
+        {/* T6 round 2 item 4: zone 2 only renders when the item is
+            not away. Ingredient mode (no item) still renders the
+            full editor. For an unmatched item (ingredient is null),
+            PanelIngredientZonePending speaks the reference's words
+            (item 6). */}
+        {open.kind === "item" && item && itemIsAway(item) ? null : ingredient ? (
           <PanelIngredientZone
             ingredient={ingredient}
             item={item}
@@ -349,6 +387,7 @@ export function DetailPanel({
           />
         ) : (
           <PanelIngredientZonePending
+            item={open.kind === "item" ? item : null}
             proposedName={proposedName ?? null}
             proposedParent={proposedParent ?? null}
           />
@@ -360,6 +399,10 @@ export function DetailPanel({
           parents={parents}
           onLoadParents={onLoadParents}
           onDone={onDone}
+          // T6 round 2 item 5: on an item-mode open the closed rows
+          // show only the four folds; Mark-as-retail + Merge stay on
+          // the ingredient panel.
+          mode={open.kind === "item" ? "item" : "ingredient"}
         />
 
         {/* T6 ruling 2: the footer is removed entirely. Archive and
@@ -383,7 +426,7 @@ export function DetailPanel({
                   ref={keepEditingRef}
                   type="button"
                   className="kf-btn kf-btn--primary kf-btn--sm"
-                  onClick={() => setDiscardAskOpen(false)}
+                  onClick={() => { setDiscardAskOpen(false); setPendingStep(null); }}
                 >
                   Keep editing
                 </button>
@@ -393,6 +436,15 @@ export function DetailPanel({
                   onClick={() => {
                     discardAll(PANEL_SCOPE);
                     setDiscardAskOpen(false);
+                    // T6 round 2 item 1: if the ask was opened by
+                    // Prev / Next, run the pending step instead of
+                    // closing the panel.
+                    if (pendingStep) {
+                      const step = pendingStep;
+                      setPendingStep(null);
+                      step();
+                      return;
+                    }
                     close();
                   }}
                 >

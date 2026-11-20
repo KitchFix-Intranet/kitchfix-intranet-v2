@@ -29,17 +29,17 @@ export function ItemPanelById({
   showStatusActions = false,
   neighborIds,
   onStep,
+  onFocusReturn,
 }: {
   itemId: string | null;
   onClose: () => void;
-  // N13 R5 + T6 ruling 1: Archive + Mark one-off render as a Put-away
-  // row in zone 1, Vendor-items-only. Review queue and Ingredients
-  // tab leave this false.
   showStatusActions?: boolean;
-  // T6 item 8: the surface's own list for Prev/Next. Null or
-  // length <= 1 hides the buttons.
   neighborIds?: string[] | null;
   onStep?: (nextId: string) => void;
+  // T6 round 2 item 2: caller focuses the row that was last opened.
+  // Receives the last-stepped-to id (not the original opener) so a
+  // Prev/Next step then Close returns focus to the visible row.
+  onFocusReturn?: (lastId: string) => void;
 }) {
   const [state, setState] = useState<
     | { phase: "idle" }
@@ -142,6 +142,7 @@ export function ItemPanelById({
             ? () => onStep(neighborIds![idx + 1])
             : undefined
         }
+        onFocusReturn={onFocusReturn ? () => onFocusReturn(item.id) : undefined}
       />
     );
   }

@@ -16,7 +16,7 @@
 // price part is omitted. Provenance (set by hand / from catalog / ...)
 // goes on the row's muted micro sub-line beneath the summary.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtDate, fmtPackNumber, fmtPackNumbersInText, fmtUsd } from "@/lib/fmt";
@@ -153,19 +153,33 @@ export function PanelItemZone({
   ingredient: ReviewCardIngredient | null;
   packHint: PackHint | null;
   onDone: () => void;
-  // T6 ruling 1: Archive + Mark one-off render as one quiet "Put this
-  // item away" row at the end of zone 1, on Vendor items only, on a
-  // not-away item. The flag carries through from DetailPanel's
-  // showStatusActions prop (set by VendorItemsView; false on review
-  // card and Ingredients drawer).
   showStatusActions?: boolean;
 }) {
   const [packOpen, setPackOpen] = useState(false);
   const [priceOpen, setPriceOpen] = useState(false);
+  // T6 round 2 item 2: after a save, focus returns to the row's
+  // Edit button. Each editor row owns a ref to its toggle button
+  // and focuses it once the editor closes.
+  const packEditRef = useRef<HTMLButtonElement>(null);
+  const priceEditRef = useRef<HTMLButtonElement>(null);
+  const [packJustClosed, setPackJustClosed] = useState(false);
+  const [priceJustClosed, setPriceJustClosed] = useState(false);
 
   useEffect(() => {
     if (packHint) setPackOpen(true);
   }, [packHint?.nonce]);
+  useEffect(() => {
+    if (!packOpen && packJustClosed) {
+      packEditRef.current?.focus();
+      setPackJustClosed(false);
+    }
+  }, [packOpen, packJustClosed]);
+  useEffect(() => {
+    if (!priceOpen && priceJustClosed) {
+      priceEditRef.current?.focus();
+      setPriceJustClosed(false);
+    }
+  }, [priceOpen, priceJustClosed]);
 
   const parsed = parsePackNormalized(item.packNormalized ?? item.pack ?? null);
   const isCheck = item.packState === "check";
@@ -276,6 +290,7 @@ export function PanelItemZone({
         </div>
         <div className="kf-ipanel__row-action">
           <button
+            ref={packEditRef}
             type="button"
             className="kf-ipanel__row-toggle"
             onClick={() => setPackOpen((v) => !v)}
@@ -290,8 +305,8 @@ export function PanelItemZone({
               item={item}
               ingredient={ingredient}
               hint={packHint}
-              onDone={() => { onDone(); setPackOpen(false); }}
-              onCancel={() => setPackOpen(false)}
+              onDone={() => { onDone(); setPackJustClosed(true); setPackOpen(false); }}
+              onCancel={() => { setPackJustClosed(true); setPackOpen(false); }}
               measures={ingredient?.measures as Parameters<typeof PackOverrideBlock>[0]["measures"]}
             />
           </div>
@@ -359,7 +374,11 @@ export function PanelItemZone({
         <div className="kf-ipanel__row-action" />
       </div>
 
-      {/* Row 4: Price override ---------------------------------- */}
+      {/* Row 4: Price by hand ----------------------------------
+          T6 round 2 item 7: words follow the reference's handRow
+          on vItemPanel. "Not set" + "For when the invoice price
+          is wrong and you know the right one." Button reads "Edit"
+          when a hand-set price exists, else "Set a price". */}
       <div className="kf-ipanel__row">
         <div className="kf-ipanel__row-label">Price by hand</div>
         <div className="kf-ipanel__row-value">
@@ -371,18 +390,26 @@ export function PanelItemZone({
             </div>
           ) : (
             <div className="kf-ipanel__pack-summary">
-              None. Use only when the pack is right and the number is not.
+              Not set.{" "}
+              <span className="kf-ipanel__row-hint" style={{ display: "inline" }}>
+                For when the invoice price is wrong and you know the right one.
+              </span>
             </div>
           )}
         </div>
         <div className="kf-ipanel__row-action">
           <button
+            ref={priceEditRef}
             type="button"
             className="kf-ipanel__row-toggle"
             onClick={() => setPriceOpen((v) => !v)}
             aria-expanded={priceOpen}
           >
-            {priceOpen ? "Close" : "Override"}
+            {priceOpen
+              ? "Close"
+              : item.priceManualOverride
+                ? "Edit"
+                : "Set a price"}
           </button>
         </div>
         {priceOpen ? (
@@ -390,8 +417,8 @@ export function PanelItemZone({
             <PriceOverrideBlock
               item={item}
               ingredient={ingredient}
-              onDone={() => { onDone(); setPriceOpen(false); }}
-              onCancel={() => setPriceOpen(false)}
+              onDone={() => { onDone(); setPriceJustClosed(true); setPriceOpen(false); }}
+              onCancel={() => { setPriceJustClosed(true); setPriceOpen(false); }}
             />
           </div>
         ) : null}

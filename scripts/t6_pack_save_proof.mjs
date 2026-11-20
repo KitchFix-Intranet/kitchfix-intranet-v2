@@ -2,8 +2,11 @@
 //
 // Part A (client decision): for each row of the memo's save table,
 // the editor's save decision calls the right API route(s) with the
-// right body. The proof reimplements the editor's branching as a
-// pure function (decideSaveSequence) and feeds the same table.
+// right body. The proof imports the REAL decidePackSave helper the
+// editor uses (src/components/ingredients/panel/packHelpers.tsx) -
+// in T6 round 2 item 8 the proof moved off a "pure mirror" copy to
+// the real function, so a proof that passes guarantees the editor
+// is right.
 //
 // Part B (library composition): setVendorItemPriceOverride NESTS the
 // price inside a pre-existing hand-set pack override instead of
@@ -17,6 +20,7 @@
 
 import { randomUUID } from "node:crypto";
 import { setVendorItemPriceOverride } from "../src/lib/reviewWrites.ts";
+import { decidePackSave } from "../src/components/ingredients/panel/packHelpers.tsx";
 
 let pass = 0;
 let fail = 0;
@@ -36,145 +40,26 @@ function ok(label, got, want) {
 // Part A: client decision table.
 // ======================================================================
 
-// A pure mirror of PackOverrideBlock.save()'s branching. If the editor
-// ever changes, this mirror must too, and the proof fails until the
-// mapping is re-stated here. The memo's table is the contract.
-function decideSaveSequence({
-  // facts the editor compares against on open
-  item,
-  // current editor state
-  catchWeight,
-  catchWeightChanged,
-  packPristine,
-  qty,
-  size,
-  uom,
-  perLb,
-  billedUnit,
-  note,
-  // the price field: current value + default + source hint if from a
-  // shortcut, matched to the cent against a file price
-  caseFieldVal,
-  defaultCaseVal,
-  caseFieldSrcLabel, // "catalog" | "billed" | "avg" | "typed" | null
-}) {
-  const caseFieldChanged = !moneyEqual(caseFieldVal, defaultCaseVal);
-  const packDirty = !catchWeight && (!packPristine || catchWeightChanged);
-
-  // Branch 1: catch weight.
-  if (catchWeight) {
-    return [{
-      route: "/api/review/set-pack-override",
-      body: {
-        itemId: item.id,
-        catchWeight: true,
-        perLb,
-        billedUnit: billedUnit || null,
-        note: note || null,
-      },
-    }];
-  }
-
-  // Branch 2: price only.
-  if (!packDirty && caseFieldChanged) {
-    const b = uomToBase(uom);
-    if (!b) return [];
-    const total = qty * size * b.factor;
-    const perBase = caseFieldVal / total;
-    return [{
-      route: "/api/review/set-price-override",
-      body: {
-        itemId: item.id,
-        perBase,
-        baseUom: b.base,
-        reason: priceReason(caseFieldSrcLabel, caseFieldVal, note),
-      },
-    }];
-  }
-
-  // Branch 3/4: pack only.
-  if (packDirty && !caseFieldChanged) {
-    return [{
-      route: "/api/review/set-pack-override",
-      body: {
-        itemId: item.id,
-        catchWeight: false,
-        qty,
-        size,
-        uom,
-        billedUnit: billedUnit || null,
-        note: note || null,
-      },
-    }];
-  }
-
-  // Branch 5: pack and price.
-  if (packDirty && caseFieldChanged) {
-    const b = uomToBase(uom);
-    if (!b) return [];
-    const total = qty * size * b.factor;
-    const perBase = caseFieldVal / total;
-    return [
-      {
-        route: "/api/review/set-pack-override",
-        body: {
-          itemId: item.id,
-          catchWeight: false,
-          qty,
-          size,
-          uom,
-          billedUnit: billedUnit || null,
-          note: note || null,
-        },
-      },
-      {
-        route: "/api/review/set-price-override",
-        body: {
-          itemId: item.id,
-          perBase,
-          baseUom: b.base,
-          reason: priceReason(caseFieldSrcLabel, caseFieldVal, note),
-        },
-      },
-    ];
-  }
-
-  return [];
-}
-
-function priceReason(srcLabel, caseVal, note) {
-  const n = (note || "").trim();
-  if (srcLabel === "typed") return n.length > 0 ? n : "Price typed in the pack editor";
-  if (srcLabel === "catalog" || srcLabel === "billed" || srcLabel === "avg") {
-    const auto = `Costed from ${srcLabel} case price $${caseVal.toFixed(2)} instead of the default`;
-    return n.length > 0 ? `${auto}. ${n}` : auto;
-  }
-  return "";
-}
-
-function moneyEqual(a, b) {
-  if (a == null || b == null) return a === b;
-  return Math.round(a * 100) === Math.round(b * 100);
-}
-function uomToBase(uom) {
-  // Minimal subset for the cases below (LB, GAL, OZ, FLOZ, EA).
-  const map = {
-    LB: { base: "LB", factor: 1 },
-    OZ: { base: "LB", factor: 1 / 16 },
-    G: { base: "LB", factor: 1 / 453.592 },
-    KG: { base: "LB", factor: 2.20462 },
-    GAL: { base: "FLOZ", factor: 128 },
-    FLOZ: { base: "FLOZ", factor: 1 },
-    QT: { base: "FLOZ", factor: 32 },
-    PT: { base: "FLOZ", factor: 16 },
-    L: { base: "FLOZ", factor: 33.814 },
-    ML: { base: "FLOZ", factor: 0.033814 },
-    EA: { base: "EA", factor: 1 },
-    CT: { base: "EA", factor: 1 },
-    PC: { base: "EA", factor: 1 },
-    DZ: { base: "EA", factor: 12 },
-  };
-  return map[uom] ?? null;
+// T6 round 2 item 8: the proof imports decidePackSave from the
+// SAME module the editor uses, so the proof cannot pass when the
+// editor is wrong. decidePackSave takes a flat state object and
+// returns the sequence of POSTs the editor will send.
+function decideSaveSequence(args) {
+  return decidePackSave({
+    itemId: args.item.id,
+    catchWeight: args.catchWeight,
+    catchWeightChanged: args.catchWeightChanged,
+    packPristine: args.packPristine,
+    qty: args.qty,
+    size: args.size,
+    uom: args.uom,
+    perLb: args.perLb,
+    billedUnit: args.billedUnit,
+    note: args.note,
+    caseFieldVal: args.caseFieldVal,
+    defaultCaseVal: args.defaultCaseVal,
+    caseFieldSrcLabel: args.caseFieldSrcLabel,
+  });
 }
 
 const item = { id: "item-1" };

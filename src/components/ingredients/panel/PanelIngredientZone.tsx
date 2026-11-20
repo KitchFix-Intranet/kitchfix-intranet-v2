@@ -586,12 +586,73 @@ export function PanelIngredientZone({
 }
 
 export function PanelIngredientZonePending({
+  item,
   proposedName,
   proposedParent,
 }: {
+  // T6 round 2 item 6: when the panel opens on an item with no
+  // ingredient (Vendor items / review queue), the words follow the
+  // reference's vItemPanel. For an ingredient-mode open that has
+  // no ingredient yet (a legacy ai-new preview with no matching
+  // item), item is null and the old "proposed" copy stands.
+  item?: import("../itemTypes").ReviewGroupItem | null;
   proposedName: string | null;
   proposedParent: string | null;
 }) {
+  // Item mode: say what the item's status is in the reference's
+  // voice. No mention of a card below or a create flow.
+  if (item) {
+    const state = item.state ?? "";
+    const isProposed = (item.linkStatus ?? "") === "proposed";
+    const isNotFood =
+      state === "not_food" ||
+      (item.reason && item.reason.startsWith("ai-notfood"));
+    return (
+      <section className="kf-ipanel__zone kf-ipanel__zone--ing" aria-label="Ingredient">
+        <header className="kf-ipanel__zone-head">
+          <span className="kf-ipanel__zone-head-title">Ingredient</span>
+        </header>
+        <div className="kf-ipanel__row">
+          <div className="kf-ipanel__row-label">Not matched yet</div>
+          <div className="kf-ipanel__row-value">
+            {isProposed ? (
+              <>
+                <p className="kf-ipanel__pending-copy">
+                  The matcher suggests{" "}
+                  {proposedName ? (
+                    <>a new ingredient, <strong>{proposedName}</strong></>
+                  ) : (
+                    "an ingredient"
+                  )}
+                  . Decide it in the Review queue.
+                </p>
+                <div>
+                  <a className="kf-btn kf-btn--line kf-btn--sm" href="/stockpot/ingredients/review">
+                    Go to the Review queue
+                  </a>
+                </div>
+              </>
+            ) : isNotFood ? (
+              <p className="kf-ipanel__pending-copy">
+                The matcher thinks this is not food
+                {item.reason && item.reason.startsWith("ai-notfood:") ? (
+                  <>: {item.reason.slice("ai-notfood:".length)}</>
+                ) : null}
+                . It is kept out of recipes.
+              </p>
+            ) : (
+              <p className="kf-ipanel__pending-copy">
+                Not matched to an ingredient yet. It will be suggested the
+                next time a batch is brought in.
+              </p>
+            )}
+          </div>
+          <div className="kf-ipanel__row-action" />
+        </div>
+      </section>
+    );
+  }
+  // Ingredient-mode open with a proposed name (legacy ai-new zone).
   return (
     <section className="kf-ipanel__zone kf-ipanel__zone--ing" aria-label="Ingredient not yet created">
       <header className="kf-ipanel__zone-head">
@@ -601,15 +662,11 @@ export function PanelIngredientZonePending({
       <div className="kf-ipanel__row">
         <div className="kf-ipanel__row-label">Proposed</div>
         <div className="kf-ipanel__row-value">
-          {/* N8 round 4 fix 1: one paragraph, one inline flow. The row
-              value is a flex column by default; a block <p> inside
-              owns the inline text so sibling <strong>s do not become
-              their own flex items. */}
           <p className="kf-ipanel__pending-copy">
             The matcher proposed <strong>{proposedName ?? "a new ingredient"}</strong>
             {proposedParent ? <> under <strong>{proposedParent}</strong></> : null}.
-            Hit &ldquo;New ingredient&rdquo; on the card below to create it (category required).
-            Rename, category, resale, and merge become available once it exists.
+            Rename, category, resale, and merge become available once it
+            exists.
           </p>
         </div>
         <div className="kf-ipanel__row-action" />

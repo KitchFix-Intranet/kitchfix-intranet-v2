@@ -341,17 +341,19 @@ export function PanelClosedRows({
   onLoadParents,
   sendAllBack,
   onDone,
+  mode = "ingredient",
 }: {
   item: ReviewGroupItem | null;
   ingredient: ReviewCardIngredient | null;
   parents: ReviewCardIngredient[];
-  // N12 §R2: optional lazy fetcher for Merge candidates; fires once
-  // per panel, not on every open of the Merge row.
   onLoadParents?: () => Promise<ReviewCardIngredient[]>;
-  // N12 §2c.6: when present, "Send all back" renders between Merge
-  // (or Evidence) and Change history.
   sendAllBack?: { masterName: string; itemIds: string[] };
   onDone: () => void;
+  // T6 round 2 item 5: in item mode (panel opened on an item), the
+  // closed rows render only the four folds (Spend by site, Invoice
+  // wording, Evidence, Change history). Mark-as-retail + Merge are
+  // ingredient-level actions and only show in ingredient mode.
+  mode?: "item" | "ingredient";
 }) {
   // N8 §1i: closed-row sub copy comes from the render.
   const ingredientName = ingredient?.name ?? "this ingredient";
@@ -434,13 +436,17 @@ export function PanelClosedRows({
 
   return (
     <div className="kf-ipanel__drows">
-      {ingredient ? (
+      {/* T6 round 2 item 5: Mark-as-retail + Merge render in
+          ingredient mode only (panel opened on an ingredient). On
+          an item-mode open those actions are reachable via the
+          "Open ingredient" button in zone 2. */}
+      {mode === "ingredient" && ingredient ? (
         <DisclosureRow label="Mark as retail" sub={`Takes ${ingredientName} out of recipe coverage`}>
           {() => <RetailRow ingredient={ingredient} onDone={onDone} />}
         </DisclosureRow>
       ) : null}
 
-      {ingredient ? (
+      {mode === "ingredient" && ingredient ? (
         <DisclosureRow
           label="Merge"
           sub={`Fold ${ingredientName} into another ingredient`}

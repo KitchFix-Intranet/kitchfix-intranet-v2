@@ -27,6 +27,7 @@ import {
   uomDisplay,
   displayPerBase,
   parsePackNormalized,
+  decidePackSave,
   type PackHint,
 } from "./packHelpers";
 
@@ -428,183 +429,115 @@ export function PackOverrideBlock({
     (catchWeight
       ? perLbValid && !perLbPristine
       : qtyValid && sizeValid && uomToBase(uom) != null && (!packPristine || caseFieldChangedNonCw || catchWeightChanged));
-  // T6 ruling 1: when the second POST of a pack-then-price run fails
-  // after the first succeeded, we leave the editor open with the
-  // price still in the field and show "The pack was saved. The price
-  // was not." + train 2's sentence. A second press saves the price
-  // alone (pack is now in the stored row so packPristine = true from
-  // that save onward - the state here just drives the extra sentence).
+  // T6 ruling 1 + round 2 item 3: when the second POST of a
+  // pack-then-price run fails after the first succeeded, we leave
+  // the editor open with the price still in the field and show
+  // "The pack was saved. The price was not." followed by a cause.
+  // The retry sends the price alone - we force packPristine in the
+  // state we feed to decidePackSave on the next save, so only the
+  // price POST fires. The retry does NOT re-post the pack.
   const [partialPackSaved, setPartialPackSaved] = useState(false);
-  const [partialSentence, setPartialSentence] = useState<string | null>(null);
+  // T6 round 2 item 1: per-editor Esc ask. Replaces the half-done
+  // tryCloseEditor that dropped typed work without asking.
+  const [editorAskOpen, setEditorAskOpen] = useState(false);
+  // T6 round 2 item 1: autofocus the first field on open. The
+  // segmented control is the first focusable; after mount we focus
+  // the first mode button so Enter + Tab + Esc all read as expected.
+  const firstFieldRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    // Only on initial mount; hint-driven focus takes over below.
+    if (!hint) firstFieldRef.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // T6 ruling 1: five save branches, one for each row of the memo's
-  // table. "One save, one effect" where today's editor can express
-  // the same facts; "pack-then-price" where the user changed both.
-  //
-  //   catch weight           -> set-pack-override          (one POST)
-  //   pack dirty, price default -> set-pack-override       (one POST)
-  //   pack pristine, price shortcut -> set-price-override  (one POST)
-  //   pack pristine, price typed    -> set-price-override  (one POST)
-  //   pack dirty, price dirty       -> pack then price     (two POSTs)
-  //
-  // See scripts/t6_pack_save_proof.mjs for the proof table.
-  function priceReason(): string {
-    if (!previewCasePrice) return "";
-    const userNote = note.trim();
-    if (previewCasePrice.src === "typed") {
-      // Memo wording: note, else "Price typed in the pack editor".
-      return userNote.length > 0 ? userNote : "Price typed in the pack editor";
-    }
-    // Shortcut source: today's auto, note appended.
-    const auto = `Costed from ${previewCasePrice.src} case price ${fmtUsd(previewCasePrice.v)} instead of the default`;
-    return userNote.length > 0 ? `${auto}. ${userNote}` : auto;
-  }
-  function perBaseFromCase(): { perBase: number; baseUom: "LB" | "FLOZ" | "EA" } | null {
-    if (!previewCasePrice) return null;
-    const b = uomToBase(uom);
-    if (!b) return null;
-    const total = qty * size * b.factor;
-    if (!(total > 0)) return null;
-    return { perBase: previewCasePrice.v / total, baseUom: b.base };
-  }
+  // T6 ruling 1 + round 2 item 8c: the branching logic lives in
+  // packHelpers::decidePackSave. The proof imports the SAME
+  // function, so this editor and the proof can never drift.
   async function save() {
     if (busy || !readyToSave) return;
     setLastTwins(null);
-    setPartialSentence(null);
 
-    const packDirty = !catchWeight && (!packPristine || catchWeightChanged);
+    // Build the state + call the shared decision. When the user
+    // skipped the price step (already landed; partial-fail retry),
+    // we pretend the pack is pristine so decidePackSave picks the
+    // price-only branch.
+    const state = {
+      itemId: item.id,
+      catchWeight,
+      catchWeightChanged,
+      packPristine: partialPackSaved ? true : packPristine,
+      qty,
+      size,
+      uom,
+      perLb,
+      billedUnit,
+      note,
+      caseFieldVal,
+      defaultCaseVal,
+      caseFieldSrcLabel: (previewCasePrice?.src ?? null) as "catalog" | "billed" | "avg" | "typed" | null,
+    };
+    const posts = decidePackSave(state);
+    if (posts.length === 0) return;
 
-    // Branch 1: catch weight.
-    if (catchWeight) {
+    // One-POST branches: catch weight, pack only, price only.
+    if (posts.length === 1) {
+      const [p] = posts;
+      const label =
+        p.route === "/api/review/set-pack-override"
+          ? "pack override"
+          : "price override";
       await runSave({
-        op: () =>
-          postJson("/api/review/set-pack-override", {
-            itemId: item.id,
-            catchWeight: true,
-            perLb,
-            billedUnit: billedUnit.trim() || null,
-            note: note.trim() || null,
-          }),
+        op: () => postJson(p.route, p.body as unknown as Record<string, unknown>),
         successMessage: (d) => {
           const twins = readTwins(d);
           setLastTwins(twins);
           return twins > 0
-            ? `Saved: pack override (applied to ${fmtCount(twins + 1)} matching items)`
-            : "Saved: pack override";
+            ? `Saved: ${label} (applied to ${fmtCount(twins + 1)} matching items)`
+            : `Saved: ${label}`;
         },
         onDone,
       });
+      // T6 round 2 item 3: if we were retrying a partial-fail (pack
+      // already saved) and the price just landed, clear the partial
+      // state so a fresh press is a clean save.
+      if (partialPackSaved) setPartialPackSaved(false);
       return;
     }
 
-    // Branch 2: price only. Pack pristine, caseField changed.
-    if (!packDirty && caseFieldChanged) {
-      const pb = perBaseFromCase();
-      if (!pb) return;
+    // Two POSTs: pack, then price. If pack fails the pack-only
+    // sentence surfaces; if price fails after pack, the partial
+    // sentence + the cause show and the next Save sends only the
+    // price (branch resolves to one POST on retry because
+    // partialPackSaved=true forces packPristine in the state).
+    const [packPost, pricePost] = posts;
+    const packRes = await postJson(
+      packPost.route,
+      packPost.body as unknown as Record<string, unknown>,
+    );
+    if (!packRes.ok) {
       await runSave({
-        op: () =>
-          postJson("/api/review/set-price-override", {
-            itemId: item.id,
-            perBase: pb.perBase,
-            baseUom: pb.baseUom,
-            reason: priceReason(),
-          }),
-        successMessage: (d) => {
-          const twins = readTwins(d);
-          setLastTwins(twins);
-          return twins > 0
-            ? `Saved: price override (applied to ${fmtCount(twins + 1)} matching items)`
-            : "Saved: price override";
-        },
+        op: async () => packRes,
+        successMessage: () => "",
         onDone,
       });
       return;
     }
-
-    // Branches 3 + 4: pack dirty. One POST for pack; then price only
-    // when caseField also changed.
-    if (packDirty && !caseFieldChanged) {
-      await runSave({
-        op: () =>
-          postJson("/api/review/set-pack-override", {
-            itemId: item.id,
-            catchWeight: false,
-            qty,
-            size,
-            uom,
-            billedUnit: billedUnit.trim() || null,
-            note: note.trim() || null,
-          }),
-        successMessage: (d) => {
-          const twins = readTwins(d);
-          setLastTwins(twins);
-          return twins > 0
-            ? `Saved: pack override (applied to ${fmtCount(twins + 1)} matching items)`
-            : "Saved: pack override";
-        },
-        onDone,
-      });
-      return;
-    }
-
-    // Branch 5: pack and price both. Two POSTs; the lib nests the
-    // price into the just-saved pack (setVendorItemPriceOverride at
-    // reviewWrites.ts:3236-3239 reads item.pack_override after the
-    // pack POST landed and composes). No route change.
-    if (packDirty && caseFieldChanged) {
-      const packRes = await postJson("/api/review/set-pack-override", {
-        itemId: item.id,
-        catchWeight: false,
-        qty,
-        size,
-        uom,
-        billedUnit: billedUnit.trim() || null,
-        note: note.trim() || null,
-      });
-      if (!packRes.ok) {
-        // Pack failed - don't touch price. Route the failure through
-        // runSave so the UI reads the same as a pack-only failure.
-        await runSave({
-          op: async () => packRes,
-          successMessage: () => "",
-          onDone,
-        });
-        return;
-      }
-      const packTwins = readTwins(packRes.data);
-      // Pack landed. Any failure past this point is "pack saved,
-      // price not" per T6 ruling 1.
-      setPartialPackSaved(true);
-      const pb = perBaseFromCase();
-      if (!pb) {
-        // Shouldn't happen (caseFieldChanged with valid preview
-        // implies pb), but be defensive: leave the editor open.
-        return;
-      }
-      const priceRes = await runSave({
-        op: () =>
-          postJson("/api/review/set-price-override", {
-            itemId: item.id,
-            perBase: pb.perBase,
-            baseUom: pb.baseUom,
-            reason: priceReason(),
-          }),
-        successMessage: (d) => {
-          const priceTwins = readTwins(d);
-          const total = Math.max(packTwins, priceTwins);
-          setLastTwins(total);
-          return total > 0
-            ? `Saved: pack and price override (applied to ${fmtCount(total + 1)} matching items)`
-            : "Saved: pack and price override";
-        },
-        onDone,
-      });
-      if (priceRes.ok) {
-        // Both landed; clear the partial flag so the next edit is
-        // clean state.
-        setPartialPackSaved(false);
-      }
-      return;
+    const packTwins = readTwins(packRes.data);
+    setPartialPackSaved(true);
+    const priceRes = await runSave({
+      op: () => postJson(pricePost.route, pricePost.body as unknown as Record<string, unknown>),
+      successMessage: (d) => {
+        const priceTwins = readTwins(d);
+        const total = Math.max(packTwins, priceTwins);
+        setLastTwins(total);
+        return total > 0
+          ? `Saved: pack and price override (applied to ${fmtCount(total + 1)} matching items)`
+          : "Saved: pack and price override";
+      },
+      onDone,
+    });
+    if (priceRes.ok) {
+      setPartialPackSaved(false);
     }
   }
 
@@ -714,19 +647,21 @@ export function PackOverrideBlock({
     }
   }
 
-  // T6 item 5: the editor sits inside a <form> so Enter in any
-  // field submits (saves when the form is valid). Esc closes the
-  // editor row (ask first if dirty, same registry the panel uses).
+  // T6 round 2 item 1: Esc / Cancel ask first when the editor has
+  // typed work. Discard resets every editor field + closes the
+  // row; Keep editing stays put. Train 2's rule: typed work is
+  // never dropped without an ask.
   function tryCloseEditor() {
     if (busy) return;
     if (dirty) {
-      // Panel's useDirtyEditor registration above fires resetDrafts
-      // on discard via the one Discard-ask. Here we just close; the
-      // panel's own Esc handler owns the ask flow so pressing Esc
-      // inside a field bubbles up and the panel handles it.
-      if (onCancel) onCancel();
+      setEditorAskOpen(true);
       return;
     }
+    if (onCancel) onCancel();
+  }
+  function discardAndClose() {
+    resetDrafts();
+    setEditorAskOpen(false);
     if (onCancel) onCancel();
   }
   return (
@@ -749,15 +684,16 @@ export function PackOverrideBlock({
       {/* N8 §1f: segmented mode toggle on the left, invoice-reads on
           the right, same baseline. */}
       <div className="kf-ipanel__editor-toprow">
-      <div className="kf-ipanel__seg" role="group" aria-label="Pricing mode">
+      <div className="kf-ipanel__seg" role="group" aria-label="How it is sold">
         <button
+          ref={firstFieldRef}
           type="button"
           className="kf-ipanel__seg-btn"
           aria-pressed={!catchWeight}
           onClick={() => { setCatchWeight(false); setCatchWeightEdited(true); }}
           disabled={busy}
         >
-          Priced by the case
+          Fixed pack
         </button>
         <button
           type="button"
@@ -789,7 +725,7 @@ export function PackOverrideBlock({
         <>
           <div className="kf-ipanel__editor-grid kf-ipanel__editor-grid--2">
             <label className="kf-ipanel__editor-field">
-              $ / lb
+              Price per lb
               <input
                 type="number"
                 inputMode="decimal"
@@ -802,7 +738,7 @@ export function PackOverrideBlock({
               />
             </label>
             <label className="kf-ipanel__editor-field">
-              Billed by
+              That price is for
               <select
                 value={billedUnit}
                 onChange={(e) => setBilledUnit(e.target.value)}
@@ -816,7 +752,7 @@ export function PackOverrideBlock({
                 {BILLED_UNIT_GROUPS.map((g) => (
                   <optgroup key={g.label} label={g.label}>
                     {g.options.map((o) => (
-                      <option key={o} value={o}>{o}</option>
+                      <option key={o} value={o}>one {o}</option>
                     ))}
                   </optgroup>
                 ))}
@@ -824,7 +760,7 @@ export function PackOverrideBlock({
             </label>
           </div>
           <label className="kf-ipanel__editor-field">
-            Note (optional)
+            Note <small>optional</small>
             <input
               type="text"
               value={note}
@@ -838,7 +774,7 @@ export function PackOverrideBlock({
         <>
           <div className="kf-ipanel__editor-grid kf-ipanel__editor-grid--4">
             <label className="kf-ipanel__editor-field">
-              Qty
+              How many in a case
               <input
                 ref={qtyInputRef}
                 type="number"
@@ -852,7 +788,7 @@ export function PackOverrideBlock({
               />
             </label>
             <label className="kf-ipanel__editor-field">
-              Size
+              Size of each
               <input
                 type="number"
                 inputMode="decimal"
@@ -877,7 +813,7 @@ export function PackOverrideBlock({
               </select>
             </label>
             <label className="kf-ipanel__editor-field">
-              Billed by
+              That price is for
               <select
                 value={billedUnit}
                 onChange={(e) => setBilledUnit(e.target.value)}
@@ -891,7 +827,7 @@ export function PackOverrideBlock({
                 {BILLED_UNIT_GROUPS.map((g) => (
                   <optgroup key={g.label} label={g.label}>
                     {g.options.map((o) => (
-                      <option key={o} value={o}>{o}</option>
+                      <option key={o} value={o}>one {o}</option>
                     ))}
                   </optgroup>
                 ))}
@@ -922,7 +858,7 @@ export function PackOverrideBlock({
               />
             </label>
             <label className="kf-ipanel__editor-field">
-              Note (optional)
+              Note <small>optional</small>
               <input
                 type="text"
                 value={note}
@@ -958,7 +894,7 @@ export function PackOverrideBlock({
                   }}
                   disabled={busy}
                 >
-                  billed {fmtUsd(billedV)}
+                  billed, latest invoice {fmtUsd(billedV)}
                 </button>
               ) : null}
               {avgV != null ? (
@@ -1029,12 +965,51 @@ export function PackOverrideBlock({
           );
         })() : null}
 
-      {/* T6 ruling 1 partial-save sentence: the pack saved but the
-          price did not. The editor stays open with the price still
-          in the field so the next press sends the price alone. */}
+      {/* T6 ruling 1 + round 2 item 3: the pack saved but the price
+          did not. The editor stays open with the price in the field
+          and the next press sends the price alone (decidePackSave
+          picks the price-only branch because packPristine is forced
+          true while partialPackSaved is set).
+          The cause follows the server's vocabulary from
+          saveErrorSentence; we strip the "Nothing was saved."
+          tail it carries because it is false here: the pack HAS
+          landed. */}
       {partialPackSaved && error ? (
         <div className="kf-ipanel__editor-foot" role="alert">
-          The pack was saved. The price was not. {error}
+          The pack was saved. The price was not.
+          {" "}
+          {error
+            .replace(/\.?\s*Nothing was saved\.?\s*$/i, ".")
+            .trim()
+            .replace(/\.$/, "")
+            .concat(".")}
+        </div>
+      ) : null}
+
+      {/* T6 round 2 item 1: per-editor Discard ask. Opens when Esc
+          or Cancel is pressed with typed work. Discard resets fields
+          + closes the row; Keep editing stays put with focus on
+          Keep. Train 2's rule: typed work is never dropped by Esc,
+          the close button, a click outside, or a step without this
+          ask. */}
+      {editorAskOpen ? (
+        <div className="kf-ipanel__editor-ask" role="alertdialog" aria-label="Discard what you typed?">
+          <span className="kf-ipanel__editor-ask-text">Discard what you typed?</span>
+          <button
+            type="button"
+            className="kf-btn kf-btn--primary kf-btn--sm"
+            autoFocus
+            onClick={() => setEditorAskOpen(false)}
+          >
+            Keep editing
+          </button>
+          <button
+            type="button"
+            className="kf-btn kf-btn--line kf-btn--sm"
+            onClick={discardAndClose}
+          >
+            Discard
+          </button>
         </div>
       ) : null}
 
@@ -1067,10 +1042,7 @@ export function PackOverrideBlock({
           type="button"
           className="kf-btn kf-btn--ghost kf-btn--sm"
           disabled={busy}
-          onClick={() => {
-            if (dirty) resetDrafts();
-            if (onCancel) onCancel();
-          }}
+          onClick={tryCloseEditor}
         >
           Cancel
         </button>

@@ -35,8 +35,16 @@ export const PanelHead = forwardRef<HTMLHeadingElement, {
   { labelId, kind, item, ingredient, proposedName, attentionCount, onClose, stepIndex, stepTotal, onPrev, onNext },
   nameRef,
 ) {
+  // T6 round 2 item 7: reference's vItemPanel reads
+  //   "<vendor> · item number <num>"
+  // or "<vendor> · no item number"; the "Vendor item" prefix is
+  // retired. The optional "N of M" counter rides at the tail.
   const eyebrow = kind === "item" && item
-    ? `Vendor item · ${item.vendor}${item.itemNumber ? ` · #${item.itemNumber}` : ""}${
+    ? `${item.vendor}${
+        item.itemNumber
+          ? ` · item number ${item.itemNumber}`
+          : " · no item number"
+      }${
         stepIndex != null && stepTotal != null && stepTotal > 1
           ? ` · ${stepIndex + 1} of ${stepTotal}`
           : ""
@@ -123,27 +131,30 @@ export const PanelHead = forwardRef<HTMLHeadingElement, {
         ) : null}
       </div>
       <div className="kf-ipanel__head-nav">
-        {many && onPrev ? (
-          <button
-            type="button"
-            className="kf-ipanel__close"
-            onClick={onPrev}
-            disabled={atStart}
-            aria-label="Previous item"
-          >
-            <ChevronUp size={20} strokeWidth={1.5} aria-hidden />
-          </button>
-        ) : null}
-        {many && onNext ? (
-          <button
-            type="button"
-            className="kf-ipanel__close"
-            onClick={onNext}
-            disabled={atEnd}
-            aria-label="Next item"
-          >
-            <ChevronDown size={20} strokeWidth={1.5} aria-hidden />
-          </button>
+        {many ? (
+          <>
+            {/* T6 round 2 item 8: Previous is drawn disabled on the
+                first item (not hidden) so the step buttons do not
+                move under the pointer; same for Next on the last. */}
+            <button
+              type="button"
+              className="kf-ipanel__close"
+              onClick={() => onPrev?.()}
+              disabled={atStart || !onPrev}
+              aria-label="Previous item"
+            >
+              <ChevronUp size={20} strokeWidth={1.5} aria-hidden />
+            </button>
+            <button
+              type="button"
+              className="kf-ipanel__close"
+              onClick={() => onNext?.()}
+              disabled={atEnd || !onNext}
+              aria-label="Next item"
+            >
+              <ChevronDown size={20} strokeWidth={1.5} aria-hidden />
+            </button>
+          </>
         ) : null}
         <button
           type="button"

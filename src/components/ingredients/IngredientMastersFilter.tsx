@@ -633,15 +633,23 @@ export function IngredientMastersFilter({
         </section>
       </div>
 
-      {/* T6 item 8: Prev/Next within the open ingredient's linked
-          items. The list is the DetailView's own linkedItems order
-          (dollar-ordered descending on the server). */}
+      {/* T6 item 8 + round 2 item 2: Prev/Next within the open
+          ingredient's linked items; focus returns to the row's name
+          button when the panel closes. */}
       {openItemId ? (
         <ItemPanelById
           itemId={openItemId}
           onClose={() => setOpenItemId(null)}
           neighborIds={selected ? selected.linkedItems.map((li) => li.id) : null}
           onStep={(nextId) => setOpenItemId(nextId)}
+          onFocusReturn={(lastId) => {
+            const el = document.querySelector<HTMLElement>(`[data-item-id="${lastId}"]`);
+            if (el) {
+              el.focus();
+              return;
+            }
+            document.querySelector<HTMLElement>(".kf-ingp__item-name")?.focus();
+          }}
         />
       ) : null}
     </div>
@@ -1423,6 +1431,7 @@ function LinkedItems({
                 <button
                   type="button"
                   className="kf-ingp__item-name"
+                  data-item-id={li.id}
                   onClick={() => onOpenItem(li.id)}
                 >
                   {li.name}
