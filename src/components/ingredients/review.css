@@ -305,7 +305,11 @@
   color: var(--sp-good);
   font-family: var(--sp-disp);
   font-weight: 800;
-  font-size: var(--sp-t-h4);
+  /* Train 5a / ruling 9: --sp-t-h4 was never defined. It fell to
+   * the inherited size (16 px); point explicitly at --sp-t-body
+   * so nothing on screen shifts. These three elements are rebuilt
+   * in 5b. */
+  font-size: var(--sp-t-body);
   letter-spacing: .5px;
   border-radius: inherit;
   animation: kf-rvc-fade var(--sp-base) var(--sp-ease) both;
@@ -1369,7 +1373,11 @@
 }
 .kf-ing-note-form__ask-text {
   font-size: var(--sp-t-label);
-  color: var(--sp-ink-dim);
+  /* Train 5a / ruling 9: --sp-ink-dim was never defined; both uses
+   * landed on inherited ink. Point at --sp-body (muted enough for
+   * context, passes contrast at 13 px on white). --sp-muted does
+   * not pass at this size. */
+  color: var(--sp-body);
 }
 
 /* N9: .kf-conf-chip family deleted. The confidence word is now plain
@@ -1393,7 +1401,11 @@
   color: var(--sp-navy);
   font-family: var(--sp-disp);
   font-weight: 800;
-  font-size: var(--sp-t-h4);
+  /* Train 5a / ruling 9: --sp-t-h4 was never defined. It fell to
+   * the inherited size (16 px); point explicitly at --sp-t-body
+   * so nothing on screen shifts. These three elements are rebuilt
+   * in 5b. */
+  font-size: var(--sp-t-body);
 }
 .kf-admin-section__head p {
   margin: 0;
@@ -1597,7 +1609,11 @@
   color: var(--sp-warn);
   font-family: var(--sp-disp);
   font-weight: 800;
-  font-size: var(--sp-t-h4);
+  /* Train 5a / ruling 9: --sp-t-h4 was never defined. It fell to
+   * the inherited size (16 px); point explicitly at --sp-t-body
+   * so nothing on screen shifts. These three elements are rebuilt
+   * in 5b. */
+  font-size: var(--sp-t-body);
 }
 .kf-flagged__count {
   color: var(--sp-body);

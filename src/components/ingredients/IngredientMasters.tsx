@@ -18,11 +18,10 @@
 // <details> accordion is gone). The pane can write base_unit back
 // via /api/review/set-base-unit - see Prompt R1.
 
+import { cache } from "react";
 import { serviceClient } from "@/lib/supabase/service";
-import { fmtCount, fmtUsd } from "@/lib/fmt";
 import { startTimer, mark, endTimer } from "@/lib/timing";
 import { Tabs } from "./Tabs";
-import { IdentBand } from "@/components/ui/IdentBand";
 import {
   IngredientMastersFilter,
   type MasterRow,
@@ -188,7 +187,12 @@ import { isPriceManualOverride } from "./itemTypes";
 // moves it between tabs on the next router.refresh() (see
 // DetailPanel's IngredientBlock + the existing /api/review/resale
 // cascade).
-export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" | "resale" } = {}) {
+// Train 5a / D3 call 1: `loadMasters` is the whole tab's data read +
+// blend rollup, wrapped in React.cache() so the tab's @topbar slot
+// can call the same loader and read its headline counts without
+// re-running the blend. One request = one blend; the header and the
+// page body cannot disagree.
+export const loadMasters = cache(async function loadMasters(mode: "recipe" | "resale" = "recipe") {
   const timer = startTimer(mode === "resale" ? "page:retail" : "page:ingredients");
   const client = serviceClient();
 
@@ -665,38 +669,37 @@ export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" |
   // number to rise; that is the point.
   const totalFlagged = rows.filter((r) => r.issues.length > 0).length;
 
-  // R2: hero + Tabs vary by mode. Recipe mode keeps the four-cell
-  // layout; Resale drops the Needs-attention cell per the Oct 31
-  // ruling (resale is outside recipe coverage / attention math).
-  // Every number is live over the pre-filtered master set.
-  const heroFacts =
-    mode === "resale"
-      ? [
-          { label: "Retail masters", value: fmtCount(totalMasters), note: "sold as-is, not cooked" },
-          { label: "Linked items", value: fmtCount(totalLinked), note: "confirmed to a master" },
-          { label: "12-mo spend", value: fmtUsd(totalUsd), note: "outside recipe coverage" },
-        ]
-      : [
-          { label: "Masters", value: fmtCount(totalMasters), note: "active ingredients" },
-          { label: "Linked items", value: fmtCount(totalLinked), note: "confirmed to a master" },
-          { label: "Linked spend", value: fmtUsd(totalUsd), note: "12 months" },
-          { label: "Needs attention", value: fmtCount(totalFlagged), note: "spread, unit or outlier" },
-        ];
+  // Train 5a: the mode-specific IdentBand facts are retired. The
+  // header reads two or three numbers off this loader's totals (see
+  // `@topbar/stockpot/ingredients/ingredients/page.tsx` and its
+  // retail twin); Overview still carries food-dollars-linked.
 
   mark(timer, "shape");
   endTimer(timer, { mode });
 
+  return {
+    rows,
+    mode,
+    totals: {
+      masters: totalMasters,
+      linked: totalLinked,
+      usd12m: totalUsd,
+      needsAttention: totalFlagged,
+    },
+  };
+});
+
+export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" | "resale" } = {}) {
+  // Train 5a: the band is gone from this tab. The headline facts
+  // (ingredients, linked items, plus need-attention when > 0) now
+  // ride in the top bar via the tab's @topbar slot page, which calls
+  // `loadMasters(mode)` from this same module. Linked spend moves
+  // out of the header; Overview still carries food-dollars-linked.
+  const { rows, mode: m } = await loadMasters(mode);
   return (
     <div className="kf-ing">
-      <IdentBand
-        eyebrow="Culinary office"
-        title={mode === "resale" ? "Retail" : "Ingredients"}
-        facts={heroFacts}
-      />
-
-      <Tabs active={mode === "resale" ? "retail" : "ingredients"} />
-
-      <IngredientMastersFilter rows={rows} mode={mode} />
+      <Tabs active={m === "resale" ? "retail" : "ingredients"} />
+      <IngredientMastersFilter rows={rows} mode={m} />
     </div>
   );
 }

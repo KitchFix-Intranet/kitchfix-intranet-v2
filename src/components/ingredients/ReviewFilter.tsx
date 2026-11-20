@@ -14,10 +14,11 @@
 // If the queue ever exceeds 1,000 (nightly matcher cron, step 7),
 // swap to a server-side search.
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowDownAZ, DollarSign, Search, X } from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
 import { fmtCount, fmtDate, fmtUsd, fmtUsdLong } from "@/lib/fmt";
 import { SUPER_CATEGORIES } from "@/lib/ingredients/categories";
+import { Search } from "./Search";
+import { SortMenu, type SortKey } from "./SortMenu";
 
 // A copy of the shape the server passes in. Keeping it narrow (not the
 // full ReviewCardGroup) so no stray React-element props leak in.
@@ -42,8 +43,12 @@ export type ReviewFilterGroup = {
   lastSeen: string | null;
 };
 
-type SortMode = "dollars" | "alpha";
+// Train 5a / F23: one Sort vocabulary. Review's "dollars first"
+// stays the default; the key the client toggles between is "spend"
+// (the shared SortMenu's word for the same order) and "name".
+type SortMode = Extract<SortKey, "spend" | "name">;
 type KindFilter = "all" | "needs" | "resale";
+const REVIEW_SORT_OPTIONS: readonly SortMode[] = ["spend", "name"];
 
 type RenderedCard = { key: string; node: ReactNode };
 
@@ -90,10 +95,11 @@ export function ReviewFilter({
   totals: Totals;
 }) {
   const [query, setQuery] = useState("");
-  const [sort, setSort] = useState<SortMode>("dollars");
+  const [sort, setSort] = useState<SortMode>("spend");
   const [superCat, setSuperCat] = useState<string | "all">("all");
   const [kindFilter, setKindFilter] = useState<KindFilter>("all");
-  const inputRef = useRef<HTMLInputElement>(null);
+  // Train 5a / F22: "/" focus and Esc clear live inside the shared
+  // Search component now; this file keeps no input ref.
 
   // Per-super counts over the FULL group list (not the search-filtered
   // one), so the chip label always shows the total available under that
@@ -113,28 +119,6 @@ export function ReviewFilter({
   const needsCount = useMemo(() => groups.filter((g) => g.category == null).length, [groups]);
   const resaleCount = useMemo(() => groups.filter((g) => g.resale).length, [groups]);
 
-  // `/` focuses the input (unless the user is typing in another input).
-  // Esc clears the current search and blurs the input.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "/") {
-        const tag = (e.target as HTMLElement | null)?.tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA") return;
-        e.preventDefault();
-        inputRef.current?.focus();
-        inputRef.current?.select();
-        return;
-      }
-      if (e.key === "Escape" && document.activeElement === inputRef.current) {
-        e.preventDefault();
-        setQuery("");
-        inputRef.current?.blur();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, []);
-
   const trimmed = query.trim();
   // All three filters AND together, then the sort runs. Each is cheap
   // over the small group list; useMemo re-runs only when its own inputs
@@ -146,7 +130,7 @@ export function ReviewFilter({
     if (superCat !== "all") out = out.filter((g) => g.category === superCat);
     if (kindFilter === "needs") out = out.filter((g) => g.category == null);
     else if (kindFilter === "resale") out = out.filter((g) => g.resale);
-    if (sort === "alpha") {
+    if (sort === "name") {
       out = [...out].sort((a, b) => displayName(a).localeCompare(displayName(b)));
     } else {
       out = [...out].sort((a, b) => b.totalUsd12m - a.totalUsd12m);
@@ -170,49 +154,32 @@ export function ReviewFilter({
     setQuery("");
     setSuperCat("all");
     setKindFilter("all");
-    inputRef.current?.focus();
   }
 
   return (
     <>
       <div className="kf-review__search">
-        <form
-          className="kf-field kf-field--search kf-review__search-field"
-          onSubmit={(e) => e.preventDefault()}
-          role="search"
-          aria-label="Filter proposals"
-        >
-          <span className="kf-field__icon" aria-hidden>
-            <Search size={16} strokeWidth={1.5} />
-          </span>
-          <input
-            ref={inputRef}
-            type="search"
-            placeholder="Filter by ingredient, vendor, or SKU - try premium or chicken"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            aria-label="Filter proposals"
-          />
-          {trimmed.length > 0 ? (
-            <button
-              type="button"
-              className="kf-field__clear"
-              onClick={() => {
-                setQuery("");
-                inputRef.current?.focus();
-              }}
-              aria-label="Clear filter"
-            >
-              <X size={16} strokeWidth={1.5} />
-            </button>
-          ) : (
-            <kbd className="kf-field__kbd" aria-hidden>/</kbd>
-          )}
-        </form>
+        {/* Train 5a / F22: one Search component, used on every working
+            tab. "/" focuses it, Esc clears it, filters as you type.
+            The old .kf-field/.kf-review__search-field shape retires. */}
+        <Search
+          kind="controlled"
+          value={query}
+          onChange={(v) => setQuery(v)}
+          placeholder="Filter by ingredient, vendor, or SKU - try premium or chicken"
+          label="Filter proposals"
+        />
         <span className="kf-review__search-count" aria-live="polite">
           {!anyFilterActive ? (
             <>
               <strong>{fmtCount(groups.length)}</strong> groups · <strong>{fmtUsd(totals.groupedUsd)}</strong>
+              {/* Train 5a / ruling 5: the retired IdentBand carried a
+                  "Flagged not food" fact (the matcher's ai-notfood
+                  pile). It moves here, once, as plain text. Train 5b
+                  gives those items a card and train 8 a switch. */}
+              {totals.notFood > 0 ? (
+                <> · <strong>{fmtCount(totals.notFood)}</strong> flagged not food</>
+              ) : null}
             </>
           ) : (
             <>
@@ -233,33 +200,14 @@ export function ReviewFilter({
           stays - the kicker names what the group is, the hairline
           marks where the groups split. */}
       <div className="kf-review__toolbar" role="toolbar" aria-label="Sort and filter">
-        <span className="kf-review__kicker" aria-hidden>Sort</span>
-        <div className="kf-review__toolbar-group" role="radiogroup" aria-label="Sort order">
-          <button
-            type="button"
-            role="radio"
-            aria-checked={sort === "dollars"}
-            aria-pressed={sort === "dollars"}
-            className={`kf-chip${sort === "dollars" ? " kf-chip--on" : ""}`}
-            onClick={() => setSort("dollars")}
-            title="Highest dollars first"
-          >
-            <DollarSign size={14} strokeWidth={1.5} aria-hidden />
-            <span>Dollars</span>
-          </button>
-          <button
-            type="button"
-            role="radio"
-            aria-checked={sort === "alpha"}
-            aria-pressed={sort === "alpha"}
-            className={`kf-chip${sort === "alpha" ? " kf-chip--on" : ""}`}
-            onClick={() => setSort("alpha")}
-            title="Alphabetical by ingredient / proposed name"
-          >
-            <ArrowDownAZ size={14} strokeWidth={1.5} aria-hidden />
-            <span>A-Z</span>
-          </button>
-        </div>
+        {/* Train 5a / F23: one Sort control, the shared labelled menu.
+            Review's two prior chip radios ("Dollars"/"A-Z") retire -
+            the vocabulary is the SORT_WORDS set that every tab uses. */}
+        <SortMenu
+          value={sort}
+          options={REVIEW_SORT_OPTIONS}
+          onChange={(v) => setSort(v)}
+        />
 
         <span className="kf-chips__sep" aria-hidden />
 
