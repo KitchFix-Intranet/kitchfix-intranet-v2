@@ -84,8 +84,10 @@ export interface BigLeagueRow {
   region: string | null;
   leaderName: string | null;
   homeGames: number;   // total HOME rows for the season (all dates)
-  seasonOver: boolean; // last game < site today
-  seasonOverIso: string | null; // date of the last game, or null if none loaded
+  seasonOver: boolean; // last HOME game < site today
+  // Fix 4 (train 4b): the last HOME game only. AWAY and EXHIBITION
+  // rows are not candidates. Null when no GAME row is loaded yet.
+  lastHomeGameIso: string | null;
   goHref: string;
 }
 

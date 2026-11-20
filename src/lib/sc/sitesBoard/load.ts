@@ -43,6 +43,8 @@ import { accountKeyToSlug } from "@/lib/sc/calendar/slug";
 import { siteInfoFrom } from "@/lib/sc/calendar/accessList";
 import { addDaysIso, dowOf } from "@/lib/sc/calendar/periodWindow";
 import { isAskedYet, effectiveUnitEndedBeforeSiteToday } from "@/lib/sc/calendar/isAskedYet";
+import { makeInScopeAdapter } from "@/lib/sc/calendar/inScopeAdapter";
+import { resolveFinalizeReviewSpan } from "@/lib/sc/scWeekFinalize";
 import { classifyRow } from "./bucket";
 import type {
   BoardRow,
@@ -135,14 +137,25 @@ export async function loadSitesBoard(input: LoadSitesBoardInput): Promise<SitesB
       .order("service_id", { ascending: true })
       .range(0, PAGE_SIZE - 1),
     sb.from("sc_day_metadata")
+      // week_label on boardMonday + the next Monday (boardMonday+7)
+      // is needed by resolveFinalizeReviewSpan for biweekly sites.
+      // The seven weekDates give us boardMonday; we add the next
+      // Monday explicitly so the adapter sees it without a second
+      // read.
       .select("account_key, service_date, review_status, game_type, game_time, event_label, week_label")
       .in("account_key", SAFE)
-      .in("service_date", weekDates),
+      .in("service_date", weekDates.concat([addDaysIso(weekStart, 7)])),
+    // Fix 1: the finalize row for THIS unit is keyed on one of
+    // exactly two Mondays — boardMonday (weekly, or biweekly
+    // closing week) or boardMonday+7 (biweekly opening week; the
+    // row lives on the pair's closing Monday). The IN list keeps
+    // the read to those two keys only. Rows from older Mondays
+    // (last week's submit on a weekly site; the previous pair's
+    // closing-Monday row on a biweekly site) are not candidates.
     sb.from("sc_week_finalize")
       .select("id, account_key, week_start, status, submitted_via, finalized_at, push_attempts, push_done_at, push_gave_up_at")
       .in("account_key", SAFE)
-      .gte("week_start", addDaysIso(weekStart, -7))
-      .lte("week_start", weekEndIso)
+      .in("week_start", [weekStart, addDaysIso(weekStart, 7)])
       .neq("status", "reverted"),
   ]);
 
@@ -182,12 +195,15 @@ export async function loadSitesBoard(input: LoadSitesBoardInput): Promise<SitesB
         .eq("day_type", "GAME"),
     ),
   );
+  // Fix 4 (train 4b): the board sub-line reads "Last home game …",
+  // so the probe reads the last GAME row only — not EXHIBITION,
+  // not AWAY. One day_type for one fact.
   const bigLastGameResults = await Promise.all(
     filteredBig.map((a) =>
       sb.from("sc_homestand_schedule")
         .select("service_date")
         .eq("account_key", a.team_key)
-        .in("day_type", ["GAME", "EXHIBITION"])
+        .eq("day_type", "GAME")
         .order("service_date", { ascending: false })
         .limit(1)
         .maybeSingle(),
@@ -324,8 +340,24 @@ export async function loadSitesBoard(input: LoadSitesBoardInput): Promise<SitesB
     const serviceById = new Map<string, ServiceLite>();
     for (const s of services) serviceById.set(s.service_id, s);
 
+    // Fix 1: pick THIS unit's finalize row, not a stray row from the
+    // previous week or pair. The target Monday is:
+    //   - weekly              -> boardMonday
+    //   - biweekly closing    -> boardMonday
+    //   - biweekly opening    -> boardMonday + 7 (pair's closing)
+    //   - biweekly, no label  -> fall back to weekly
+    const targetMonday = await resolveFinalizeTargetMonday({
+      accountKey: acc.team_key,
+      boardMonday: weekStart,
+      cadence: qboMap?.cadence ?? null,
+      weekLabelByDate: new Map(
+        ((metaQ.data ?? []) as Array<DayMetadataLite & { account_key: string }>)
+          .filter((r) => r.account_key === acc.team_key)
+          .map((r) => [r.service_date, r.week_label ?? null]),
+      ),
+    });
     const fin = (finByAcc.get(acc.team_key) ?? []).find(
-      (f) => f.week_start >= addDaysIso(weekStart, -7) && f.week_start <= weekStart,
+      (f) => f.week_start === targetMonday,
     ) ?? null;
 
     const isInSubmittedSpan = !!fin;
@@ -537,9 +569,12 @@ export async function loadSitesBoard(input: LoadSitesBoardInput): Promise<SitesB
     if (countRes.error) throw new Error(`sc_homestand_schedule count(${a.team_key}): ${countRes.error.message}`);
     if (lastRes.error) throw new Error(`sc_homestand_schedule last(${a.team_key}): ${lastRes.error.message}`);
     const homeGames = countRes.count ?? 0;
-    const lastIso = (lastRes.data as { service_date?: string } | null)?.service_date ?? null;
+    // Fix 4: the last HOME game (not AWAY, not EXHIBITION) is the
+    // only date the sub-line reports. The in-season / past-season
+    // flag keys off that same date.
+    const lastHomeIso = (lastRes.data as { service_date?: string } | null)?.service_date ?? null;
     const siteToday = siteTodayByAcc.get(a.team_key) ?? weekStart;
-    const seasonOver = !!lastIso && lastIso < siteToday;
+    const seasonOver = !!lastHomeIso && lastHomeIso < siteToday;
     return {
       accountKey: a.team_key,
       slug: accountKeyToSlug(a.team_key),
@@ -548,7 +583,7 @@ export async function loadSitesBoard(input: LoadSitesBoardInput): Promise<SitesB
       leaderName: leaderByAcc.get(a.team_key) ?? null,
       homeGames,
       seasonOver,
-      seasonOverIso: lastIso,
+      lastHomeGameIso: lastHomeIso,
       goHref: `/service/mlb?site=${accountKeyToSlug(a.team_key)}`,
     };
   }).sort((a, b) => a.name.localeCompare(b.name));
@@ -600,6 +635,37 @@ export async function loadSitesBoard(input: LoadSitesBoardInput): Promise<SitesB
 }
 
 // ── helpers ────────────────────────────────────────────────────────
+
+// Fix 1: find the Monday the finalize row for this unit lives on.
+// Weekly or biweekly-closing -> boardMonday. Biweekly-opening ->
+// boardMonday + 7 (the pair's closing Monday). Biweekly with no
+// week_label on boardMonday -> fall back to boardMonday (weekly
+// behaviour) so a defective label does not hide a submit.
+async function resolveFinalizeTargetMonday(input: {
+  accountKey: string;
+  boardMonday: string;
+  cadence: "weekly" | "biweekly" | null;
+  weekLabelByDate: Map<string, string | null>;
+}): Promise<string> {
+  if (input.cadence !== "biweekly") return input.boardMonday;
+  const adapter = makeInScopeAdapter({
+    accountKey: input.accountKey,
+    cadence: "biweekly",
+    weekLabelByDate: input.weekLabelByDate,
+  });
+  const span = await resolveFinalizeReviewSpan(
+    input.accountKey,
+    input.boardMonday,
+    adapter,
+  );
+  // weekIndex 1 or 3 = opening week; the closing-Monday row sits at
+  // boardMonday + 7.
+  if (span.weekIndex === 1 || span.weekIndex === 3) {
+    return addDaysIso(input.boardMonday, 7);
+  }
+  // weekIndex 2 or 4 (closing) or null (no label) -> this Monday.
+  return input.boardMonday;
+}
 
 function aggregateDay(rows: DailyRevenueLite[], serviceById: Map<string, ServiceLite>) {
   let hasAnyActualAbove = false;

@@ -261,7 +261,7 @@ function Notice({ view }: { view: MlbCalendarView }) {
         <div>
           <div className="kf-sc-mlb-notice__title">The 2026 season is done</div>
           <div className="kf-sc-mlb-notice__body">
-            Last game was {last}. The 2027 games show here by themselves once the league posts them.
+            Last game was {last}. The 2027 schedule will show here once it is loaded.
           </div>
         </div>
       </div>
@@ -286,7 +286,7 @@ function computeHeadline(view: MlbCalendarView): { title: string; kick: string }
   if (!view.firstGameIso) {
     return {
       title: "No schedule loaded yet",
-      kick: "The 2027 games will show here when they are in.",
+      kick: "The 2027 schedule will show here once it is loaded.",
     };
   }
   if (view.seasonOver && view.lastGameIso) {
