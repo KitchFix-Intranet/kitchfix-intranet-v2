@@ -16,6 +16,10 @@
     {
       "path": "/api/service/reminder-monday",
       "schedule": "0 13-17 * * 1"
+    },
+    {
+      "path": "/api/invoices/send-retry",
+      "schedule": "*/10 * * * *"
     }
   ]
 }

@@ -316,3 +316,59 @@ export async function unremoveFile(
   if (q.error || !q.data) return null;
   return q.data as unknown as import("./types").FileRow;
 }
+
+// Train 3: insert the outbound PDF row. kind='outbound',
+// submission_id set, no draft_id. storage_path is UNIQUE so a
+// retry that calls this again returns the existing row.
+export interface InsertOutboundFileInput {
+  id: string;
+  submissionId: string;
+  storagePath: string;
+  fileName: string;
+  sizeBytes: number;
+  sha256: string;
+  pageCount: number | null;
+  uploadedBy: string;
+}
+
+export async function insertOutboundFile(
+  sb: SupabaseClient,
+  input: InsertOutboundFileInput,
+): Promise<{ status: "created" | "existing" | "err"; row: import("./types").FileRow | null }> {
+  const existing = await sb
+    .from("invoice_files")
+    .select(FILE_COLS)
+    .eq("storage_path", input.storagePath)
+    .maybeSingle();
+  if (existing.data) {
+    return { status: "existing", row: existing.data as unknown as import("./types").FileRow };
+  }
+  const ins = await sb
+    .from("invoice_files")
+    .insert({
+      id: input.id,
+      submission_id: input.submissionId,
+      kind: "outbound",
+      storage_path: input.storagePath,
+      file_name: input.fileName,
+      mime_type: "application/pdf",
+      size_bytes: input.sizeBytes,
+      sha256: input.sha256,
+      page_count: input.pageCount,
+      sort_order: 0,
+      rotation: 0,
+      uploaded_by: input.uploadedBy,
+    })
+    .select(FILE_COLS)
+    .maybeSingle();
+  if (ins.error || !ins.data) {
+    const retry = await sb
+      .from("invoice_files")
+      .select(FILE_COLS)
+      .eq("storage_path", input.storagePath)
+      .maybeSingle();
+    if (retry.data) return { status: "existing", row: retry.data as unknown as import("./types").FileRow };
+    return { status: "err", row: null };
+  }
+  return { status: "created", row: ins.data as unknown as import("./types").FileRow };
+}
