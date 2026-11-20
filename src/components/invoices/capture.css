@@ -850,6 +850,7 @@
   gap: var(--sp-sp-3);
   align-items: center;
 }
+.kf-inv-sitting__phonehead__morewrap { position: relative; }
 .kf-inv-sitting__phonehead__back,
 .kf-inv-sitting__phonehead__more {
   display: inline-flex;

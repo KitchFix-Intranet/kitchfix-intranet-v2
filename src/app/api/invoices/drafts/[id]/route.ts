@@ -41,6 +41,8 @@ function toGl(v: unknown): GlLineDraft[] | undefined {
     if (typeof r.code !== "string" || typeof r.name !== "string") return undefined;
     const amt = typeof r.amount === "number" ? r.amount : Number(r.amount);
     if (!Number.isFinite(amt)) return undefined;
+    // Strip the client-only `auto` flag (train 2b fix-before-push
+    // #4) before the row lands in the DB.
     out.push({ code: r.code, name: r.name, amount: Math.round(amt * 100) / 100 });
   }
   return out;

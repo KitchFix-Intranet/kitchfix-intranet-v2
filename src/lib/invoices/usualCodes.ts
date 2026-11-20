@@ -90,3 +90,43 @@ export function computeUsualCodes(past: readonly PastInvoiceLite[]): UsualCodesR
 
   return { codes, singleCodeFill, sampleSize: sample.length };
 }
+
+// Train 2b fix-before-push #4. Pure.
+//
+// The 9-in-10 fill plants a single coding line equal to the total.
+// Before this fix the fill only fired once (when the coding was
+// empty), so a user typing "100" saw "1", "10", "100" each stage:
+// the first keystroke filled the code with "1" and then stuck
+// there while the total grew. Now, while the coding is still the
+// tool's own fill (one line with `auto: true` and the fillCode's
+// code), the amount follows the total. Once the user edits the
+// code or the amount, `auto` flips off and the tool stops writing.
+//
+// Inputs: the parsed total (or null), the current coding, and
+// the vendor's singleCodeFill (or null). Returns the next coding.
+export function applySingleCodeFill(
+  total: number | null,
+  coding: ReadonlyArray<{ code: string; name: string; amount: number; auto?: boolean }>,
+  fillCode: { code: string; name: string } | null,
+): Array<{ code: string; name: string; amount: number; auto?: boolean }> {
+  if (!fillCode) return coding.slice();
+  if (total == null) return coding.slice();
+
+  // No coding yet - plant the auto-fill line.
+  if (coding.length === 0) {
+    return [{ code: fillCode.code, name: fillCode.name, amount: total, auto: true }];
+  }
+
+  // Coding is one line, it's the tool's own auto-fill for the same
+  // code: update the amount to match the new total.
+  if (coding.length === 1) {
+    const only = coding[0];
+    if (only.auto && only.code === fillCode.code) {
+      if (only.amount === total) return coding.slice();
+      return [{ ...only, amount: total, auto: true }];
+    }
+  }
+
+  // User-edited coding - leave it alone.
+  return coding.slice();
+}

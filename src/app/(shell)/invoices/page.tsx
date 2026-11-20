@@ -167,6 +167,7 @@ export default async function Page({
 
     return (
       <CaptureSittingRoot
+        key={draft.id}
         initialDraft={toDraftView(draft)}
         initialFiles={liveFiles.map(toFileView)}
         initialVendorName={vendorName}

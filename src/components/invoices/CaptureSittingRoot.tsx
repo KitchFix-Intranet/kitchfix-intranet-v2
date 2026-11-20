@@ -42,6 +42,7 @@ import { parseDateInput, toBoxDate } from "@/lib/invoices/dateInput";
 import { parseMoneyInput } from "@/lib/invoices/moneyInput";
 import type { SiteGlCode } from "@/lib/invoices/glCodes";
 import type { UsualCode } from "@/lib/invoices/usualCodes";
+import { applySingleCodeFill } from "@/lib/invoices/usualCodes";
 import { VendorPicker } from "./VendorPicker";
 import { OwnerPreviewBanner } from "./OwnerPreviewBanner";
 import { Sheet } from "./Sheet";
@@ -136,12 +137,48 @@ export function CaptureSittingRoot({
   const totalRef = useRef<HTMLInputElement | null>(null);
   const vendorButtonRef = useRef<HTMLButtonElement | null>(null);
   const moreTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const morePhoneTriggerRef = useRef<HTMLButtonElement | null>(null);
   const pageTriggerRef = useRef<HTMLButtonElement | null>(null);
   const sendButtonRef = useRef<HTMLButtonElement | null>(null);
   const addFileInputRef = useRef<HTMLInputElement | null>(null);
   const replaceFileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => { draftRef.current = draft; }, [draft]);
+
+  // Train 2b fix-before-push #2: when the server-rendered draft
+  // prop changes (router.refresh after a 409, or a navigation
+  // that didn't change the draft id but re-ran page.tsx), adopt
+  // the server's newest state. The 409 said this tab's view was
+  // stale, so any in-flight staged patch is dropped. One toast,
+  // one reload. The initial mount is the same path - initialDraft
+  // arrives as the state's first value, so no extra render.
+  useEffect(() => {
+    setDraft(initialDraft);
+    setInvNumLocal(initialDraft.invoice_number ?? "");
+    setInvDateLocal(toBoxDate(initialDraft.invoice_date));
+    setTotalLocal(initialDraft.total_amount != null ? initialDraft.total_amount.toFixed(2) : "");
+    stagedRef.current = {};
+    writeLocal(false);
+    backoffAttemptRef.current = 0;
+    setErrors([]);
+    setCopyMatch(null);
+    setSaveState("idle");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialDraft.id, initialDraft.updated_at]);
+
+  // Train 2b fix-before-push #5: C11 asks for the cursor to be in
+  // the next draft's number box on arrival. With key={draftId} on
+  // the page, each new sitting mounts fresh; this effect runs
+  // once per mount and lands focus there. If there is no vendor
+  // yet the vendor button is more useful, so prefer that.
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      if (!initialDraft.vendor_id) vendorButtonRef.current?.focus();
+      else invNumRef.current?.focus();
+    }, 0);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const asQ = asParam ? `?as=${encodeURIComponent(asParam)}` : "";
   const asQAmp = asParam ? `&as=${encodeURIComponent(asParam)}` : "";
@@ -208,11 +245,19 @@ export function CaptureSittingRoot({
         backoffAttemptRef.current = 0;
         writeLocal(false);
       } else if (res.status === 409) {
-        // Train 2b correction F2: preserve typing in progress.
-        stagedRef.current = { ...body, ...stagedRef.current };
-        writeLocal(true);
+        // Train 2b fix-before-push #2: one toast, one reload.
+        // The 409 means another tab got in first, so our view -
+        // and anything we had staged on top of it - is stale.
+        // Drop the staged patch, drop the retry backoff, toast
+        // once, and refresh. The initialDraft.updated_at effect
+        // above re-adopts the server state on the next render.
+        stagedRef.current = {};
+        writeLocal(false);
+        backoffAttemptRef.current = 0;
+        setSaveState("idle");
         toast("This invoice changed in another tab. Showing the newest.", { tone: "ink" });
-        setTimeout(() => router.refresh(), 300);
+        router.refresh();
+        return; // skip the finally reschedule path
       } else if (res.status === 500) {
         // Train 2b correction 4.2: DB error, not a conflict. Retry
         // a few times with growing backoff; then stop and say so.
@@ -293,14 +338,17 @@ export function CaptureSittingRoot({
     setTotalLocal(v);
     const parsed = parseMoneyInput(v);
     stage("total_amount", parsed);
-    // 9-in-10 fill: when the usual's singleCodeFill is set and the
-    // breakdown is empty, drop the code in. The chip renders as
-    // "filled, with one tap to change it."
-    if (parsed != null && usual.singleCodeFill && (draft.gl_breakdown ?? []).length === 0) {
-      const code = usual.singleCodeFill;
-      const nextGl: GlLineDraft[] = [{ code: code.code, name: code.name, amount: parsed }];
-      stage("gl_breakdown", nextGl);
-      setDraft((d) => ({ ...d, gl_breakdown: nextGl }));
+    // 9-in-10 fill (train 2b fix-before-push #4): pure helper
+    // decides whether to plant the line, update its amount, or
+    // leave the user's coding alone. The amount tracks the total
+    // while the line is still the tool's own auto-fill.
+    if (usual.singleCodeFill) {
+      const current = draft.gl_breakdown ?? [];
+      const next = applySingleCodeFill(parsed, current, usual.singleCodeFill);
+      if (next !== current) {
+        stage("gl_breakdown", next);
+        setDraft((d) => ({ ...d, gl_breakdown: next }));
+      }
     }
   };
 
@@ -363,7 +411,9 @@ export function CaptureSittingRoot({
     updateGl([...gl, { code, name, amount: Math.round(left * 100) / 100 }]);
   };
   const updateLine = (idx: number, patch: Partial<GlLineDraft>) => {
-    updateGl(gl.map((l, i) => (i === idx ? { ...l, ...patch } : l)));
+    // Train 2b fix-before-push #4: any user edit clears the auto
+    // flag so the fill helper stops writing to this line.
+    updateGl(gl.map((l, i) => (i === idx ? { ...l, ...patch, auto: false } : l)));
   };
   const removeLine = (idx: number) => {
     updateGl(gl.filter((_, i) => i !== idx));
@@ -644,14 +694,39 @@ export function CaptureSittingRoot({
               {vendorName ?? (draft.type === "credit" ? "New credit" : "New invoice")}
             </h2>
           </div>
-          <button
-            type="button"
-            className="kf-inv-sitting__phonehead__more"
-            aria-label="More for this invoice"
-            onClick={() => setMoreMenuOpen((v) => !v)}
-          >
-            <MoreHorizontal size={20} aria-hidden />
-          </button>
+          <div className="kf-inv-sitting__phonehead__morewrap">
+            <button
+              ref={morePhoneTriggerRef}
+              type="button"
+              className="kf-inv-sitting__phonehead__more"
+              aria-haspopup="menu"
+              aria-expanded={moreMenuOpen ? true : undefined}
+              aria-label="More for this invoice"
+              onClick={() => setMoreMenuOpen((v) => !v)}
+            >
+              <MoreHorizontal size={20} aria-hidden />
+            </button>
+            {/* Train 2b fix-before-push #3: mount the Menu for the
+                phone trigger too. Without this the "..." on phone
+                opens nothing and Delete-this-invoice is unreachable. */}
+            {moreMenuOpen ? (
+              <Menu
+                label="More for this invoice"
+                anchorRef={morePhoneTriggerRef}
+                align="down-right"
+                onClose={() => setMoreMenuOpen(false)}
+                items={canSave ? [
+                  {
+                    key: "delete",
+                    label: "Delete this invoice",
+                    icon: <Trash2 size={18} aria-hidden />,
+                    destructive: true,
+                    onPick: () => void discard(),
+                  },
+                ] : []}
+              />
+            ) : null}
+          </div>
         </div>
       </div>
 
