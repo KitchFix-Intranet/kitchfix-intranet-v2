@@ -89,10 +89,15 @@ export function ReviewFilter({
   groups,
   cards,
   totals,
+  notFoodCard,
 }: {
   groups: ReviewFilterGroup[];
   cards: RenderedCard[];
   totals: Totals;
+  // T5b item 3: the not-food card is one card that is not drawn
+  // when a search or filter is on. It sits last in the list. Null
+  // when there are no proposed ai-notfood items.
+  notFoodCard?: ReactNode;
 }) {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortMode>("spend");
@@ -313,11 +318,27 @@ export function ReviewFilter({
           </button>
         </div>
       ) : (
-        <ul className="kf-review__groups" aria-label="Groups">
-          {filtered.map((g) => (
-            <li key={g.key}>{cardByKey.get(g.key)}</li>
-          ))}
-        </ul>
+        <>
+          {/* T5b item 1: the four exits are explained once, in one
+              line above the list of cards. The legend line on each
+              card is retired. */}
+          <p className="kf-helpline">
+            <b>Not for recipes:</b> Retail is sold as-is. One-off was bought
+            once. Archive is a mistake or a dead item. Not food is fees and
+            supplies. Every decision can be undone, here or in Recent
+            decisions.
+          </p>
+          <ul className="kf-review__groups" aria-label="Groups">
+            {filtered.map((g) => (
+              <li key={g.key}>{cardByKey.get(g.key)}</li>
+            ))}
+            {/* T5b item 3: the not-food card is one card, last in
+                the list, drawn only when no search or filter is on.
+                It is one group for the header's "groups to review"
+                count (see loadReview's totals.groups). */}
+            {!anyFilterActive && notFoodCard ? <li key="nf">{notFoodCard}</li> : null}
+          </ul>
+        </>
       )}
 
       <p className="kf-review__hint">

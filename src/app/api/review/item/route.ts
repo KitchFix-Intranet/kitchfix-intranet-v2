@@ -245,7 +245,8 @@ export async function GET(req: NextRequest) {
           .from("pr_ingredients")
           // N5: avg_weight_lb + avg_weight_source added to the two
           // ingredient SELECTs so the panel reads what is stored.
-          .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source,yield_pct,yield_source")
+          // T5b item 6: allergens_reviewed_by leaves the SELECT.
+          .select("id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source,yield_pct,yield_source")
           .eq("id", it.ingredient_id)
           .maybeSingle()
       : Promise.resolve({ data: null as unknown, error: null }),

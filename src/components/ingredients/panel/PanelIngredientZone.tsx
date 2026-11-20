@@ -491,7 +491,6 @@ export function PanelIngredientZone({
             ref={allergenRef}
             ingredientId={ingredient.id}
             allergens={ingredient.allergens}
-            reviewedBy={ingredient.allergens_reviewed_by}
             reviewedAt={ingredient.allergens_reviewed_at}
             onSaved={onDone}
             onStateChange={onAllergenState}

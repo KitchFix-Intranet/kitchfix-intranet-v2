@@ -21,6 +21,7 @@
 
 import { serviceClient } from "@/lib/supabase/service";
 import { fmtUsdLong, timeAgo, fmtDate, nameFromEmail } from "@/lib/fmt";
+import { displayNameFor } from "@/lib/ingredients/itemName";
 import { UndoLedgerButton } from "./UndoLedgerButton";
 import { UndoMergeButton } from "./UndoMergeButton";
 import { UndoDecisionButton } from "./UndoDecisionButton";
@@ -152,6 +153,24 @@ export async function ReviewLedger({ ingredients }: { ingredients: Ingredient[] 
     link_status: string | null;
     link_reason: string | null;
   }>();
+  // T5b ruling 10 + round 2 item 4: one batched read names every
+  // item mentioned by the rows on this page, following the SAME
+  // precedence the Review card uses (pr_vendor_catalog.clean_name
+  // ?? pr_vendor_items.name). Two selects: the items row for state
+  // checks + vendor_id + item_number_norm; then one per-vendor
+  // catalog read keyed on item_number_norm (same shape
+  // loadReview uses).
+  const itemNameById = new Map<string, string>();
+  type ItemRow = {
+    id: string;
+    status: string | null;
+    link_status: string | null;
+    link_reason: string | null;
+    vendor_id: string | null;
+    item_number_norm: string | null;
+    name: string | null;
+  };
+  const itemRowsById = new Map<string, ItemRow>();
   if (mentionedIds.size > 0) {
     const ids = Array.from(mentionedIds);
     const page = 200;
@@ -159,12 +178,55 @@ export async function ReviewLedger({ ingredients }: { ingredients: Ingredient[] 
       const slice = ids.slice(i, i + page);
       const { data: vi } = await client
         .from("pr_vendor_items")
-        .select("id,status,link_status,link_reason")
+        .select("id,status,link_status,link_reason,vendor_id,item_number_norm,name")
         .in("id", slice);
-      for (const r of (vi ?? []) as Array<{ id: string; status: string | null; link_status: string | null; link_reason: string | null }>) {
+      for (const r of (vi ?? []) as ItemRow[]) {
         currentShape.set(r.id, { status: r.status, link_status: r.link_status, link_reason: r.link_reason });
+        itemRowsById.set(r.id, r);
       }
     }
+  }
+  // Catalog join: one read per vendor, bounded by the small list
+  // of (vendor_id, item_number_norm) pairs the rows above refer to.
+  const catalogCleanByKey = new Map<string, string>();
+  if (itemRowsById.size > 0) {
+    const byVendor = new Map<string, Set<string>>();
+    for (const r of itemRowsById.values()) {
+      if (!r.vendor_id || !r.item_number_norm) continue;
+      let set = byVendor.get(r.vendor_id);
+      if (!set) {
+        set = new Set();
+        byVendor.set(r.vendor_id, set);
+      }
+      set.add(r.item_number_norm);
+    }
+    for (const [vendorId, nums] of byVendor) {
+      const list = Array.from(nums);
+      const chunk = 500;
+      for (let i = 0; i < list.length; i += chunk) {
+        const slice = list.slice(i, i + chunk);
+        const { data: cat } = await client
+          .from("pr_vendor_catalog")
+          .select("vendor_id,item_number_norm,clean_name")
+          .eq("vendor_id", vendorId)
+          .in("item_number_norm", slice);
+        for (const c of (cat ?? []) as Array<{ vendor_id: string; item_number_norm: string; clean_name: string | null }>) {
+          const name = (c.clean_name ?? "").trim();
+          if (name.length > 0) {
+            catalogCleanByKey.set(`${c.vendor_id}#${c.item_number_norm}`, name);
+          }
+        }
+      }
+    }
+  }
+  for (const r of itemRowsById.values()) {
+    const key =
+      r.vendor_id && r.item_number_norm ? `${r.vendor_id}#${r.item_number_norm}` : null;
+    const cleanName = key ? catalogCleanByKey.get(key) ?? null : null;
+    const name = displayNameFor({ cleanName, name: r.name });
+    // displayNameFor floors to "Item"; only record a real match so
+    // LedgerRow's "Item" fallback applies when we have nothing.
+    if (name !== "Item") itemNameById.set(r.id, name);
   }
 
   const ingredientById = new Map(ingredients.map((i) => [i.id, i]));
@@ -180,7 +242,7 @@ export async function ReviewLedger({ ingredients }: { ingredients: Ingredient[] 
       <ul className="kf-review__ledger-list">
         {prepared.map((row) => (
           <li key={row.event.id}>
-            <LedgerRow row={row} ingredientById={ingredientById} />
+            <LedgerRow row={row} ingredientById={ingredientById} itemNameById={itemNameById} />
           </li>
         ))}
       </ul>
@@ -325,23 +387,56 @@ function matchesDecisionShape(
 function LedgerRow({
   row,
   ingredientById,
+  itemNameById,
 }: {
   row: PreparedRow;
   ingredientById: Map<string, Ingredient>;
+  itemNameById: Map<string, string>;
 }) {
   const { event } = row;
   const after = event.after ?? {};
   const name = actorName(event.actor);
+
+  // T5b ruling 10: on a decision that touched one item, the bold
+  // subject is the item's current description. "Item" is the
+  // fallback when the row was renamed or removed. For item-scoped
+  // events from before train 4 that stored no after.item_ids /
+  // after.count, we treat them as one-item events named by the
+  // event's own entity_id.
+  function singleItemId(): string | null {
+    if (row.itemIds.length === 1) return row.itemIds[0];
+    if (row.itemIds.length === 0 && event.entity_type === "vendor_item") {
+      return event.entity_id;
+    }
+    return null;
+  }
+  function singleItemName(): string | null {
+    const id = singleItemId();
+    if (!id) return null;
+    const n = itemNameById.get(id);
+    return n && n.length > 0 ? n : "Item";
+  }
+  // T5b ruling 10 (+pre-T4 heal): item-scoped events pre-T4 wrote
+  // one row per item without an after.item_ids / after.count. A
+  // sensible count is 1 when the event names a single vendor_item.
+  const pre4SingleItem =
+    row.itemIds.length === 0 && event.entity_type === "vendor_item" ? 1 : 0;
 
   if (event.kind === "review_confirm") {
     const confirmed = asNumber(after.confirmed) || row.itemIds.length;
     const usd = asNumber(after.usd);
     const wasRetail = Boolean(after.ingredient_is_retail) || asNumber(after.moved_to_resale) > 0;
     const verb = wasRetail ? "Confirmed as retail" : "Confirmed";
+    const subject =
+      confirmed === 1 ? (singleItemName() ?? "Item") : row.ingredientName;
+    const detail =
+      confirmed === 1
+        ? `to ${row.ingredientName} · $${fmtUsdLong(usd).replace(/^\$/, "")}`
+        : `${confirmed} items · $${fmtUsdLong(usd).replace(/^\$/, "")}`;
     return (
       <LedgerRowFrame
         kind={verb}
-        text={<><strong>{row.ingredientName}</strong> - {confirmed} items / ${fmtUsdLong(usd).replace(/^\$/, "")}</>}
+        text={<><strong>{subject}</strong> <small>{detail}</small></>}
         at={event.at}
         name={name}
         row={row}
@@ -350,11 +445,13 @@ function LedgerRow({
   }
 
   if (event.kind === "review_resale") {
-    const items = row.itemIds.length;
+    const items = row.itemIds.length || pre4SingleItem;
+    const subject = items === 1 ? (singleItemName() ?? "Item") : row.ingredientName;
+    const detail = items === 1 ? "to Retail" : `${items} items`;
     return (
       <LedgerRowFrame
         kind="Marked retail"
-        text={items === 1 ? <>{row.ingredientName}</> : <>{items} items</>}
+        text={<><strong>{subject}</strong> <small>{detail}</small></>}
         at={event.at}
         name={name}
         row={row}
@@ -363,11 +460,12 @@ function LedgerRow({
   }
 
   if (event.kind === "review_archive") {
-    const count = asNumber(after.count) || row.itemIds.length;
+    const count = asNumber(after.count) || row.itemIds.length || pre4SingleItem;
+    const subject = count === 1 ? (singleItemName() ?? "Item") : `${count} items`;
     return (
       <LedgerRowFrame
         kind="Archived"
-        text={count === 1 ? <>1 item</> : <>{count} items</>}
+        text={<><strong>{subject}</strong></>}
         at={event.at}
         name={name}
         row={row}
@@ -376,10 +474,12 @@ function LedgerRow({
   }
 
   if (event.kind === "review_oneoff") {
+    const count = row.itemIds.length || pre4SingleItem;
+    const subject = count === 1 ? (singleItemName() ?? "Item") : `${count} items`;
     return (
       <LedgerRowFrame
         kind="Marked one-off"
-        text={row.itemIds.length === 1 ? <>1 item</> : <>{row.itemIds.length} items</>}
+        text={<><strong>{subject}</strong></>}
         at={event.at}
         name={name}
         row={row}
@@ -388,10 +488,12 @@ function LedgerRow({
   }
 
   if (event.kind === "review_notfood") {
+    const count = row.itemIds.length || pre4SingleItem;
+    const subject = count === 1 ? (singleItemName() ?? "Item") : `${count} items`;
     return (
       <LedgerRowFrame
         kind="Marked not food"
-        text={row.itemIds.length === 1 ? <>1 item</> : <>{row.itemIds.length} items</>}
+        text={<><strong>{subject}</strong></>}
         at={event.at}
         name={name}
         row={row}
@@ -400,10 +502,12 @@ function LedgerRow({
   }
 
   if (event.kind === "review_keep_separate") {
+    const count = row.itemIds.length || pre4SingleItem;
+    const subject = count === 1 ? (singleItemName() ?? "Item") : `${count} items`;
     return (
       <LedgerRowFrame
         kind="Held separate"
-        text={row.itemIds.length === 1 ? <>1 item</> : <>{row.itemIds.length} items</>}
+        text={<><strong>{subject}</strong></>}
         at={event.at}
         name={name}
         row={row}
@@ -412,10 +516,13 @@ function LedgerRow({
   }
 
   if (event.kind === "review_relink") {
+    const count = row.itemIds.length || pre4SingleItem;
+    const subject = count === 1 ? (singleItemName() ?? "Item") : `${count} items`;
+    const detail = `to ${row.ingredientName}`;
     return (
       <LedgerRowFrame
         kind="Relinked"
-        text={<><strong>{row.ingredientName}</strong> - {row.itemIds.length === 1 ? "1 item" : `${row.itemIds.length} items`}</>}
+        text={<><strong>{subject}</strong> <small>{detail}</small></>}
         at={event.at}
         name={name}
         row={row}
@@ -436,11 +543,13 @@ function LedgerRow({
   }
 
   if (event.kind === "review_undo") {
-    const items = row.itemIds.length;
+    const items = row.itemIds.length || pre4SingleItem;
+    const subject =
+      items === 1 ? (singleItemName() ?? "Item") : `${items} items`;
     return (
       <LedgerRowFrame
         kind="Undid"
-        text={items === 1 ? <>Reversed one item.</> : <>Reversed {items} items.</>}
+        text={<><strong>{subject}</strong></>}
         at={event.at}
         name={name}
         row={row}

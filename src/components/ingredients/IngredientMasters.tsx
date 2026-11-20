@@ -44,8 +44,10 @@ type Ingredient = {
   base_unit: string;
   // B1: allergen three-state fields. Null reviewed_at = unreviewed
   // (must render "Check allergens" at every surface).
+  // T5b item 6: allergens_reviewed_by is not read on any Ingredients
+  // / Retail screen (and the field is already gone from the shared
+  // ReviewCardIngredient type). Keep only the timestamp.
   allergens: string[];
-  allergens_reviewed_by: string | null;
   allergens_reviewed_at: string | null;
   // N6: usual measure of one each. Only meaningful on each-costed
   // masters; null everywhere else.
@@ -204,8 +206,9 @@ export const loadMasters = cache(async function loadMasters(mode: "recipe" | "re
   const rawIngredients = await readActiveIngredients<Ingredient>(
     client as unknown as MinimalSupabase,
     {
+      // T5b item 6: allergens_reviewed_by leaves the SELECT.
       columns:
-        "id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source,yield_pct,yield_source",
+        "id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source,yield_pct,yield_source",
       equals: [["resale", mode === "resale"]],
     }
   );
@@ -605,7 +608,8 @@ export const loadMasters = cache(async function loadMasters(mode: "recipe" | "re
       // Row-level marker + filter chip + count derive from
       // allergensReviewedAt == null.
       allergens: m.allergens,
-      allergensReviewedBy: m.allergens_reviewed_by,
+      // T5b item 6: the reviewer's email is not in the loader's
+      // SELECT any more; the MasterRow carries only the timestamp.
       allergensReviewedAt: m.allergens_reviewed_at,
       linkedCount: items.length,
       usd12m: usd,
