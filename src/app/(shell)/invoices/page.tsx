@@ -3,16 +3,20 @@
 //
 // No `site`: one-site viewer -> redirect to their site; many-site
 // viewer -> "Which site?". No sites -> NoAccess.
-// With `site`, no `draft`: the landing (drop zone + Latest sent +
-// Drafts waiting).
-// With `site` and `draft`: the sitting (one invoice, page beside
-// the fields).
+// With `site`, no `draft`: the landing.
+// With `site` and `draft`: the sitting.
 //
 // Train 2b correction 4.5: no signed storage URL is built here or
-// passed to any client component. The browser asks the view route
-// for a 60s link only for the file it is drawing (and again if the
-// link expires).
+// passed to any client component.
+// Train 2b fix-before-push #6 / F4: no segment-level loading.tsx
+// (it cannot see `?draft=`, so a sitting load would flash the
+// landing skeleton). Instead, Page() reads searchParams and wraps
+// the heavy data-loading branch in its own Suspense boundary with
+// the matching skeleton. The viewer/scope reads happen at the top
+// where they are cheap and needed by both paths; they stream in
+// before the Suspense fallback shows. No path crosses skeletons.
 
+import { Suspense } from "react";
 import { notFound, redirect } from "next/navigation";
 import { requireOwnerPage } from "@/lib/gate";
 import { serviceClient } from "@/lib/supabase/service";
@@ -35,8 +39,23 @@ import { CaptureSittingRoot } from "@/components/invoices/CaptureSittingRoot";
 import { OwnerPreviewBanner } from "@/components/invoices/OwnerPreviewBanner";
 import { NoAccess, NoRosterRow } from "@/components/invoices/EmptyStates";
 import { IdentBand } from "@/components/ui/IdentBand";
+import { LandingSkeleton, SittingSkeleton } from "@/components/invoices/CaptureSkeletons";
+import type { InvoiceScope, SiteNavItem } from "@/lib/invoices/types";
 import "@/components/invoices/invoices.css";
 import "@/components/invoices/capture.css";
+
+interface Shared {
+  scope: InvoiceScope;
+  nav: readonly SiteNavItem[];
+  manySites: boolean;
+  slug: string;
+  accountKey: string;
+  ownerEmail: string;
+  asParam: string | null;
+  previewName: string | null;
+  isPreview: boolean;
+  siteName: string;
+}
 
 export default async function Page({
   searchParams,
@@ -92,7 +111,7 @@ export default async function Page({
   const nav = sitesInScope(scope, sites);
   const many = isManySites(scope);
 
-  const ownerEmailLower = (viewer.work_email ?? "").trim().toLowerCase();
+  const ownerEmail = (viewer.work_email ?? "").trim().toLowerCase();
 
   if (!site) {
     if (nav.length === 1) {
@@ -100,13 +119,14 @@ export default async function Page({
       const qs = as ? `&as=${encodeURIComponent(as)}` : "";
       redirect(`/invoices?site=${only.slug}${qs}`);
     }
-    // Per-site draft counts for A3 ("2 drafts" under the site row).
+    // "Which site?" is a cheap read - no Suspense needed; draft
+    // counts are a single head query per site.
     const draftCountsBySlug: Record<string, number> = {};
     await Promise.all(nav.map(async (s) => {
       const q = await sb
         .from("invoice_drafts")
         .select("id", { count: "exact", head: true })
-        .eq("owner_email", ownerEmailLower)
+        .eq("owner_email", ownerEmail)
         .eq("account_key", s.accountKey)
         .eq("status", "draft");
       draftCountsBySlug[s.slug] = q.count ?? 0;
@@ -127,69 +147,90 @@ export default async function Page({
 
   const asParam = as;
   const slug = accountKeyToSlug(accountKey);
-  const ownerEmail = ownerEmailLower;
   const navSite = nav.find((s) => s.accountKey === accountKey);
   const siteName = navSite?.name ?? accountKey;
 
-  // Sitting
+  const shared: Shared = {
+    scope, nav, manySites: many, slug, accountKey, ownerEmail,
+    asParam, previewName, isPreview, siteName,
+  };
+
+  // Train 2b fix-before-push #6 / F4: one Suspense boundary per
+  // branch. Each branch's skeleton replaces what React is about
+  // to stream for that branch; no cross-skeleton flash.
   if (draftId) {
-    const draft = await getDraftById(sb, ownerEmail, draftId);
-    if (!draft) notFound();
-    if (draft.account_key !== accountKey) notFound();
-    if (draft.status === "discarded") {
-      redirect(`/invoices?site=${slug}${asParam ? `&as=${encodeURIComponent(asParam)}` : ""}`);
-    }
-
-    const [files, codes, vendorRow, fixedOrder] = await Promise.all([
-      listFilesForDraft(sb, ownerEmail, draft.id),
-      loadActiveCodesForSite(sb, accountKey),
-      draft.vendor_id
-        ? sb.from("vendors").select("name").eq("id", draft.vendor_id).maybeSingle()
-        : Promise.resolve({ data: null, error: null } as { data: { name: string } | null; error: null }),
-      listDraftsForOwnerSiteFixedOrder(sb, ownerEmail, accountKey),
-    ]);
-    const vendorName = (vendorRow.data as { name: string } | null)?.name ?? null;
-    const liveFiles = files.filter((f) => f.removed_at == null);
-
-    // Train 2b correction 4.5: no signed URLs in server-rendered HTML.
-    // The sitting fetches a 60s link per file on screen via /view.
-    const activeSet = new Set(codes.map((c) => c.code));
-    const usual = draft.vendor_id
-      ? await loadUsualCodes(sb, accountKey, draft.vendor_id, activeSet)
-      : { codes: [], singleCodeFill: null, sampleSize: 0 };
-
-    // C1 pager: N-of-M over the fixed-order list of this (owner,
-    // site)'s drafts.
-    const totalInSitting = fixedOrder.length;
-    const idx = Math.max(0, fixedOrder.findIndex((d) => d.id === draft.id));
-    const prevDraftId = idx > 0 ? fixedOrder[idx - 1].id : null;
-    const nextDraftId = idx >= 0 && idx < totalInSitting - 1 ? fixedOrder[idx + 1].id : null;
-
     return (
-      <CaptureSittingRoot
-        key={draft.id}
-        initialDraft={toDraftView(draft)}
-        initialFiles={liveFiles.map(toFileView)}
-        initialVendorName={vendorName}
-        activeCodes={codes}
-        initialUsual={usual}
-        siteSlug={slug}
-        siteAccountKey={accountKey}
-        siteName={siteName}
-        asParam={asParam}
-        previewName={previewName}
-        isPreview={isPreview}
-        pager={{
-          position: idx + 1,
-          total: totalInSitting,
-          prevDraftId,
-          nextDraftId,
-        }}
-      />
+      <Suspense fallback={<SittingSkeleton />}>
+        <SittingSurface shared={shared} draftId={draftId} />
+      </Suspense>
     );
   }
+  return (
+    <Suspense fallback={<LandingSkeleton />}>
+      <LandingSurface shared={shared} />
+    </Suspense>
+  );
+}
 
-  // Landing
+async function SittingSurface({ shared, draftId }: { shared: Shared; draftId: string }) {
+  const sb = serviceClient();
+  const { ownerEmail, accountKey, slug, asParam, siteName, previewName, isPreview } = shared;
+
+  const draft = await getDraftById(sb, ownerEmail, draftId);
+  if (!draft) notFound();
+  if (draft.account_key !== accountKey) notFound();
+  if (draft.status === "discarded") {
+    redirect(`/invoices?site=${slug}${asParam ? `&as=${encodeURIComponent(asParam)}` : ""}`);
+  }
+
+  const [files, codes, vendorRow, fixedOrder] = await Promise.all([
+    listFilesForDraft(sb, ownerEmail, draft.id),
+    loadActiveCodesForSite(sb, accountKey),
+    draft.vendor_id
+      ? sb.from("vendors").select("name").eq("id", draft.vendor_id).maybeSingle()
+      : Promise.resolve({ data: null, error: null } as { data: { name: string } | null; error: null }),
+    listDraftsForOwnerSiteFixedOrder(sb, ownerEmail, accountKey),
+  ]);
+  const vendorName = (vendorRow.data as { name: string } | null)?.name ?? null;
+  const liveFiles = files.filter((f) => f.removed_at == null);
+  const activeSet = new Set(codes.map((c) => c.code));
+  const usual = draft.vendor_id
+    ? await loadUsualCodes(sb, accountKey, draft.vendor_id, activeSet)
+    : { codes: [], singleCodeFill: null, sampleSize: 0 };
+
+  const totalInSitting = fixedOrder.length;
+  const idx = Math.max(0, fixedOrder.findIndex((d) => d.id === draft.id));
+  const prevDraftId = idx > 0 ? fixedOrder[idx - 1].id : null;
+  const nextDraftId = idx >= 0 && idx < totalInSitting - 1 ? fixedOrder[idx + 1].id : null;
+
+  return (
+    <CaptureSittingRoot
+      key={draft.id}
+      initialDraft={toDraftView(draft)}
+      initialFiles={liveFiles.map(toFileView)}
+      initialVendorName={vendorName}
+      activeCodes={codes}
+      initialUsual={usual}
+      siteSlug={slug}
+      siteAccountKey={accountKey}
+      siteName={siteName}
+      asParam={asParam}
+      previewName={previewName}
+      isPreview={isPreview}
+      pager={{
+        position: idx + 1,
+        total: totalInSitting,
+        prevDraftId,
+        nextDraftId,
+      }}
+    />
+  );
+}
+
+async function LandingSurface({ shared }: { shared: Shared }) {
+  const sb = serviceClient();
+  const { scope, nav, manySites, ownerEmail, accountKey, slug, asParam, siteName, previewName } = shared;
+
   const activeCodes = await loadActiveCodesForSite(sb, accountKey);
   const activeCodesSet = new Set(activeCodes.map((c) => c.code));
   const [drafts, latestSent, needsFix, returnedForSite] = await Promise.all([
@@ -200,10 +241,6 @@ export default async function Page({
     loadReturnedForSite(sb, accountKey, 4),
   ]);
   const fixCount = needsFix.count ?? 0;
-
-  // Train 2b correction 6: server-computed Ready + vendor name per
-  // draft. B1 headline, B6 rows and E all read these fields; no
-  // client-side copy of the Ready rule.
   const draftList = await buildDraftListView(sb, ownerEmail, drafts, activeCodesSet);
 
   return (
@@ -219,7 +256,7 @@ export default async function Page({
       needsFixPreview={returnedForSite}
       asParam={asParam}
       previewName={previewName}
-      manySites={many}
+      manySites={manySites}
     />
   );
 }

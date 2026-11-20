@@ -670,9 +670,25 @@ export function CaptureSittingRoot({
     : saveState === "stopped" ? "Not saved. Changes are kept on this device."
     : "Saved";
 
+  // Train 2b fix-before-push #7 (F3 second half). A visually-
+  // hidden sentence spells out why every disabled control is
+  // disabled when the viewer is previewing someone. Each disabled
+  // control carries aria-describedby="preview-reason" so a screen
+  // reader announces the reason.
+  const previewDescId = isPreview ? "preview-reason" : undefined;
+  const describedBy = (errId: string | undefined): string | undefined => {
+    const parts = [errId, previewDescId].filter((s): s is string => Boolean(s));
+    return parts.length === 0 ? undefined : parts.join(" ");
+  };
+
   return (
     <div className="kf-invoices-surface kf-inv-sitting-wrap">
       {previewName ? <OwnerPreviewBanner name={previewName} exitHref="/invoices" /> : null}
+      {isPreview ? (
+        <span id="preview-reason" className="kf-sr-only">
+          Owner preview. Changes are not saved.
+        </span>
+      ) : null}
 
       {/* D1: plain phone head carrying the vendor name as the
           H2 heading and the pager under it. The desk C1 slim top
@@ -976,7 +992,7 @@ export function CaptureSittingRoot({
               data-vendor
               aria-haspopup="dialog"
               aria-invalid={vendorErr ? true : false}
-              aria-describedby={vendorErr ? "err-vendor" : undefined}
+              aria-describedby={describedBy(vendorErr ? "err-vendor" : undefined)}
               onClick={() => setPickerOpen(true)}
               disabled={isPreview}
             >
@@ -989,7 +1005,7 @@ export function CaptureSittingRoot({
           {/* C5 kind line with 48px tap area on the link */}
           <p className="kf-inv-sitting__kind">
             {draft.type === "invoice" ? "This is an invoice." : "This is a credit."}
-            <button type="button" className="kf-inv-sitting__kind-link" onClick={onKindFlip} disabled={isPreview}>
+            <button type="button" className="kf-inv-sitting__kind-link" onClick={onKindFlip} disabled={isPreview} aria-describedby={previewDescId}>
               {draft.type === "invoice" ? "It is a credit" : "It is an invoice"}
             </button>
           </p>
@@ -1003,7 +1019,7 @@ export function CaptureSittingRoot({
               value={invNumLocal}
               onChange={(e) => onInvNumChange(e.currentTarget.value)}
               aria-invalid={invNumErr ? true : false}
-              aria-describedby={invNumErr ? "err-num" : undefined}
+              aria-describedby={describedBy(invNumErr ? "err-num" : undefined)}
               maxLength={50}
               autoCapitalize="characters"
               autoComplete="off"
@@ -1024,7 +1040,7 @@ export function CaptureSittingRoot({
                 placeholder="MM/DD/YYYY"
                 maxLength={10}
                 aria-invalid={invDateErr || invDateErrorInline ? true : false}
-                aria-describedby={invDateErr || invDateErrorInline ? "err-date" : undefined}
+                aria-describedby={describedBy(invDateErr || invDateErrorInline ? "err-date" : undefined)}
                 autoComplete="off"
                 disabled={isPreview}
               />
@@ -1034,6 +1050,7 @@ export function CaptureSittingRoot({
                 aria-label="Pick the date on a calendar"
                 aria-haspopup="dialog"
                 aria-expanded={calOpen ? true : undefined}
+                aria-describedby={previewDescId}
                 onClick={() => setCalOpen(true)}
                 disabled={isPreview}
               >
@@ -1086,7 +1103,7 @@ export function CaptureSittingRoot({
                 inputMode="decimal"
                 placeholder="0.00"
                 aria-invalid={totalErr ? true : false}
-                aria-describedby={totalErr ? "err-total" : undefined}
+                aria-describedby={describedBy(totalErr ? "err-total" : undefined)}
                 autoComplete="off"
                 disabled={isPreview}
               />
@@ -1298,6 +1315,7 @@ export function CaptureSittingRoot({
               onClick={() => void check()}
               disabled={checking || isPreview}
               aria-live="polite"
+              aria-describedby={previewDescId}
             >
               {checking ? "Checking" : "Check and send"}
             </button>

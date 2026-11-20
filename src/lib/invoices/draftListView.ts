@@ -15,8 +15,9 @@ import { copyCheck } from "./duplicateCheck";
 import { vendorIsAvailable } from "./vendorPicker";
 
 // Short, plain-words missing-field list from CheckError messages.
-// Capped to 4 so the row doesn't wrap into a paragraph.
-function toMissing(errors: ReadonlyArray<{ field: string; message: string }>): string[] {
+// Capped to 4 so the row doesn't wrap into a paragraph. Exported
+// for tests (train 2b fix-before-push #8 / section 4.6).
+export function toMissing(errors: ReadonlyArray<{ field: string; message: string }>): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const e of errors) {
@@ -29,7 +30,7 @@ function toMissing(errors: ReadonlyArray<{ field: string; message: string }>): s
   return out;
 }
 
-function labelFor(field: string): string {
+export function labelFor(field: string): string {
   switch (field) {
     case "vendor_id": return "Vendor";
     case "type": return "Kind";

@@ -14,6 +14,7 @@ import { insertFile } from "@/lib/invoices/draftWrite";
 import { detectKind } from "@/lib/invoices/fileKind";
 import { sha256Hex } from "@/lib/invoices/fileSha";
 import { pdfPageCount } from "@/lib/invoices/pdfPages";
+import { pickSortOrder } from "@/lib/invoices/sortOrder";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -120,13 +121,9 @@ export async function POST(req: Request) {
   // Compute the next sort_order on this draft.
   const existing = await listFilesForDraft(sb, ownerEmail, draft.id);
   const nextOrder = existing.length === 0 ? 0 : Math.max(...existing.map((f) => f.sort_order)) + 1;
-  // Train 2b correction 4.3: a whole number of zero or more is used;
-  // anything else quietly falls back to nextOrder. Never a 400 on
-  // this route for a bad sort_order - a good file must never leave
-  // the bucket because the browser sent a rubbish number.
-  const sortOrder = typeof body.sort_order === "number" && Number.isInteger(body.sort_order) && body.sort_order >= 0
-    ? body.sort_order
-    : nextOrder;
+  // Train 2b correction 4.3 / fix-before-push #8: shared helper
+  // picks the whole-number input or falls back to nextOrder.
+  const sortOrder = pickSortOrder(body.sort_order, nextOrder);
 
   const result = await insertFile(sb, {
     id: body.file_id,
