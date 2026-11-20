@@ -312,6 +312,39 @@ return null. `default.tsx` stays for full-load behaviour. Next's route
 precedence (static > dynamic > catch-all) keeps every existing named
 slot page winning over the catch-all.
 
+## 23. Two shapes of the same disposition during the correction window
+
+Train 4 makes `one-off` and `not_food` first-class values of
+`pr_vendor_items.status`, but the one-time correction that rewrites
+old rows runs AFTER the deploy. During the window the database holds
+BOTH shapes and every reader has to answer them the same way.
+
+One-off:
+  old: `status='archived', link_status='rejected', link_reason='oneoff:<email>'`
+  new: `status='one_off',  link_status='rejected', link_reason='oneoff'`
+
+Not food (person-marked):
+  old: `status='active',   link_status='rejected', link_reason='notfood:<email>', is_food=true`
+  new: `status='not_food', link_status='rejected', link_reason='notfood', is_food=true`
+
+Readers must call `getVendorItemState` in
+`src/lib/ingredients/vendorItemState.ts`; none of them inlines a
+test on the raw columns. The segment filters on Vendor items widen
+the Archived chip to `status in ('archived','one_off')` and the Not
+food chip to `is_food=false OR status='not_food' OR (old-shape four-
+column expression)` so no row hides. Overview totals come from SQL
+views that test `status`; those views do NOT read the old shape.
+Between deploy and correction, Overview keeps counting the 9 person-
+marked not-food items as active food the way it does today; that is
+accepted and not a bug to patch. After the correction runs, Overview
+drops those 9 and coverage shares rise.
+
+The reason-verb cleanup is live from this train on: new writes use
+the verb only (`confirmed`, `split`, `relinked`, `archived`, `oneoff`,
+`notfood`, `keep_separate`, `undo`). Old rows still carry their email
+tails in the database; both `parseReason` functions drop everything
+after the first colon so the UI never renders them.
+
 Branch-specific items we have already lived through on
 `step-1-shell-and-ingredients`:
 
@@ -372,3 +405,13 @@ onChange={(e) => {
 Same rule for `e.target.value`, `e.key`, anything else sourced from the
 event. If a handler needs multiple event fields, read them all into locals
 on line 1.
+
+## G-F `/api/admin/rescan-apply` can overwrite a person-set state
+
+The absorbed-row UPDATE in `src/app/api/admin/rescan-apply/route.ts`
+sets `status='duplicate', link_status='rejected',
+link_reason='rescan_merge:absorbed'` with no state guard. It can
+overwrite a `not_food` or `one_off` a reviewer set. Kevin's Nov 5
+ruling ended the invoice re-scan and the tool is not run today; it
+must gain a `status NOT IN ('not_food','one_off','archived')` guard
+before it is ever run again.

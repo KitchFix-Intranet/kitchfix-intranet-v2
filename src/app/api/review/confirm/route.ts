@@ -20,7 +20,9 @@ export async function POST(req: NextRequest) {
   try {
     const client = serviceClient();
     const result = await confirmItems(client, { ingredientId, itemIds, actorEmail: gate.email });
-    return NextResponse.json(result);
+    // T4 R2: the toast on the review card hands event_id to
+    // /api/review/undo so Undo reads the snapshot.
+    return NextResponse.json({ ...result, event_id: result.eventId ?? null });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ error: msg }, { status: 500 });

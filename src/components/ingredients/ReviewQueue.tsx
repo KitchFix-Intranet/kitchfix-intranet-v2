@@ -27,7 +27,7 @@ import {
   type BlendStatus,
 } from "@/lib/ingredients/ingredientBlend";
 import { canonicalFromBaseUnit } from "@/lib/ingredients/pack";
-import { fmtCount, fmtUsd } from "@/lib/fmt";
+import { fmtCount, fmtUsd, nameFromEmail } from "@/lib/fmt";
 import { Tabs } from "./Tabs";
 import { IdentBand } from "@/components/ui/IdentBand";
 import { ReviewCard, type ReviewCardGroup } from "./ReviewCard";
@@ -140,23 +140,30 @@ type CatalogRow = {
 
 type AiNewPayload = { proposed_name?: string; proposed_parent?: string | null; reason?: string };
 
+// T4 ruling 11: strip everything after the first colon for any
+// actor-authored verb (confirmed, split, relinked, undo, archived,
+// oneoff, notfood, keep_separate, rescan_merge). Old rows in the
+// database may still carry `<verb>:<email>` tails; this parser never
+// renders them. Matcher-authored verbs (ai, ai-new, ai-notfood,
+// alias) keep their bodies - those are the AI's prose, not an email.
 function parseReason(raw: string | null): { prefix: "ai" | "ai-new" | "ai-notfood" | "alias" | "undo" | "other" | null; body: string; aiNew?: AiNewPayload } {
   if (!raw) return { prefix: null, body: "" };
   if (raw.startsWith("ai-new:")) {
     const body = raw.slice("ai-new:".length);
     let aiNew: AiNewPayload = {};
-    try { aiNew = JSON.parse(body) as AiNewPayload; } catch { /* ignore - render body raw */ }
-    return { prefix: "ai-new", body: aiNew.reason ?? body, aiNew };
+    try { aiNew = JSON.parse(body) as AiNewPayload; } catch { /* ignore */ }
+    return { prefix: "ai-new", body: aiNew.reason ?? "", aiNew };
   }
   if (raw.startsWith("ai-notfood:")) return { prefix: "ai-notfood", body: raw.slice("ai-notfood:".length) };
   if (raw.startsWith("ai:")) return { prefix: "ai", body: raw.slice("ai:".length) };
   if (raw.startsWith("alias:")) return { prefix: "alias", body: raw.slice("alias:".length) };
-  // Polish 3: `undo:<email>` is written server-side (reviewWrites.ts:532)
-  // when a confirm is reversed - audit-ledger context, not row-label
-  // context. The row card just needs to say the row was undone; the
-  // actor sits in the ledger. Render body "Undo" without attribution.
   if (raw.startsWith("undo:")) return { prefix: "undo", body: "Undo" };
-  return { prefix: "other", body: raw };
+  if (raw === "undo") return { prefix: "undo", body: "Undo" };
+  // Actor-verb or unknown row. Surface only the head word, never any
+  // tail. Historic rows carried email addresses after the colon; those
+  // never reach the page.
+  const i = raw.indexOf(":");
+  return { prefix: "other", body: i < 0 ? raw : "" };
 }
 
 async function loadReview() {
@@ -523,7 +530,9 @@ async function loadReview() {
           caseSource: (pe?.case_price_source as "catalog" | "billed" | "catch_weight" | "catalog_lb" | "override" | "actuals_base_unit" | "actuals_weight" | "actuals_case" | null) ?? null,
           flagged: it.flagged === true,
           flagNote: it.flag_note ?? null,
-          flaggedBy: it.flagged_by ?? null,
+          // T4 ruling 10: server strips email to display name so no
+          // address crosses the wire.
+          flaggedBy: it.flagged_by ? nameFromEmail(it.flagged_by) : null,
           flaggedAt: it.flagged_at ?? null,
           // G1: tier on the item.
           grade: it.grade ?? null,
@@ -660,7 +669,9 @@ async function loadReview() {
           caseSource: (pe?.case_price_source as "catalog" | "billed" | "catch_weight" | "catalog_lb" | "override" | "actuals_base_unit" | "actuals_weight" | "actuals_case" | null) ?? null,
           flagged: it.flagged === true,
           flagNote: it.flag_note ?? null,
-          flaggedBy: it.flagged_by ?? null,
+          // T4 ruling 10: server strips email to display name so no
+          // address crosses the wire.
+          flaggedBy: it.flagged_by ? nameFromEmail(it.flagged_by) : null,
           flaggedAt: it.flagged_at ?? null,
           // G1: tier on the item.
           grade: it.grade ?? null,

@@ -24,6 +24,7 @@ import { IdentBand } from "@/components/ui/IdentBand";
 import { fmtCount } from "@/lib/fmt";
 import { readPerBase, type PriceEstimate } from "@/lib/ingredients/priceEstimate";
 import { startTimer, mark, endTimer } from "@/lib/timing";
+import { getVendorItemState } from "@/lib/ingredients/vendorItemState";
 import { VendorItemsView, type VendorSeg, type SortKey, type VendorSegCounts, type VendorItemViewRow, type LinkCell } from "./VendorItemsView";
 import "./ingredients.css";
 import "./table.css";
@@ -45,6 +46,9 @@ type Row = {
   is_food: boolean | null;
   status: string;
   link_status: string;
+  // T4: link_reason is read ONLY for the state helper's old-shape test.
+  // Not projected into VendorItemViewRow and never sent to the client.
+  link_reason: string | null;
   duplicate_of_id: string | null;
   ingredient_id: string | null;
   price_estimate: PriceEstimate;
@@ -91,6 +95,15 @@ function parsePer(v: string | undefined): number {
 }
 
 // Compose vendor + segment filters per §3.4.
+//
+// T4 ruling 4:
+//   - Archived chip finds archived AND one-off items together (old
+//     shape and new). Rows: status='archived' (both pre-T4 Archive and
+//     pre-T4 one-off) OR status='one_off' (new one-off).
+//   - Not food chip finds intake-flagged not-food (is_food=false) AND
+//     person-marked not-food (status='not_food' new shape OR
+//     status='active' + link_status='rejected' + link_reason prefix
+//     'notfood' old shape).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function applyFilters(q: any, vendor: string | undefined, seg: VendorSeg): any {
   if (vendor && vendor !== "all") q = q.eq("vendor_id", vendor);
@@ -109,11 +122,26 @@ function applyFilters(q: any, vendor: string | undefined, seg: VendorSeg): any {
   } else if (seg === "no_number") {
     q = q.is("item_number_norm", null).eq("is_food", true).in("status", ["active", "resale"]);
   } else if (seg === "not_food") {
-    q = q.eq("is_food", false);
+    // Old shape (status='active', link_status='rejected', link_reason
+    // starts with 'notfood', is_food=true) + new shape (status='not_food')
+    // + intake-flagged (is_food=false). PostgREST's .or takes a list
+    // of commas-separated filters; each one is comma-joined operator
+    // syntax. The inner `and()` lets us express the old-shape row's
+    // four-column condition in one filter.
+    q = q.or(
+      [
+        "is_food.eq.false",
+        "status.eq.not_food",
+        "and(status.eq.active,link_status.eq.rejected,is_food.eq.true,link_reason.like.notfood*)",
+      ].join(","),
+    );
   } else if (seg === "duplicates") {
     q = q.eq("status", "duplicate");
   } else if (seg === "archived") {
-    q = q.eq("status", "archived");
+    // Old-shape one-off and new-shape one-off appear in Archived so no
+    // row goes missing before the correction runs. The row-level label
+    // still says the real word via linkCell.
+    q = q.or("status.eq.archived,status.eq.one_off");
   } else {
     q = q.in("status", ["active", "resale", "duplicate", "one_off", "not_food", "archived"]);
   }
@@ -156,38 +184,49 @@ async function readSegCounts(
   };
 }
 
+// T4 ruling 4: the row still shows its own word - "Archived",
+// "One-off", "Not food" - regardless of whether the row is in the new
+// shape or the pre-correction old shape. The state helper reads both.
 function linkCell(
   r: Row,
   ingredientName: string | null,
   twinNumber: string | null,
+  // T4 §5: `link_reason` on the row is handed to the state helper. The
+  // raw string is NOT sent to the client; only the resolved state
+  // crosses the wire.
 ): LinkCell {
-  if (r.status === "duplicate") {
+  const state = getVendorItemState({
+    status: r.status,
+    link_status: r.link_status,
+    link_reason: (r as unknown as { link_reason: string | null }).link_reason,
+    is_food: r.is_food,
+  });
+
+  if (state === "duplicate") {
     return { kind: "duplicate", main: "Duplicate", sub: twinNumber ? `counted on #${twinNumber}` : "counted on the twin" };
   }
-  if (r.status === "archived") {
+  if (state === "archived") {
     return { kind: "archived", main: "Archived", sub: "out of the catalog" };
   }
-  if (r.status === "one_off") {
+  if (state === "one_off") {
     return { kind: "one_off", main: "One-off", sub: "bought once" };
   }
-  if (r.is_food === false) {
-    return { kind: "not_food", main: "Not food", sub: "fees and supplies" };
+  if (state === "not_food") {
+    // Intake said so (is_food=false) OR a person did (new or old shape).
+    return { kind: "not_food", main: "Not food", sub: r.is_food === false ? "fees and supplies" : "not food" };
   }
-  if (r.status === "resale") {
-    // Round 2 fix 10: retail-with-ingredient reads as the ingredient's
-    // name over "retail"; retail-with-no-ingredient reads "Retail" over
-    // "sold as-is" so the sub never repeats the main.
+  if (state === "retail") {
     return ingredientName
       ? { kind: "retail", main: ingredientName, sub: "retail" }
       : { kind: "retail", main: "Retail", sub: "sold as-is" };
   }
-  if (r.link_status === "proposed") {
+  if (state === "proposed") {
     return { kind: "proposed", main: ingredientName ?? "Proposed", sub: "proposed, needs review" };
   }
-  if (r.link_status === "confirmed") {
+  if (state === "linked") {
     return { kind: "linked", main: ingredientName ?? "Linked", sub: "linked" };
   }
-  if (r.link_status === "rejected") {
+  if (state === "rejected") {
     return { kind: "rejected", main: "Rejected", sub: "link was turned down" };
   }
   return { kind: "not_linked", main: "Not linked", sub: "in the review queue" };
@@ -264,7 +303,7 @@ export async function VendorItemsPage({
     .from("pr_vendor_items")
     .select(
       // §3.1: ingredient_id + price_estimate added. Nothing else.
-      "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,billed_unit,catch_weight,is_food,status,link_status,duplicate_of_id,ingredient_id,price_estimate,usd_12m,lines_12m,accounts,last_seen",
+      "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,billed_unit,catch_weight,is_food,status,link_status,link_reason,duplicate_of_id,ingredient_id,price_estimate,usd_12m,lines_12m,accounts,last_seen",
       { count: "exact" },
     );
   pageQuery = applyFilters(pageQuery, p.vendor, seg);

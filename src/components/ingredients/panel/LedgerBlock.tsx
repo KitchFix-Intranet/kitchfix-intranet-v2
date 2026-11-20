@@ -11,7 +11,7 @@
 // and fetch-on-mount semantics unchanged.
 
 import React, { useEffect, useState } from "react";
-import { fmtDate, timeAgo } from "@/lib/fmt";
+import { fmtDate, nameFromEmail, timeAgo } from "@/lib/fmt";
 import { humanizeKind } from "@/lib/humanizeKind";
 
 export type LedgerEvent = {
@@ -104,7 +104,8 @@ export function LedgerBlock({
 
 function LedgerRowItem({ e }: { e: LedgerEvent }) {
   const { label, body } = describeEvent(e);
-  const actor = e.actor ?? "-";
+  // T4 ruling 10: name, never an email.
+  const actor = e.actor ? nameFromEmail(e.actor) : "-";
   return (
     <li className="kf-dpn__ledger-item">
       <span className="kf-dpn__ledger-kind">{label}</span>

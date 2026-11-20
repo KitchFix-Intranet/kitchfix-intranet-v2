@@ -10,7 +10,7 @@ import Link from "next/link";
 import { ArrowRight, Flag } from "lucide-react";
 import { serviceClient } from "@/lib/supabase/service";
 import { COUNTABLE_OBSERVATIONS_VIEW, applyCountableFilter } from "@/lib/ingredients/countability";
-import { fmtCount, fmtDate, fmtDuration, fmtStatus, fmtUsd, fmtUsdLong, timeAgo } from "@/lib/fmt";
+import { fmtCount, fmtDate, fmtDuration, fmtStatus, fmtUsd, fmtUsdLong, nameFromEmail, timeAgo } from "@/lib/fmt";
 import { IdentBand } from "@/components/ui/IdentBand";
 import { CountUp } from "@/components/ui/CountUp";
 import { Tabs } from "./Tabs";
@@ -155,7 +155,9 @@ async function loadOverview(): Promise<{
     vendor: vendorNameById.get(r.vendor_id) ?? r.vendor_id,
     usd12m: Number(r.usd_12m ?? 0),
     flagNote: r.flag_note,
-    flaggedBy: r.flagged_by,
+    // T4 ruling 10: name, never an email. nameFromEmail prettifies
+    // the local part so a flagger's address never crosses the wire.
+    flaggedBy: r.flagged_by ? nameFromEmail(r.flagged_by) : null,
     flaggedAt: r.flagged_at,
   }));
 

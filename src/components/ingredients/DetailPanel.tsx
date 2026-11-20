@@ -19,7 +19,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/ui/Toaster";
-import { postJson, saveErrorSentence } from "./panel/common";
+import { postJson, saveErrorSentence, undoViaEvent } from "./panel/common";
 import { anyDirty, discardAll, DirtyScopeProvider } from "./panel/dirty";
 
 // T2 round 2 §4: every editor inside the item panel registers under
@@ -379,64 +379,129 @@ export function DetailPanel({
   );
 }
 
-// N13 R5: inline footer with Archive + Mark one-off. Same behaviour
-// as the retired ItemStatusActions (POST /api/vendor-items/[id]/status,
-// toast with Undo to the prior status) - renders only when the panel
-// is opened from the Vendor items tab (showStatusActions prop).
+// T4 §5 + §7: inline footer with Archive, Mark one-off and Restore.
+// Each button routes through /api/vendor-items/[id]/status with the
+// three allowed actions; the server runs them through markArchived /
+// markOneOff / restoreVendorItem so the full shape (status +
+// link_status + link_reason) is set and the decision event carries a
+// before snapshot Undo can read.
+//
+// T4 R2 §3: Archive-disabled / One-off-disabled / Restore-visible
+// branch on `item.state` and `item.canRestore`, which the server
+// computed via getVendorItemState / canRestore. The panel does not
+// read `item.status` / `item.isFood` / `item.link_reason` directly.
+//
+// T4 R2 §4: Restore uses the in-page "What happens" ask (same shape
+// as Send back): one sentence, then Restore + Cancel. Archive and
+// One-off act at once with Undo in the toast.
 function ItemStatusFooter({ item, onDone }: { item: ReviewGroupItem; onDone: () => void }) {
-  const [busy, setBusy] = useState<null | "archived" | "one_off">(null);
+  const [busy, setBusy] = useState<null | "archive" | "one-off" | "restore">(null);
   const [error, setError] = useState<string | null>(null);
+  // T4 R2 §4: Restore uses the in-page ask. Open on click; the ask
+  // carries the "What happens" sentence and Restore / Cancel.
+  const [restoreAsk, setRestoreAsk] = useState(false);
+  const router = useRouter();
 
-  async function set(next: "archived" | "one_off", successCopy: string) {
+  // T4 R2 §3: the state the server resolved. Both old and new shapes
+  // land on these labels.
+  const state = item.state ?? "";
+  const isLinked = (item.linkStatus ?? "") === "confirmed";
+  const isArchived = state === "archived";
+  const isOneOff = state === "one_off";
+  const showRestore = item.canRestore === true;
+
+  async function run(action: "archive" | "one-off" | "restore", successCopy: string) {
     if (busy) return;
-    setBusy(next);
+    setBusy(action);
     setError(null);
-    const prior = item.status ?? "active";
-    const r = await postJson(`/api/vendor-items/${item.id}/status`, { status: next });
+    const r = await postJson(`/api/vendor-items/${item.id}/status`, { action });
     if (!r.ok) {
       setError(saveErrorSentence(r) ?? "Nothing was saved.");
       setBusy(null);
       return;
     }
+    const d = (r.data ?? {}) as { event_id?: string | null };
     toast(successCopy, {
-      undo: async () => {
-        // T2 §1 + ruling 9: an Undo that fails is announced by the
-        // toaster (T1 §4). Throw from the undo callback so the toast
-        // layer reports it.
-        const u = await postJson(`/api/vendor-items/${item.id}/status`, { status: prior });
-        if (!u.ok) throw new Error(saveErrorSentence(u) ?? "Nothing was saved.");
-        onDone();
-      },
+      undo: d.event_id ? undoViaEvent(router, d.event_id) : undefined,
     });
     onDone();
     setBusy(null);
   }
+
+  async function doRestore() {
+    setRestoreAsk(false);
+    await run("restore", "Restored - back to not matched yet");
+  }
+
   return (
     <div className="kf-ipanel__footer-strip">
       <span className="kf-ipanel__footer-label">Not for recipes</span>
       <div className="kf-ipanel__footer-actions">
         <button
           type="button"
-          className={`kf-btn kf-btn--soft kf-btn--sm${busy === "archived" ? " is-busy" : ""}`}
-          disabled={busy !== null || item.status === "archived"}
-          onClick={() => set("archived", "Archived")}
+          className={`kf-btn kf-btn--soft kf-btn--sm${busy === "archive" ? " is-busy" : ""}`}
+          disabled={busy !== null || isLinked || isArchived}
+          onClick={() => run("archive", "Archived")}
+          title={isLinked ? "Send this item back to review first." : undefined}
         >
           Archive
         </button>
         <button
           type="button"
-          className={`kf-btn kf-btn--soft kf-btn--sm${busy === "one_off" ? " is-busy" : ""}`}
-          disabled={busy !== null || item.status === "one_off"}
-          onClick={() => set("one_off", "Marked one-off")}
+          className={`kf-btn kf-btn--soft kf-btn--sm${busy === "one-off" ? " is-busy" : ""}`}
+          disabled={busy !== null || isLinked || isOneOff}
+          onClick={() => run("one-off", "Marked one-off")}
+          title={isLinked ? "Send this item back to review first." : undefined}
         >
           Mark one-off
         </button>
+        {showRestore ? (
+          <button
+            type="button"
+            className={`kf-btn kf-btn--soft kf-btn--sm${busy === "restore" ? " is-busy" : ""}`}
+            disabled={busy !== null || restoreAsk}
+            onClick={() => setRestoreAsk(true)}
+            title="Put this item back to not matched yet; it can be matched again."
+          >
+            Restore
+          </button>
+        ) : null}
+        {isLinked ? (
+          <span className="kf-ipanel__footer-note" role="note">
+            Linked to an ingredient. Send it back to review first.
+          </span>
+        ) : null}
         {error ? (
           <span className="kf-dpn__flash kf-dpn__flash--err" role="alert">
             {error}
           </span>
         ) : null}
       </div>
+      {restoreAsk ? (
+        <div className="kf-ipanel__footer-ask" role="alertdialog" aria-label="Restore?">
+          <p className="kf-ipanel__footer-ask-text">
+            This item goes back to not matched yet and can be matched again.
+          </p>
+          <div className="kf-ipanel__footer-ask-actions">
+            <button
+              type="button"
+              className={`kf-btn kf-btn--primary kf-btn--sm${busy === "restore" ? " is-busy" : ""}`}
+              disabled={busy !== null}
+              onClick={doRestore}
+            >
+              {busy === "restore" ? "Saving..." : "Restore"}
+            </button>
+            <button
+              type="button"
+              className="kf-btn kf-btn--line kf-btn--sm"
+              disabled={busy !== null}
+              onClick={() => setRestoreAsk(false)}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
