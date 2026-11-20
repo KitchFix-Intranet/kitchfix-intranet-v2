@@ -20,8 +20,8 @@
 
 import { serviceClient } from "@/lib/supabase/service";
 import { Tabs } from "./Tabs";
-import { IdentBand } from "@/components/ui/IdentBand";
-import { fmtCount } from "@/lib/fmt";
+// Train 5a: the band is gone from this tab; IdentBand and fmtCount
+// are not used here any more.
 import { readPerBase, type PriceEstimate } from "@/lib/ingredients/priceEstimate";
 import { startTimer, mark, endTimer } from "@/lib/timing";
 import { getVendorItemState } from "@/lib/ingredients/vendorItemState";
@@ -391,15 +391,12 @@ export async function VendorItemsPage({
 
   return (
     <div className="kf-ing">
-      <IdentBand
-        eyebrow="Culinary office"
-        title="Vendor items"
-        facts={[
-          { label: "Items", value: fmtCount(segCounts.all), note: "every line we've read" },
-          { label: "Unlinked", value: fmtCount(segCounts.unlinked + segCounts.proposed), note: "waiting to be named" },
-        ]}
-      />
-
+      {/* Train 5a / D3 call 1: the IdentBand is gone. The two facts
+          ("items" and "not matched yet") ride in the top bar via the
+          @topbar/stockpot/ingredients/vendor-items slot page, which
+          calls `loadVendorItemsHeader` (whole-catalog counts, not the
+          user's vendor filter). Chips below still show filtered
+          counts. */}
       <Tabs active="vendor-items" />
 
       <VendorItemsView

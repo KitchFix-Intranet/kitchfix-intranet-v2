@@ -3,7 +3,13 @@
 // ai-new proposed name), groups by target, sorts groups by total 12m
 // dollars descending, renders. The actions UI is a separate client island
 // (ReviewActions).
+//
+// Train 5a / D3 call 1: `loadReview` is wrapped in React.cache() and
+// exported so the tab's @topbar slot page can call the same loader
+// and read its facts without a second database round-trip. Per-
+// request memoization; the page and the slot cannot disagree.
 
+import { cache } from "react";
 import { serviceClient } from "@/lib/supabase/service";
 import { COUNTABLE_OBSERVATIONS_VIEW, applyCountableFilter } from "@/lib/ingredients/countability";
 import { categoryForParent } from "@/lib/ingredients/categories";
@@ -27,13 +33,14 @@ import {
   type BlendStatus,
 } from "@/lib/ingredients/ingredientBlend";
 import { canonicalFromBaseUnit } from "@/lib/ingredients/pack";
-import { fmtCount, fmtUsd, nameFromEmail } from "@/lib/fmt";
+import { nameFromEmail } from "@/lib/fmt";
 import { Tabs } from "./Tabs";
-import { IdentBand } from "@/components/ui/IdentBand";
 import { ReviewCard, type ReviewCardGroup } from "./ReviewCard";
 import { isPackManualOverride, isPriceManualOverride } from "./itemTypes";
 import { ReviewLedger } from "./ReviewLedger";
 import { ReviewFilter, type ReviewFilterGroup } from "./ReviewFilter";
+// Train 5a: IdentBand is not used on this tab any more; the top bar
+// carries the two facts via the @topbar slot.
 import "./ingredients.css";
 import "./review.css";
 // Pulled in so the search field inherits the shared .kf-field--search
@@ -166,7 +173,7 @@ function parseReason(raw: string | null): { prefix: "ai" | "ai-new" | "ai-notfoo
   return { prefix: "other", body: i < 0 ? raw : "" };
 }
 
-async function loadReview() {
+export const loadReview = cache(async function loadReview() {
   const timer = startTimer("page:review");
   const client = serviceClient();
 
@@ -208,7 +215,7 @@ async function loadReview() {
   // Vendors + ingredients (both small, read once). category + resale on
   // the ingredient feed the detail panel's category dropdown + resale
   // toggle.
-  const [vendorsRes, ingredientsRes, notFoodCountRes] = await Promise.all([
+  const [vendorsRes, ingredientsRes, notFoodCountRes, unlinkedCountRes] = await Promise.all([
     client.from("pr_vendors").select("id,name"),
     // T2 §2: paged reader fails loudly on a short list so the queue's
     // category / sub-category / merge dropdowns can never show a
@@ -225,6 +232,16 @@ async function loadReview() {
       .select("id", { count: "exact", head: true })
       .like("link_reason", "ai-notfood:%")
       .eq("link_status", "none"),
+    // Train 5a: "items not matched yet" - food items with no link at
+    // all (link_status='none', is_food=true, status in active/resale).
+    // Same number the Vendor items "Not linked" chip counts; the tab
+    // header reads it from this loader's result.
+    client
+      .from("pr_vendor_items")
+      .select("id", { count: "exact", head: true })
+      .eq("is_food", true)
+      .eq("link_status", "none")
+      .in("status", ["active", "resale"]),
   ]);
   if (vendorsRes.error) throw vendorsRes.error;
   if (ingredientsRes.error) throw ingredientsRes.error;
@@ -783,42 +800,34 @@ async function loadReview() {
   const totalUsd = items.reduce((s, it) => s + Number(it.usd_12m ?? 0), 0);
   const groupedUsd = groupList.reduce((s, g) => s + g.totalUsd12m, 0);
   const notFoodCount = notFoodCountRes.count ?? 0;
+  const unlinkedCount = unlinkedCountRes.count ?? 0;
 
   mark(timer, "shape");
   endTimer(timer);
   return {
     groups: groupList,
     ingredients,
-    totals: { items: totalItems, usd: totalUsd, groupedUsd, groups: groupList.length, notFood: notFoodCount },
+    totals: {
+      items: totalItems,
+      usd: totalUsd,
+      groupedUsd,
+      groups: groupList.length,
+      notFood: notFoodCount,
+      unlinked: unlinkedCount,
+    },
   };
-}
+});
 
 export async function ReviewQueue() {
   const { groups, ingredients, totals } = await loadReview();
 
   return (
     <div className="kf-ing">
-      {/* Polish 6: Overview-style hero header. Same IdentBand the
-          Overview tab uses; no description row (kick omitted); no CTA
-          (Run intake stays in the top bar). Stats are the two facts
-          the retired .kf-review__meta white strip used to carry -
-          same props, new home. */}
-      <IdentBand
-        eyebrow="Culinary office"
-        title="Review queue"
-        facts={[
-          {
-            label: "Proposals",
-            value: fmtCount(totals.items),
-            note: `${fmtUsd(totals.usd)} · ${fmtCount(totals.groups)} groups`,
-          },
-          {
-            label: "Flagged not food",
-            value: fmtCount(totals.notFood),
-            note: "matcher called them not food",
-          },
-        ]}
-      />
+      {/* Train 5a / D3 call 1: the IdentBand is gone. The two facts
+          ("groups to review" and "items not matched yet") now ride in
+          the top bar via the @topbar/stockpot/ingredients/review slot
+          page. The "Flagged not food" count moves to ReviewFilter's
+          groups-count line (ruling 5). */}
 
       <Tabs active="review" />
 

@@ -51,6 +51,11 @@
   position: absolute;
   inset: -4px 0;
 }
+/* Train 5a: on a phone the painted chip is 40 px tall; the ::before
+ * halo above widens the hit target to 48 px (phone chef floor). */
+@media (max-width: 860px) {
+  .kf-chip { min-height: 40px; }
+}
 .kf-chip span { color: var(--sp-muted); font-weight: 400; }
 
 .kf-chip--on {
