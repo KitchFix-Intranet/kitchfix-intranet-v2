@@ -1356,6 +1356,22 @@
   flex-wrap: wrap;
 }
 
+/* T4 §6: inline discard-ask for the flag note. Slots into the actions
+ * row and takes the space of the buttons while the ask is open; the
+ * underlying buttons stay rendered behind. */
+.kf-ing-note-form__discard-ask {
+  display: inline-flex;
+  gap: var(--sp-sp-2);
+  align-items: center;
+  flex-wrap: wrap;
+  padding-left: var(--sp-sp-2);
+  border-left: 1px solid var(--sp-line);
+}
+.kf-ing-note-form__ask-text {
+  font-size: var(--sp-t-label);
+  color: var(--sp-ink-dim);
+}
+
 /* N9: .kf-conf-chip family deleted. The confidence word is now plain
  * micro text on the Unit price cell's sub-line (override / from spend
  * / per-unit (high) / est. (low)); the per-row Low/Medium confidence

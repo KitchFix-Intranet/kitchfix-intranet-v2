@@ -40,6 +40,7 @@ import {
 } from "@/lib/ingredients/measuresRead";
 import { readActiveIngredients, type MinimalSupabase } from "@/lib/ingredients/readIngredients";
 import { startTimer, mark, endTimer } from "@/lib/timing";
+import { nameFromEmail } from "@/lib/fmt";
 // M2 §4B part 2: shape helpers no longer called here. Nothing on
 // screen reads each_measure_*; the GET returns the raw legacy
 // values when present (type-level back-compat) and the real
@@ -63,21 +64,29 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 type AiNewPayload = { proposed_name?: string; proposed_parent?: string | null; reason?: string };
 
+// T4 ruling 11: every actor-verb row with a `:<email>` tail is
+// stripped so no email reaches the response. The matcher verbs keep
+// their body (that's the AI's prose). Anything else surfaces the
+// head word only.
 function parseReason(raw: string | null): { body: string } {
   if (!raw) return { body: "" };
   if (raw.startsWith("ai-new:")) {
     const body = raw.slice("ai-new:".length);
     try {
       const aiNew = JSON.parse(body) as AiNewPayload;
-      return { body: aiNew.reason ?? body };
+      return { body: aiNew.reason ?? "" };
     } catch {
-      return { body };
+      return { body: "" };
     }
   }
   if (raw.startsWith("ai-notfood:")) return { body: raw.slice("ai-notfood:".length) };
   if (raw.startsWith("ai:")) return { body: raw.slice("ai:".length) };
   if (raw.startsWith("alias:")) return { body: raw.slice("alias:".length) };
-  return { body: raw };
+  // Everything else: drop the tail. Covers the actor-authored verbs
+  // (confirmed, split, relinked, undo, archived, oneoff, notfood,
+  // keep_separate, rescan_merge, and any future addition).
+  const i = raw.indexOf(":");
+  return { body: i < 0 ? raw : "" };
 }
 
 export async function GET(req: NextRequest) {
@@ -108,7 +117,7 @@ export async function GET(req: NextRequest) {
   // mates run alongside the enrichment batch below (not after it) so
   // the serial await chain shrinks from four steps to two.
   const ITEM_SELECT_BASE =
-    "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_qty,pack_size,pack_uom,pack_state,pack_override,pack_note,billed_unit,catch_weight,ingredient_id,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen,flagged,flag_note,flagged_by,flagged_at,price_estimate,grade,each_measure_qty,each_measure_uom,needs_review_lines,first_seen,status,is_food,food_reason";
+    "id,vendor_id,item_number,item_number_norm,name,description_key,pack_text,pack_qty,pack_size,pack_uom,pack_state,pack_override,pack_note,billed_unit,catch_weight,ingredient_id,link_status,link_confidence,link_reason,usd_12m,lines_12m,accounts,last_seen,flagged,flag_note,flagged_by,flagged_at,price_estimate,grade,each_measure_qty,each_measure_uom,needs_review_lines,first_seen,status,is_food,food_reason";
   const ITEM_SELECT = measuresWorld
     ? `${ITEM_SELECT_BASE},case_weight_lb`
     : ITEM_SELECT_BASE;
@@ -397,7 +406,9 @@ export async function GET(req: NextRequest) {
         | null) ?? null,
     flagged: it.flagged === true,
     flagNote: it.flag_note ?? null,
-    flaggedBy: it.flagged_by ?? null,
+    // T4 ruling 10: server strips email to display name so no address
+    // crosses the wire.
+    flaggedBy: it.flagged_by ? nameFromEmail(it.flagged_by) : null,
     flaggedAt: it.flagged_at ?? null,
     // G1: tier on the item. Null is standard; 'premium' is the only
     // sanctioned non-null value today.
@@ -432,6 +443,10 @@ export async function GET(req: NextRequest) {
     needsReviewLines: Number(it.needs_review_lines ?? 0),
     firstSeen: it.first_seen,
     status: it.status,
+    // T4 ruling 8: the item-panel footer disables Archive and One-off
+    // on a linked (confirmed) row and shows the sentence. The client
+    // needs linkStatus to render that.
+    linkStatus: (it as unknown as { link_status?: string | null }).link_status ?? undefined,
     isFood: it.is_food,
     foodReason: it.food_reason,
   };

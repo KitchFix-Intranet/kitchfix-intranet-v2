@@ -379,20 +379,42 @@ export function DetailPanel({
   );
 }
 
-// N13 R5: inline footer with Archive + Mark one-off. Same behaviour
-// as the retired ItemStatusActions (POST /api/vendor-items/[id]/status,
-// toast with Undo to the prior status) - renders only when the panel
-// is opened from the Vendor items tab (showStatusActions prop).
+// T4 §5 + §7: inline footer with Archive, Mark one-off and Restore.
+// Each button routes through /api/vendor-items/[id]/status with the
+// three allowed actions; the server runs them through markArchived /
+// markOneOff / restoreVendorItem so the full shape (status +
+// link_status + link_reason) is set and the decision event carries a
+// before snapshot Undo can read.
+//
+// On a linked (confirmed) item, Archive and One-off are disabled
+// with the sentence ruling 8 asks for. Restore shows only on a row
+// that is a person's disposition today (archived / one-off / person-
+// marked not food - via the state helper so both old and new shapes
+// resolve the same).
 function ItemStatusFooter({ item, onDone }: { item: ReviewGroupItem; onDone: () => void }) {
-  const [busy, setBusy] = useState<null | "archived" | "one_off">(null);
+  const [busy, setBusy] = useState<null | "archive" | "one-off" | "restore">(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function set(next: "archived" | "one_off", successCopy: string) {
+  // Classify the item's current shape. The three decisions act only
+  // on proposed / not-matched rows (ruling 8); on a confirmed row the
+  // sentence names why they are disabled.
+  const linkStatus = item.linkStatus ?? "";
+  const isLinked = linkStatus === "confirmed";
+  const isArchived = item.status === "archived";
+  const isOneOff = item.status === "one_off";
+  const isNotFood = item.status === "not_food";
+  // Person-marked not-food OLD shape stays as status='active' +
+  // link_status='rejected' + reason-prefix notfood; the server's
+  // restoreVendorItem reads link_reason to spot it, so this surface
+  // only needs to offer Restore for the rows it can see clearly. On
+  // the new shape every person disposition reads from `status` alone.
+  const showRestore = isArchived || isOneOff || isNotFood;
+
+  async function run(action: "archive" | "one-off" | "restore", successCopy: string) {
     if (busy) return;
-    setBusy(next);
+    setBusy(action);
     setError(null);
-    const prior = item.status ?? "active";
-    const r = await postJson(`/api/vendor-items/${item.id}/status`, { status: next });
+    const r = await postJson(`/api/vendor-items/${item.id}/status`, { action });
     if (!r.ok) {
       setError(saveErrorSentence(r) ?? "Nothing was saved.");
       setBusy(null);
@@ -400,11 +422,20 @@ function ItemStatusFooter({ item, onDone }: { item: ReviewGroupItem; onDone: () 
     }
     toast(successCopy, {
       undo: async () => {
-        // T2 §1 + ruling 9: an Undo that fails is announced by the
-        // toaster (T1 §4). Throw from the undo callback so the toast
-        // layer reports it.
-        const u = await postJson(`/api/vendor-items/${item.id}/status`, { status: prior });
-        if (!u.ok) throw new Error(saveErrorSentence(u) ?? "Nothing was saved.");
+        // Restore walks the decision event. Archive / One-off are
+        // decisions themselves and have their own events; a toast
+        // Undo rolls them back through restoreVendorItem so the
+        // panel-footer click is reversible in the same ten seconds.
+        if (action === "restore") {
+          // Reverse a restore: re-mark archived (the common prior
+          // state) only when the user's original shape was archived;
+          // otherwise the user would need Recent decisions.
+          const u = await postJson(`/api/vendor-items/${item.id}/status`, { action: "archive" });
+          if (!u.ok) throw new Error(saveErrorSentence(u) ?? "Nothing was saved.");
+        } else {
+          const u = await postJson(`/api/vendor-items/${item.id}/status`, { action: "restore" });
+          if (!u.ok) throw new Error(saveErrorSentence(u) ?? "Nothing was saved.");
+        }
         onDone();
       },
     });
@@ -417,20 +448,39 @@ function ItemStatusFooter({ item, onDone }: { item: ReviewGroupItem; onDone: () 
       <div className="kf-ipanel__footer-actions">
         <button
           type="button"
-          className={`kf-btn kf-btn--soft kf-btn--sm${busy === "archived" ? " is-busy" : ""}`}
-          disabled={busy !== null || item.status === "archived"}
-          onClick={() => set("archived", "Archived")}
+          className={`kf-btn kf-btn--soft kf-btn--sm${busy === "archive" ? " is-busy" : ""}`}
+          disabled={busy !== null || isLinked || isArchived}
+          onClick={() => run("archive", "Archived")}
+          title={isLinked ? "Send this item back to review first." : undefined}
         >
           Archive
         </button>
         <button
           type="button"
-          className={`kf-btn kf-btn--soft kf-btn--sm${busy === "one_off" ? " is-busy" : ""}`}
-          disabled={busy !== null || item.status === "one_off"}
-          onClick={() => set("one_off", "Marked one-off")}
+          className={`kf-btn kf-btn--soft kf-btn--sm${busy === "one-off" ? " is-busy" : ""}`}
+          disabled={busy !== null || isLinked || isOneOff}
+          onClick={() => run("one-off", "Marked one-off")}
+          title={isLinked ? "Send this item back to review first." : undefined}
         >
           Mark one-off
         </button>
+        {showRestore ? (
+          <button
+            type="button"
+            className={`kf-btn kf-btn--soft kf-btn--sm${busy === "restore" ? " is-busy" : ""}`}
+            disabled={busy !== null}
+            onClick={() => run("restore", "Restored - back to not matched yet")}
+            title="Put this item back to not matched yet; it can be matched again."
+          >
+            Restore
+          </button>
+        ) : null}
+        {isLinked ? (
+          // T4 ruling 8: sentence sits beside the disabled buttons.
+          <span className="kf-ipanel__footer-note" role="note">
+            Linked to an ingredient. Send it back to review first.
+          </span>
+        ) : null}
         {error ? (
           <span className="kf-dpn__flash kf-dpn__flash--err" role="alert">
             {error}

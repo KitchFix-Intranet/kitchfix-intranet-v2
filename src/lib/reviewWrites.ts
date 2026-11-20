@@ -4,6 +4,11 @@
 // time (future matcher upgrade), and the vendor-items table flips to
 // link_status='confirmed' which coverage already counts in
 // pr_v_overview_totals.
+//
+// T4: every decision emits a `before` snapshot on its event so an Undo
+// can put the row back without guessing. `link_reason` is the verb
+// only - no email address - and old-shape readers accept either form
+// via `getVendorItemState` / `reasonVerb`.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { CATEGORY_BY_PARENT, categoryForParent, inferBaseUnit, type SuperCategory } from "@/lib/ingredients/categories";
@@ -18,6 +23,57 @@ import {
 } from "@/lib/ingredients/pack";
 import { COUNTABLE_OBSERVATIONS_VIEW, applyCountableFilter } from "@/lib/ingredients/countability";
 import { isPackManualOverride } from "@/components/ingredients/itemTypes";
+
+// T4: per-item snapshot carried on every decision event's `before` /
+// `after`. Each decision writes an array of these (one row per item
+// touched). An Undo reads the snapshot and writes it back, guarded on
+// the row still matching the `after` the decision left behind - if it
+// does not, the decision was already overwritten and Undo refuses.
+export type ItemSnapshot = {
+  item_id: string;
+  status?: string | null;
+  link_status?: string | null;
+  link_reason?: string | null;
+  link_confidence?: string | null;
+  ingredient_id?: string | null;
+};
+
+const ITEM_SNAPSHOT_COLUMNS = "id,status,link_status,link_reason,link_confidence,ingredient_id";
+
+async function readItemSnapshots(
+  client: SupabaseClient,
+  itemIds: string[],
+): Promise<Map<string, ItemSnapshot>> {
+  const out = new Map<string, ItemSnapshot>();
+  if (itemIds.length === 0) return out;
+  const page = 200;
+  for (let i = 0; i < itemIds.length; i += page) {
+    const slice = itemIds.slice(i, i + page);
+    const { data, error } = await client
+      .from("pr_vendor_items")
+      .select(ITEM_SNAPSHOT_COLUMNS)
+      .in("id", slice);
+    if (error) throw error;
+    for (const r of ((data ?? []) as Array<{
+      id: string;
+      status: string | null;
+      link_status: string | null;
+      link_reason: string | null;
+      link_confidence: string | null;
+      ingredient_id: string | null;
+    }>)) {
+      out.set(r.id, {
+        item_id: r.id,
+        status: r.status,
+        link_status: r.link_status,
+        link_reason: r.link_reason,
+        link_confidence: r.link_confidence,
+        ingredient_id: r.ingredient_id,
+      });
+    }
+  }
+  return out;
+}
 
 export type ConfirmResult = {
   confirmed: number;
@@ -97,6 +153,11 @@ export async function confirmItems(
   const rows = await readItems(client, itemIds);
   const confirmable = rows.filter((r) => r.link_status === "proposed");
 
+  // T4: snapshot the pre-write shape of every confirmable row so the
+  // event carries exactly what Undo needs. Read in one batch to keep
+  // writes serial but reads cheap.
+  const before = await readItemSnapshots(client, confirmable.map((r) => r.id));
+
   // Golden links. Plain UNIQUE on (vendor_item_id) already enforces one
   // row per vendor item; upsert on that constraint keeps a confirm ->
   // undo -> re-confirm cycle mutating the same row (revoked_at:null ->
@@ -125,13 +186,15 @@ export async function confirmItems(
   // status='resale' instead of leaving it 'active'. Only touch rows
   // currently 'active' - duplicate/archived rows have their own
   // state and must not be re-coloured by this write.
+  const confirmedSnapshots: ItemSnapshot[] = [];
   for (const r of confirmable) {
     const nextStatusChange = ingredientIsRetail && r.status === "active";
     const update: Record<string, unknown> = {
       ingredient_id: ingredientId,
       link_status: "confirmed",
       link_confidence: "high",
-      link_reason: `confirmed:${actorEmail}`,
+      // T4 ruling 3: verb only, no email address.
+      link_reason: "confirmed",
     };
     if (nextStatusChange) update.status = "resale";
     const { error } = await client
@@ -145,16 +208,10 @@ export async function confirmItems(
     }
     result.confirmed += 1;
     result.usd += Number(r.usd_12m ?? 0);
+    const snap = before.get(r.id);
+    if (snap) confirmedSnapshots.push(snap);
     if (nextStatusChange) {
       result.movedToResale = (result.movedToResale ?? 0) + 1;
-      await client.from("pr_events").insert({
-        entity_type: "vendor_item",
-        entity_id: r.id,
-        kind: "status_set",
-        before: { status: "active" },
-        after: { status: "resale", via: "confirm_into_retail", ingredient_id: ingredientId },
-        actor: actorEmail,
-      });
     }
   }
 
@@ -188,16 +245,28 @@ export async function confirmItems(
     if (aErr) result.errors.push(`aliases: ${aErr.message}`);
   }
 
-  // Ledger.
+  // Ledger. T4: the ingredient-scoped review_confirm event stays, but
+  // `before.items` now carries each item's pre-write snapshot so Undo
+  // can find a decision from the event alone - no per-item event needed.
+  // Retail-at-confirm bumps are described by the snapshot's status ("active"
+  // before, "resale" after).
   await client.from("pr_events").insert({
     entity_type: "ingredient",
     entity_id: ingredientId,
     kind: "review_confirm",
+    before: {
+      items: confirmedSnapshots,
+    },
     after: {
-      item_ids: confirmable.map((r) => r.id),
+      item_ids: confirmedSnapshots.map((s) => s.item_id),
+      ingredient_id: ingredientId,
       confirmed: result.confirmed,
       usd: Math.round(result.usd),
       aliases: uniqueAliasRows.length,
+      // T4 ruling 2: tag the Retail-at-confirm path on the event. Undo
+      // reads this to know which items also need status restored.
+      moved_to_resale: result.movedToResale ?? 0,
+      ingredient_is_retail: ingredientIsRetail,
     },
     actor: actorEmail,
   });
@@ -213,26 +282,28 @@ export async function markNotFood(
   const errors: string[] = [];
   let marked = 0;
   let skipped = 0;
+  // T4: snapshot every candidate row BEFORE the write so the event
+  // carries what Undo needs. Writes stay serial on purpose - a race on
+  // link_status is still the per-row guard.
+  const before = await readItemSnapshots(client, itemIds);
   for (const id of itemIds) {
-    // Set link_reason to 'notfood:' and link_status='rejected' so the
-    // matcher skips (link_status != 'none') AND the item visibly drops
-    // out of the proposed queue. We do NOT flip is_food - that's intake's
-    // call, and a human disagreement with the AI shouldn't retro-rewrite
-    // the intake classification.
+    // T4 §2: person-marked not food becomes a state of its own
+    // (status='not_food'). is_food stays intake's call - a person
+    // disagreeing with the AI doesn't retro-rewrite the intake
+    // classification. The matcher skips (link_status='rejected') AND
+    // the item visibly drops out of the proposed queue.
     //
     // T3 §8: the `.in("link_status", [...])` guard means the UPDATE
-    // matches zero rows when the item already sits outside that set
-    // (already rejected, already confirmed, etc). Before this fix we
-    // still bumped `marked` and inserted a pr_events row for
-    // nothing - the toast said success, the ledger grew by one, the
-    // DB never changed. .select("id") on the update returns the rows
-    // that actually matched; we count those, and only write history
-    // when the write is real.
+    // matches zero rows when the item already sits outside that set.
+    // .select("id") returns the real match set; we count those and
+    // only write history when the write is real.
     const { data, error } = await client
       .from("pr_vendor_items")
       .update({
+        status: "not_food",
         link_status: "rejected",
-        link_reason: `notfood:${actorEmail}`,
+        // T4 ruling 3: verb only, no email address.
+        link_reason: "notfood",
       })
       .eq("id", id)
       .in("link_status", ["proposed", "none"])
@@ -247,10 +318,23 @@ export async function markNotFood(
       continue;
     }
     marked += 1;
+    const snap = before.get(id);
     await client.from("pr_events").insert({
       entity_type: "vendor_item",
       entity_id: id,
       kind: "review_notfood",
+      before: snap ? { items: [snap] } : { items: [] },
+      after: {
+        item_ids: [id],
+        items: [
+          {
+            item_id: id,
+            status: "not_food",
+            link_status: "rejected",
+            link_reason: "notfood",
+          },
+        ],
+      },
       actor: actorEmail,
     });
   }
@@ -277,16 +361,18 @@ export async function markOneOff(
   const errors: string[] = [];
   let marked = 0;
   let skipped = 0;
+  // T4: snapshot every candidate row BEFORE the write.
+  const before = await readItemSnapshots(client, itemIds);
   for (const id of itemIds) {
-    // T3 §8: see markNotFood for the shape rationale. The guard
-    // (.in link_status) means already-decided rows match zero; we
-    // count those as skipped and emit no history row.
+    // T4 §2: one-off becomes a state of its own (status='one_off').
+    // See markNotFood for the shape rationale. is_food stays intake's.
     const { data, error } = await client
       .from("pr_vendor_items")
       .update({
-        status: "archived",
+        status: "one_off",
         link_status: "rejected",
-        link_reason: `oneoff:${actorEmail}`,
+        // T4 ruling 3: verb only, no email address.
+        link_reason: "oneoff",
       })
       .eq("id", id)
       .in("link_status", ["proposed", "none"])
@@ -301,10 +387,23 @@ export async function markOneOff(
       continue;
     }
     marked += 1;
+    const snap = before.get(id);
     await client.from("pr_events").insert({
       entity_type: "vendor_item",
       entity_id: id,
       kind: "review_oneoff",
+      before: snap ? { items: [snap] } : { items: [] },
+      after: {
+        item_ids: [id],
+        items: [
+          {
+            item_id: id,
+            status: "one_off",
+            link_status: "rejected",
+            link_reason: "oneoff",
+          },
+        ],
+      },
       actor: actorEmail,
     });
   }
@@ -385,6 +484,18 @@ export async function markResale(
   // this second write catches the non-retail-master case. Scoped to
   // rows we just confirmed AND whose current status is 'active' so
   // we never re-colour a duplicate or archived row.
+  //
+  // T4 ruling 2: `markResale` is one logical decision. confirmItems
+  // already emitted a `review_confirm` whose `before.items` snapshots
+  // every row's pre-write state (including status='active'). That one
+  // event is the Retail click's undo target - Undo restores the full
+  // pre-write shape in a single pass, whether the master was already
+  // Retail or not. We do NOT emit a second event here; the second
+  // write below is part of the same decision and is undone via the
+  // same snapshot (snapshot.status='active' puts the item back from
+  // 'resale'). The ReviewLedger tells apart "confirm into retail" and
+  // "confirm into recipe" using review_confirm.after.ingredient_is_retail
+  // and after.moved_to_resale.
   let marked = 0;
   if (!ingredientIsRetail && confirmResult.confirmed > 0) {
     const { data: justConfirmed } = await client
@@ -393,7 +504,7 @@ export async function markResale(
       .in("id", itemIds)
       .eq("link_status", "confirmed")
       .eq("status", "active");
-    for (const r of ((justConfirmed ?? []) as Array<{ id: string; usd_12m: number | null }>)) {
+    for (const r of ((justConfirmed ?? []) as Array<{ id: string }>)) {
       const { error: upErr } = await client
         .from("pr_vendor_items")
         .update({ status: "resale" })
@@ -405,17 +516,6 @@ export async function markResale(
         continue;
       }
       marked += 1;
-      await client.from("pr_events").insert({
-        entity_type: "vendor_item",
-        entity_id: r.id,
-        kind: "review_resale",
-        after: {
-          via: "review_retail_action",
-          ingredient_id: ingredientId,
-          usd: Math.round(Number(r.usd_12m ?? 0)),
-        },
-        actor: actorEmail,
-      });
     }
   } else if (ingredientIsRetail) {
     // Master already retail -> confirmItems stamped status for us;
@@ -512,12 +612,10 @@ export async function markArchived(
 
   const rows = await readItems(client, itemIds);
   const eligible = rows.filter((r) => r.link_status === "proposed" || r.link_status === "none");
-  // T3 §8: count only rows the UPDATE actually changed. The prior
-  // code counted every row in `eligible` even when a race moved the
-  // row out of the guard between readItems and the UPDATE, and it
-  // inserted a history row for the no-op write too. .select("id")
-  // on the update returns the real match set; we bump marked on
-  // that and skip the event when nothing landed.
+  // T4: snapshot the eligible rows BEFORE writing so each event
+  // carries a per-item `before` Undo can read.
+  const before = await readItemSnapshots(client, eligible.map((r) => r.id));
+  // T3 §8: count only rows the UPDATE actually changed.
   let marked = 0;
   let skipped = itemIds.length - eligible.length; // already-decided at read time
   const changedIds: string[] = [];
@@ -527,7 +625,8 @@ export async function markArchived(
       .update({
         status: "archived",
         link_status: "rejected",
-        link_reason: `archived:${actorEmail}`,
+        // T4 ruling 3: verb only.
+        link_reason: "archived",
       })
       .eq("id", r.id)
       .in("link_status", ["proposed", "none"])
@@ -549,14 +648,24 @@ export async function markArchived(
     .filter((r) => changedIds.includes(r.id))
     .reduce((s, r) => s + Number(r.usd_12m ?? 0), 0);
   for (const id of changedIds) {
+    const snap = before.get(id);
     await client.from("pr_events").insert({
       entity_type: "vendor_item",
       entity_id: id,
       kind: "review_archive",
+      before: snap ? { items: [snap] } : { items: [] },
       after: {
         item_ids: changedIds,
         count: changedIds.length,
         usd: Math.round(changedUsd),
+        items: [
+          {
+            item_id: id,
+            status: "archived",
+            link_status: "rejected",
+            link_reason: "archived",
+          },
+        ],
       },
       actor: actorEmail,
     });
@@ -572,21 +681,19 @@ export async function keepSeparate(
   const errors: string[] = [];
   let marked = 0;
   let skipped = 0;
+  // T4: snapshot every candidate row BEFORE the write.
+  const before = await readItemSnapshots(client, itemIds);
   // "Keep separate" = don't propose this item into the current group ever
   // again. We write link_status='rejected' + link_reason='keep_separate'
   // so the matcher (which only reads link_status='none') never looks at
-  // it. The item appears on vendor-items with a Rejected pill. If Kevin
-  // later wants to re-propose it (to a different ingredient), there is a
-  // Relink path on the vendor-item drawer that resets link_status.
-  //
-  // T3 §8: count only rows the UPDATE actually changed; skip history
-  // for no-ops. See markNotFood for the reasoning.
+  // it. The item appears on vendor-items with a Rejected pill.
   for (const id of itemIds) {
     const { data, error } = await client
       .from("pr_vendor_items")
       .update({
         link_status: "rejected",
-        link_reason: `keep_separate:${actorEmail}`,
+        // T4 ruling 3: verb only.
+        link_reason: "keep_separate",
       })
       .eq("id", id)
       .in("link_status", ["proposed", "none"])
@@ -601,10 +708,22 @@ export async function keepSeparate(
       continue;
     }
     marked += 1;
+    const snap = before.get(id);
     await client.from("pr_events").insert({
       entity_type: "vendor_item",
       entity_id: id,
       kind: "review_keep_separate",
+      before: snap ? { items: [snap] } : { items: [] },
+      after: {
+        item_ids: [id],
+        items: [
+          {
+            item_id: id,
+            link_status: "rejected",
+            link_reason: "keep_separate",
+          },
+        ],
+      },
       actor: actorEmail,
     });
   }
@@ -631,15 +750,16 @@ export async function relinkItems(
     throw new Error("Ingredient not found or merged");
   }
 
-  // T3 §8: count only rows the UPDATE actually changed; skip
-  // history for no-ops. The .eq("link_status", "proposed") guard
-  // means items already confirmed / rejected match zero rows.
+  // T4: snapshot every candidate row BEFORE the write.
+  const before = await readItemSnapshots(client, itemIds);
+  // T3 §8: count only rows the UPDATE actually changed.
   for (const id of itemIds) {
     const { data, error } = await client
       .from("pr_vendor_items")
       .update({
         ingredient_id: ingredientId,
-        link_reason: `relinked:${actorEmail}`,
+        // T4 ruling 3: verb only.
+        link_reason: "relinked",
       })
       .eq("id", id)
       .eq("link_status", "proposed")
@@ -654,11 +774,22 @@ export async function relinkItems(
       continue;
     }
     relinked += 1;
+    const snap = before.get(id);
     await client.from("pr_events").insert({
       entity_type: "vendor_item",
       entity_id: id,
       kind: "review_relink",
-      after: { ingredient_id: ingredientId },
+      before: snap ? { items: [snap] } : { items: [] },
+      after: {
+        item_ids: [id],
+        items: [
+          {
+            item_id: id,
+            ingredient_id: ingredientId,
+            link_reason: "relinked",
+          },
+        ],
+      },
       actor: actorEmail,
     });
   }
@@ -702,11 +833,12 @@ export async function undoConfirm(
   // Flip the item back to proposed - this is what drives coverage + the
   // review queue back. Keep ingredient_id so the card still shows the
   // correct target when the item reappears in the queue.
+  // T4 ruling 3: verb only.
   const { error: upErr } = await client
     .from("pr_vendor_items")
     .update({
       link_status: "proposed",
-      link_reason: `undo:${actorEmail}`,
+      link_reason: "undo",
     })
     .eq("id", itemId)
     .eq("link_status", "confirmed");
@@ -781,6 +913,328 @@ export async function undoConfirmMany(
   return { ok: errors.length === 0, undone, skipped, errors };
 }
 
+// T4 §5: Restore. Puts an archived / one-off / person-marked not-food
+// row back to active with no link. Writes its own event with before +
+// after so the Undo chain can take IT back too. Works on both shapes:
+// a status='archived' row with `oneoff` reason restores the same way
+// as a status='one_off' row.
+//
+// Does NOT restore an intake-flagged not-food row (is_food=false).
+// That was never a person's call; the Restore is for human
+// dispositions only.
+export async function restoreVendorItem(
+  client: SupabaseClient,
+  args: { itemId: string; actorEmail: string }
+): Promise<{ ok: boolean; error?: string; restored: boolean }> {
+  const { itemId, actorEmail } = args;
+
+  const { data: curData, error: curErr } = await client
+    .from("pr_vendor_items")
+    .select(ITEM_SNAPSHOT_COLUMNS + ",is_food")
+    .eq("id", itemId)
+    .maybeSingle();
+  if (curErr) return { ok: false, error: curErr.message, restored: false };
+  if (!curData) return { ok: false, error: "Item not found", restored: false };
+  const cur = curData as unknown as {
+    id: string;
+    status: string | null;
+    link_status: string | null;
+    link_reason: string | null;
+    link_confidence: string | null;
+    ingredient_id: string | null;
+    is_food: boolean | null;
+  };
+
+  const verb = (cur.link_reason ?? "").split(":")[0]?.trim().toLowerCase() ?? "";
+  const isArchived = cur.status === "archived" && verb !== "oneoff";
+  const isOneOff = cur.status === "one_off" || (cur.status === "archived" && verb === "oneoff");
+  const isPersonNotFood =
+    cur.status === "not_food" ||
+    (cur.status === "active" && cur.link_status === "rejected" && verb === "notfood" && cur.is_food === true);
+
+  if (!(isArchived || isOneOff || isPersonNotFood)) {
+    return { ok: false, error: "This item is not archived, one-off or not food.", restored: false };
+  }
+
+  const beforeSnap: ItemSnapshot = {
+    item_id: cur.id,
+    status: cur.status,
+    link_status: cur.link_status,
+    link_reason: cur.link_reason,
+    link_confidence: cur.link_confidence,
+    ingredient_id: cur.ingredient_id,
+  };
+
+  // Restore: status='active', link_status='none', link_reason=null,
+  // link_confidence=null, ingredient_id=null. Guard on the matching
+  // current shape so a race against another writer refuses.
+  const update: Record<string, unknown> = {
+    status: "active",
+    link_status: "none",
+    link_reason: null,
+    link_confidence: null,
+    ingredient_id: null,
+  };
+  const { data, error } = await client
+    .from("pr_vendor_items")
+    .update(update)
+    .eq("id", cur.id)
+    .eq("status", cur.status ?? "")
+    .eq("link_status", cur.link_status ?? "")
+    .select("id");
+  if (error) return { ok: false, error: error.message, restored: false };
+  if (!data || data.length === 0) {
+    return { ok: false, error: "This item was changed again since. Nothing was undone.", restored: false };
+  }
+
+  await client.from("pr_events").insert({
+    entity_type: "vendor_item",
+    entity_id: cur.id,
+    kind: "review_restore",
+    before: { items: [beforeSnap] },
+    after: {
+      item_ids: [cur.id],
+      items: [
+        {
+          item_id: cur.id,
+          status: "active",
+          link_status: "none",
+          link_reason: null,
+          link_confidence: null,
+          ingredient_id: null,
+        },
+      ],
+    },
+    actor: actorEmail,
+  });
+
+  return { ok: true, restored: true };
+}
+
+// T4 §3: the one function that takes any decision event back. Reads
+// `before.items` and writes each snapshot back, guarded on the row
+// still matching the `after` the decision left behind. If any guard
+// fails, every write is still safe (per-row guard blocks overwrite),
+// but the result reports `refused` with the plain sentence so the UI
+// can say it out loud.
+//
+// Scope: supports review_confirm, review_archive, review_oneoff,
+// review_notfood, review_keep_separate, review_relink,
+// ingredient_split_create, review_restore. Everything else returns
+// an unsupported-kind error.
+export async function undoDecisionEvent(
+  client: SupabaseClient,
+  args: { eventId: string; actorEmail: string }
+): Promise<{
+  ok: boolean;
+  error?: string;
+  reverted: number;
+  refused: number;
+  retiredIngredientId?: string | null;
+}> {
+  const { eventId, actorEmail } = args;
+
+  const { data: ev, error: evErr } = await client
+    .from("pr_events")
+    .select("id,kind,entity_type,entity_id,before,after,actor")
+    .eq("id", eventId)
+    .maybeSingle();
+  if (evErr) return { ok: false, error: evErr.message, reverted: 0, refused: 0 };
+  if (!ev) return { ok: false, error: "Decision not found.", reverted: 0, refused: 0 };
+
+  const event = ev as {
+    id: string;
+    kind: string;
+    entity_type: string;
+    entity_id: string;
+    before: Record<string, unknown> | null;
+    after: Record<string, unknown> | null;
+  };
+
+  const SUPPORTED = new Set([
+    "review_confirm",
+    "review_archive",
+    "review_oneoff",
+    "review_notfood",
+    "review_keep_separate",
+    "review_relink",
+    "ingredient_split_create",
+    "review_restore",
+  ]);
+  if (!SUPPORTED.has(event.kind)) {
+    return { ok: false, error: `Undo is not available for ${event.kind}.`, reverted: 0, refused: 0 };
+  }
+
+  const beforeItems = extractItemSnapshots(event.before?.items);
+  const afterItems = extractItemSnapshots(event.after?.items);
+  if (beforeItems.length === 0) {
+    // Decisions written before this train have no snapshot. For
+    // review_confirm the legacy undoConfirmMany path still works - it
+    // puts link_status back to proposed from the current row - so we
+    // call it. For every other kind pre-T4 we refuse with the user
+    // sentence; the ledger row already says so.
+    if (event.kind === "review_confirm") {
+      const itemIds = extractStringArray(event.after?.item_ids);
+      if (itemIds.length === 0) {
+        return { ok: false, error: "This decision has no record to undo.", reverted: 0, refused: 0 };
+      }
+      const r = await undoConfirmMany(client, { itemIds, actorEmail });
+      return { ok: r.ok, reverted: r.undone, refused: r.skipped, error: r.errors[0] };
+    }
+    return { ok: false, error: "This decision was made before Undo existed. Use Restore instead.", reverted: 0, refused: 0 };
+  }
+
+  // Build the afterGuard map (item_id -> expected current shape) so
+  // the per-item UPDATE guards on the state the decision left. Fall
+  // back to an empty guard for review_confirm (whose before.items
+  // snapshot is complete; the current shape is derived from the
+  // decision).
+  const afterGuard = new Map<string, Partial<ItemSnapshot>>();
+  for (const a of afterItems) {
+    afterGuard.set(a.item_id, a);
+  }
+
+  // Alias-revoke tracking for Confirm undo.
+  const confirmUndoNeedsAliasRevoke = event.kind === "review_confirm";
+
+  let reverted = 0;
+  let refused = 0;
+  for (const snap of beforeItems) {
+    const itemId = snap.item_id;
+    const guard = afterGuard.get(itemId);
+
+    // Compose the UPDATE from the snapshot. Null values are written
+    // as null so Restore's `ingredient_id=null` really clears the
+    // column.
+    const update: Record<string, unknown> = {};
+    if ("status" in snap) update.status = snap.status ?? null;
+    if ("link_status" in snap) update.link_status = snap.link_status ?? null;
+    if ("link_reason" in snap) update.link_reason = snap.link_reason ?? null;
+    if ("link_confidence" in snap) update.link_confidence = snap.link_confidence ?? null;
+    if ("ingredient_id" in snap) update.ingredient_id = snap.ingredient_id ?? null;
+
+    // Per-row guard: only write when the row still matches what the
+    // decision set. For review_confirm the after shape is implied
+    // (link_status='confirmed', link_reason='confirmed'); check that.
+    let q = client.from("pr_vendor_items").update(update).eq("id", itemId);
+    if (guard?.status != null) q = q.eq("status", guard.status);
+    if (guard?.link_status != null) q = q.eq("link_status", guard.link_status);
+    else if (event.kind === "review_confirm") q = q.eq("link_status", "confirmed");
+    const { data, error } = await q.select("id");
+    if (error) {
+      refused += 1;
+      continue;
+    }
+    if (!data || data.length === 0) {
+      refused += 1;
+      continue;
+    }
+    reverted += 1;
+
+    if (confirmUndoNeedsAliasRevoke) {
+      // Mirror undoConfirm's alias / golden-link revoke policy (the
+      // snapshot path doesn't go through undoConfirm). Revoke the
+      // active golden link for this item; revoke the learned alias
+      // only if no OTHER confirmed item on the same
+      // (description_key, ingredient_id) still relies on it.
+      const nowIso = new Date().toISOString();
+      await client
+        .from("pr_golden_links")
+        .update({ revoked_at: nowIso })
+        .eq("vendor_item_id", itemId)
+        .is("revoked_at", null);
+      if (snap.ingredient_id) {
+        // We don't carry description_key on the snapshot; re-read it
+        // from the row (it is intake-owned and never overwritten).
+        const { data: row } = await client
+          .from("pr_vendor_items")
+          .select("description_key")
+          .eq("id", itemId)
+          .maybeSingle();
+        const dkey = (row as { description_key: string } | null)?.description_key;
+        const targetIng = (event.after?.ingredient_id as string | undefined) ?? event.entity_id;
+        if (dkey) {
+          const { count } = await client
+            .from("pr_vendor_items")
+            .select("id", { count: "exact", head: true })
+            .eq("link_status", "confirmed")
+            .eq("ingredient_id", targetIng)
+            .eq("description_key", dkey);
+          if ((count ?? 0) === 0) {
+            await client
+              .from("pr_ingredient_aliases")
+              .update({ revoked_at: nowIso })
+              .eq("alias_norm", dkey)
+              .eq("kind", "manual")
+              .eq("ingredient_id", targetIng)
+              .is("revoked_at", null);
+          }
+        }
+      }
+    }
+  }
+
+  // T4 ruling 5: Undo on Create retires the created ingredient when
+  // this decision CREATED it AND no item of any link state still
+  // points at it. Named-match or revive-retired paths leave the
+  // ingredient alone.
+  let retiredIngredientId: string | null = null;
+  if (event.kind === "ingredient_split_create") {
+    const createKind = (event.after as { create_kind?: unknown } | null)?.create_kind;
+    const ingredientId = event.entity_id;
+    if (createKind === "created" && ingredientId) {
+      const { count } = await client
+        .from("pr_vendor_items")
+        .select("id", { count: "exact", head: true })
+        .eq("ingredient_id", ingredientId);
+      if ((count ?? 0) === 0) {
+        const { error: retErr } = await client
+          .from("pr_ingredients")
+          .update({ status: "retired", updated_at: new Date().toISOString() })
+          .eq("id", ingredientId)
+          .eq("status", "active");
+        if (!retErr) retiredIngredientId = ingredientId;
+      }
+    }
+  }
+
+  // Emit a `review_undo` with the full snapshot and a pointer to the
+  // event it reversed. If no row was actually written, skip the event -
+  // the caller refuses with the user sentence.
+  if (reverted > 0) {
+    await client.from("pr_events").insert({
+      entity_type: "vendor_item",
+      entity_id: beforeItems[0].item_id,
+      kind: "review_undo",
+      before: { items: afterItems, undid_event_id: event.id, undid_kind: event.kind },
+      after: { items: beforeItems, item_ids: beforeItems.map((s) => s.item_id), retired_ingredient_id: retiredIngredientId },
+      actor: actorEmail,
+    });
+  }
+
+  if (reverted === 0 && refused > 0) {
+    return { ok: false, error: "This item was changed again since. Nothing was undone.", reverted, refused, retiredIngredientId };
+  }
+  return { ok: true, reverted, refused, retiredIngredientId };
+}
+
+// Narrowing helpers for the untyped jsonb columns on pr_events.
+function extractItemSnapshots(v: unknown): ItemSnapshot[] {
+  if (!Array.isArray(v)) return [];
+  const out: ItemSnapshot[] = [];
+  for (const r of v) {
+    if (r && typeof r === "object" && typeof (r as { item_id?: unknown }).item_id === "string") {
+      out.push(r as ItemSnapshot);
+    }
+  }
+  return out;
+}
+
+function extractStringArray(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter((x): x is string => typeof x === "string");
+}
+
 export async function createIngredient(
   client: SupabaseClient,
   args: {
@@ -801,7 +1255,7 @@ export async function createIngredient(
     // belong on "each".
     baseUnit?: BaseUnit;
   }
-): Promise<{ id: string; baseUnit: BaseUnit }> {
+): Promise<{ id: string; baseUnit: BaseUnit; kind: "created" | "matched_active" | "revived_retired" }> {
   const trimmed = args.name.trim();
   if (trimmed.length < 2) throw new Error("Ingredient name is required");
   // N10 §2b: swap the inline expression for the shared helper so the
@@ -812,24 +1266,26 @@ export async function createIngredient(
   // Try to find an existing active ingredient by name_norm first.
   // N4: when a match is found this returns it AS-IS - the caller's
   // baseUnit is deliberately NOT applied to an existing ingredient.
-  // 85 masters carry a unit Kevin set by hand; retrofitting them on
-  // every re-create would silently clobber that work.
   // N5 4f: return the matched row's REAL base_unit so the caller's
   // event + toast reflect what is actually stored, not what was
   // inferred from the items this time round.
+  //
+  // T4 ruling 5: when the active lookup misses, also check for a
+  // RETIRED row with the same name_norm. The live unique index
+  // (`pr_ingredients_name_norm_live_uq WHERE status <> 'merged'`) keeps
+  // the name reserved for retired rows too, so a plain insert would
+  // hit the index. Revive the retired row (status='active', bump
+  // updated_at) and use it in place of an insert. Emits
+  // `ingredient_revived` so Recent decisions can name the moment.
   const { data: existing } = await client
     .from("pr_ingredients")
-    .select("id,base_unit")
+    .select("id,base_unit,status")
     .eq("name_norm", nameNorm)
-    .eq("status", "active")
+    .neq("status", "merged")
     .maybeSingle();
   if (existing) {
-    const row = existing as { id: string; base_unit: string };
+    const row = existing as { id: string; base_unit: string; status: string };
     // N6 A3: validate the stored base_unit against the shared allow-set.
-    // The "each" fallback survives only for a value outside the set -
-    // every pre-N6 row is in it (lb, each, gal, dozen are all members),
-    // and any future row persisted by a route that bypassed validation
-    // lands here instead of propagating a stale string into the toast.
     let existingUnit: BaseUnit;
     if (SHARED_BASE_UNIT_VALUES.has(row.base_unit as BaseUnit)) {
       existingUnit = row.base_unit as BaseUnit;
@@ -839,7 +1295,26 @@ export async function createIngredient(
       );
       existingUnit = "each";
     }
-    return { id: row.id, baseUnit: existingUnit };
+    if (row.status === "retired") {
+      // T4 ruling 5: bring the retired row back and use it. No new
+      // row, no schema change. Emits one event so the ledger carries
+      // the moment.
+      const { error: reviveErr } = await client
+        .from("pr_ingredients")
+        .update({ status: "active", updated_at: new Date().toISOString() })
+        .eq("id", row.id);
+      if (reviveErr) throw reviveErr;
+      await client.from("pr_events").insert({
+        entity_type: "ingredient",
+        entity_id: row.id,
+        kind: "ingredient_revived",
+        before: { status: "retired" },
+        after: { status: "active", name: trimmed, via: "create_on_retired_name" },
+        actor: args.actorEmail,
+      });
+      return { id: row.id, baseUnit: existingUnit, kind: "revived_retired" };
+    }
+    return { id: row.id, baseUnit: existingUnit, kind: "matched_active" };
   }
 
   // base_unit is required by the schema (lb|each|gal|dozen). N4: the
@@ -879,7 +1354,7 @@ export async function createIngredient(
     after: { name: trimmed, parent, category },
     actor: args.actorEmail,
   });
-  return { id, baseUnit: insertedBaseUnit };
+  return { id, baseUnit: insertedBaseUnit, kind: "created" };
 }
 
 // Split-to-new-ingredient: create a new ingredient AND move the selected
@@ -936,6 +1411,7 @@ export async function splitToNewIngredient(
   // toast names what is on disk, not what we proposed.
   let ingredientId: string;
   let resolvedBaseUnit: BaseUnit = baseUnit;
+  let createKind: "created" | "matched_active" | "revived_retired" = "created";
   try {
     const created = await createIngredient(client, {
       name,
@@ -946,6 +1422,7 @@ export async function splitToNewIngredient(
     });
     ingredientId = created.id;
     resolvedBaseUnit = created.baseUnit;
+    createKind = created.kind;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return { ok: false, error: msg, ingredientId: null, moved: 0, baseUnit };
@@ -955,13 +1432,18 @@ export async function splitToNewIngredient(
     return { ok: true, ingredientId, moved: 0, baseUnit: resolvedBaseUnit };
   }
 
+  // T4: snapshot every candidate row BEFORE the write so the split
+  // event carries a per-item `before` Undo can read.
+  const before = await readItemSnapshots(client, itemIds);
+
   // Reassign in one UPDATE guarded on current proposed state so a race
   // doesn't retouch a row the user already confirmed elsewhere.
   const { error, data } = await client
     .from("pr_vendor_items")
     .update({
       ingredient_id: ingredientId,
-      link_reason: `split:${actorEmail}`,
+      // T4 ruling 3: verb only.
+      link_reason: "split",
     })
     .in("id", itemIds)
     .eq("link_status", "proposed")
@@ -970,19 +1452,37 @@ export async function splitToNewIngredient(
     return { ok: false, error: error.message, ingredientId, moved: 0, baseUnit: resolvedBaseUnit };
   }
   const movedIds = ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
+  const movedSnapshots = movedIds
+    .map((id) => before.get(id))
+    .filter((s): s is ItemSnapshot => s != null);
 
   await client.from("pr_events").insert({
     entity_type: "ingredient",
     entity_id: ingredientId,
     kind: "ingredient_split_create",
-    before: { item_ids: itemIds },
+    before: { items: movedSnapshots, item_ids: itemIds },
     // N4 + N5 4f: base_unit carried on the create event so the audit
-    // trail matches what landed on pr_ingredients. On a name-match this
-    // is the EXISTING row's stored unit (not what we inferred this time
-    // round); on an insert it's the inferred value we just wrote. A
-    // later unit change by a human emits a separate
-    // ingredient_base_unit_set event.
-    after: { moved_item_ids: movedIds, name, parent, category, base_unit: resolvedBaseUnit },
+    // trail matches what landed on pr_ingredients. A later unit change
+    // by a human emits a separate ingredient_base_unit_set event.
+    //
+    // T4 ruling 5: `create_kind` tags whether a new ingredient row was
+    // inserted ("created"), an existing active row was matched
+    // ("matched_active"), or a retired row was revived
+    // ("revived_retired"). Undo-Create only retires the row when
+    // this decision created it.
+    after: {
+      moved_item_ids: movedIds,
+      name,
+      parent,
+      category,
+      base_unit: resolvedBaseUnit,
+      create_kind: createKind,
+      items: movedIds.map((id) => ({
+        item_id: id,
+        ingredient_id: ingredientId,
+        link_reason: "split",
+      })),
+    },
     actor: actorEmail,
   });
 

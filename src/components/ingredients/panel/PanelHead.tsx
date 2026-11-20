@@ -67,23 +67,30 @@ export const PanelHead = forwardRef<HTMLButtonElement, {
 
   // N13 R4: status pill when the item sits outside the normal
   // active flow. One pill, muted tone; nothing for plain active.
+  // T4 ruling 4: "Not food" is named here the same way "One-off" is,
+  // for both intake-flagged rows (is_food=false) and person-marked
+  // rows (status='not_food' new shape, or the pre-correction old
+  // shape where is_food=true but status still active). The latter
+  // reaches the panel via PanelHead reading `item.status`.
   const statusPill =
     kind === "item" && item
       ? item.status === "archived"
         ? "Archived"
         : item.status === "one_off"
           ? "One-off"
-          : item.status === "duplicate"
-            ? "Duplicate"
-            : item.status === "resale"
-              ? "Retail"
-              : null
+          : item.status === "not_food"
+            ? "Not food"
+            : item.status === "duplicate"
+              ? "Duplicate"
+              : item.status === "resale"
+                ? "Retail"
+                : null
       : null;
-  // N13 R4 + round 2 fix 2: "Not food" pill only when is_food is
-  // STRICTLY false. Tri-state: null means we never asked / it is a
-  // legacy row - no pill. foodReason prints as muted text beside
-  // when present.
-  const showNotFoodPill = kind === "item" && item?.isFood === false;
+  // The "Not food" pill still appears for intake-flagged rows whose
+  // status is 'active' (the common case before train 4). statusPill
+  // above covers the new state; this covers the AI-only classification.
+  const showNotFoodPill =
+    kind === "item" && item?.isFood === false && item.status !== "not_food";
 
   return (
     <div className="kf-ipanel__head">

@@ -236,6 +236,16 @@ export function ReviewActions({
   const [flagFormOpen, setFlagFormOpen] = useState(false);
   const [flagNote, setFlagNote] = useState("");
   const [flagError, setFlagError] = useState<string | null>(null);
+  // T4 §6: the four "not for recipes" buttons (Retail, Archive, One-off,
+  // Not food) and Keep separate used to report failure in a toast that
+  // was gone in six seconds. Now the sentence sits in the card, beside
+  // the buttons, until the next press. One state slot.
+  const [barError, setBarError] = useState<string | null>(null);
+  // T4 §6: Esc on a flag note with text asks before dropping the note,
+  // the same way the item-panel asks on every other typed field. Scoped
+  // to this component so it never reaches the item panel's dirty
+  // registry.
+  const [flagDiscardAsk, setFlagDiscardAsk] = useState(false);
   // N3: why the user opened the create panel. "confirm" is the plain
   // + Create flow (default). "retail" is set only by the markResale
   // fallback below when it cannot post directly (name < 2 chars or
@@ -383,16 +393,13 @@ export function ReviewActions({
         itemIds: checkedIds,
       });
     } catch {
-      const msg = "Could not reach the server. Nothing was sent.";
-      setRelinkError(msg);
-      toast(msg, { tone: "block" });
+      // T4 §6: failed relink says it in the panel, not in a toast.
+      setRelinkError("Could not reach the server. Nothing was sent.");
       setOp(null);
       return;
     }
     if (!r.ok) {
-      const msg = saveErrorSentence(r) ?? "Nothing was saved.";
-      setRelinkError(msg);
-      toast(msg, { tone: "block" });
+      setRelinkError(saveErrorSentence(r) ?? "Nothing was saved.");
       setOp(null);
       return;
     }
@@ -429,16 +436,13 @@ export function ReviewActions({
         itemIds: checkedIds,
       });
     } catch {
-      const msg = "Could not reach the server. Nothing was sent.";
-      setRelinkError(msg);
-      toast(msg, { tone: "block" });
+      // T4 §6: failed relink says it in the panel, not in a toast.
+      setRelinkError("Could not reach the server. Nothing was sent.");
       setOp(null);
       return;
     }
     if (!r.ok) {
-      const msg = saveErrorSentence(r) ?? "Nothing was saved.";
-      setRelinkError(msg);
-      toast(msg, { tone: "block" });
+      setRelinkError(saveErrorSentence(r) ?? "Nothing was saved.");
       setOp(null);
       return;
     }
@@ -594,10 +598,12 @@ export function ReviewActions({
 
   async function markNotFood() {
     if (op || noneChecked) return;
+    setBarError(null);
     setOp("notfood");
     const r = await postJson("/api/review/not-food", { itemIds: checkedIds });
     if (!r.ok) {
-      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
+      // T4 §6: sentence stays in the card. No toast.
+      setBarError(saveErrorSentence(r) ?? "Nothing was saved.");
       setOp(null);
       return;
     }
@@ -628,10 +634,12 @@ export function ReviewActions({
   // out of the coverage meters without inventing a new column.
   async function markOneOff() {
     if (op || noneChecked) return;
+    setBarError(null);
     setOp("oneoff");
     const r = await postJson("/api/review/one-off", { itemIds: checkedIds });
     if (!r.ok) {
-      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
+      // T4 §6: sentence stays in the card. No toast.
+      setBarError(saveErrorSentence(r) ?? "Nothing was saved.");
       setOp(null);
       return;
     }
@@ -700,7 +708,8 @@ export function ReviewActions({
         resale: true,
       });
       if (!r.ok) {
-        toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
+        // T4 §6: sentence stays in the card.
+        setBarError(saveErrorSentence(r) ?? "Nothing was saved.");
         setOp(null);
         return;
       }
@@ -729,16 +738,18 @@ export function ReviewActions({
     // corrupt group shape and should block, not silently create a new
     // master.
     if (!currentIngredientId) {
-      toast("No ingredient target for this group", { tone: "block" });
+      setBarError("No ingredient target for this group");
       return;
     }
+    setBarError(null);
     setOp("resale");
     const r = await postJson("/api/review/resale", {
       ingredientId: currentIngredientId,
       itemIds: checkedIds,
     });
     if (!r.ok) {
-      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
+      // T4 §6: sentence stays in the card.
+      setBarError(saveErrorSentence(r) ?? "Nothing was saved.");
       setOp(null);
       return;
     }
@@ -764,10 +775,12 @@ export function ReviewActions({
   // link_status='rejected' keeps the matcher away.
   async function markArchived() {
     if (op || noneChecked) return;
+    setBarError(null);
     setOp("archived");
     const r = await postJson("/api/review/archive", { itemIds: checkedIds });
     if (!r.ok) {
-      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
+      // T4 §6: sentence stays in the card.
+      setBarError(saveErrorSentence(r) ?? "Nothing was saved.");
       setOp(null);
       return;
     }
@@ -823,10 +836,12 @@ export function ReviewActions({
 
   async function keepSeparate() {
     if (op || noneChecked) return;
+    setBarError(null);
     setOp("keepsep");
     const r = await postJson("/api/review/keep-separate", { itemIds: checkedIds });
     if (!r.ok) {
-      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
+      // T4 §6: sentence stays in the card.
+      setBarError(saveErrorSentence(r) ?? "Nothing was saved.");
       setOp(null);
       return;
     }
@@ -943,9 +958,16 @@ export function ReviewActions({
                 if (e.key === "Escape") {
                   e.preventDefault();
                   e.stopPropagation();
-                  setFlagFormOpen(false);
-                  setFlagNote("");
-                  setFlagError(null);
+                  // T4 §6: a typed note is typed work. Ask before
+                  // dropping it. Scoped to this component so the item
+                  // panel never asks on its own typed fields.
+                  if (flagNote.trim().length > 0) {
+                    setFlagDiscardAsk(true);
+                  } else {
+                    setFlagFormOpen(false);
+                    setFlagNote("");
+                    setFlagError(null);
+                  }
                 } else if (e.key === "Enter") {
                   e.preventDefault();
                   flagSave();
@@ -969,9 +991,14 @@ export function ReviewActions({
                 className="kf-btn kf-btn--line kf-btn--sm"
                 disabled={op === "flag"}
                 onClick={() => {
-                  setFlagFormOpen(false);
-                  setFlagNote("");
-                  setFlagError(null);
+                  // T4 §6: ask when the field has text.
+                  if (flagNote.trim().length > 0) {
+                    setFlagDiscardAsk(true);
+                  } else {
+                    setFlagFormOpen(false);
+                    setFlagNote("");
+                    setFlagError(null);
+                  }
                 }}
               >
                 Cancel
@@ -980,6 +1007,34 @@ export function ReviewActions({
                 <span className="kf-dpn__flash kf-dpn__flash--err" role="alert">
                   {flagError}
                 </span>
+              ) : null}
+              {flagDiscardAsk ? (
+                // T4 §6: inline ask - stays scoped to this form so the
+                // item panel's own Discard ask never fires on this
+                // field. "Discard" drops the typed text and closes;
+                // "Keep editing" returns to the input.
+                <div className="kf-ing-note-form__discard-ask" role="alertdialog" aria-label="Discard what you typed?">
+                  <span className="kf-ing-note-form__ask-text">Discard what you typed?</span>
+                  <button
+                    type="button"
+                    className="kf-btn kf-btn--primary kf-btn--sm"
+                    onClick={() => setFlagDiscardAsk(false)}
+                  >
+                    Keep editing
+                  </button>
+                  <button
+                    type="button"
+                    className="kf-btn kf-btn--line kf-btn--sm"
+                    onClick={() => {
+                      setFlagDiscardAsk(false);
+                      setFlagFormOpen(false);
+                      setFlagNote("");
+                      setFlagError(null);
+                    }}
+                  >
+                    Discard
+                  </button>
+                </div>
               ) : null}
             </div>
           </div>
@@ -1044,6 +1099,13 @@ export function ReviewActions({
           <span className="kf-rvc__actions-status kf-rvc__actions-status--done" aria-live="polite">
             <Check size={12} strokeWidth={2.5} aria-hidden />
             Done
+          </span>
+        ) : barError ? (
+          // T4 §6: the sentence sits beside the buttons until the next
+          // press. No toast fires. Any of the five bar handlers clears
+          // this at the top of its call.
+          <span className="kf-dpn__flash kf-dpn__flash--err" role="alert">
+            {barError}
           </span>
         ) : null}
       </div>

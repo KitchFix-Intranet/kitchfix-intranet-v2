@@ -146,6 +146,11 @@ export type ReviewGroupItem = {
   needsReviewLines?: number;
   firstSeen?: string | null;
   status?: string;
+  // T4: carried so the item-panel footer knows whether to disable
+  // Archive and One-off on a confirmed item with the sentence ruling 8
+  // asks for. Optional; readers that never set it are the Review queue
+  // builder (every queue item is link_status='proposed' there anyway).
+  linkStatus?: string;
   // Tri-state: null = legacy / unknown; the "Not food" pill in the
   // item panel renders only on strict `false`.
   isFood?: boolean | null;

@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Flag } from "lucide-react";
 import { toast } from "@/components/ui/Toaster";
+import { nameFromEmail } from "@/lib/fmt";
 import { postJson, saveErrorSentence } from "./panel/common";
 
 export function RowFlagToggle({
@@ -29,6 +30,9 @@ export function RowFlagToggle({
   const [formOpen, setFormOpen] = useState(false);
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // T4 §6: when the note has text, Esc / Cancel ask before dropping.
+  // Scoped to this row so the item panel's dirty registry never fires.
+  const [discardAsk, setDiscardAsk] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // T2 round 2 §4: the flag note is not inside any panel's save
@@ -80,9 +84,12 @@ export function RowFlagToggle({
     router.refresh();
   }
 
+  // T4 ruling 10: name, never an email. The prop still holds the raw
+  // flagged_by (historical type); we derive a display name here.
+  const flaggedName = flaggedBy ? nameFromEmail(flaggedBy) : null;
   const title = flagged
     ? (flagNote ? `Flagged: ${flagNote}` : "Flagged for review") +
-      (flaggedBy ? ` - ${flaggedBy}` : "") +
+      (flaggedName ? ` - ${flaggedName}` : "") +
       " - click to clear"
     : "Flag this item for a second look";
 
@@ -123,9 +130,14 @@ export function RowFlagToggle({
               if (e.key === "Escape") {
                 e.preventDefault();
                 e.stopPropagation();
-                setFormOpen(false);
-                setNote("");
-                setError(null);
+                // T4 §6: a typed note is typed work.
+                if (note.trim().length > 0) {
+                  setDiscardAsk(true);
+                } else {
+                  setFormOpen(false);
+                  setNote("");
+                  setError(null);
+                }
               } else if (e.key === "Enter") {
                 e.preventDefault();
                 saveFlag();
@@ -148,9 +160,13 @@ export function RowFlagToggle({
               className="kf-btn kf-btn--line kf-btn--sm"
               disabled={busy}
               onClick={() => {
-                setFormOpen(false);
-                setNote("");
-                setError(null);
+                if (note.trim().length > 0) {
+                  setDiscardAsk(true);
+                } else {
+                  setFormOpen(false);
+                  setNote("");
+                  setError(null);
+                }
               }}
             >
               Cancel
@@ -159,6 +175,30 @@ export function RowFlagToggle({
               <span className="kf-dpn__flash kf-dpn__flash--err" role="alert">
                 {error}
               </span>
+            ) : null}
+            {discardAsk ? (
+              <div className="kf-ing-note-form__discard-ask" role="alertdialog" aria-label="Discard what you typed?">
+                <span className="kf-ing-note-form__ask-text">Discard what you typed?</span>
+                <button
+                  type="button"
+                  className="kf-btn kf-btn--primary kf-btn--sm"
+                  onClick={() => setDiscardAsk(false)}
+                >
+                  Keep editing
+                </button>
+                <button
+                  type="button"
+                  className="kf-btn kf-btn--line kf-btn--sm"
+                  onClick={() => {
+                    setDiscardAsk(false);
+                    setFormOpen(false);
+                    setNote("");
+                    setError(null);
+                  }}
+                >
+                  Discard
+                </button>
+              </div>
             ) : null}
           </div>
         </div>
