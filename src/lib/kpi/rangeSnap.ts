@@ -1,4 +1,4 @@
-// src/lib/kpi/rangeSnap.js
+// src/lib/kpi/rangeSnap.ts
 //
 // Cross-board range-alignment guard ([name], 2026-09-02).
 //
@@ -24,86 +24,63 @@
 //    names what happened."
 //
 // A range is considered aligned iff:
-//   1. (start, end) == FY_START, today            -> FYTD
+//   1. (start, end) == fy.startISO, today         -> FYTD
 //   2. start == periodStartISO(A) AND end == periodEndISO(B)
 //      for some A, B in [1..13] with A <= B       -> single or multi-period
 //
 // Otherwise: snap to the fiscal period containing `end`. Non-fiscal
-// bounds outside FY26 are clamped to the containing period at the
-// boundary (e.g., end > FY_END_ISO snaps to P13).
-//
-// Response shape:
-//   {
-//     start, end,                    // resolved boundaries (post-snap)
-//     kind: "fytd" | "period" | "periods",
-//     period_no: number | null,      // set on single-period
-//     start_period_no: number | null,// set on multi-period
-//     end_period_no: number | null,  // set on multi-period
-//     snapped: boolean,
-//     snapped_from: null | { start, end }  // original when snapped
-//   }
+// bounds outside fy are clamped to the boundary period (e.g., end >
+// fy.endISO snaps to P13).
 
 import {
-  FY_START_ISO,
-  FY_END_ISO,
   periodStartISO,
   periodEndISO,
 } from "@/lib/kpi/labor/periods";
+import type { FiscalYear } from "@/lib/kpi/shared/fiscalYear";
 
 const PERIODS = Array.from({ length: 13 }, (_: any, i: any): any => i + 1);
 
 // Which period contains an arbitrary ISO date. Returns null if the
-// date is outside FY26 boundaries.
-export function periodContainingDate(iso: any): any {
+// date is outside fy boundaries.
+export function periodContainingDate(iso: any, fy: FiscalYear): any {
   if (!iso) return null;
   for (const p of PERIODS) {
-    const s = periodStartISO(p);
-    const e = periodEndISO(p);
+    const s = periodStartISO(p, fy);
+    const e = periodEndISO(p, fy);
     if (s && e && iso >= s && iso <= e) return p;
   }
-  // Outside FY: clamp to end period if too late, first if too early.
-  if (iso < FY_START_ISO) return 1;
-  if (iso > FY_END_ISO) return 13;
+  if (iso < fy.startISO) return 1;
+  if (iso > fy.endISO) return 13;
   return null;
 }
 
-// Match a start ISO to a period_no whose start equals it (exact).
-function periodStartingAt(iso: any): any {
-  for (const p of PERIODS) if (periodStartISO(p) === iso) return p;
+function periodStartingAt(iso: any, fy: FiscalYear): any {
+  for (const p of PERIODS) if (periodStartISO(p, fy) === iso) return p;
   return null;
 }
-// Match an end ISO to a period_no whose end equals it (exact).
-function periodEndingAt(iso: any): any {
-  for (const p of PERIODS) if (periodEndISO(p) === iso) return p;
+function periodEndingAt(iso: any, fy: FiscalYear): any {
+  for (const p of PERIODS) if (periodEndISO(p, fy) === iso) return p;
   return null;
 }
 
 /**
  * Resolve a URL-supplied (start, end) pair to an aligned range,
  * snapping when necessary. `today` is required to distinguish
- * "FYTD" (FY_START to today) from an aligned multi-period range
+ * "FYTD" (fy.startISO to today) from an aligned multi-period range
  * that happens to end today.
- *
- * @param {string} start   ISO YYYY-MM-DD
- * @param {string} end     ISO YYYY-MM-DD
- * @param {string} today   ISO YYYY-MM-DD (request date)
- * @returns {object}       shape per file-header comment
  */
-export function snapRange(start: any, end: any, today: any): any {
+export function snapRange(start: any, end: any, today: any, fy: FiscalYear): any {
   if (!start || !end) {
-    // Empty inputs default to FYTD - matches labor's + purchasing's
-    // prior URL-fallback behavior.
     return {
-      start: FY_START_ISO, end: today,
+      start: fy.startISO, end: today,
       kind: "fytd", period_no: null,
       start_period_no: null, end_period_no: null,
       snapped: false, snapped_from: null,
     };
   }
 
-  // 1. FYTD: FY_START to today exactly. This is the ONE non-period
-  // aligned range that survives the retirement.
-  if (start === FY_START_ISO && end === today) {
+  // 1. FYTD: fy.startISO to today exactly.
+  if (start === fy.startISO && end === today) {
     return {
       start, end,
       kind: "fytd", period_no: null,
@@ -112,10 +89,9 @@ export function snapRange(start: any, end: any, today: any): any {
     };
   }
 
-  // 2. Aligned to period boundaries. Start must match SOME period's
-  // start; end must match SOME period's end; start_period <= end_period.
-  const startP = periodStartingAt(start);
-  const endP = periodEndingAt(end);
+  // 2. Aligned to period boundaries.
+  const startP = periodStartingAt(start, fy);
+  const endP = periodEndingAt(end, fy);
   if (startP != null && endP != null && startP <= endP) {
     if (startP === endP) {
       return {
@@ -134,12 +110,10 @@ export function snapRange(start: any, end: any, today: any): any {
   }
 
   // 3. Snap to the period containing `end` (per [name]'s rule 4).
-  // This makes a bookmarked custom URL land on a plausible period
-  // rather than a blank board or (worse) a computed grain-mismatch.
-  const p = periodContainingDate(end) || periodContainingDate(start) || 1;
+  const p = periodContainingDate(end, fy) || periodContainingDate(start, fy) || 1;
   return {
-    start: periodStartISO(p),
-    end: periodEndISO(p),
+    start: periodStartISO(p, fy),
+    end: periodEndISO(p, fy),
     kind: "period", period_no: p,
     start_period_no: p, end_period_no: p,
     snapped: true,

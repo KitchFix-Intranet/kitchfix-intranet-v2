@@ -116,12 +116,13 @@ import { resolveAccessFlags, resolveIncludeSalary } from "./accessFlags";
 import { composeFlags, isPackagingGapAccount, isSeededAccount } from "./flags";
 
 import { periodOf, periodStartISO, periodEndISO, weekStartsInRange, endOfLastCompleteWeek } from "@/lib/kpi/labor/periods";
+import type { FiscalYear } from "@/lib/kpi/shared/fiscalYear";
+import { pagedSelect } from "@/lib/kpi/shared/pagedSelect";
 import { PURCHASING_ENVELOPE_EXCLUSIONS } from "@/lib/kpi/accountModels";
 import { canonicalSubLine } from "@/lib/kpi/purchasing/glRollup";
 import { resolveFinanceCloseAdjustment, absorbFinanceCloseIntoSubLines } from "@/lib/kpi/shared/financeCloseAdjustment";
 import { buildBillback, buildBillbackPeriod } from "@/lib/kpi/overview/billback";
 
-const FISCAL_YEAR = 2026;
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
@@ -224,11 +225,15 @@ async function fetchAccountsDirectoryOv(supa: any): Promise<any> {
   // [name] ruling 2026-10-06: retired accounts (active=false, today
   // CHI - IL + CIN - FL) are not Overview directory rows. Same filter
   // as the labor route's fetchAccountsDirectory.
-  const q = await supa.from("accounts")
+  //
+  // Train 2b: paged via pagedSelect. Sort team_key is the accounts
+  // primary key.
+  const q = await pagedSelect((from: number, to: number) => supa.from("accounts")
     .select("team_key, region, name, city, state, timezone")
     .neq("team_key", "CORP")
     .neq("active", false)
-    .order("team_key");
+    .order("team_key")
+    .range(from, to));
   if (q.error) return { error: q.error };
   const salaried = new Set(["CIN - KY", "TBJ - NY"]);
   return {
@@ -245,7 +250,6 @@ async function fetchAccountsDirectoryOv(supa: any): Promise<any> {
 }
 
 
-const FY_START_ISO = "2025-12-29";
 
 // [name] R-58 (2026-09-03): every account belongs to one of three
 // revenue models. Source of truth is kpi_account_flags.revenue_model
@@ -292,13 +296,13 @@ function accountRevenueModel(accountKey: any, flagRow: any): any {
 // explicit. Range PR-2 retired last_4wk / last_13wk as presets on
 // the picker; those windows do not fold and correctly read as
 // "Custom" on the chip.
-function normalizeExplicitToPreset({ start, end, today }: any): any {
-  if (start === FY_START_ISO && end === today) {
+function normalizeExplicitToPreset({ start, end, today, fy }: any): any {
+  if (start === fy.startISO && end === today) {
     return { kind: "fytd", period_no: null };
   }
   for (let p = 1; p <= 13; p += 1) {
-    const ps = periodStartISO(p);
-    const pe = periodEndISO(p);
+    const ps = periodStartISO(p, fy);
+    const pe = periodEndISO(p, fy);
     if (ps && pe && start === ps && end === pe) {
       return { kind: "period", period_no: p };
     }
@@ -317,10 +321,10 @@ function normalizeExplicitToPreset({ start, end, today }: any): any {
 // Fee accounts, salaried, per-meal - all treated identically.
 // The running period stays reachable through the "This period"
 // preset and the P{N} picker.
-function lastClosedPeriodNoBefore(today: any): any {
+function lastClosedPeriodNoBefore(today: any, fy: FiscalYear): any {
   let last = null;
   for (let p = 1; p <= 13; p += 1) {
-    const pe = periodEndISO(p);
+    const pe = periodEndISO(p, fy);
     if (pe && pe < today) last = p;
   }
   return last;
@@ -330,23 +334,23 @@ function lastClosedPeriodNoBefore(today: any): any {
 //   - { kind: 'fytd' }
 //   - { kind: 'period', period_no: N }
 //   - { kind: 'explicit', start, end }
-function resolveRange({ range, today }: any): any {
+function resolveRange({ range, today, fy }: any): any {
   if (!range || range.kind === "fytd") {
-    const lastClosed = lastClosedPeriodNoBefore(today);
+    const lastClosed = lastClosedPeriodNoBefore(today, fy);
     // Fall back to `today` if the FY hasn't got a single closed period
     // yet (e.g. day one of a new FY). Downstream still works but the
     // payload will just carry zero contributing periods.
-    const end = lastClosed != null ? periodEndISO(lastClosed) : today;
+    const end = lastClosed != null ? periodEndISO(lastClosed, fy) : today;
     return {
-      start: FY_START_ISO,
+      start: fy.startISO,
       end,
       kind: "fytd",
       period_no: null,
     };
   }
   if (range.kind === "period") {
-    const s = periodStartISO(range.period_no);
-    const e = periodEndISO(range.period_no);
+    const s = periodStartISO(range.period_no, fy);
+    const e = periodEndISO(range.period_no, fy);
     if (!s || !e) {
       throw new Error(`overview-range: unknown period_no ${range.period_no}`);
     }
@@ -362,6 +366,7 @@ function resolveRange({ range, today }: any): any {
       start: range.start,
       end: range.end,
       today,
+      fy,
     });
     if (folded) {
       return {
@@ -382,9 +387,9 @@ function resolveRange({ range, today }: any): any {
 }
 
 // Enumerate the fiscal periods the range's weeks touch.
-function periodsInRangeFor(start: any, end: any): any {
-  const weeks = weekStartsInRange(start, end);
-  return [...new Set(weeks.map((w: any): any => periodOf(w)).filter((p: any): any => p != null))].sort((a: any, b: any): any => a - b);
+function periodsInRangeFor(start: any, end: any, fy: FiscalYear): any {
+  const weeks = weekStartsInRange(start, end, fy);
+  return [...new Set(weeks.map((w: any): any => periodOf(w, fy)).filter((p: any): any => p != null))].sort((a: any, b: any): any => a - b);
 }
 
 
@@ -461,6 +466,13 @@ export async function resolveOverview({
   includeSalary = false,
   caller,
   today,
+  // Train 2b: the clock is an input. The entry passes a real
+  // timestamp; this resolver threads it to every loader that still
+  // needs the time of day (invoice stamping + freshness age math).
+  now,
+  // Train 2b: the fiscal year is an input, loaded from fiscal_periods
+  // by the entry. No file under the engine holds a year or its bounds.
+  fy,
   debugTiming = false,
   // Train 2a: the two regional-director display names are inputs,
   // not derived in the engine. v1 imported `REGIONAL_DIRECTORS` from
@@ -482,7 +494,7 @@ export async function resolveOverview({
   };
 
   // 1. Range resolution + members resolution (single hop each, independent).
-  const rng = resolveRange({ range, today });
+  const rng = resolveRange({ range, today, fy });
   const mResp = await timeIt("resolveMembers", (): any => resolveMembers(supa, accountKey));
   if (mResp.error) return { error: mResp.error, scope: mResp.scope };
   const members = mResp.data;
@@ -524,7 +536,7 @@ export async function resolveOverview({
   //
   // resolveWorkerMeta needs actualsRows[].worker_id from paginateLaborActuals -
   // that IS a dependency, so it runs AFTER Layer 1 in Layer 2.
-  const periods = periodsInRangeFor(rng.start, rng.end);
+  const periods = periodsInRangeFor(rng.start, rng.end, fy);
 
   // [name] ruling R-63 (2026-09-03): revenue and cost both stop at the
   // end of the last complete week in the range. On closed ranges every
@@ -537,7 +549,7 @@ export async function resolveOverview({
   //
   // Supersedes the today - 1 cap from #976 on open ranges - 08/30 is
   // earlier than today - 1 = 09/02, so #976's inequality still holds.
-  const lastCompleteWk = endOfLastCompleteWeek(rng.start, rng.end, today);
+  const lastCompleteWk = endOfLastCompleteWeek(rng.start, rng.end, today, fy);
   const effectiveEndISO = lastCompleteWk && lastCompleteWk.effectiveEndISO < rng.end
     ? lastCompleteWk.effectiveEndISO
     : rng.end;
@@ -556,9 +568,9 @@ export async function resolveOverview({
   // asserted below and telemetry-logged; see the divergence branch
   // for the two theoretical mismatch cases.
   const railGatePStart = rng.kind === "period" && rng.period_no != null
-    ? periodStartISO(rng.period_no) : null;
+    ? periodStartISO(rng.period_no, fy) : null;
   const railGatePEnd = rng.kind === "period" && rng.period_no != null
-    ? periodEndISO(rng.period_no) : null;
+    ? periodEndISO(rng.period_no, fy) : null;
   const willBeRunningSinglePeriod = !!(
     rng.kind === "period" &&
     rng.period_no != null &&
@@ -582,10 +594,10 @@ export async function resolveOverview({
   );
 
   const layer1 = await timeIt("layer1_parallel", async (): Promise<any> => Promise.all([
-    loadPeriodStatus(supa, FISCAL_YEAR),
+    loadPeriodStatus(supa, fy.year),
     loadAccountFlags(supa),
-    loadOverviewBudgets(supa, { members, fiscalYear: FISCAL_YEAR }),
-    loadPnlActuals(supa, { members, periods, fiscalYear: FISCAL_YEAR }),
+    loadOverviewBudgets(supa, { members, fiscalYear: fy.year }),
+    loadPnlActuals(supa, { members, periods, fiscalYear: fy.year }),
     // SC daily revenue always read (cheap; per-account narrow). The
     // guard is what prevents contamination from surfacing in the
     // per-account picker. Aggregates that don't need it just pass
@@ -606,15 +618,15 @@ export async function resolveOverview({
     // [name] ruling 2026-10-13 (KPI perf). Bulk-fetched by account_key IN()
     // instead of one call per member. ALL / EAST / WEST views drop from
     // 2 * N queries to 2 total here (-20 on an 11-member rollup).
-    resolveMemberBudgets(supa, members, FISCAL_YEAR),
-    paginatePurchasingWeekly(supa, { members, start: rng.start, end: effectiveEndISO }),
-    paginatePurchasingActuals(supa, { members, start: rng.start, end: effectiveEndISO }),
+    resolveMemberBudgets(supa, members, fy),
+    paginatePurchasingWeekly(supa, { members, start: rng.start, end: effectiveEndISO, fy, now }),
+    paginatePurchasingActuals(supa, { members, start: rng.start, end: effectiveEndISO, now }),
     loadPurchasingPending(supa, { members, start: rng.start, end: effectiveEndISO }),
-    loadPurchasingBudgets(supa, members, FISCAL_YEAR),
+    loadPurchasingBudgets(supa, members, fy.year),
     // R-28 / §5.9 - salary is composed INTO 3100 unconditionally on
     // both postures. These two loaders feed the merge in step 5
     // (buildBoard) below.
-    load3100_2Budgets(supa, members),
+    load3100_2Budgets(supa, members, fy),
     // R-63: salary actuals capped at effectiveEndISO too so labour and
     // purchasing measure the same window.
     loadSalaryActuals(supa, members, rng.start, effectiveEndISO),
@@ -624,12 +636,13 @@ export async function resolveOverview({
     // P2-4b / P2-4d (2026-09-01): purchasing freshness for cards_
     // through (last CLOSED card date) + last_derive_at (drives the
     // Overview's command-bar freshness chip via last_walk_at echo).
-    loadPurchasingFreshness(supa),
+    // Train 2b: `now` threaded for the age-hours math.
+    loadPurchasingFreshness(supa, { now }),
     // [name] R-61 (2026-09-03): [name]'s inventory adjusting JEs.
     // Ships an empty map pre-migration; the resolver treats absent
     // JEs as "no adjustment", not zero (absent-vs-zero rule). Never
     // fabricates rows for accounts that carry no inventory.
-    loadInventoryAdjustments(supa, { members, periods, fiscalYear: FISCAL_YEAR }),
+    loadInventoryAdjustments(supa, { members, periods, fiscalYear: fy.year }),
     // [name] ruling 2026-09-08 item 3 (Approach A). Rail-block queries
     // moved into layer1_parallel so they hide behind the slowest
     // existing query instead of serialising after. Only fire when
@@ -642,7 +655,7 @@ export async function resolveOverview({
     // the rail needs all four weeks including forecast, and the
     // R-92 branch (below) reads the same result.
     willFetchLaborRevBasis
-      ? loadWeeklyRevenueBasisForOverview(supa, { members, start: rng.start, end: rng.end, today })
+      ? loadWeeklyRevenueBasisForOverview(supa, { members, start: rng.start, end: rng.end, today, fy })
       : Promise.resolve(null),
     // Rail labor + salary full-range fetches (versus the existing
     // effectiveEndISO-capped fetches above). Full range needed so
@@ -747,6 +760,7 @@ export async function resolveOverview({
       periodNo: p,
       todayISO: today,
       periodStatusRow: periodStatus.get(p) || null,
+      fy,
     });
     return state !== "open";
   });
@@ -850,7 +864,7 @@ export async function resolveOverview({
   //    false when there are no hourly rows AND no salary rows; when
   //    salary rows exist they get a real board (matches the labor
   //    route's D26 salary-on branch, salaryBoard.js line 222-232).
-  const salaryActualsShaped = salaryRows.map(shapeSalaryRow);
+  const salaryActualsShaped = salaryRows.map((r: any) => shapeSalaryRow(r, fy));
   const mergedLaborActuals = (laborActuals || []).concat(salaryActualsShaped);
   // R-63 ([name] 2026-09-03): pass effectiveEndISO as the range end AND
   // as throughISO so labor's budget-to-date days proration stops at
@@ -868,6 +882,7 @@ export async function resolveOverview({
       start: rng.start,
       end: effectiveEndISO,
       today,
+      fy,
       throughISO: effectiveEndISO,
       actuals: mergedLaborActuals,
       budget_periods: laborBudgetPeriods,
@@ -894,6 +909,7 @@ export async function resolveOverview({
       start: rng.start,
       end: rng.end,
       today,
+      fy,
       throughISO: effectiveEndISO,
       actualsRows: purchActuals,
       weeklyRows: purchWeekly,
@@ -911,6 +927,7 @@ export async function resolveOverview({
     periodStatus,
     accountFlags,
     todayISO: today,
+    fy,
     overviewBudgets,
     pnl,
     scByAcct,
@@ -953,9 +970,10 @@ export async function resolveOverview({
       periodNo: p,
       todayISO: today,
       periodStatusRow: psRow,
+      fy,
     });
     if (!settled) continue;
-    const pEnd = periodEndISO(p);
+    const pEnd = periodEndISO(p, fy);
     if (!pEnd) continue;
     const daysSinceClose = Math.round(
       (new Date(today + "T00:00:00Z").getTime()
@@ -1010,15 +1028,15 @@ export async function resolveOverview({
   for (const line of REVENUE_LINE_CODES) {
     const byPeriod = sumBudgetByPeriodForLine({ overviewBudgets, lineCode: line, members });
     if (byPeriod.size === 0) continue;
-    const bto = computeBudgetToDateForLine({ budgetByPeriod: byPeriod, periodsInRange: periods, today, throughISO: effectiveEndISO });
+    const bto = computeBudgetToDateForLine({ budgetByPeriod: byPeriod, periodsInRange: periods, today, throughISO: effectiveEndISO, fy });
     if (bto.amount != null) {
       revBudgetToDate += bto.amount;
       anyRevBudget = true;
     }
     const fp = computeFullPeriodBudget({ budgetByPeriod: byPeriod, periodsInRange: periods });
     if (fp != null) revBudgetFullPeriod += fp;
-    const fy = computeFullYearBudget({ budgetByPeriod: byPeriod });
-    if (fy != null) revBudgetFullYear += fy;
+    const fyBud = computeFullYearBudget({ budgetByPeriod: byPeriod });
+    if (fyBud != null) revBudgetFullYear += fyBud;
   }
   const revenue_budget_to_date = anyRevBudget ? r2(revBudgetToDate) : null;
   const revenue_budget_full_period = anyRevBudget ? r2(revBudgetFullPeriod) : null;
@@ -1092,7 +1110,7 @@ export async function resolveOverview({
     // 3100 · labor + salary per period. Sum from mergedLaborActuals
     // (hourly + shaped salary rows) by periodOf(week_start).
     for (const r of (mergedLaborActuals || [])) {
-      const p = r.week_start ? periodOf(r.week_start) : null;
+      const p = r.week_start ? periodOf(r.week_start, fy) : null;
       if (p == null) continue;
       if (!periods.includes(p)) continue;
       const m = feedByParentPeriod.get("3100");
@@ -1108,7 +1126,7 @@ export async function resolveOverview({
                    : gl.startsWith("3500") ? "3500"
                    : null;
       if (!parent) continue;
-      const p = r.txn_date ? periodOf(r.txn_date) : null;
+      const p = r.txn_date ? periodOf(r.txn_date, fy) : null;
       if (p == null) continue;
       if (!periods.includes(p)) continue;
       const m = feedByParentPeriod.get(parent);
@@ -1141,6 +1159,7 @@ export async function resolveOverview({
     periods,
     periodStatus,
     todayISO: today,
+    fy,
     pnlMap: pnl,
     feedByParentPeriod,
   });
@@ -1274,8 +1293,8 @@ export async function resolveOverview({
     let matchStart = false;
     let matchEnd = false;
     for (let p = 1; p <= 13; p += 1) {
-      if (periodStartISO(p) === rng.start) matchStart = true;
-      if (periodEndISO(p) === rng.end) matchEnd = true;
+      if (periodStartISO(p, fy) === rng.start) matchStart = true;
+      if (periodEndISO(p, fy) === rng.end) matchEnd = true;
     }
     return matchStart && matchEnd;
   })();
@@ -1311,6 +1330,7 @@ export async function resolveOverview({
       periodNo: n,
       todayISO: today,
       periodStatusRow: periodStatus.get(n) || null,
+      fy,
     });
   })();
   let sc_counts_without_dollars = null;
@@ -1326,8 +1346,8 @@ export async function resolveOverview({
         // in FYTD read pnl_actuals via the picker.
         const pn = rng.kind === "period" ? rng.period_no
           : (periods.length > 0 ? periods[periods.length - 1] : null);
-        const pStart = pn != null ? periodStartISO(pn) : rng.start;
-        const pEnd = pn != null ? periodEndISO(pn) : rng.end;
+        const pStart = pn != null ? periodStartISO(pn, fy) : rng.start;
+        const pEnd = pn != null ? periodEndISO(pn, fy) : rng.end;
         let rowCount = 0;
         let sumRev = 0;
         let firstDate = null;
@@ -1420,6 +1440,7 @@ export async function resolveOverview({
       periodNo: displayPeriodNo,
       todayISO: today,
       periodStatusRow: periodStatus.get(displayPeriodNo) || null,
+      fy,
     });
     // [name] ruling 2026-09-17. Additive `spend_settled` sibling of
     // `period_state`. True once a closed period is at least 8 days
@@ -1430,6 +1451,7 @@ export async function resolveOverview({
       periodNo: displayPeriodNo,
       todayISO: today,
       periodStatusRow: periodStatus.get(displayPeriodNo) || null,
+      fy,
     });
   }
 
@@ -1998,7 +2020,7 @@ export async function resolveOverview({
     // fiscal period in the range.
     const laborByPeriod = new Map<any, any>();
     for (const w of laborBoard?.weeks || []) {
-      const p = periodOf(w.week_start);
+      const p = periodOf(w.week_start, fy);
       if (p != null) laborByPeriod.set(p, (laborByPeriod.get(p) || 0) + Number(w.spent || 0));
     }
     const purchByPeriod = new Map<any, any>();
@@ -2006,7 +2028,7 @@ export async function resolveOverview({
       const bucket = purchBoard.buckets[key];
       if (!bucket?.week_series) continue;
       for (const w of bucket.week_series) {
-        const p = periodOf(w.week_start);
+        const p = periodOf(w.week_start, fy);
         if (p != null) purchByPeriod.set(p, (purchByPeriod.get(p) || 0) + Number(w.amount || 0));
       }
     }
@@ -2047,7 +2069,7 @@ export async function resolveOverview({
     const unappLaborByPeriod = new Map<any, any>();
     if (laborRate > 0) {
       for (const w of laborBoard?.weeks || []) {
-        const p = periodOf(w.week_start);
+        const p = periodOf(w.week_start, fy);
         if (p == null) continue;
         const dh = Number(w.draft_hours || 0);
         if (dh > 0.004) unappLaborByPeriod.set(p, (unappLaborByPeriod.get(p) || 0) + dh * laborRate);
@@ -2091,18 +2113,20 @@ export async function resolveOverview({
     //   - closed_awaiting + !spend_settled  -> invoices_landed = false (hatch)
     //   - open / planned                    -> no flag; other branches
     const series = periods.map((p: any): any => {
-      const pStart = periodStartISO(p);
-      const pEnd = periodEndISO(p);
+      const pStart = periodStartISO(p, fy);
+      const pEnd = periodEndISO(p, fy);
       const state = pEnd < today ? "closed" : (pStart <= today && today <= pEnd) ? "in_progress" : "not_started";
       const dState = derivePeriodState({
         periodNo: p,
         todayISO: today,
         periodStatusRow: periodStatus.get(p) || null,
+        fy,
       });
       const pSettled = derivePeriodSpendSettled({
         periodNo: p,
         todayISO: today,
         periodStatusRow: periodStatus.get(p) || null,
+        fy,
       });
       const invoices_landed = state === "closed" && pSettled;
       // Period budget = sum of member budget + purchasing bucket
@@ -2196,7 +2220,7 @@ export async function resolveOverview({
     isMultiPeriod: rng.kind !== "period",
     todayISO: today,
     periodStatus,
-    fiscalYear: FISCAL_YEAR,
+    fy,
   });
 
   // PR-billback-2. Single-period surface: the goal row inside the Purchasing
@@ -2213,7 +2237,7 @@ export async function resolveOverview({
             isManagementFee,
             todayISO: today,
             periodStatus,
-            fiscalYear: FISCAL_YEAR,
+            fy,
           },
           rng.period_no,
         )
@@ -2254,13 +2278,14 @@ export async function resolveOverview({
     // because this branch keys off isRunningSinglePeriod itself.
     const railLaborActuals = railLaborActualsResp;
     const railSalaryActuals = railSalaryActualsResp;
-    const railSalaryShaped = (railSalaryActuals?.rows || []).map(shapeSalaryRow);
+    const railSalaryShaped = (railSalaryActuals?.rows || []).map((r: any) => shapeSalaryRow(r, fy));
     const railMergedLabor = (railLaborActuals?.data || []).concat(railSalaryShaped);
     const railBoard = buildBoard({
       account: accountKey,
       start: rng.start,
       end: rng.end,
       today,
+      fy,
       actuals: railMergedLabor,
       budget_periods: laborBudgetPeriods,
       account_state: "hourly_ok",
@@ -2302,6 +2327,7 @@ export async function resolveOverview({
       attachWeeklyBasisToBoard(railBoard, runningWkBasis, {
         lineTargetPctByPeriod: railLineTargetPct,
         todayISO: today,
+        fy,
         contractualAccrualByPeriod: railContractualAccrual,
         verifiedPeriodTotals: null,
         salaryBudgetByPeriod,
@@ -2455,7 +2481,7 @@ export async function resolveOverview({
   for (const line of REVENUE_LINE_CODES) {
     const rev = revenueByLine[line];
     const byPeriod = sumBudgetByPeriodForLine({ overviewBudgets, lineCode: line, members });
-    const bto = computeBudgetToDateForLine({ budgetByPeriod: byPeriod, periodsInRange: periods, today, throughISO: effectiveEndISO });
+    const bto = computeBudgetToDateForLine({ budgetByPeriod: byPeriod, periodsInRange: periods, today, throughISO: effectiveEndISO, fy });
     const fp = computeFullPeriodBudget({ budgetByPeriod: byPeriod, periodsInRange: periods });
     // E17 (2026-09-01): a revenue line the account does not run (no
     // budget, no actual) reads `inactive`, not a [amount] variance. The
@@ -2724,6 +2750,7 @@ export async function resolveOverview({
       end: effectiveEndISO,
       today,
       throughISO: effectiveEndISO,
+      fy,
     });
     const budget_to_date = btdRes?.amount ?? null;
     return { actual, period_budget, budget_to_date };
@@ -2887,6 +2914,7 @@ export async function resolveOverview({
       end: effectiveEndISO,
       today,
       throughISO: effectiveEndISO,
+      fy,
     });
     const salaryBTDLabor = computeLaborBudgetToDateDays({
       budget_periods: salaryBudgetPeriodsArr,
@@ -2894,6 +2922,7 @@ export async function resolveOverview({
       end: effectiveEndISO,
       today,
       throughISO: effectiveEndISO,
+      fy,
     });
     const hourlyBTD = { amount: hourlyBTDLabor.amount };
     const salaryBTD = { amount: salaryBTDLabor.amount };
@@ -3331,6 +3360,7 @@ export async function resolveOverview({
         periodsInRange: periods,
         today,
         throughISO: effectiveEndISO,
+        fy,
       });
       const budget_to_date_raw = btd.amount;
       const period_budget = parentSuppressed_ ? null : period_budget_raw;
@@ -3447,7 +3477,7 @@ export async function resolveOverview({
   ].map((r: any): any => {
     // reported is true iff the loader saw a non-zero actual - positive
     // OR negative (a credit note on 5002.5 is a real reported figure,
-    // e.g. ALL/P9 -157.03). Zero on the purchasing side is ambiguous
+    // e.g. ALL/P9 -[amount]). Zero on the purchasing side is ambiguous
     // between reported-zero and absent, so we treat it as unreported.
     const reported = r.actual != null && r.actual !== 0;
     // PR 2 addition (2026-09-01, [name] surfaced): when reported=false,
@@ -3810,7 +3840,7 @@ export async function resolveOverview({
     if (rng.kind !== "period" || displayPeriodState !== "closed_awaiting" || displaySpendSettled) return null;
     const p = rng.period_no;
     if (p == null) return null;
-    const pEnd = periodEndISO(p);
+    const pEnd = periodEndISO(p, fy);
 
     // [name] ruling 2026-09-08. Purchases line no longer renders
     // counts - copy is period-dynamic + generic ("Invoices for
@@ -3820,7 +3850,7 @@ export async function resolveOverview({
     // in the period. Reads laborActuals directly (already in scope,
     // no extra query).
     const inPeriod = (laborActuals || []).filter((r: any): any =>
-      r.week_start && periodOf(r.week_start) === p && Number(r.draft_hours || 0) > 0.004
+      r.week_start && periodOf(r.week_start, fy) === p && Number(r.draft_hours || 0) > 0.004
     );
     const draftHours = inPeriod.reduce((s: any, r: any): any => s + Number(r.draft_hours || 0), 0);
     const draftPeople = countDistinctPeople(inPeriod, workerToEmail);
@@ -3987,6 +4017,7 @@ export async function resolveOverview({
       lastCompleteWk,
       effectiveEndISO,
       todayISO: today,
+      fy,
     }),
     // [name] ruling R-63 (2026-09-03): the "as of when" answer for
     // every figure on the board. On closed ranges this equals
@@ -4279,7 +4310,7 @@ function buildStatusLine({ ticker, period_state, spend_settled, has_target, rang
 //     period_span: "P1-P8" | "P8" | null,
 //     period_last: "P8" | null,
 //   }
-function buildRangeLabels({ range, rangeComposition, overduePeriodNos = [], periodState, lastCompleteWk, effectiveEndISO, todayISO }: any): any {
+function buildRangeLabels({ range, rangeComposition, overduePeriodNos = [], periodState, lastCompleteWk, effectiveEndISO, todayISO, fy }: any): any {
   const rc = rangeComposition;
   // [name] ruling 2026-09-08. Explicit ranges that align to WHOLE
   // period boundaries render fytd-style labels (P1-P8 · closed and
@@ -4292,8 +4323,8 @@ function buildRangeLabels({ range, rangeComposition, overduePeriodNos = [], peri
     let matchStart = false;
     let matchEnd = false;
     for (let p = 1; p <= 13; p += 1) {
-      if (periodStartISO(p) === range.start) matchStart = true;
-      if (periodEndISO(p) === range.end) matchEnd = true;
+      if (periodStartISO(p, fy) === range.start) matchStart = true;
+      if (periodEndISO(p, fy) === range.end) matchEnd = true;
     }
     return matchStart && matchEnd;
   })();
@@ -4370,7 +4401,7 @@ function buildRangeLabels({ range, rangeComposition, overduePeriodNos = [], peri
     // this line does not restate that detail.
     const isUnaudited = isAwaiting && overduePeriodNos.includes(range.period_no);
     if (isAwaiting) {
-      const pEnd = periodEndISO(range.period_no);
+      const pEnd = periodEndISO(range.period_no, fy);
       const md = pEnd ? `${pEnd.slice(5, 7)}/${pEnd.slice(8, 10)}` : "";
       const suffix = isUnaudited ? "unaudited" : "figures still settling";
       horizon = md

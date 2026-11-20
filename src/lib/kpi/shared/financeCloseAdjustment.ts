@@ -87,6 +87,7 @@ export function resolveFinanceCloseAdjustment({
   periods,
   periodStatus,
   todayISO,
+  fy,
   pnlMap,
   feedByParentPeriod,
 }: any): any {
@@ -96,6 +97,7 @@ export function resolveFinanceCloseAdjustment({
       periodNo: p,
       todayISO,
       periodStatusRow: periodStatus?.get?.(p) || null,
+      fy,
     });
     if (state === "verified") verifiedPeriods.push(p);
   }

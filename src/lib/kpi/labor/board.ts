@@ -26,6 +26,7 @@ import {
   periodOf,
 } from "./periods";
 import { countDistinctPeople } from "./personCount";
+import type { FiscalYear } from "@/lib/kpi/shared/fiscalYear";
 
 const MS_PER_DAY = 86400000;
 const WEEKS_PER_PERIOD = 4;
@@ -65,11 +66,11 @@ export function computePeriodMeasures(actuals: any, elapsedWeeks: any): any {
 // Aggregate: pass the summed budget_periods (server already sums
 // member budgets per period) - the resulting per-week amount is the
 // aggregate weekly budget.
-export function buildWeekBudgets({ start, end, budget_periods }: any): any {
-  const weekStarts = weekStartsInRange(start, end);
+export function buildWeekBudgets({ start, end, budget_periods, fy }: any): any {
+  const weekStarts = weekStartsInRange(start, end, fy);
   const byPeriod = new Map((budget_periods || []).map((b: any): any => [b.period_no, Number(b.amount)]));
   return weekStarts.map((week_start: any): any => {
-    const p = periodOf(week_start);
+    const p = periodOf(week_start, fy);
     const periodAmount = p != null ? byPeriod.get(p) : null;
     // @ts-expect-error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum t
     const amount = periodAmount != null ? Math.round((periodAmount / WEEKS_PER_PERIOD) * 100) / 100 : null;
@@ -82,15 +83,15 @@ export function buildWeekBudgets({ start, end, budget_periods }: any): any {
 // (not the whole aggregate week amount). Envelope + salaried members
 // contribute nothing. `member_budgets` is a Map<accountKey,
 // budget_periods[]> already resolved per playbook 4.5.
-export function buildAggregateWeekBudgets({ start, end, member_budgets }: any): any {
-  const weekStarts = weekStartsInRange(start, end);
+export function buildAggregateWeekBudgets({ start, end, member_budgets, fy }: any): any {
+  const weekStarts = weekStartsInRange(start, end, fy);
   const memberByPeriod = new Map<any, any>();
   for (const [m, list] of member_budgets) {
     const byPeriod = new Map((list || []).map((b: any): any => [b.period_no, Number(b.amount)]));
     memberByPeriod.set(m, byPeriod);
   }
   return weekStarts.map((week_start: any): any => {
-    const p = periodOf(week_start);
+    const p = periodOf(week_start, fy);
     const per_member = {};
     let total = 0;
     let anyHasBudget = false;
@@ -152,12 +153,12 @@ export function buildAggregateWeekBudgets({ start, end, member_budgets }: any): 
 // existing days_through_yesterday behavior stands, so the Labor page
 // keeps its current semantics. The Overview passes throughISO to keep
 // labour + purchasing + revenue on the same window.
-export function computeBudgetToDateDays({ budget_periods, start, end, today, throughISO }: any): any {
-  const weeks = weekStartsInRange(start, end);
+export function computeBudgetToDateDays({ budget_periods, start, end, today, throughISO, fy }: any): any {
+  const weeks = weekStartsInRange(start, end, fy);
   if (weeks.length === 0) {
     return { amount: null, days_elapsed_current: null, days_in_current: null, current_period_no: null, closed_period_nos: [] };
   }
-  const periodsTouched = [...new Set(weeks.map((w: any): any => periodOf(w)).filter((p: any): any => p != null))].sort((a: any, b: any): any => a - b);
+  const periodsTouched = [...new Set(weeks.map((w: any): any => periodOf(w, fy)).filter((p: any): any => p != null))].sort((a: any, b: any): any => a - b);
   const budgetByPeriod = new Map((budget_periods || []).map((b: any): any => [Number(b.period_no), Number(b.amount)]));
   if (budgetByPeriod.size === 0) {
     return { amount: null, days_elapsed_current: null, days_in_current: null, current_period_no: null, closed_period_nos: [] };
@@ -174,8 +175,8 @@ export function computeBudgetToDateDays({ budget_periods, start, end, today, thr
   let daysElapsedCurrent = null;
   let daysInCurrent = null;
   for (const p of periodsTouched) {
-    const pStart = parseISO(periodStartISO(p));
-    const pEnd = parseISO(periodEndISO(p));
+    const pStart = parseISO(periodStartISO(p, fy));
+    const pEnd = parseISO(periodEndISO(p, fy));
     if (!pStart || !pEnd) continue;
     const amt = budgetByPeriod.get(p);
     // Closed: period_end < today (strictly earlier than today's date).
@@ -440,6 +441,7 @@ export function buildBoard({
   start,                // range start ISO
   end,                  // range end ISO
   today,                // ISO YYYY-MM-DD
+  fy,                   // Train 2b: the fiscal year as an input.
   throughISO,           // R-63 ([name] 2026-09-03): Overview passes this
                         // so budget-to-date days proration stops at the
                         // same edge as revenue + purchasing. Absent ->
@@ -459,14 +461,14 @@ export function buildBoard({
       account,
     };
   }
-  const selection = inferRangeSelection(start, end);
+  const selection = inferRangeSelection(start, end, fy);
   const isSinglePeriod = selection && selection.kind === "period";
   // Multi-period detection - the range spans multiple fiscal periods.
-  const weeksInRange = weekStartsInRange(start, end);
+  const weeksInRange = weekStartsInRange(start, end, fy);
   if (weeksInRange.length === 0) {
     return { applies: false, kind: "empty_range", account };
   }
-  const periodsTouched = [...new Set(weeksInRange.map((w: any): any => periodOf(w)).filter((p: any): any => p != null))].sort((a: any, b: any): any => a - b);
+  const periodsTouched = [...new Set(weeksInRange.map((w: any): any => periodOf(w, fy)).filter((p: any): any => p != null))].sort((a: any, b: any): any => a - b);
 
   // Determine budget for the range. Sum of member period budgets that
   // fall inside the range's period span. If none, no verdict possible.
@@ -530,7 +532,7 @@ export function buildBoard({
   let kind;
   if (isSinglePeriod) {
     const period_no = selection.value;
-    const pEnd = periodEndISO(period_no);
+    const pEnd = periodEndISO(period_no, fy);
     kind = pEnd < today ? "single_period_closed" : "single_period_in_progress";
   } else {
     kind = "multi_period";
@@ -584,7 +586,7 @@ export function buildBoard({
     }
     // Per-week original target: for multi-period, use each week's own
     // period budget / 4; for single-period, weekly_original_target.
-    const wPeriod = periodOf(w.week_start);
+    const wPeriod = periodOf(w.week_start, fy);
     const wBudget = budgetByPeriod.get(wPeriod);
     // @ts-expect-error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum t
     const original_target = wBudget != null ? r2(wBudget / WEEKS_PER_PERIOD) : null;
@@ -877,8 +879,8 @@ export function buildBoard({
     period_span: { first: periodsTouched[0], last: periodsTouched[periodsTouched.length - 1] },
     // Range shape
     period_no: isSinglePeriod ? selection.value : null,
-    period_start: isSinglePeriod ? periodStartISO(selection.value) : null,
-    period_end: isSinglePeriod ? periodEndISO(selection.value) : null,
+    period_start: isSinglePeriod ? periodStartISO(selection.value, fy) : null,
+    period_end: isSinglePeriod ? periodEndISO(selection.value, fy) : null,
     weeks_in_period: isSinglePeriod ? WEEKS_PER_PERIOD : null,
     // PR-A - total weeks in the requested range (multi_period gets a
     // denominator so "N of M weeks closed" can render on FYTD /
@@ -905,7 +907,7 @@ export function buildBoard({
     // range enumerates zero fiscal weeks. Callers surface the null.
     // See computeBudgetToDateDays above for the exact contract.
     budget_to_date_days: computeBudgetToDateDays({
-      budget_periods, start, end, today, throughISO,
+      budget_periods, start, end, today, throughISO, fy,
     }),
     // V37-4 - basis of the money above. Single period reads its one
     // basis; multi-period agrees only if every touched period has

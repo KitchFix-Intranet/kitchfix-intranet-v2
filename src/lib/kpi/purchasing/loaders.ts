@@ -63,6 +63,8 @@ import {
   periodStartISO, periodEndISO, periodOf,
 } from "@/lib/kpi/labor/periods";
 import { isCardAuthorization } from "@/lib/kpi/shared/rippling";
+import type { FiscalYear } from "@/lib/kpi/shared/fiscalYear";
+import { pagedSelect } from "@/lib/kpi/shared/pagedSelect";
 
 // ── constants ────────────────────────────────────────────────────────
 
@@ -153,13 +155,14 @@ function isoMax(a: any, b: any): any { return a > b ? a : b; }
 // paginateActuals uses. Extracted so the R-147 cutover splits can
 // share the read helper.
 async function readPurchasingActuals(supa: any, { members, start, end, cols, PS, sourceInclude, sourceExclude }: any): Promise<any> {
+  // Train 2b: paged via pagedSelect. purchasing_actuals.id is a uuid
+  // primary key so (txn_date, account_key, id) is unique.
   // @ts-expect-error TS7034: Variable 'out' implicitly has type 'any[]' in some locations where its type cannot be determined.
   const out = [];
   // @ts-expect-error TS7005: Variable 'out' implicitly has an 'any[]' type.
   if (!members?.length || start > end) return out;
   for (const memberChunk of chunk(members, IN_CHUNK)) {
-    let from = 0;
-    while (true) {
+    const r = await pagedSelect((lo: number, hi: number) => {
       let q = supa
         .from("purchasing_actuals")
         .select(cols)
@@ -170,16 +173,13 @@ async function readPurchasingActuals(supa: any, { members, start, end, cols, PS,
         .order("txn_date", { ascending: true })
         .order("account_key", { ascending: true })
         .order("id", { ascending: true })
-        .range(from, from + PS - 1);
+        .range(lo, hi);
       if (sourceInclude) q = q.in("source", sourceInclude);
       if (sourceExclude) q = q.neq("source", sourceExclude);
-      const r = await q;
-      if (r.error) throw r.error;
-      const rows = r.data || [];
-      for (const row of rows) out.push(row);
-      if (rows.length < PS) break;
-      from += PS;
-    }
+      return q;
+    }, { pageSize: PS });
+    if (r.error) throw r.error;
+    for (const row of r.data) out.push(row);
   }
   return out;
 }
@@ -195,46 +195,47 @@ async function readPurchasingActuals(supa: any, { members, start, end, cols, PS,
 // The status + type + invoice_number + sga_removed_amount fields are
 // only useful to the ledger's transaction-grouped render; they are
 // carried on the drill rows and dropped in default mode.
-export async function paginateInvoiceSubmissions(supa: any, { members, start, end, includeLines }: any): Promise<any> {
+export async function paginateInvoiceSubmissions(supa: any, { members, start, end, includeLines, now }: any): Promise<any> {
   const captureMembers = (members || []).filter((m: any): any => !CAPTURE_EXCLUDED_ACCOUNTS.has(m));
   if (captureMembers.length === 0) return { data: [] };
   const readStart = isoMax(start, CAPTURE_CUTOVER_ISO);
   if (readStart > end) return { data: [] };
   const PS = V6_PAGE_DEFAULT;
+  // Train 2b: paged via pagedSelect. invoice_submissions.id (uuid) is
+  // the primary key, so (invoice_date, account_key, id) is unique.
   const subs = [];
   for (const memberChunk of chunk(captureMembers, IN_CHUNK)) {
-    let from = 0;
-    while (true) {
-      const q = await supa
-        .from("invoice_submissions")
-        // [name] ruling 2026-10-06: carry the Drive links + submitter so
-        // the fold's transaction number can hyperlink to the stamped
-        // PDF. drive_urls is a Postgres text[] (NOT jsonb; from
-        // PostgREST this arrives as a real array - do NOT JSON.parse
-        // like the Sheets-era InvoiceAdmin.js:313 reads). Element 0 is
-        // the stamped PDF, which carries the GL coding that matches
-        // the figures on the board. raw_drive_url rides the wire too
-        // (original photo) but is not rendered yet. submitter_email
-        // ships with it so the uploader name is already on the wire
-        // when [name] rules on the render.
-        .select("id, account_key, vendor_id, vendor_name, invoice_number, invoice_date, total_amount, gl_breakdown, status, type, drive_urls, raw_drive_url, submitter_email")
-        .in("account_key", memberChunk)
-        .in("status", ["sent", "returned"])
-        .gte("invoice_date", readStart)
-        .lte("invoice_date", end)
-        .order("invoice_date", { ascending: true })
-        .order("account_key", { ascending: true })
-        .order("id", { ascending: true })
-        .range(from, from + PS - 1);
-      if (q.error) return { error: q.error };
-      const rows = q.data || [];
-      for (const row of rows) subs.push(row);
-      if (rows.length < PS) break;
-      from += PS;
-    }
+    const r = await pagedSelect((lo: number, hi: number) => supa
+      .from("invoice_submissions")
+      // [name] ruling 2026-10-06: carry the Drive links + submitter so
+      // the fold's transaction number can hyperlink to the stamped
+      // PDF. drive_urls is a Postgres text[] (NOT jsonb; from
+      // PostgREST this arrives as a real array - do NOT JSON.parse
+      // like the Sheets-era InvoiceAdmin.js:313 reads). Element 0 is
+      // the stamped PDF, which carries the GL coding that matches
+      // the figures on the board. raw_drive_url rides the wire too
+      // (original photo) but is not rendered yet. submitter_email
+      // ships with it so the uploader name is already on the wire
+      // when [name] rules on the render.
+      .select("id, account_key, vendor_id, vendor_name, invoice_number, invoice_date, total_amount, gl_breakdown, status, type, drive_urls, raw_drive_url, submitter_email")
+      .in("account_key", memberChunk)
+      .in("status", ["sent", "returned"])
+      .gte("invoice_date", readStart)
+      .lte("invoice_date", end)
+      .order("invoice_date", { ascending: true })
+      .order("account_key", { ascending: true })
+      .order("id", { ascending: true })
+      .range(lo, hi),
+      { pageSize: PS },
+    );
+    if (r.error) return { error: r.error };
+    for (const row of r.data) subs.push(row);
   }
   const out = [];
-  const derivedAt = new Date().toISOString();
+  // Train 2b: the clock is an input. The caller passes `now`; this
+  // stamp lands on drill rows' derived_at field and is never
+  // re-derived here.
+  const derivedAt = (now instanceof Date ? now : new Date(now)).toISOString();
   for (const s of subs) {
     const arr = Array.isArray(s.gl_breakdown) ? s.gl_breakdown : [];
     // Precompute the invoice-level SG&A total so we can tag each COGS
@@ -316,7 +317,7 @@ export async function paginateInvoiceSubmissions(supa: any, { members, start, en
 // row-level table needs the full shape.
 export const ACTUALS_COLS_DEFAULT = "source, gl_line_code, amount, account_key, txn_date";
 export const ACTUALS_COLS_DRILL   = "id, source, source_bill_id, source_line_id, account_key, gl_line_code, gl_bucket, txn_date, posting_date, amount, paid, approx_date, derived_at, vendor_or_merchant, employee_name, has_receipt, memo";
-export async function paginateActuals(supa: any, { members, start, end, pageSize, includeLines }: any): Promise<any> {
+export async function paginateActuals(supa: any, { members, start, end, pageSize, includeLines, now }: any): Promise<any> {
   const PS = pageSize && pageSize > 0 && pageSize <= V6_PAGE_DEFAULT ? pageSize : V6_PAGE_DEFAULT;
   const cols = includeLines ? ACTUALS_COLS_DRILL : ACTUALS_COLS_DEFAULT;
 
@@ -354,7 +355,7 @@ export async function paginateActuals(supa: any, { members, start, end, pageSize
       if (post.billExcluded?.error) return { error: post.billExcluded.error };
     }
     // Capture lane for capture-eligible accounts.
-    const invResp = await paginateInvoiceSubmissions(supa, { members, start: postStart, end, includeLines });
+    const invResp = await paginateInvoiceSubmissions(supa, { members, start: postStart, end, includeLines, now });
     if (invResp.error) return { error: invResp.error };
     post.invoiceEligible = invResp.data;
   }
@@ -414,7 +415,7 @@ export async function paginateActuals(supa: any, { members, start, end, pageSize
 // for presence with `row.invoice_amount != null` (or equivalent) and
 // fall back to suppressing any surface that needs the split, the way
 // CurrentPeriodTable's period-column channel split does.
-export async function paginateWeekly(supa: any, { members, start, end }: any): Promise<any> {
+export async function paginateWeekly(supa: any, { members, start, end, fy, now }: any): Promise<any> {
   const PS = V6_PAGE_DEFAULT;
 
   // R-147 cutover on the weekly grain. The view aggregates
@@ -443,35 +444,33 @@ export async function paginateWeekly(supa: any, { members, start, end }: any): P
   const captureExcluded = (members || []).filter((m: any): any => CAPTURE_EXCLUDED_ACCOUNTS.has(m));
 
   async function readViewSlice(memberSet: any, sStart: any, sEnd: any): Promise<any> {
+    // Train 2b: paged via pagedSelect. The view's grouping key is
+    // (account_key, week_start, gl_line_code, gl_bucket); adding
+    // gl_bucket to the order chain makes the sort unique.
     // @ts-expect-error TS7034: Variable 'out' implicitly has type 'any[]' in some locations where its type cannot be determined.
     const out = [];
     // @ts-expect-error TS7005: Variable 'out' implicitly has an 'any[]' type.
     if (memberSet.length === 0 || sStart > sEnd) return out;
     for (const memberChunk of chunk(memberSet, IN_CHUNK)) {
-      let from = 0;
-      while (true) {
-        const q = await supa
-          .from("v_purchasing_by_site_week")
-          .select("account_key, week_start, week_end, gl_line_code, gl_bucket, amount, line_count, bill_count, paid_amount")
-          .in("account_key", memberChunk)
-          .gte("week_start", sStart)
-          .lte("week_start", sEnd)
-          .order("account_key", { ascending: true })
-          .order("week_start", { ascending: true })
-          .order("gl_line_code", { ascending: true, nullsFirst: false })
-          .range(from, from + PS - 1);
-        if (q.error) throw q.error;
-        const rows = q.data || [];
-        for (const r of rows) out.push(r);
-        if (rows.length < PS) break;
-        from += PS;
-      }
+      const r = await pagedSelect((from: number, to: number) => supa
+        .from("v_purchasing_by_site_week")
+        .select("account_key, week_start, week_end, gl_line_code, gl_bucket, amount, line_count, bill_count, paid_amount")
+        .in("account_key", memberChunk)
+        .gte("week_start", sStart)
+        .lte("week_start", sEnd)
+        .order("account_key", { ascending: true })
+        .order("week_start", { ascending: true })
+        .order("gl_line_code", { ascending: true, nullsFirst: false })
+        .order("gl_bucket", { ascending: true, nullsFirst: false })
+        .range(from, to));
+      if (r.error) throw r.error;
+      for (const row of r.data) out.push(row);
     }
     return out;
   }
 
-  // week_start floor - same math the view uses (schema note L143-145).
-  const fyStartMs = new Date("2025-12-29T00:00:00Z").getTime();
+  // Train 2b: FY start comes from fy, not a typed-in literal.
+  const fyStartMs = new Date(fy.startISO + "T00:00:00Z").getTime();
   function weekStartOf(txnDate: any): any {
     const t = new Date(txnDate + "T00:00:00Z").getTime();
     if (!Number.isFinite(t) || t < fyStartMs) return null;
@@ -565,7 +564,7 @@ export async function paginateWeekly(supa: any, { members, start, end }: any): P
         });
         for (const w of aggregateWeekly(cardRows, { isInvoiceLane: false })) out.push(w);
 
-        const invResp = await paginateInvoiceSubmissions(supa, { members: captureEligible, start: postStart, end, includeLines: true });
+        const invResp = await paginateInvoiceSubmissions(supa, { members: captureEligible, start: postStart, end, includeLines: true, now });
         if (invResp.error) throw invResp.error;
         for (const w of aggregateWeekly(invResp.data, { isInvoiceLane: true })) out.push(w);
       }
@@ -598,22 +597,23 @@ export async function loadCogsLineCountForPeriod(supa: any, { members, periodSta
   let lineCount = 0;
   const PS = V6_PAGE_DEFAULT;
   for (const memberChunk of chunk(members, IN_CHUNK)) {
-    let from = 0;
-    while (true) {
-      const q = await supa
-        .from("v_purchasing_by_site_week")
-        .select("gl_line_code, line_count")
-        .in("account_key", memberChunk)
-        .like("gl_line_code", "3200%")
-        .gte("week_start", periodStart)
-        .lte("week_start", periodEnd)
-        .range(from, from + PS - 1);
-      if (q.error) return { error: q.error };
-      const rows = q.data || [];
-      for (const r of rows) lineCount += Number(r.line_count || 0);
-      if (rows.length < PS) break;
-      from += PS;
-    }
+    // Train 2b: paged via pagedSelect. v_purchasing_by_site_week
+    // groups on (account_key, week_start, gl_line_code, gl_bucket);
+    // the sort chain uses all four for uniqueness.
+    const r = await pagedSelect((lo: number, hi: number) => supa
+      .from("v_purchasing_by_site_week")
+      .select("account_key, week_start, gl_line_code, gl_bucket, line_count")
+      .in("account_key", memberChunk)
+      .like("gl_line_code", "3200%")
+      .gte("week_start", periodStart)
+      .lte("week_start", periodEnd)
+      .order("account_key", { ascending: true })
+      .order("week_start", { ascending: true })
+      .order("gl_line_code", { ascending: true, nullsFirst: false })
+      .order("gl_bucket", { ascending: true, nullsFirst: false })
+      .range(lo, hi), { pageSize: PS });
+    if (r.error) return { error: r.error };
+    for (const row of r.data) lineCount += Number(row.line_count || 0);
   }
   return { data: { line_count: lineCount } };
 }
@@ -629,47 +629,41 @@ export async function loadCogsLineCountForPeriod(supa: any, { members, periodSta
 // 74ms (single-account) to 250ms (ALL) for the 8-period window; the
 // call runs in parallel with the other loaders so it doesn't add
 // serial cost.
-export async function loadPriorPeriodHistory(supa: any, { members, periodNo }: any): Promise<any> {
+export async function loadPriorPeriodHistory(supa: any, { members, periodNo, fy }: any): Promise<any> {
   if (!periodNo || periodNo < 2) return { data: null };   // no prior period exists for P1
   const firstPeriod = Math.max(1, periodNo - 7);          // last 8 periods ending at current
-  const startISO = periodStartISO(firstPeriod);
-  const endISO   = periodEndISO(periodNo);
+  const startISO = periodStartISO(firstPeriod, fy);
+  const endISO   = periodEndISO(periodNo, fy);
   const IN_CHUNK_LOCAL = 100;
   const PS = 1000;
+  // Train 2b: paged via pagedSelect. v_purchasing_by_site_week groups
+  // on (account_key, week_start, gl_line_code, gl_bucket); adding
+  // account_key, gl_line_code and gl_bucket to the sort chain makes
+  // the sort unique across page boundaries.
   const byWeek = new Map<any, any>();
   for (let i = 0; i < members.length; i += IN_CHUNK_LOCAL) {
     const chunk = members.slice(i, i + IN_CHUNK_LOCAL);
-    let from = 0;
-    while (true) {
-      // R13 P0-1: sparkline must compare like-to-like with the hero,
-      // which is the KPI line only (food + packaging + vehicle).  Pull
-      // gl_line_code and filter client-side to lines beginning with
-      // 3200 / 3400 / 3500 - same predicate as kpiBudget in
-      // src/app/kpi/purchasing/lib/board.js.  Without this filter the
-      // prior-period value included reimbursable + SG&A and read as a
-      // different base than the hero it was compared against.
-      const q = await supa.from("v_purchasing_by_site_week")
-        .select("week_start, amount, gl_line_code")
-        .in("account_key", chunk)
-        .gte("week_start", startISO)
-        .lte("week_start", endISO)
-        .order("week_start", { ascending: true })
-        .range(from, from + PS - 1);
-      if (q.error) return { error: q.error };
-      const rows = q.data || [];
-      for (const r of rows) {
-        const gl = String(r.gl_line_code || "");
-        if (!(gl.startsWith("3200") || gl.startsWith("3400") || gl.startsWith("3500"))) continue;
-        const wk = r.week_start;
-        byWeek.set(wk, (byWeek.get(wk) || 0) + Number(r.amount || 0));
-      }
-      if (rows.length < PS) break;
-      from += PS;
+    const r = await pagedSelect((lo: number, hi: number) => supa.from("v_purchasing_by_site_week")
+      .select("account_key, week_start, amount, gl_line_code, gl_bucket")
+      .in("account_key", chunk)
+      .gte("week_start", startISO)
+      .lte("week_start", endISO)
+      .order("account_key", { ascending: true })
+      .order("week_start", { ascending: true })
+      .order("gl_line_code", { ascending: true, nullsFirst: false })
+      .order("gl_bucket", { ascending: true, nullsFirst: false })
+      .range(lo, hi), { pageSize: PS });
+    if (r.error) return { error: r.error };
+    for (const row of r.data) {
+      const gl = String(row.gl_line_code || "");
+      if (!(gl.startsWith("3200") || gl.startsWith("3400") || gl.startsWith("3500"))) continue;
+      const wk = row.week_start;
+      byWeek.set(wk, (byWeek.get(wk) || 0) + Number(row.amount || 0));
     }
   }
   const byPeriod = new Map<any, any>();
   for (const [wk, amt] of byWeek) {
-    const p = periodOf(wk);
+    const p = periodOf(wk, fy);
     if (p >= firstPeriod && p <= periodNo) {
       byPeriod.set(p, (byPeriod.get(p) || 0) + amt);
     }
@@ -706,31 +700,27 @@ export async function loadPriorPeriodHistory(supa: any, { members, periodNo }: a
 // only if account_key is null too): we specifically WANT the
 // gl_line_code=NULL rows.
 export async function loadPending(supa: any, { members, start, end }: any): Promise<any> {
+  // Train 2b: paged via pagedSelect. source_line_id is unique per
+  // purchasing_actuals row for the rippling_spend lane.
   let amount = 0;
   let line_count = 0;
   const PS = V6_PAGE_DEFAULT;
   for (const memberChunk of chunk(members, IN_CHUNK)) {
-    let from = 0;
-    while (true) {
-      const q = await supa
-        .from("purchasing_actuals")
-        .select("amount, source_line_id")
-        .eq("source", "rippling_spend")
-        .eq("excluded", false)
-        .is("gl_line_code", null)
-        .in("account_key", memberChunk)
-        .gte("txn_date", start)
-        .lte("txn_date", end)
-        .order("source_line_id", { ascending: true })
-        .range(from, from + PS - 1);
-      if (q.error) return { error: q.error };
-      const rows = q.data || [];
-      for (const r of rows) {
-        amount += Number(r.amount || 0);
-        line_count += 1;
-      }
-      if (rows.length < PS) break;
-      from += PS;
+    const r = await pagedSelect((lo: number, hi: number) => supa
+      .from("purchasing_actuals")
+      .select("amount, source_line_id")
+      .eq("source", "rippling_spend")
+      .eq("excluded", false)
+      .is("gl_line_code", null)
+      .in("account_key", memberChunk)
+      .gte("txn_date", start)
+      .lte("txn_date", end)
+      .order("source_line_id", { ascending: true })
+      .range(lo, hi), { pageSize: PS });
+    if (r.error) return { error: r.error };
+    for (const row of r.data) {
+      amount += Number(row.amount || 0);
+      line_count += 1;
     }
   }
   return {
@@ -748,13 +738,22 @@ export async function fetchMembers(supa: any, account: any): Promise<any> {
     // [name] ruling 2026-10-06: retired accounts (active=false, today
     // CHI - IL + CIN - FL) are not portfolio members. .neq (not .eq
     // true) so a new account inserted without the flag does not vanish.
-    const q = await supa.from("accounts").select("team_key").neq("team_key", "CORP").neq("active", false).order("team_key");
-    return q.error ? { error: q.error } : { members: (q.data || []).map((r: any): any => r.team_key) };
+    // Train 2b: paged via pagedSelect. team_key is the accounts
+    // primary key.
+    const q = await pagedSelect((from: number, to: number) =>
+      supa.from("accounts").select("team_key")
+        .neq("team_key", "CORP").neq("active", false)
+        .order("team_key").range(from, to));
+    return q.error ? { error: q.error } : { members: q.data.map((r: any): any => r.team_key) };
   }
   if (account === "EAST" || account === "WEST") {
     const regionValue = account === "EAST" ? "East" : "West";
-    const q = await supa.from("accounts").select("team_key").neq("team_key", "CORP").neq("active", false).eq("region", regionValue).order("team_key");
-    return q.error ? { error: q.error } : { members: (q.data || []).map((r: any): any => r.team_key) };
+    const q = await pagedSelect((from: number, to: number) =>
+      supa.from("accounts").select("team_key")
+        .neq("team_key", "CORP").neq("active", false)
+        .eq("region", regionValue)
+        .order("team_key").range(from, to));
+    return q.error ? { error: q.error } : { members: q.data.map((r: any): any => r.team_key) };
   }
   return { members: [account] };
 }
@@ -774,32 +773,29 @@ export async function fetchMembers(supa: any, account: any): Promise<any> {
 // .range(), chunk members through IN_CHUNK, walk pages until a short
 // page returns.
 export async function loadPurchasingBudgets(supa: any, accounts: any, fiscalYear: any): Promise<any> {
+  // Train 2b: paged via pagedSelect. kpi_budgets primary key is
+  // (account_key, line_code, fiscal_year, period_no); fixing
+  // fiscal_year leaves (account_key, line_code, period_no) unique.
   const byLine = new Map<any, any>();
   const PS = V6_PAGE_DEFAULT;
   for (const memberChunk of chunk(accounts, IN_CHUNK)) {
-    let from = 0;
-    while (true) {
-      const q = await supa.from("kpi_budgets")
-        .select("account_key, line_code, period_no, amount")
-        .eq("fiscal_year", fiscalYear)
-        .in("account_key", memberChunk)
-        .neq("line_code", "3100.1")     // labor lives in labor route
-        .neq("line_code", "3100.2")     // salaried; not in scope for purchasing v1
-        .order("account_key", { ascending: true })
-        .order("line_code", { ascending: true })
-        .order("period_no", { ascending: true })
-        .range(from, from + PS - 1);
-      if (q.error) return { error: q.error };
-      const rows = q.data || [];
-      for (const r of rows) {
-        const gl = String(r.line_code);
-        const acct = String(r.account_key);
-        if (!byLine.has(gl)) byLine.set(gl, new Map<any, any>());
-        if (!byLine.get(gl).has(acct)) byLine.get(gl).set(acct, new Map<any, any>());
-        byLine.get(gl).get(acct).set(Number(r.period_no), Number(r.amount));
-      }
-      if (rows.length < PS) break;
-      from += PS;
+    const r = await pagedSelect((lo: number, hi: number) => supa.from("kpi_budgets")
+      .select("account_key, line_code, period_no, amount")
+      .eq("fiscal_year", fiscalYear)
+      .in("account_key", memberChunk)
+      .neq("line_code", "3100.1")     // labor lives in labor route
+      .neq("line_code", "3100.2")     // salaried; not in scope for purchasing v1
+      .order("account_key", { ascending: true })
+      .order("line_code", { ascending: true })
+      .order("period_no", { ascending: true })
+      .range(lo, hi), { pageSize: PS });
+    if (r.error) return { error: r.error };
+    for (const row of r.data) {
+      const gl = String(row.line_code);
+      const acct = String(row.account_key);
+      if (!byLine.has(gl)) byLine.set(gl, new Map<any, any>());
+      if (!byLine.get(gl).has(acct)) byLine.get(gl).set(acct, new Map<any, any>());
+      byLine.get(gl).get(acct).set(Number(row.period_no), Number(row.amount));
     }
   }
   return { data: byLine };
@@ -808,19 +804,23 @@ export async function loadPurchasingBudgets(supa: any, accounts: any, fiscalYear
 // ── sentinel probe ───────────────────────────────────────────────────
 
 // Compute the sentinel: TBR - FL, P8, gl 3200.1.
-export async function computeSentinel(supa: any): Promise<any> {
-  const p8start = periodStartISO(8);
-  const p8end = periodEndISO(8);
-  const q = await supa.from("purchasing_actuals")
-    .select("amount")
+export async function computeSentinel(supa: any, fy: FiscalYear): Promise<any> {
+  // Train 2b: paged via pagedSelect. purchasing_actuals.id is the
+  // table primary key.
+  const p8start = periodStartISO(8, fy);
+  const p8end = periodEndISO(8, fy);
+  const q = await pagedSelect((from: number, to: number) => supa.from("purchasing_actuals")
+    .select("id, amount")
     .eq("source", "billcom")
     .eq("excluded", false)
     .eq("account_key", "TBR - FL")
     .eq("gl_line_code", "3200.1")
     .gte("txn_date", p8start)
-    .lte("txn_date", p8end);
+    .lte("txn_date", p8end)
+    .order("id", { ascending: true })
+    .range(from, to));
   if (q.error) return { error: q.error };
-  const total = (q.data || []).reduce((s: any, r: any): any => s + Number(r.amount || 0), 0);
+  const total = q.data.reduce((s: any, r: any): any => s + Number(r.amount || 0), 0);
   return {
     data: {
       account:      "TBR - FL",
@@ -828,7 +828,7 @@ export async function computeSentinel(supa: any): Promise<any> {
       range:        { start: p8start, end: p8end },
       gl_line_code: "3200.1",
       amount:       Math.round(total * 100) / 100,
-      line_count:   (q.data || []).length,
+      line_count:   q.data.length,
     },
   };
 }
@@ -845,15 +845,17 @@ export async function computeSentinel(supa: any): Promise<any> {
 // the labor helper is not exported and the module boundary keeps the
 // two routes independent - this is a live query, not a fork of logic).
 export async function loadAccountsDirectory(supa: any): Promise<any> {
-  const q = await supa.from("accounts")
+  // Train 2b: paged via pagedSelect. team_key is the accounts PK.
+  const q = await pagedSelect((from: number, to: number) => supa.from("accounts")
     .select("team_key, region, name, city, state")
     .neq("team_key", "CORP")
     .neq("active", false)
-    .order("team_key");
+    .order("team_key")
+    .range(from, to));
   if (q.error) return { error: q.error };
   const salaried = new Set(["CIN - KY", "TBJ - NY"]);
   return {
-    data: (q.data || []).map((r: any): any => ({
+    data: q.data.map((r: any): any => ({
       team_key: r.team_key,
       region: r.region,
       team_name: r.name || null,
@@ -866,7 +868,7 @@ export async function loadAccountsDirectory(supa: any): Promise<any> {
 
 // ── freshness read ───────────────────────────────────────────────────
 
-export async function loadFreshness(supa: any): Promise<any> {
+export async function loadFreshness(supa: any, { now }: any = {}): Promise<any> {
   // PR-2 R4 Part E: freshness pill splits `Bills current` from
   // `cards through <date>`. `cards_through` = the newest txn_date on
   // any rippling_spend row (excluded=false). Cards land in the derive
@@ -903,8 +905,11 @@ export async function loadFreshness(supa: any): Promise<any> {
     ? (bc.data.completed_at > rp.data.completed_at ? bc.data.completed_at : rp.data.completed_at)
     : (bc.data?.completed_at || rp.data?.completed_at || null);
   const reportAt = rr.data?.completed_at || null;
+  // Train 2b: the clock is an input. `now` is a timestamp from the
+  // caller; hour math reads it here, never Date.now().
+  const nowMs = (now instanceof Date ? now : new Date(now)).getTime();
   const reportAgeHours = reportAt
-    ? Math.round((Date.now() - new Date(reportAt).getTime()) / 3600000)
+    ? Math.round((nowMs - new Date(reportAt).getTime()) / 3600000)
     : null;
   const REPORT_STALE_LIMIT_H = 36;
   const reportStale = reportAgeHours == null ? true : reportAgeHours > REPORT_STALE_LIMIT_H;
@@ -958,8 +963,9 @@ export async function loadLedgerRows(supa: any, { members, start, end, glLineCod
   const rows = [];
   const PS = V6_PAGE_DEFAULT;
   for (const memberChunk of chunk(members, IN_CHUNK)) {
-    let from = 0;
-    while (true) {
+    // Train 2b: paged via pagedSelect. purchasing_actuals.id is the
+    // primary key so (txn_date, id) is unique.
+    const r = await pagedSelect((lo: number, hi: number) => {
       let q = supa.from("purchasing_actuals")
         .select("id, source, source_bill_id, source_line_id, account_key, gl_line_code, txn_date, amount, vendor_or_merchant")
         .in("account_key", memberChunk)
@@ -968,16 +974,13 @@ export async function loadLedgerRows(supa: any, { members, start, end, glLineCod
         .lte("txn_date", end)
         .order("txn_date", { ascending: true })
         .order("id", { ascending: true })
-        .range(from, from + PS - 1);
+        .range(lo, hi);
       if (glLineCode) q = q.eq("gl_line_code", glLineCode);
       else if (glLikePrefix) q = q.like("gl_line_code", glLikePrefix);
-      const r = await q;
-      if (r.error) return { error: r.error };
-      const data = r.data || [];
-      for (const row of data) rows.push(row);
-      if (data.length < PS) break;
-      from += PS;
-    }
+      return q;
+    }, { pageSize: PS });
+    if (r.error) return { error: r.error };
+    for (const row of r.data) rows.push(row);
   }
   // Total (uncapped) - this must equal the bucket hero for Check 9.
   const totalAmount = rows.reduce((s: any, r: any): any => s + Number(r.amount || 0), 0);
@@ -1029,7 +1032,7 @@ export async function loadLedgerRows(supa: any, { members, start, end, glLineCod
   };
 }
 
-export async function loadCardCharges(supa: any, { members, start, end, cap = 50, reportOnlyPromise = null }: any): Promise<any> {
+export async function loadCardCharges(supa: any, { members, start, end, today, cap = 50, reportOnlyPromise = null }: any): Promise<any> {
   // Uncoded card charges - rippling_spend rows with gl_line_code IS NULL
   // PLUS report-only pending rows (parents in rippling_report_only_pending_v1
   // that have not yet landed in purchasing_actuals).
@@ -1059,25 +1062,20 @@ export async function loadCardCharges(supa: any, { members, start, end, cap = 50
   const rows = [];
   const PS = V6_PAGE_DEFAULT;
   for (const memberChunk of chunk(members, IN_CHUNK)) {
-    let from = 0;
-    while (true) {
-      const r = await supa.from("purchasing_actuals")
-        .select("id, source_line_id, account_key, txn_date, amount, vendor_or_merchant, gl_line_code")
-        .in("account_key", memberChunk)
-        .eq("excluded", false)
-        .eq("source", "rippling_spend")
-        .is("gl_line_code", null)
-        .gte("txn_date", start)
-        .lte("txn_date", end)
-        .order("txn_date", { ascending: true })
-        .order("id", { ascending: true })
-        .range(from, from + PS - 1);
-      if (r.error) return { error: r.error };
-      const data = r.data || [];
-      for (const row of data) rows.push(row);
-      if (data.length < PS) break;
-      from += PS;
-    }
+    // Train 2b: paged via pagedSelect. id is unique.
+    const rr = await pagedSelect((lo: number, hi: number) => supa.from("purchasing_actuals")
+      .select("id, source_line_id, account_key, txn_date, amount, vendor_or_merchant, gl_line_code")
+      .in("account_key", memberChunk)
+      .eq("excluded", false)
+      .eq("source", "rippling_spend")
+      .is("gl_line_code", null)
+      .gte("txn_date", start)
+      .lte("txn_date", end)
+      .order("txn_date", { ascending: true })
+      .order("id", { ascending: true })
+      .range(lo, hi), { pageSize: PS });
+    if (rr.error) return { error: rr.error };
+    for (const row of rr.data) rows.push(row);
   }
   // F-11 (d): consume the shared report-only read. If the shared
   // promise is absent (no caller passed one), fall back to empty so
@@ -1168,7 +1166,10 @@ export async function loadCardCharges(supa: any, { members, start, end, cap = 50
   // CurrentPeriodReview's Needs Review headline ([name] ruling 2026-09-24)
   // so the headline picks the same source the fold uses instead of
   // the compliance panel (which reads a different table).
-  const todayIso = new Date().toISOString().slice(0, 10);
+  // Train 2b: the clock is an input. `today` is a YYYY-MM-DD from the
+  // caller; the oldest-age calculation reads it here rather than
+  // re-deriving a timestamp.
+  const todayIso = String(today).slice(0, 10);
   const todayMs = new Date(todayIso + "T00:00:00Z").getTime();
   let oldestAgeDays = 0;
   for (const r of enriched) {
@@ -1238,35 +1239,31 @@ export async function loadVendorRollup(supa: any, { members, start, end }: any):
   };
 
   // Lane 1: bill.com via named view (vendor_id + vendor_name).
+  // Train 2b: paged via pagedSelect. Sort id is unique per
+  // purchasing_actuals (the view's underlying primary key).
   for (const memberChunk of chunk(members, IN_CHUNK)) {
-    let from = 0;
-    while (true) {
-      const r = await supa.from("v_purchasing_actuals_billcom_named")
-        .select("account_key, gl_line_code, amount, vendor_id, vendor_name, vendor_resolved")
-        .in("account_key", memberChunk)
-        .eq("excluded", false)
-        .gte("txn_date", start)
-        .lte("txn_date", end)
-        .order("id", { ascending: true })
-        .range(from, from + PS - 1);
-      if (r.error) return { error: r.error };
-      const data = r.data || [];
-      for (const row of data) {
-        const key = `bill:${row.vendor_id || "__UNRESOLVED__"}`;
-        const b = ensureBucket(key, {
-          vendor_id: row.vendor_id,
-          name: row.vendor_name,
-          resolved: !!row.vendor_resolved,
-          source: "bill",
-        });
-        const amt = Number(row.amount || 0);
-        b.spend += amt;
-        b.spend_bill += amt;
-        b.line_count += 1;
-        applyGl(b, String(row.gl_line_code || ""), amt);
-      }
-      if (data.length < PS) break;
-      from += PS;
+    const r = await pagedSelect((lo: number, hi: number) => supa.from("v_purchasing_actuals_billcom_named")
+      .select("id, account_key, gl_line_code, amount, vendor_id, vendor_name, vendor_resolved")
+      .in("account_key", memberChunk)
+      .eq("excluded", false)
+      .gte("txn_date", start)
+      .lte("txn_date", end)
+      .order("id", { ascending: true })
+      .range(lo, hi), { pageSize: PS });
+    if (r.error) return { error: r.error };
+    for (const row of r.data) {
+      const key = `bill:${row.vendor_id || "__UNRESOLVED__"}`;
+      const b = ensureBucket(key, {
+        vendor_id: row.vendor_id,
+        name: row.vendor_name,
+        resolved: !!row.vendor_resolved,
+        source: "bill",
+      });
+      const amt = Number(row.amount || 0);
+      b.spend += amt;
+      b.spend_bill += amt;
+      b.line_count += 1;
+      applyGl(b, String(row.gl_line_code || ""), amt);
     }
   }
 
@@ -1274,37 +1271,32 @@ export async function loadVendorRollup(supa: any, { members, start, end }: any):
   // the raw merchant string. gl_line_code IS NOT NULL to exclude
   // uncoded card charges - those live in loadCardCharges/coding strip.
   for (const memberChunk of chunk(members, IN_CHUNK)) {
-    let from = 0;
-    while (true) {
-      const r = await supa.from("purchasing_actuals")
-        .select("account_key, gl_line_code, amount, vendor_or_merchant")
-        .in("account_key", memberChunk)
-        .eq("excluded", false)
-        .eq("source", "rippling_spend")
-        .not("gl_line_code", "is", null)
-        .gte("txn_date", start)
-        .lte("txn_date", end)
-        .order("id", { ascending: true })
-        .range(from, from + PS - 1);
-      if (r.error) return { error: r.error };
-      const data = r.data || [];
-      for (const row of data) {
-        const merchant = (row.vendor_or_merchant || "").trim();
-        const key = `card:${merchant || "__UNKNOWN__"}`;
-        const b = ensureBucket(key, {
-          vendor_id: null,
-          name: merchant || null,
-          resolved: !!merchant,
-          source: "card",
-        });
-        const amt = Number(row.amount || 0);
-        b.spend += amt;
-        b.spend_card += amt;
-        b.line_count += 1;
-        applyGl(b, String(row.gl_line_code || ""), amt);
-      }
-      if (data.length < PS) break;
-      from += PS;
+    // Train 2b: paged via pagedSelect. id is the purchasing_actuals PK.
+    const r = await pagedSelect((lo: number, hi: number) => supa.from("purchasing_actuals")
+      .select("id, account_key, gl_line_code, amount, vendor_or_merchant")
+      .in("account_key", memberChunk)
+      .eq("excluded", false)
+      .eq("source", "rippling_spend")
+      .not("gl_line_code", "is", null)
+      .gte("txn_date", start)
+      .lte("txn_date", end)
+      .order("id", { ascending: true })
+      .range(lo, hi), { pageSize: PS });
+    if (r.error) return { error: r.error };
+    for (const row of r.data) {
+      const merchant = (row.vendor_or_merchant || "").trim();
+      const key = `card:${merchant || "__UNKNOWN__"}`;
+      const b = ensureBucket(key, {
+        vendor_id: null,
+        name: merchant || null,
+        resolved: !!merchant,
+        source: "card",
+      });
+      const amt = Number(row.amount || 0);
+      b.spend += amt;
+      b.spend_card += amt;
+      b.line_count += 1;
+      applyGl(b, String(row.gl_line_code || ""), amt);
     }
   }
 
@@ -1370,41 +1362,27 @@ export async function loadVendorRollup(supa: any, { members, start, end }: any):
 export async function loadCompliance(supa: any, { members, start, end, today }: any): Promise<any> {
   const PS = V6_PAGE_DEFAULT;
   const rows = [];
-  let from = 0;
-  while (true) {
-    const q = await supa.from("rippling_report_txns_latest")
-      .select("purchased_at, amount, work_location, employee, has_receipt, approval_state, category, raw")
-      .ilike("category", "%please select%")
-      .gte("purchased_at", start)
-      .lte("purchased_at", end)
-      .order("purchased_at", { ascending: true })
-      .range(from, from + PS - 1);
-    if (q.error) return { error: q.error };
-    const data = q.data || [];
-    // [name] ruling 2026-09-24. Rippling emits a Card Authorization
-    // (swipe hold) and a separate Card Transaction (settled charge)
-    // for the same purchase; both carry the operator's category. Left
-    // in, an uncoded purchase inflates this count roughly 2x and
-    // misattributes work to named people. R-148C already excludes the
-    // hold from purchasing_actuals; this filter matches the compliance
-    // read to the same shape.
-    //
-    // NULL guard: raw->>'Object Type' is null for report rows landed
-    // before 2026-07-28 (Rippling only started emitting the field
-    // then). A SQL `<> 'Card Authorization'` would evaluate NULL to
-    // NULL and drop them, silently losing real charges. Filter in JS
-    // so the null case is explicit: keep the row unless Object Type
-    // is exactly the string "Card Authorization".
-    //
-    // Same read path as CC task #83 (key auth-pair rule on Object
-    // Type instead of inferring hold-shape from blank posted_date +
-    // approval_state); the derive-side change lives in #83, not here.
-    for (const r of data) {
-      if (isCardAuthorization(r.raw)) continue;
-      rows.push(r);
-    }
-    if (data.length < PS) break;
-    from += PS;
+  // Train 2b: paged via pagedSelect. rippling_report_txns_latest.id
+  // is a bigint primary key; sort (purchased_at, id) is unique.
+  const r = await pagedSelect((lo: number, hi: number) => supa.from("rippling_report_txns_latest")
+    .select("id, purchased_at, amount, work_location, employee, has_receipt, approval_state, category, raw")
+    .ilike("category", "%please select%")
+    .gte("purchased_at", start)
+    .lte("purchased_at", end)
+    .order("purchased_at", { ascending: true })
+    .order("id", { ascending: true })
+    .range(lo, hi), { pageSize: PS });
+  if (r.error) return { error: r.error };
+  // [name] ruling 2026-09-24. Rippling emits a Card Authorization
+  // (swipe hold) and a separate Card Transaction (settled charge)
+  // for the same purchase; both carry the operator's category. Left
+  // in, an uncoded purchase inflates this count roughly 2x and
+  // misattributes work to named people. R-148C already excludes the
+  // hold from purchasing_actuals; this filter matches the compliance
+  // read to the same shape.
+  for (const row of r.data) {
+    if (isCardAuthorization(row.raw)) continue;
+    rows.push(row);
   }
 
   // Resolve work_location label -> account_key. The map keys by
@@ -1415,12 +1393,19 @@ export async function loadCompliance(supa: any, { members, start, end, today }: 
   const labels = [...new Set(rows.map((r: any): any => r.work_location).filter(Boolean))];
   const labelToKey = new Map<any, any>();
   if (labels.length > 0) {
+    // Train 2b: paged via pagedSelect. work_location_label is not
+    // guaranteed unique (Corp/Remote labels map to several
+    // work_location_id rows), so we also order by work_location_id
+    // (the table primary key) to make the sort unique.
     for (const chunkLabels of chunk(labels, IN_CHUNK)) {
-      const mr = await supa.from("spend_work_location_site_map")
-        .select("work_location_label, account_key")
-        .in("work_location_label", chunkLabels);
+      const mr = await pagedSelect((from: number, to: number) => supa.from("spend_work_location_site_map")
+        .select("work_location_label, account_key, work_location_id")
+        .in("work_location_label", chunkLabels)
+        .order("work_location_label")
+        .order("work_location_id")
+        .range(from, to));
       if (mr.error) return { error: mr.error };
-      for (const m of mr.data || []) {
+      for (const m of mr.data) {
         if (!labelToKey.has(m.work_location_label)) {
           labelToKey.set(m.work_location_label, m.account_key || null);
         }
@@ -1574,10 +1559,15 @@ export async function loadCompliance(supa: any, { members, start, end, today }: 
     // self-contained and its assertions don't depend on parallel-load
     // ordering. loadAccountsDirectory also fetches these fields for the
     // rail; the duplication is worth the isolation.
-    const arResp = await supa.from("accounts").select("team_key, region").neq("team_key", "CORP").neq("active", false);
+    // Train 2b: paged via pagedSelect. team_key is the accounts PK.
+    const arResp = await pagedSelect((from: number, to: number) => supa.from("accounts")
+      .select("team_key, region")
+      .neq("team_key", "CORP").neq("active", false)
+      .order("team_key")
+      .range(from, to));
     if (arResp.error) return { error: arResp.error };
     const regionByKey = new Map<any, any>();
-    for (const row of arResp.data || []) regionByKey.set(row.team_key, row.region);
+    for (const row of arResp.data) regionByKey.set(row.team_key, row.region);
     const east = { count: 0, amount: 0 };
     const west = { count: 0, amount: 0 };
     const other = { count: 0, amount: 0, keys: new Set() };

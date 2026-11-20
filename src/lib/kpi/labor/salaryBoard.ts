@@ -39,23 +39,30 @@
 // a dollar figure.
 
 import { countDistinctPeople } from "./personCount";
+import type { FiscalYear } from "@/lib/kpi/shared/fiscalYear";
+import { pagedSelect } from "@/lib/kpi/shared/pagedSelect";
 
 function r2(n: any): any { return Math.round((Number(n) || 0) * 100) / 100; }
 
-// FIN-2027 W1 PR-A year-safety: fiscalYear is now a parameter with
-// FY2026 default so existing callers stay byte-identical.
 /**
  * Load 3100.2 (salary) budgets per (account, period).
  * @returns {Promise<{ byAccount: Map<string, Map<number, number>>, error?: string }>}
  */
-export async function load3100_2Budgets(supa: any, members: any, fiscalYear: any = 2026): Promise<any> {
+export async function load3100_2Budgets(supa: any, members: any, fy: FiscalYear): Promise<any> {
   if (!members || members.length === 0) return { byAccount: new Map<any, any>() };
-  const q = await supa
+  // Train 2b: paged via pagedSelect. kpi_budgets primary key is
+  // (account_key, line_code, fiscal_year, period_no); line_code +
+  // fiscal_year are fixed by the filter, so (account_key, period_no)
+  // is unique in the result set.
+  const q = await pagedSelect((from: number, to: number) => supa
     .from("kpi_budgets")
     .select("account_key, period_no, amount")
     .in("account_key", members)
     .eq("line_code", "3100.2")
-    .eq("fiscal_year", fiscalYear);
+    .eq("fiscal_year", fy.year)
+    .order("account_key")
+    .order("period_no")
+    .range(from, to));
   if (q.error) return { byAccount: new Map<any, any>(), error: q.error.message };
   const byAccount = new Map<any, any>();
   for (const r of q.data || []) {
@@ -72,23 +79,21 @@ export async function load3100_2Budgets(supa: any, members: any, fiscalYear: any
  */
 export async function loadSalaryActuals(supa: any, members: any, start: any, end: any): Promise<any> {
   if (!members || members.length === 0) return { rows: [] };
-  const PS = 1000;
-  const out = [];
-  let from = 0;
-  while (true) {
-    const q = await supa
-      .from("labor_salary_actuals")
-      .select("account_key, worker_id, week_start, amount, annual_comp_at_time")
-      .in("account_key", members)
-      .gte("week_start", start)
-      .lte("week_start", end)
-      .range(from, from + PS - 1);
-    if (q.error) return { rows: [], error: q.error.message };
-    for (const r of q.data || []) out.push(r);
-    if ((q.data || []).length < PS) break;
-    from += PS;
-  }
-  return { rows: out };
+  // Train 2b: paged via pagedSelect. labor_salary_actuals is grained
+  // by (account_key, worker_id, week_start); sorting on all three
+  // yields a unique order within the filter.
+  const q = await pagedSelect((from: number, to: number) => supa
+    .from("labor_salary_actuals")
+    .select("account_key, worker_id, week_start, amount, annual_comp_at_time")
+    .in("account_key", members)
+    .gte("week_start", start)
+    .lte("week_start", end)
+    .order("account_key")
+    .order("week_start")
+    .order("worker_id")
+    .range(from, to));
+  if (q.error) return { rows: [], error: q.error.message };
+  return { rows: q.data };
 }
 
 // Turn a labor_salary_actuals row into a labor_actuals-shaped row so
@@ -102,7 +107,7 @@ export async function loadSalaryActuals(supa: any, members: any, start: any, end
 // merge is not on the Overview code path (Overview calls buildBoard
 // directly), so the resolver runs an inline equivalent using this
 // helper + mergeBudgetPeriods.
-export function shapeSalaryRow(r: any): any {
+export function shapeSalaryRow(r: any, fy: FiscalYear): any {
   const wsD = new Date(`${r.week_start}T00:00:00.000Z`);
   wsD.setUTCDate(wsD.getUTCDate() + 6);
   const weekEnd = wsD.toISOString().slice(0, 10);
@@ -113,7 +118,7 @@ export function shapeSalaryRow(r: any): any {
     line_code: "3100.2",
     week_start: r.week_start,
     week_end: weekEnd,
-    fiscal_year: 2026,
+    fiscal_year: fy.year,
     period_no: null,
     week_source: "salary_derive",
     hours_regular: 0,
@@ -196,6 +201,7 @@ export function withSalary(body: any, {
   start,
   end,
   today,
+  fy,
   buildBoard,
   buildWeekBudgets,
   salary3100_2,
@@ -223,7 +229,7 @@ export function withSalary(body: any, {
 
   // 3. Merge actuals + salary rows (shaped for buildBoard).
   const hourlyActuals = body.actuals || [];
-  const salaryActualsShaped = salaryRows.map(shapeSalaryRow);
+  const salaryActualsShaped = salaryRows.map((r: any) => shapeSalaryRow(r, fy));
   const mergedActuals = hourlyActuals.concat(salaryActualsShaped);
 
   // 2026-11-10. Per-week actual payroll split, carried on the merged

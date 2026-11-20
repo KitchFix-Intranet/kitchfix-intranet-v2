@@ -27,6 +27,8 @@ import {
   periodEndISO,
   r93FytdEndISO,
 } from "@/lib/kpi/labor/periods";
+import type { FiscalYear } from "@/lib/kpi/shared/fiscalYear";
+import { pagedSelect } from "@/lib/kpi/shared/pagedSelect";
 
 const IN_CHUNK = 100;
 const PS_DEFAULT = 1000;
@@ -54,12 +56,16 @@ export const ALSO_TRACKED_LINE_CODES = ["5002.1", "5002.5", "5017.3"];
 // source_ref }>. The Overview resolver DERIVES calendar-closed from
 // periods.js AND consults this record; verified is authoritative from
 // the row.
-export async function loadPeriodStatus(supa: any, fiscalYear: any = 2026): Promise<any> {
-  const q = await supa
+export async function loadPeriodStatus(supa: any, fiscalYear: number): Promise<any> {
+  // Train 2b: paged via pagedSelect. Sort (fiscal_year, period_no) is
+  // unique per the kpi_period_status primary key; the row set is 13
+  // rows today, so one page clears the whole year.
+  const q = await pagedSelect((from: number, to: number) => supa
     .from("kpi_period_status")
     .select("period_no, closed_at, verified_at, verified_by, source_ref")
     .eq("fiscal_year", fiscalYear)
-    .order("period_no");
+    .order("period_no")
+    .range(from, to));
   if (q.error) return { error: q.error, scope: "kpi_period_status" };
   const out = new Map<any, any>();
   for (const r of q.data || []) {
@@ -93,13 +99,20 @@ export async function loadAccountFlags(supa: any): Promise<any> {
   // Overview keeps rendering. Post-migration the resolver reads the
   // column value directly. The `accountRevenueModel` helper on the
   // resolver side handles the null-revenue_model row transparently.
-  let q = await supa
+  //
+  // Train 2b: paged via pagedSelect. Sort account_key is unique per
+  // the kpi_account_flags primary key.
+  let q = await pagedSelect((from: number, to: number) => supa
     .from("kpi_account_flags")
-    .select("account_key, sc_revenue_live, revenue_model, set_at, set_by");
+    .select("account_key, sc_revenue_live, revenue_model, set_at, set_by")
+    .order("account_key")
+    .range(from, to));
   if (q.error) {
-    q = await supa
+    q = await pagedSelect((from: number, to: number) => supa
       .from("kpi_account_flags")
-      .select("account_key, sc_revenue_live, set_at, set_by");
+      .select("account_key, sc_revenue_live, set_at, set_by")
+      .order("account_key")
+      .range(from, to));
     if (q.error) return { error: q.error, scope: "kpi_account_flags" };
   }
   const out = new Map<any, any>();
@@ -130,18 +143,28 @@ export async function loadAccountFlags(supa: any): Promise<any> {
 // Returns Map<account_key, Map<period_no, Map<gl_line_code, adjusting_je_sum>>>.
 // gl_line_code: "3200" (food) or "3400" (packaging + supplies summed).
 // adjusting_je is the SIGNED sum for the (account, period, gl) tuple.
-export async function loadInventoryAdjustments(supa: any, { members, periods, fiscalYear = 2026 }: any): Promise<any> {
+export async function loadInventoryAdjustments(supa: any, { members, periods, fiscalYear }: any): Promise<any> {
   if (!members || members.length === 0 || !periods || periods.length === 0) {
     return { data: new Map<any, any>() };
   }
   const out = new Map<any, any>();
   for (const memberChunk of chunk(members, IN_CHUNK)) {
-    const q = await supa
+    // Train 2b: paged via pagedSelect. inventory_adjustments is
+    // grained by (account_key, fiscal_year, period_no, category,
+    // gl_line_code); fiscal_year is fixed by the filter, so the
+    // sort chain (account_key, period_no, category, gl_line_code)
+    // is unique within the result set.
+    const q = await pagedSelect((from: number, to: number) => supa
       .from("inventory_adjustments")
-      .select("account_key, period_no, gl_line_code, adjusting_je")
+      .select("account_key, period_no, gl_line_code, adjusting_je, category")
       .eq("fiscal_year", fiscalYear)
       .in("account_key", memberChunk)
-      .in("period_no", periods);
+      .in("period_no", periods)
+      .order("account_key")
+      .order("period_no")
+      .order("category", { nullsFirst: false })
+      .order("gl_line_code")
+      .range(from, to));
     if (q.error) {
       // Pre-migration: table absent. Ship an empty map; the resolver's
       // callers must treat "no JE" as "no adjustment" per the absent-
@@ -179,43 +202,40 @@ export async function loadInventoryAdjustments(supa: any, { members, periods, fi
 //
 // Absence = not reported. Callers MUST check .has()/.get() and treat
 // missing as null in the payload; never substitute 0.
-export async function loadPnlActuals(supa: any, { members, periods, fiscalYear = 2026 }: any): Promise<any> {
+export async function loadPnlActuals(supa: any, { members, periods, fiscalYear }: any): Promise<any> {
   if (!members || members.length === 0 || !periods || periods.length === 0) {
     return { data: new Map<any, any>() };
   }
   const out = new Map<any, any>();
+  // Train 2b: paged via pagedSelect. pnl_actuals primary key is
+  // (account_key, fiscal_year, period_no, line_code); fiscal_year is
+  // fixed, so (account_key, period_no, line_code) is unique.
   for (const memberChunk of chunk(members, IN_CHUNK)) {
-    let from = 0;
-    while (true) {
-      const q = await supa
-        .from("pnl_actuals")
-        .select("account_key, period_no, line_code, actual, budget, source_ref, verified_at, verified_by")
-        .eq("fiscal_year", fiscalYear)
-        .in("account_key", memberChunk)
-        .in("period_no", periods)
-        .order("account_key")
-        .order("period_no")
-        .order("line_code")
-        .range(from, from + PS_DEFAULT - 1);
-      if (q.error) return { error: q.error, scope: "pnl_actuals" };
-      const rows = q.data || [];
-      for (const r of rows) {
-        const acct = String(r.account_key);
-        const per = Number(r.period_no);
-        const line = String(r.line_code);
-        if (!out.has(acct)) out.set(acct, new Map<any, any>());
-        const byAcct = out.get(acct);
-        if (!byAcct.has(per)) byAcct.set(per, new Map<any, any>());
-        byAcct.get(per).set(line, {
-          actual: Number(r.actual),
-          budget: r.budget == null ? null : Number(r.budget),
-          source_ref: r.source_ref || null,
-          verified_at: r.verified_at || null,
-          verified_by: r.verified_by || null,
-        });
-      }
-      if (rows.length < PS_DEFAULT) break;
-      from += PS_DEFAULT;
+    const q = await pagedSelect((from: number, to: number) => supa
+      .from("pnl_actuals")
+      .select("account_key, period_no, line_code, actual, budget, source_ref, verified_at, verified_by")
+      .eq("fiscal_year", fiscalYear)
+      .in("account_key", memberChunk)
+      .in("period_no", periods)
+      .order("account_key")
+      .order("period_no")
+      .order("line_code")
+      .range(from, to));
+    if (q.error) return { error: q.error, scope: "pnl_actuals" };
+    for (const r of q.data) {
+      const acct = String(r.account_key);
+      const per = Number(r.period_no);
+      const line = String(r.line_code);
+      if (!out.has(acct)) out.set(acct, new Map<any, any>());
+      const byAcct = out.get(acct);
+      if (!byAcct.has(per)) byAcct.set(per, new Map<any, any>());
+      byAcct.get(per).set(line, {
+        actual: Number(r.actual),
+        budget: r.budget == null ? null : Number(r.budget),
+        source_ref: r.source_ref || null,
+        verified_at: r.verified_at || null,
+        verified_by: r.verified_by || null,
+      });
     }
   }
   return { data: out };
@@ -230,34 +250,31 @@ export async function loadPnlActuals(supa: any, { members, periods, fiscalYear =
 // there; here we read only what the Overview owns directly.
 //
 // Returns Map<line_code, Map<account_key, Map<period_no, amount>>>.
-export async function loadOverviewBudgets(supa: any, { members, fiscalYear = 2026 }: any): Promise<any> {
+export async function loadOverviewBudgets(supa: any, { members, fiscalYear }: any): Promise<any> {
   if (!members || members.length === 0) return { data: new Map<any, any>() };
   const wanted = new Set([...REVENUE_LINE_CODES, ...ALSO_TRACKED_LINE_CODES, "3100.1", "3100.2"]);
   const out = new Map<any, any>();
+  // Train 2b: paged via pagedSelect. kpi_budgets primary key is
+  // (account_key, line_code, fiscal_year, period_no); fiscal_year is
+  // fixed, so (account_key, line_code, period_no) is unique.
   for (const memberChunk of chunk(members, IN_CHUNK)) {
-    let from = 0;
-    while (true) {
-      const q = await supa
-        .from("kpi_budgets")
-        .select("account_key, line_code, period_no, amount")
-        .eq("fiscal_year", fiscalYear)
-        .in("account_key", memberChunk)
-        .order("account_key")
-        .order("line_code")
-        .order("period_no")
-        .range(from, from + PS_DEFAULT - 1);
-      if (q.error) return { error: q.error, scope: "kpi_budgets_overview" };
-      const rows = q.data || [];
-      for (const r of rows) {
-        const gl = String(r.line_code);
-        if (!wanted.has(gl)) continue;
-        const acct = String(r.account_key);
-        if (!out.has(gl)) out.set(gl, new Map<any, any>());
-        if (!out.get(gl).has(acct)) out.get(gl).set(acct, new Map<any, any>());
-        out.get(gl).get(acct).set(Number(r.period_no), Number(r.amount));
-      }
-      if (rows.length < PS_DEFAULT) break;
-      from += PS_DEFAULT;
+    const q = await pagedSelect((from: number, to: number) => supa
+      .from("kpi_budgets")
+      .select("account_key, line_code, period_no, amount")
+      .eq("fiscal_year", fiscalYear)
+      .in("account_key", memberChunk)
+      .order("account_key")
+      .order("line_code")
+      .order("period_no")
+      .range(from, to));
+    if (q.error) return { error: q.error, scope: "kpi_budgets_overview" };
+    for (const r of q.data) {
+      const gl = String(r.line_code);
+      if (!wanted.has(gl)) continue;
+      const acct = String(r.account_key);
+      if (!out.has(gl)) out.set(gl, new Map<any, any>());
+      if (!out.get(gl).has(acct)) out.get(gl).set(acct, new Map<any, any>());
+      out.get(gl).get(acct).set(Number(r.period_no), Number(r.amount));
     }
   }
   return { data: out };
@@ -312,39 +329,28 @@ export async function loadScDailyRevenue(supa: any, { members, start, end, today
   const effectiveEnd = today ? capBeforeToday(end, today) : end;
   if (!effectiveEnd || effectiveEnd < start) return { data: new Map<any, any>() };
   const out = new Map<any, any>();
+  // Train 2b: paged via pagedSelect. sc_daily_revenue is grained per
+  // (account_key, service_id, service_date); sorting on all three
+  // makes the key unique across page boundaries.
   for (const memberChunk of chunk(members, IN_CHUNK)) {
-    let from = 0;
-    while (true) {
-      const q = await supa
-        .from("sc_daily_revenue")
-        .select("account_key, service_date, service_id, actual_revenue, is_non_revenue")
-        .in("account_key", memberChunk)
-        .gte("service_date", start)
-        .lte("service_date", effectiveEnd)
-        .not("is_non_revenue", "is", true)   // §5.10: NOT is_non_revenue always
-        // Order chain must uniquely order rows across the 1000-row page
-        // boundary. sc_daily_revenue is grained per
-        // (account_key, service_id, service_date) - see sc-6b's
-        // service_days CTE. Without service_id in the order chain, tie
-        // groups of rows sharing (account_key, service_date) reorder
-        // freely across pages, dropping or duplicating rows. Same
-        // pagination-order defect class as the sentinel probe fix on
-        // 2026-08-31 and purchasing #892's .order("id") retraction.
-        .order("account_key")
-        .order("service_date")
-        .order("service_id")
-        .range(from, from + PS_DEFAULT - 1);
-      if (q.error) return { error: q.error, scope: "sc_daily_revenue" };
-      const rows = q.data || [];
-      for (const r of rows) {
-        const acct = String(r.account_key);
-        const day = r.service_date;
-        if (!out.has(acct)) out.set(acct, new Map<any, any>());
-        const m = out.get(acct);
-        m.set(day, (m.get(day) || 0) + Number(r.actual_revenue || 0));
-      }
-      if (rows.length < PS_DEFAULT) break;
-      from += PS_DEFAULT;
+    const q = await pagedSelect((from: number, to: number) => supa
+      .from("sc_daily_revenue")
+      .select("account_key, service_date, service_id, actual_revenue, is_non_revenue")
+      .in("account_key", memberChunk)
+      .gte("service_date", start)
+      .lte("service_date", effectiveEnd)
+      .not("is_non_revenue", "is", true)   // §5.10: NOT is_non_revenue always
+      .order("account_key")
+      .order("service_date")
+      .order("service_id")
+      .range(from, to));
+    if (q.error) return { error: q.error, scope: "sc_daily_revenue" };
+    for (const r of q.data) {
+      const acct = String(r.account_key);
+      const day = r.service_date;
+      if (!out.has(acct)) out.set(acct, new Map<any, any>());
+      const m = out.get(acct);
+      m.set(day, (m.get(day) || 0) + Number(r.actual_revenue || 0));
     }
   }
   return { data: out };
@@ -390,10 +396,15 @@ export async function loadScDailyRevenueCarveOut(supa: any, { carveOuts, start, 
   // group_name appears in the account's carve-out map.
   const svcToLine = new Map<any, any>();   // Map<acct, Map<service_id, lineCode>>
   for (const acctChunk of chunk(accounts, IN_CHUNK)) {
-    const q = await supa
+    // Train 2b: paged via pagedSelect. Sort id is the sc_services
+    // primary key (uuid) and is unique across the table; the inner
+    // join to sc_service_groups emits at most one row per service.
+    const q = await pagedSelect((from: number, to: number) => supa
       .from("sc_services")
       .select("id, account_key, sc_service_groups!inner(group_name)")
-      .in("account_key", acctChunk);
+      .in("account_key", acctChunk)
+      .order("id")
+      .range(from, to));
     if (q.error) return { error: q.error, scope: "sc_services_carve_out_resolve" };
     for (const r of q.data || []) {
       const acct = r.account_key;
@@ -411,38 +422,31 @@ export async function loadScDailyRevenueCarveOut(supa: any, { carveOuts, start, 
   for (const m of svcToLine.values()) for (const id of m.keys()) serviceIds.push(id);
 
   const out = new Map<any, any>();  // Map<acct, Map<lineCode, Map<day, amount>>>
+  // Train 2b: paged via pagedSelect; same unique (account_key,
+  // service_date, service_id) sort as loadScDailyRevenue.
   for (const svcChunk of chunk(serviceIds, IN_CHUNK)) {
-    let from = 0;
-    while (true) {
-      const q = await supa
-        .from("sc_daily_revenue")
-        .select("account_key, service_date, service_id, actual_revenue, is_non_revenue")
-        .in("service_id", svcChunk)
-        .gte("service_date", start)
-        .lte("service_date", effectiveEnd)
-        .not("is_non_revenue", "is", true)
-        // Same stable order chain as loadScDailyRevenue - the
-        // (account_key, service_date, service_id) triple uniquely
-        // identifies a sc_daily_revenue row.
-        .order("account_key")
-        .order("service_date")
-        .order("service_id")
-        .range(from, from + PS_DEFAULT - 1);
-      if (q.error) return { error: q.error, scope: "sc_daily_revenue_carve_out" };
-      const rows = q.data || [];
-      for (const r of rows) {
-        const acct = String(r.account_key);
-        const lineCode = svcToLine.get(acct)?.get(r.service_id);
-        if (!lineCode) continue;
-        if (!out.has(acct)) out.set(acct, new Map<any, any>());
-        const perAcct = out.get(acct);
-        if (!perAcct.has(lineCode)) perAcct.set(lineCode, new Map<any, any>());
-        const perLine = perAcct.get(lineCode);
-        const day = r.service_date;
-        perLine.set(day, (perLine.get(day) || 0) + Number(r.actual_revenue || 0));
-      }
-      if (rows.length < PS_DEFAULT) break;
-      from += PS_DEFAULT;
+    const q = await pagedSelect((from: number, to: number) => supa
+      .from("sc_daily_revenue")
+      .select("account_key, service_date, service_id, actual_revenue, is_non_revenue")
+      .in("service_id", svcChunk)
+      .gte("service_date", start)
+      .lte("service_date", effectiveEnd)
+      .not("is_non_revenue", "is", true)
+      .order("account_key")
+      .order("service_date")
+      .order("service_id")
+      .range(from, to));
+    if (q.error) return { error: q.error, scope: "sc_daily_revenue_carve_out" };
+    for (const r of q.data) {
+      const acct = String(r.account_key);
+      const lineCode = svcToLine.get(acct)?.get(r.service_id);
+      if (!lineCode) continue;
+      if (!out.has(acct)) out.set(acct, new Map<any, any>());
+      const perAcct = out.get(acct);
+      if (!perAcct.has(lineCode)) perAcct.set(lineCode, new Map<any, any>());
+      const perLine = perAcct.get(lineCode);
+      const day = r.service_date;
+      perLine.set(day, (perLine.get(day) || 0) + Number(r.actual_revenue || 0));
     }
   }
   return { data: out };
@@ -464,9 +468,9 @@ export async function loadScDailyRevenueCarveOut(supa: any, { carveOuts, start, 
 // so the client can render the Planning view instead of the standard
 // This period surface (budget-hero, not-started reference, no
 // verdicts on the top cards).
-export function derivePeriodState({ periodNo, todayISO, periodStatusRow }: any): any {
-  const pStart = periodStartISO(periodNo);
-  const pEnd = periodEndISO(periodNo);
+export function derivePeriodState({ periodNo, todayISO, periodStatusRow, fy }: any): any {
+  const pStart = periodStartISO(periodNo, fy);
+  const pEnd = periodEndISO(periodNo, fy);
   if (!pEnd) return "open";
   // Future period - hasn't started yet.
   if (pStart && pStart > todayISO) return "planned";
@@ -509,8 +513,8 @@ export function derivePeriodState({ periodNo, todayISO, periodStatusRow }: any):
 // construction.
 //
 // Open / planned periods are never spend_settled.
-export function derivePeriodSpendSettled({ periodNo, todayISO, periodStatusRow }: any): any {
-  const pEnd = periodEndISO(periodNo);
+export function derivePeriodSpendSettled({ periodNo, todayISO, periodStatusRow, fy }: any): any {
+  const pEnd = periodEndISO(periodNo, fy);
   if (!pEnd) return false;
   const verifiedAt = periodStatusRow?.verified_at || null;
   if (verifiedAt) return true;   // verified is settled by definition
@@ -520,7 +524,7 @@ export function derivePeriodSpendSettled({ periodNo, todayISO, periodStatusRow }
   // R-93 boundary: settled once the FYTD end has advanced to or past
   // this period's end. r93FytdEndISO walks back to the last period
   // whose end is more than 7 days before today.
-  const fytdEnd = r93FytdEndISO(todayISO);
+  const fytdEnd = r93FytdEndISO(todayISO, fy);
   if (!fytdEnd) return false;
   return fytdEnd >= pEnd;
 }
