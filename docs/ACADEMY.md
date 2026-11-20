@@ -178,3 +178,63 @@ certificate route) do not yet filter by `access_level`; a restricted
 doc can surface to a non-owner through the requirement-assignment
 channel if one is ever assigned. An access-level gate at
 cycle-publish time (or per-surface) is a follow-up train.
+
+## Library: the bookcase
+
+`/library` is one landing page - IdentBand (desktop) or a plain phone
+heading, then a search field, a sticky shelf list, and the shelves of
+tiles - all fed by one `loadLibrary` in `src/lib/academy/library.ts`
+(the L1 split into `loadLibrary` + `loadLibraryIndex` is folded; a
+single call powers the count, the shelf list, the shelves and the
+search list). The may-read rule above runs first: a restricted
+document never reaches the payload for a viewer whose level is
+`reads_unrestricted`, so every count on the page is the same count
+the viewer could reach by navigating. Empty shelves are dropped. The
+old `LibraryFind.tsx`, `ShelvesBrowser.tsx` and
+`/library/shelves/loading.tsx` are deleted; `/library/shelves` 308s
+to `/library`.
+
+The `LibraryDoc` shape carries two derived tile marks - `has_es`
+("another live readable doc with id `<id>-ES` is in the catalogue")
+and `posted_on_wall` (mirrors `documents.print_required`) - rendered
+as shape + words, never colour alone. R-AC26 keeps the reading-level
+mark and the Academy mark off the tile. Filled-in-by-a-leader is
+omitted: no column in `documents` or `academy_obligations` encodes it
+today.
+
+Headline reads `<N> documents on <M> shelves`, kick `Each one is the
+current version.` Search is document-level (R-AC10) via `?q=`. The
+match-count line is one visible `<p role="status">` directly under
+the search field - the sighted reader and the screen reader read the
+same words once ("`No documents match "<q>"`" or "`N documents match
+"<q>"`"). There is no second `sr-only` region; the SR never announces
+the same words twice. Pressing a shelf in the sticky list scrolls the
+page to it and moves focus to that shelf's `h2`.
+
+Phone opens with a plain heading (the shell hides the band), then
+the kick, the search field, a horizontally-scrolling shelf-jump
+strip, and tiles stacked one per row. The shelf heading keeps
+`--sp-t-title` on phone so the bookcase stays at five distinct type
+sizes on every width (13 / 14.5 / 16 / 18 / 24).
+
+A new-and-changed row is not built. `documents.updated_at` carries
+seven distinct days across 82 Live docs with 27 docs sharing one day
+(batch rewrites, no honest signal); `effective_date` and
+`approved_date` are similar; `next_review` is uniformly null. The row
+waits for a per-doc `last_substantive_edit` column or a supersedes
+chain.
+
+Evidence lives in `scripts/_library_l1_probe.ts` (updated for the
+one-loader API; owner 82, every other kind 70, restricted kept_for,
+unknown 404) and `scripts/_l2_battery.mjs` (Playwright chromium
+headless, signed in via Supabase admin `generateLink` + `@supabase/ssr`
+`setSession` cookies, sweeps 360-1920 step 40 x four states against a
+local build on `:3100`, reports sideways scroll, under-48 controls,
+distinct type sizes, clipped text, contrast pairs and console
+errors).
+
+Not in this train: L3 (document page), L4 ("Suggest an edit" +
+"Share"), editing / publishing / Changes / Reviews, section-level
+search, the IdentBand right-slot for the search, and the shell-menu
+link to `/library/shelves` (the 308 keeps clicks correct). These are
+shared-foundation or later-train work.

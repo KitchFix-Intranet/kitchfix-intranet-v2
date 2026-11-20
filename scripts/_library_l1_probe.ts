@@ -23,6 +23,11 @@
 //   region_lead:    70 / 70 / 70, restricted doc kept_for, unknown 404
 //   learner:        70 / 70 / 70, restricted doc kept_for, unknown 404
 //
+// L2 fold: the three columns `find.totalDocs`, `shelves.totalDocs`
+// and `shelves.count sum` now come from a single `loadLibrary` call
+// (the old `loadLibraryIndex` was retired when the Library became one
+// page); the numbers are identical by construction.
+//
 // Picks one restricted and one unrestricted docId from today's
 // `documents` table. Then calls the three loaders for each viewer
 // and prints a markdown table. The probe writes nothing. Emails are
@@ -31,7 +36,7 @@
 
 import { serviceClient } from "../src/lib/supabase/service";
 import { ownerEmails } from "../src/lib/supabase/env";
-import { loadLibrary, loadLibraryIndex } from "../src/lib/academy/library";
+import { loadLibrary } from "../src/lib/academy/library";
 import { loadDocument } from "../src/lib/academy/document";
 
 type ViewerKind = "owner" | "library_admin" | "region_lead" | "learner";
@@ -177,11 +182,13 @@ async function main() {
       );
       continue;
     }
-    const [idx, lib] = await Promise.all([
-      loadLibraryIndex(email),
-      loadLibrary(email),
-    ]);
-    const idxTotal = idx.ok ? idx.totalDocs : `ERR:${idx.error}`;
+    // L2: one loader. The previous Find index and Shelves were two
+    // calls; the bookcase is one. We still run `loadLibrary` twice
+    // under the same label to keep the three columns readable
+    // against the L1 report - the two numbers are identical by
+    // construction now.
+    const lib = await loadLibrary(email);
+    const idxTotal = lib.ok ? lib.totalDocs : `ERR:${lib.error}`;
     let shelvesTotal: string | number = "n/a";
     let countSum: string | number = "n/a";
     if (lib.ok) {
