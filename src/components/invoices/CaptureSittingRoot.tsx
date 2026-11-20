@@ -117,6 +117,10 @@ export function CaptureSittingRoot({
   const [viewUrls, setViewUrls] = useState<Record<string, string>>({});
   const [usual, setUsual] = useState(initialUsual);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Ride 8.3: which coding-row amount input is focused. While
+  // focused the display is the raw number (easy to edit); on
+  // blur the display shows two decimals.
+  const [focusedLineIdx, setFocusedLineIdx] = useState<number | null>(null);
   const [errors, setErrors] = useState<CheckResult["errors"]>([]);
   // Train 3 correction 5: a DB-origin copy refusal says a single
   // sentence with no other site's details. It still routes through
@@ -688,6 +692,7 @@ export function CaptureSittingRoot({
           inFlight: inflightRef.current,
           stagedKeys: Object.keys(stagedRef.current).length,
           stopped: saveStateRef.current === "stopped",
+          offline: saveStateRef.current === "offline",
         }),
         onSettled: (fn) => {
           saveSettledListenersRef.current.add(fn);
@@ -847,7 +852,7 @@ export function CaptureSittingRoot({
   // ─── Render ─────────────────────────────────────────────────────
   const saveLine =
     saveState === "saving" ? "Saving"
-    : saveState === "offline" ? "No signal. Your typing is kept on this device."
+    : saveState === "offline" ? "No signal. It will send when you are back online."
     : saveState === "stopped" ? "Not saved. Changes are kept on this device."
     : "Saved";
 
@@ -887,7 +892,7 @@ export function CaptureSittingRoot({
             <span className="kf-inv-sitting__phonehead__sub">
               Invoice {pager.position} of {pager.total} · {siteAccountKey}
             </span>
-            <h2 className="kf-inv-sitting__phonehead__title">
+            <h2 className="kf-inv-sitting__phonehead__title" title={vendorName ?? undefined}>
               {vendorName ?? (draft.type === "credit" ? "New credit" : "New invoice")}
             </h2>
           </div>
@@ -985,7 +990,10 @@ export function CaptureSittingRoot({
         {/* C3: page box */}
         <section className="kf-inv-sitting__page">
           <div className="kf-inv-sitting__page-tools">
-            <span className="kf-inv-sitting__page-tools__name">
+            <span
+              className="kf-inv-sitting__page-tools__name"
+              title={activeFile?.file_name ?? undefined}
+            >
               {activeFile?.file_name ?? "No file yet"}
               {files.length > 1 ? ` · Page ${activeIndex + 1} of ${files.length}` : ""}
             </span>
@@ -1220,6 +1228,12 @@ export function CaptureSittingRoot({
                 ref={invDateRef}
                 value={invDateLocal}
                 onChange={(e) => onInvDateChange(e.currentTarget.value)}
+                onBlur={(e) => {
+                  // Ride 8.3: reformat MM/DD/YYYY as soon as the
+                  // box is left, not only after a reload.
+                  const parsed = parseDateInput(e.currentTarget.value);
+                  if (parsed.iso) setInvDateLocal(toBoxDate(parsed.iso));
+                }}
                 inputMode="numeric"
                 placeholder="MM/DD/YYYY"
                 maxLength={10}
@@ -1253,7 +1267,7 @@ export function CaptureSittingRoot({
                 <div className="kf-inv-sitting__sixty__btns">
                   <button
                     type="button"
-                    className="kf-btn kf-btn--sm kf-btn--primary"
+                    className="kf-btn kf-btn--sm kf-btn--line"
                     onClick={confirm60Days}
                   >
                     Yes, that is right
@@ -1292,7 +1306,7 @@ export function CaptureSittingRoot({
                 disabled={isPreview}
               />
             </div>
-            {totalParsed != null ? <span className="kf-inv-sitting__hint">{fmtUsdExact(totalParsed)}</span> : null}
+            {/* Ride 8.3: no echo of the total under its box. */}
             {totalErr ? <span id="err-total" className="kf-inv-sitting__err">{totalErr.message}</span> : null}
           </div>
 
@@ -1360,7 +1374,17 @@ export function CaptureSittingRoot({
                     <input
                       aria-label={`Amount, line ${i + 1}`}
                       inputMode="decimal"
-                      value={Number.isFinite(line.amount) ? String(line.amount) : ""}
+                      value={
+                        focusedLineIdx === i
+                          ? (Number.isFinite(line.amount) ? String(line.amount) : "")
+                          : (line.amount > 0 ? line.amount.toFixed(2) : "")
+                      }
+                      onFocus={() => setFocusedLineIdx(i)}
+                      onBlur={() => {
+                        // Ride 8.3: fall back to the two-decimal
+                        // display via the focus state above.
+                        setFocusedLineIdx(null);
+                      }}
                       onChange={(e) => {
                         const amt = parseMoneyInput(e.currentTarget.value);
                         updateLine(i, { amount: amt ?? 0 });

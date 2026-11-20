@@ -65,9 +65,14 @@ export function DraftsWaitingList({
       {visible.map((d) => {
         const vendor = d.vendor_name ?? "No vendor yet";
         const num = d.invoice_number ? `#${d.invoice_number}` : "No number";
+        // Ride 8.4: "Copy to settle" is terminal and never gets
+        // the " left" suffix. When present it blocks the Ready
+        // check, so show it alone.
         const status = d.ready
           ? "Ready"
-          : d.missing.length > 0 ? d.missing.join(", ") + " left" : "In progress";
+          : d.missing.includes("Copy to settle")
+            ? "Copy to settle"
+            : d.missing.length > 0 ? d.missing.join(", ") + " left" : "In progress";
         return (
           <li key={d.id} className="kf-inv-capture__draft">
             <Link

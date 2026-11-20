@@ -463,6 +463,11 @@
 .kf-inv-sitting__canvas img {
   display: block;
   max-width: 100%;
+  /* Ride 8.6: fit to the box width, never overflow horizontally
+     until zoom is on. */
+  width: auto;
+  height: auto;
+  object-fit: contain;
 }
 .kf-inv-sitting__canvas.is-zoom {
   min-height: 420px;
@@ -675,6 +680,13 @@
   grid-template-columns: minmax(0, 1fr) 140px auto;
   gap: var(--sp-sp-2);
   align-items: center;
+}
+/* Ride 8.7: at 360 widths the amount column gets narrower so
+   the code picker has room to be at least 48 px wide + readable. */
+@media (max-width: 400px) {
+  .kf-inv-sitting__coding-row {
+    grid-template-columns: minmax(48px, 1fr) 100px auto;
+  }
 }
 .kf-inv-sitting__coding-row select {
   min-height: var(--sp-floor-chef);
