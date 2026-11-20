@@ -86,3 +86,26 @@
   color: var(--sp-card);
 }
 .kf-chip--warn.kf-chip--on span { color: var(--sp-card); }
+
+/* T5b item 9: the three modifiers the Review queue added on top of
+ * the shared chip - the sort/filter hairline, the count sub-span and
+ * a disabled-zero style - rode in review.css until this train and
+ * never had a rule outside it. Migrated here so the shared primitive
+ * stays whole on every tab that needs it (train 8's missing-rule
+ * lesson). */
+.kf-chip:hover:not([disabled]) { background: var(--sp-sky-tint); }
+.kf-chip:active:not([disabled]) { transform: translateY(1px); }
+.kf-chip:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
+.kf-chip.kf-chip--on:hover:not([disabled]) { background: var(--sp-navy-deep); border-color: var(--sp-navy-deep); }
+.kf-chip--warn.kf-chip--on:hover:not([disabled]) { background: var(--sp-warn); border-color: var(--sp-warn); }
+.kf-chip--empty { color: var(--sp-muted); background: var(--sp-ground); cursor: not-allowed; opacity: 0.6; }
+.kf-chip__count {
+  color: inherit;
+  opacity: 0.65;
+  font-variant-numeric: tabular-nums;
+  margin-left: var(--sp-sp-1);
+}
+.kf-chip--on .kf-chip__count { opacity: 0.9; }
+/* Hairline between the sort chips and the filter chips so two filled
+ * chips on one rail do not read as two active filters. */
+.kf-chips__sep { width: 1px; align-self: stretch; margin: var(--sp-sp-1) var(--sp-sp-1); background: var(--sp-line); }

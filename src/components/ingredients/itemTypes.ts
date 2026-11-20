@@ -220,8 +220,12 @@ export type ReviewCardIngredient = {
   // empty array is "No Top 9 allergens"; a set timestamp with a
   // non-empty array is the tags. See src/lib/ingredients/allergens.ts
   // for the canonical nine and the three-state rules.
+  // T5b item 6: allergens_reviewed_by was read but never rendered.
+  // Only the reviewed_at timestamp decides "unreviewed"/"confirmed
+  // none"/"has tags" — see src/lib/ingredients/allergens.ts. The
+  // address stops travelling to the browser; reviewWrites.ts still
+  // records it to pr_ingredients for the audit row.
   allergens: string[];
-  allergens_reviewed_by: string | null;
   allergens_reviewed_at: string | null;
   // N6: the usual measure of one each on the master. Weight OR volume
   // qty + uom + source (one of house_test | book | vendor_spec |

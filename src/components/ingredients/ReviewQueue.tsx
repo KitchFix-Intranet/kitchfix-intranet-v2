@@ -33,16 +33,22 @@ import {
   type BlendStatus,
 } from "@/lib/ingredients/ingredientBlend";
 import { canonicalFromBaseUnit } from "@/lib/ingredients/pack";
-import { nameFromEmail } from "@/lib/fmt";
+import { isBatchInProgress } from "@/lib/matcher/lock";
+import { fmtCount, nameFromEmail } from "@/lib/fmt";
 import { Tabs } from "./Tabs";
 import { ReviewCard, type ReviewCardGroup } from "./ReviewCard";
 import { isPackManualOverride, isPriceManualOverride } from "./itemTypes";
 import { ReviewLedger } from "./ReviewLedger";
 import { ReviewFilter, type ReviewFilterGroup } from "./ReviewFilter";
+import { BatchRunControl } from "./BatchRunControl";
 // Train 5a: IdentBand is not used on this tab any more; the top bar
 // carries the two facts via the @topbar slot.
 import "./ingredients.css";
 import "./review.css";
+// T5b item 9: chips on the Review queue come from the shared primitive
+// in chips.css (36 / 40 painted; 44 / 48 hit area). The duplicate rule
+// in review.css is gone - see this commit's hunks.
+import "./chips.css";
 // Pulled in so the search field inherits the shared .kf-field--search
 // token set from Vendor-items / Ingredients (magnifier, Enter / clear
 // pill). Keeps the input visually native across tabs.
@@ -110,9 +116,10 @@ type Ingredient = {
   base_unit: string;
   // B1: allergen three-state fields flow through this type so the
   // detail panel's IngredientBlock reads them when opened from the
-  // Review queue.
+  // Review queue. T5b item 6: allergens_reviewed_by stops travelling
+  // (no screen renders it); the timestamp remains so IngredientAllergens
+  // can seed "confirmed none" when a reviewer set the list to empty.
   allergens: string[];
-  allergens_reviewed_by: string | null;
   allergens_reviewed_at: string | null;
   // N6: usual measure of one each on the master. Weight or volume
   // (lb, oz, fl oz, gal, ...) plus a provenance tag; deriveRecipePrice
@@ -221,17 +228,27 @@ export const loadReview = cache(async function loadReview() {
     // category / sub-category / merge dropdowns can never show a
     // 1,000-capped slice as if it were the full set.
     readActiveIngredients<Ingredient>(client as unknown as MinimalSupabase, {
+      // T5b item 6: the reviewer's email was read but never rendered.
+      // allergens_reviewed_at still carries so IngredientAllergens can
+      // seed "confirmed none"; the address stops travelling. The write
+      // path in reviewWrites.ts still records it.
       columns:
-        "id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source,yield_pct,yield_source",
+        "id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source,yield_pct,yield_source",
     }).then(
       (rows) => ({ data: rows, error: null }),
       (error: Error) => ({ data: null, error })
     ),
+    // T5b ruling 4: "Flagged not food" line counts the matcher's
+    // not-food guesses that are OUTSIDE the queue - both the old shape
+    // (link_status='none') and the new shape the matcher writes today
+    // (link_status='rejected'). The in-queue proposed rows are the
+    // not-food card; counting them here too would double-count.
     client
       .from("pr_vendor_items")
       .select("id", { count: "exact", head: true })
       .like("link_reason", "ai-notfood:%")
-      .eq("link_status", "none"),
+      .in("link_status", ["none", "rejected"])
+      .in("status", ["active", "resale"]),
     // Train 5a: "items not matched yet" - food items with no link at
     // all (link_status='none', is_food=true, status in active/resale).
     // Same number the Vendor items "Not linked" chip counts; the tab
@@ -432,11 +449,123 @@ export const loadReview = cache(async function loadReview() {
   const vendorNameById = new Map(vendors.map((v) => [v.id, v.name]));
   const ingredientById = new Map(ingredients.map((i) => [i.id, i]));
 
+  // T5b item 3: project one ProposedItem into the shape ReviewCard /
+  // reviewRow render. Shared between the existing-ingredient branch,
+  // the ai-new branch and the new ai-notfood card branch (lines
+  // around 758 below) so the three never drift. Closure reads over
+  // vendorNameById, unitPriceByItem, catalogByKey.
+  function projectItem(
+    it: ProposedItem,
+    parsedBody: string,
+    u12: number,
+  ): ReviewCardGroup["items"][number] {
+    const up = unitPriceByItem.get(it.id) ?? null;
+    const cat =
+      it.item_number_norm ? catalogByKey.get(`${it.vendor_id}#${it.item_number_norm}`) ?? null : null;
+    const catalogClean = cat?.clean_name?.trim() || null;
+    const catalogPack = cat?.pack_text?.trim() || null;
+    const catalogPrice = cat && cat.catalog_price != null ? Number(cat.catalog_price) : null;
+    const gtin = cat?.gtin?.trim() || null;
+    const hasManualOverride = isPackManualOverride(it.pack_override);
+    const hasPriceOverride = isPriceManualOverride(it.pack_override);
+    const packDisplay = hasManualOverride
+      ? it.pack_text
+      : (catalogPack ?? it.pack_text);
+    const estPackSource =
+      it.price_estimate && typeof it.price_estimate.pack_source === "string"
+        ? it.price_estimate.pack_source
+        : null;
+    const packSource: "override" | "catalog" | "invoice" | "catalog_sibling" | null = hasManualOverride
+      ? "override"
+      : estPackSource === "catalog_sibling"
+        ? "catalog_sibling"
+        : catalogPack
+          ? "catalog"
+          : it.pack_text
+            ? "invoice"
+            : null;
+    const normalizedPack =
+      it.pack_qty != null && it.pack_size != null && it.pack_uom
+        ? (Number(it.pack_qty) === 1
+            ? `${it.pack_size} ${it.pack_uom}`
+            : `${it.pack_qty}/${it.pack_size} ${it.pack_uom}`)
+        : null;
+    const pe = it.price_estimate ?? null;
+    const perBase =
+      pe && pe.per_base != null && Number.isFinite(Number(pe.per_base))
+        ? Number(pe.per_base)
+        : null;
+    const perBaseConfidence =
+      pe && (pe.confidence === "high" || pe.confidence === "low" || pe.confidence === "override" || pe.confidence === "derived")
+        ? (pe.confidence as "high" | "low" | "override" | "derived")
+        : null;
+    return {
+      id: it.id,
+      name: it.name,
+      vendorOcrName: it.name,
+      displayName: catalogClean ?? it.name,
+      displayNameSource: catalogClean ? "catalog" : "invoice",
+      vendor: vendorNameById.get(it.vendor_id) ?? it.vendor_id,
+      itemNumber: it.item_number,
+      pack: packDisplay,
+      packNormalized: normalizedPack,
+      packUom: it.pack_uom,
+      packQty: it.pack_qty,
+      packSize: it.pack_size,
+      packState: it.pack_state,
+      packSource,
+      packManualOverride: hasManualOverride,
+      priceManualOverride: hasPriceOverride,
+      billedUnit: it.billed_unit,
+      usd12m: u12,
+      lines12m: Number(it.lines_12m ?? 0),
+      accounts: it.accounts ?? [],
+      accountsCount: (it.accounts ?? []).length,
+      lastSeen: it.last_seen,
+      confidence: it.link_confidence,
+      reason: parsedBody,
+      catchWeight: it.catch_weight,
+      unitPrice: up ? up.unitPrice : null,
+      unitPriceUnit: up ? up.billedUnit ?? it.billed_unit : null,
+      catalogPrice,
+      gtin,
+      perBase,
+      perBaseUom: pe?.base_uom ?? null,
+      perBaseConfidence,
+      perBaseNote: pe?.note ?? null,
+      storedCasePrice: pe?.case_price != null && Number.isFinite(Number(pe.case_price)) ? Number(pe.case_price) : null,
+      caseSource: (pe?.case_price_source as "catalog" | "billed" | "catch_weight" | "catalog_lb" | "override" | "actuals_base_unit" | "actuals_weight" | "actuals_case" | null) ?? null,
+      flagged: it.flagged === true,
+      flagNote: it.flag_note ?? null,
+      // T4 ruling 10: server strips email to display name so no
+      // address crosses the wire.
+      flaggedBy: it.flagged_by ? nameFromEmail(it.flagged_by) : null,
+      flaggedAt: it.flagged_at ?? null,
+      grade: it.grade ?? null,
+      matchSource:
+        pe?.match_source === "sku" || pe?.match_source === "catalog_name"
+          ? pe.match_source
+          : null,
+      matchScore:
+        pe?.match_score != null && Number.isFinite(Number(pe.match_score))
+          ? Number(pe.match_score)
+          : null,
+      packNote: it.pack_note ?? null,
+      eachMeasure:
+        it.each_measure_qty != null && it.each_measure_uom
+          ? { qty: Number(it.each_measure_qty), uom: it.each_measure_uom }
+          : null,
+    };
+  }
+
   // Group:
   //   key `ex:<ingredient_id>` for existing-ingredient groups
   //   key `new:<proposed_name_lower>` for ai-new groups
-  //   notFood items are shown as a count only (filter view later)
+  //   T5b item 3: proposed rows whose reason starts `ai-notfood` were
+  //   previously dropped by the "malformed, skip" branch. They now
+  //   collect into notFoodItems for the dedicated not-food card.
   const groups = new Map<string, ReviewCardGroup>();
+  const notFoodItems: ReviewCardGroup["items"] = [];
   for (const it of items) {
     const parsed = parseReason(it.link_reason);
     const u12 = Number(it.usd_12m ?? 0);
@@ -456,129 +585,7 @@ export const loadReview = cache(async function loadReview() {
       };
       g.totalUsd12m += u12;
       g.totalLines12m += Number(it.lines_12m ?? 0);
-      {
-        const up = unitPriceByItem.get(it.id) ?? null;
-        const cat =
-          it.item_number_norm ? catalogByKey.get(`${it.vendor_id}#${it.item_number_norm}`) ?? null : null;
-        const catalogClean = cat?.clean_name?.trim() || null;
-        const catalogPack = cat?.pack_text?.trim() || null;
-        const catalogPrice = cat && cat.catalog_price != null ? Number(cat.catalog_price) : null;
-        const gtin = cat?.gtin?.trim() || null;
-        const hasManualOverride = isPackManualOverride(it.pack_override);
-        const hasPriceOverride = isPriceManualOverride(it.pack_override);
-        // Pack precedence: user manual override > catalog > invoice
-        // OCR. Each tier carries a source label so the row is clear
-        // about which value Kevin's looking at.
-        const packDisplay = hasManualOverride
-          ? it.pack_text
-          : (catalogPack ?? it.pack_text);
-        // P1 correction 2c: prefer price_estimate.pack_source when
-        // the backfill has stamped a refined value ('catalog_sibling'
-        // via the vendor-sibling expansion rule). Raw-column inference
-        // misses it; without this a sibling-expanded item reads as
-        // "invoice" in the panel even though its pack came from
-        // vendor-sibling corroboration.
-        const estPackSource =
-          it.price_estimate && typeof it.price_estimate.pack_source === "string"
-            ? it.price_estimate.pack_source
-            : null;
-        const packSource: "override" | "catalog" | "invoice" | "catalog_sibling" | null = hasManualOverride
-          ? "override"
-          : estPackSource === "catalog_sibling"
-            ? "catalog_sibling"
-            : catalogPack
-              ? "catalog"
-              : it.pack_text
-                ? "invoice"
-                : null;
-        // Normalized pack display from the backfill: "6/1 LB" style.
-        // Falls back to the raw pack text when the backfill hasn't
-        // produced qty+size+uom yet.
-        const normalizedPack =
-          it.pack_qty != null && it.pack_size != null && it.pack_uom
-            ? (Number(it.pack_qty) === 1
-                ? `${it.pack_size} ${it.pack_uom}`
-                : `${it.pack_qty}/${it.pack_size} ${it.pack_uom}`)
-            : null;
-        const pe = it.price_estimate ?? null;
-        const perBase =
-          pe && pe.per_base != null && Number.isFinite(Number(pe.per_base))
-            ? Number(pe.per_base)
-            : null;
-        const perBaseConfidence =
-          pe && (pe.confidence === "high" || pe.confidence === "low" || pe.confidence === "override" || pe.confidence === "derived")
-            ? (pe.confidence as "high" | "low" | "override" | "derived")
-            : null;
-        g.items.push({
-          id: it.id,
-          name: it.name,
-          vendorOcrName: it.name,
-          displayName: catalogClean ?? it.name,
-          displayNameSource: catalogClean ? "catalog" : "invoice",
-          vendor: vendorNameById.get(it.vendor_id) ?? it.vendor_id,
-          itemNumber: it.item_number,
-          pack: packDisplay,
-          packNormalized: normalizedPack,
-          packUom: it.pack_uom,
-          packQty: it.pack_qty,
-          packSize: it.pack_size,
-          packState: it.pack_state,
-          packSource,
-          packManualOverride: hasManualOverride,
-          priceManualOverride: hasPriceOverride,
-          billedUnit: it.billed_unit,
-          usd12m: u12,
-          lines12m: Number(it.lines_12m ?? 0),
-          accounts: it.accounts ?? [],
-          accountsCount: (it.accounts ?? []).length,
-          lastSeen: it.last_seen,
-          confidence: it.link_confidence,
-          reason: parsed.body,
-          catchWeight: it.catch_weight,
-          unitPrice: up ? up.unitPrice : null,
-          unitPriceUnit: up ? up.billedUnit ?? it.billed_unit : null,
-          catalogPrice,
-          gtin,
-          perBase,
-          perBaseUom: pe?.base_uom ?? null,
-          perBaseConfidence,
-          perBaseNote: pe?.note ?? null,
-          storedCasePrice: pe?.case_price != null && Number.isFinite(Number(pe.case_price)) ? Number(pe.case_price) : null,
-          caseSource: (pe?.case_price_source as "catalog" | "billed" | "catch_weight" | "catalog_lb" | "override" | "actuals_base_unit" | "actuals_weight" | "actuals_case" | null) ?? null,
-          flagged: it.flagged === true,
-          flagNote: it.flag_note ?? null,
-          // T4 ruling 10: server strips email to display name so no
-          // address crosses the wire.
-          flaggedBy: it.flagged_by ? nameFromEmail(it.flagged_by) : null,
-          flaggedAt: it.flagged_at ?? null,
-          // G1: tier on the item.
-          grade: it.grade ?? null,
-          // P1 §5: pack provenance (how the catalog row was matched).
-          matchSource:
-            pe?.match_source === "sku" || pe?.match_source === "catalog_name"
-              ? pe.match_source
-              : null,
-          matchScore:
-            pe?.match_score != null && Number.isFinite(Number(pe.match_score))
-              ? Number(pe.match_score)
-              : null,
-          // Q2 §4: pack-note (evidence-strength phrase from the P1/P2
-          // backfill). Pass through verbatim; null for most items.
-          packNote: it.pack_note ?? null,
-          // M1 R2 fix 1 + R3 fix 2: in measures-world, case_weight_lb
-          // decides whether the item has an override and what it is
-          // worth. The legacy pair (when consistent with the case
-          // weight within 1 percent) decides how to SHOW it. Pre-0019
-          // we fall back to the legacy pair unchanged.
-          // M2 §4B part 2: item.eachMeasure is unread on screen; keep
-          // the field present on the type for back-compat but no
-          // shape-helper projection.
-          eachMeasure:
-            it.each_measure_qty != null && it.each_measure_uom
-              ? { qty: Number(it.each_measure_qty), uom: it.each_measure_uom }
-              : null,
-        });
-      }
+      g.items.push(projectItem(it, parsed.body, u12));
       groups.set(key, g);
     } else if (parsed.prefix === "ai-new" && parsed.aiNew?.proposed_name) {
       const nameKey = parsed.aiNew.proposed_name.trim().toLowerCase();
@@ -595,134 +602,19 @@ export const loadReview = cache(async function loadReview() {
       };
       g.totalUsd12m += u12;
       g.totalLines12m += Number(it.lines_12m ?? 0);
-      {
-        const up = unitPriceByItem.get(it.id) ?? null;
-        const cat =
-          it.item_number_norm ? catalogByKey.get(`${it.vendor_id}#${it.item_number_norm}`) ?? null : null;
-        const catalogClean = cat?.clean_name?.trim() || null;
-        const catalogPack = cat?.pack_text?.trim() || null;
-        const catalogPrice = cat && cat.catalog_price != null ? Number(cat.catalog_price) : null;
-        const gtin = cat?.gtin?.trim() || null;
-        const hasManualOverride = isPackManualOverride(it.pack_override);
-        const hasPriceOverride = isPriceManualOverride(it.pack_override);
-        // Pack precedence: user manual override > catalog > invoice
-        // OCR. Each tier carries a source label so the row is clear
-        // about which value Kevin's looking at.
-        const packDisplay = hasManualOverride
-          ? it.pack_text
-          : (catalogPack ?? it.pack_text);
-        // P1 correction 2c: prefer price_estimate.pack_source when
-        // the backfill has stamped a refined value ('catalog_sibling'
-        // via the vendor-sibling expansion rule). Raw-column inference
-        // misses it; without this a sibling-expanded item reads as
-        // "invoice" in the panel even though its pack came from
-        // vendor-sibling corroboration.
-        const estPackSource =
-          it.price_estimate && typeof it.price_estimate.pack_source === "string"
-            ? it.price_estimate.pack_source
-            : null;
-        const packSource: "override" | "catalog" | "invoice" | "catalog_sibling" | null = hasManualOverride
-          ? "override"
-          : estPackSource === "catalog_sibling"
-            ? "catalog_sibling"
-            : catalogPack
-              ? "catalog"
-              : it.pack_text
-                ? "invoice"
-                : null;
-        // Normalized pack display from the backfill: "6/1 LB" style.
-        // Falls back to the raw pack text when the backfill hasn't
-        // produced qty+size+uom yet.
-        const normalizedPack =
-          it.pack_qty != null && it.pack_size != null && it.pack_uom
-            ? (Number(it.pack_qty) === 1
-                ? `${it.pack_size} ${it.pack_uom}`
-                : `${it.pack_qty}/${it.pack_size} ${it.pack_uom}`)
-            : null;
-        const pe = it.price_estimate ?? null;
-        const perBase =
-          pe && pe.per_base != null && Number.isFinite(Number(pe.per_base))
-            ? Number(pe.per_base)
-            : null;
-        const perBaseConfidence =
-          pe && (pe.confidence === "high" || pe.confidence === "low" || pe.confidence === "override" || pe.confidence === "derived")
-            ? (pe.confidence as "high" | "low" | "override" | "derived")
-            : null;
-        g.items.push({
-          id: it.id,
-          name: it.name,
-          vendorOcrName: it.name,
-          displayName: catalogClean ?? it.name,
-          displayNameSource: catalogClean ? "catalog" : "invoice",
-          vendor: vendorNameById.get(it.vendor_id) ?? it.vendor_id,
-          itemNumber: it.item_number,
-          pack: packDisplay,
-          packNormalized: normalizedPack,
-          packUom: it.pack_uom,
-          packQty: it.pack_qty,
-          packSize: it.pack_size,
-          packState: it.pack_state,
-          packSource,
-          packManualOverride: hasManualOverride,
-          priceManualOverride: hasPriceOverride,
-          billedUnit: it.billed_unit,
-          usd12m: u12,
-          lines12m: Number(it.lines_12m ?? 0),
-          accounts: it.accounts ?? [],
-          accountsCount: (it.accounts ?? []).length,
-          lastSeen: it.last_seen,
-          confidence: it.link_confidence,
-          reason: parsed.body,
-          catchWeight: it.catch_weight,
-          unitPrice: up ? up.unitPrice : null,
-          unitPriceUnit: up ? up.billedUnit ?? it.billed_unit : null,
-          catalogPrice,
-          gtin,
-          perBase,
-          perBaseUom: pe?.base_uom ?? null,
-          perBaseConfidence,
-          perBaseNote: pe?.note ?? null,
-          storedCasePrice: pe?.case_price != null && Number.isFinite(Number(pe.case_price)) ? Number(pe.case_price) : null,
-          caseSource: (pe?.case_price_source as "catalog" | "billed" | "catch_weight" | "catalog_lb" | "override" | "actuals_base_unit" | "actuals_weight" | "actuals_case" | null) ?? null,
-          flagged: it.flagged === true,
-          flagNote: it.flag_note ?? null,
-          // T4 ruling 10: server strips email to display name so no
-          // address crosses the wire.
-          flaggedBy: it.flagged_by ? nameFromEmail(it.flagged_by) : null,
-          flaggedAt: it.flagged_at ?? null,
-          // G1: tier on the item.
-          grade: it.grade ?? null,
-          // P1 §5: pack provenance (how the catalog row was matched).
-          matchSource:
-            pe?.match_source === "sku" || pe?.match_source === "catalog_name"
-              ? pe.match_source
-              : null,
-          matchScore:
-            pe?.match_score != null && Number.isFinite(Number(pe.match_score))
-              ? Number(pe.match_score)
-              : null,
-          // Q2 §4: pack-note (evidence-strength phrase from the P1/P2
-          // backfill). Pass through verbatim; null for most items.
-          packNote: it.pack_note ?? null,
-          // M1 R2 fix 1 + R3 fix 2: in measures-world, case_weight_lb
-          // decides whether the item has an override and what it is
-          // worth. The legacy pair (when consistent with the case
-          // weight within 1 percent) decides how to SHOW it. Pre-0019
-          // we fall back to the legacy pair unchanged.
-          // M2 §4B part 2: item.eachMeasure is unread on screen; keep
-          // the field present on the type for back-compat but no
-          // shape-helper projection.
-          eachMeasure:
-            it.each_measure_qty != null && it.each_measure_uom
-              ? { qty: Number(it.each_measure_qty), uom: it.each_measure_uom }
-              : null,
-        });
-      }
+      g.items.push(projectItem(it, parsed.body, u12));
       groups.set(key, g);
+    } else if (parsed.prefix === "ai-notfood") {
+      // T5b item 3: the matcher left these as link_status='proposed'
+      // but with no ingredient_id and an ai-notfood: reason. The
+      // grouper above left them out; the dedicated not-food card
+      // reads them from this collection.
+      notFoodItems.push(projectItem(it, parsed.body, u12));
     }
-    // Items with link_status='proposed' but no ingredient_id and no ai-new
-    // reason are malformed - skip silently; a future hotfix can surface them.
+    // Items with link_status='proposed' but no ingredient_id and no
+    // ai-new / ai-notfood reason are malformed - skip silently.
   }
+  notFoodItems.sort((a, b) => b.usd12m - a.usd12m);
 
   // M2.1: post-pass fills perBaseInIngUnit + statusKind on every
   // proposed item in an existing-ingredient group. statusKind runs
@@ -795,23 +687,54 @@ export const loadReview = cache(async function loadReview() {
   }));
   groupList.sort((a, b) => b.totalUsd12m - a.totalUsd12m);
 
+  // T5b ruling 7: the lock predicate is one shared function in
+  // src/lib/matcher/lock.ts, called here and in the batch-start
+  // route so the two surfaces can never disagree.
+  const [batchStartRes, batchEndRes] = await Promise.all([
+    client
+      .from("pr_events")
+      .select("at")
+      .eq("entity_type", "matcher")
+      .eq("kind", "ai_match_run_started")
+      .order("at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    client
+      .from("pr_events")
+      .select("at")
+      .eq("entity_type", "matcher")
+      .eq("kind", "ai_match_run")
+      .order("at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+  const batchStartAt = (batchStartRes.data?.at as string | undefined) ?? null;
+  const batchEndAt = (batchEndRes.data?.at as string | undefined) ?? null;
+  const batchInProgress = isBatchInProgress(batchStartAt, batchEndAt, Date.now());
+
   // Overall totals.
   const totalItems = items.length;
   const totalUsd = items.reduce((s, it) => s + Number(it.usd_12m ?? 0), 0);
   const groupedUsd = groupList.reduce((s, g) => s + g.totalUsd12m, 0);
   const notFoodCount = notFoodCountRes.count ?? 0;
   const unlinkedCount = unlinkedCountRes.count ?? 0;
+  const hasNotFoodCard = notFoodItems.length > 0;
 
   mark(timer, "shape");
   endTimer(timer);
   return {
     groups: groupList,
+    notFoodItems,
     ingredients,
+    batchInProgress,
     totals: {
       items: totalItems,
       usd: totalUsd,
       groupedUsd,
-      groups: groupList.length,
+      // T5b ruling 2: the not-food card counts as one group when it
+      // has items. The @topbar header slot and the page both read
+      // this number from the one cached loader.
+      groups: groupList.length + (hasNotFoodCard ? 1 : 0),
       notFood: notFoodCount,
       unlinked: unlinkedCount,
     },
@@ -819,7 +742,32 @@ export const loadReview = cache(async function loadReview() {
 });
 
 export async function ReviewQueue() {
-  const { groups, ingredients, totals } = await loadReview();
+  const { groups, notFoodItems, ingredients, totals, batchInProgress } = await loadReview();
+
+  // T5b item 3: build a synthetic kind="notfood" group for the
+  // dedicated not-food card. ingredient is null and proposed* are
+  // not read on this kind. The card uses the same ReviewCard chrome
+  // and ReviewActions machinery - see those files for the branching
+  // on `kind === "notfood"`.
+  const hasNotFoodCard = notFoodItems.length > 0;
+  const notFoodGroup: ReviewCardGroup | null = hasNotFoodCard
+    ? {
+        key: "nf",
+        kind: "notfood" as const,
+        ingredient: null,
+        proposedName: null,
+        proposedParent: null,
+        totalUsd12m: notFoodItems.reduce((s, it) => s + it.usd12m, 0),
+        totalLines12m: notFoodItems.reduce((s, it) => s + it.lines12m, 0),
+        items: notFoodItems,
+      }
+    : null;
+
+  // T5b item 4: the queue is "empty" for toolbar purposes only when
+  // no regular groups AND no not-food card. When only the not-food
+  // card remains the toolbar stays drawn (the card is one group and
+  // the user still wants the search field for Recent decisions).
+  const isEmpty = groups.length === 0 && !hasNotFoodCard;
 
   return (
     <div className="kf-ing">
@@ -831,13 +779,25 @@ export async function ReviewQueue() {
 
       <Tabs active="review" />
 
-      {groups.length === 0 ? (
+      {isEmpty ? (
+        // T5b item 4: the empty queue says so in the reference's
+        // words, states how many food items are not matched yet, and
+        // offers the batch control. The toolbar is not drawn.
         <div className="kf-empty">
+          <span className="kf-empty__icon" aria-hidden />
           <div>
-            <div className="kf-empty__title">No proposals waiting</div>
+            <div className="kf-empty__title">You are caught up</div>
             <div className="kf-empty__body">
-              Run the matcher (<code>POST /api/match</code>) to populate this queue; or confirm what&rsquo;s
-              already linked on the vendor-items table.
+              Nothing is waiting for review.{" "}
+              <strong>{fmtCount(totals.unlinked)}</strong> food items have not
+              been matched yet. Bring in a batch and the matcher will suggest
+              an ingredient for each one.
+            </div>
+            <div className="kf-empty__action">
+              <BatchRunControl
+                unlinkedCount={totals.unlinked}
+                inProgress={batchInProgress}
+              />
             </div>
           </div>
         </div>
@@ -848,6 +808,11 @@ export async function ReviewQueue() {
             key: g.key,
             node: <ReviewCard group={g} ingredients={ingredients} />,
           }))}
+          notFoodCard={
+            notFoodGroup ? (
+              <ReviewCard group={notFoodGroup} ingredients={ingredients} />
+            ) : null
+          }
           totals={{
             items: totals.items,
             usd: totals.usd,
@@ -867,6 +832,11 @@ export async function ReviewQueue() {
 // filter needs. Only serializable fields; no React elements or
 // functions.
 function toFilterGroup(g: ReviewCardGroup): ReviewFilterGroup {
+  // T5b item 3: this is called only on the regular groups list from
+  // loadReview, which contains existing + new kinds only (the
+  // notfood card is threaded through separately as a React node).
+  // Narrow the kind for ReviewFilterGroup's stricter union.
+  const kind = g.kind === "notfood" ? "existing" : g.kind;
   const latestLastSeen = g.items.reduce<string | null>((acc, it) => {
     if (!it.lastSeen) return acc;
     if (!acc) return it.lastSeen;
@@ -874,7 +844,7 @@ function toFilterGroup(g: ReviewCardGroup): ReviewFilterGroup {
   }, null);
   return {
     key: g.key,
-    kind: g.kind,
+    kind,
     ingredientName: g.ingredient?.name ?? null,
     ingredientParent: g.ingredient?.parent ?? null,
     // category + resale carry the super-category and resale flag to the

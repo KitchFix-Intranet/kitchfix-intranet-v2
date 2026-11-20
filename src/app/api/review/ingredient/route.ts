@@ -56,8 +56,9 @@ export async function GET(req: NextRequest) {
   // panel's sub-category and merge dropdowns, in parallel. T2 §2:
   // the parents list goes through readActiveIngredients, which pages
   // past PostgREST's 1,000-row cap and fails loudly on a short read.
+  // T5b item 6: allergens_reviewed_by leaves the SELECT.
   const PARENT_COLS =
-    "id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_by,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source,yield_pct,yield_source";
+    "id,name,parent,category,resale,base_unit,allergens,allergens_reviewed_at,each_measure_qty,each_measure_uom,each_measure_source,yield_pct,yield_source";
   let parents: ReviewCardIngredient[];
   const [ingRes, parentsOrErr] = await Promise.all([
     client

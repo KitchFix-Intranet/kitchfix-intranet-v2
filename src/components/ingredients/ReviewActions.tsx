@@ -63,7 +63,12 @@ type Ingredient = {
 };
 
 type Props = {
-  kind: "existing" | "new";
+  // T5b item 3: "notfood" variant draws two buttons only - "Yes, not
+  // food" (markNotFood) and "It is food: pick an ingredient" (opens
+  // the Relink panel). The exits group, New ingredient button and
+  // the empty-selection line are suppressed. Decision functions
+  // under src/lib/reviewWrites.ts do not change.
+  kind: "existing" | "new" | "notfood";
   currentIngredientId: string | null;
   // Whether the current target ingredient is Retail. On existing-group
   // confirms with this true, confirmItems lands the items as
@@ -82,16 +87,13 @@ type Props = {
   // router.refresh(). Fires BEFORE the undo toast lands so the two
   // animations overlap. Receives the item ids that just left the queue.
   onLeaveStart?: (itemIds: string[]) => void;
-  // N9 §2d: the "moves to Linked" / "Select items to confirm" line
-  // moves out of the separate <footer> strip into the action bar's
-  // second row. Computed by the parent so it already knows the
-  // selected count + usd sum.
-  movesLine?: string;
 };
 
 // N10 R6: "relinkandconfirm" is a distinct op so the busy chrome
 // lands on the Relink panel's primary, not on the bar's Confirm.
-type Op = null | "confirming" | "relinking" | "relinkandconfirm" | "creating" | "notfood" | "resale" | "archived" | "oneoff" | "keepsep" | "flag";
+// T5b item 1: Keep separate and the card-level Flag left the card;
+// "keepsep" and "flag" leave the union. Their routes stay.
+type Op = null | "confirming" | "relinking" | "relinkandconfirm" | "creating" | "notfood" | "resale" | "archived" | "oneoff";
 
 // T2 §1: ReviewActions now goes through the shared postJson in
 // ./panel/common, so a dropped connection is a caught outcome and
@@ -126,7 +128,6 @@ export function ReviewActions({
   checkedCount,
   memberCount,
   onLeaveStart,
-  movesLine,
 }: Props) {
   const router = useRouter();
   const [op, setOp] = useState<Op>(null);
@@ -136,23 +137,10 @@ export function ReviewActions({
   // across renders and between cards.
   const scopeBase = useId();
   const dirtyScope = `rvc-${scopeBase}`;
-  // Shared save-status strip. `lastDone` is the clock stamp of the
-  // most recent successful action; a 2.5s window after that renders
-  // the inline "Done" chip. The strip renders "Saving..." any time
-  // an op is in flight, so every save point here has a consistent
-  // in-flight + success indicator (matches the DetailPanel SaveFlash
-  // pattern per the Oct 29 Britt review).
-  const [lastDone, setLastDone] = useState<number | null>(null);
-  const [showDone, setShowDone] = useState(false);
-  useEffect(() => {
-    if (!lastDone) {
-      setShowDone(false);
-      return;
-    }
-    setShowDone(true);
-    const t = window.setTimeout(() => setShowDone(false), 2500);
-    return () => window.clearTimeout(t);
-  }, [lastDone]);
+  // T5b item 2: the "Done" status chip + leaving-overlay sentence
+  // are gone. One quiet signal: the card (or decided rows) leaves,
+  // the Undo toast offers Undo. A failure still shows its sentence
+  // in the card (bar + panel paths below).
   const [showRelink, setShowRelink] = useState(false);
   const [relinkId, setRelinkId] = useState<string | null>(null);
   // N10 round 2 fix 3: refocus the opener button when a panel closes
@@ -231,21 +219,12 @@ export function ReviewActions({
     dirtyScope
   );
 
-  // T2 §5: batch-flag in-page note form (replaces the former
-  // window.prompt). Open on Flag click; Save posts; Cancel closes.
-  const [flagFormOpen, setFlagFormOpen] = useState(false);
-  const [flagNote, setFlagNote] = useState("");
-  const [flagError, setFlagError] = useState<string | null>(null);
-  // T4 §6: the four "not for recipes" buttons (Retail, Archive, One-off,
-  // Not food) and Keep separate used to report failure in a toast that
-  // was gone in six seconds. Now the sentence sits in the card, beside
-  // the buttons, until the next press. One state slot.
+  // T4 §6: the four "not for recipes" buttons report failure as a
+  // sentence beside the buttons, not a toast. One state slot. T5b
+  // item 1: the card-level Flag and Keep separate (and their note
+  // form) are gone; row-level Flag + ledger-level Undo still cover
+  // those paths.
   const [barError, setBarError] = useState<string | null>(null);
-  // T4 §6: Esc on a flag note with text asks before dropping the note,
-  // the same way the item-panel asks on every other typed field. Scoped
-  // to this component so it never reaches the item panel's dirty
-  // registry.
-  const [flagDiscardAsk, setFlagDiscardAsk] = useState(false);
   // N3: why the user opened the create panel. "confirm" is the plain
   // + Create flow (default). "retail" is set only by the markResale
   // fallback below when it cannot post directly (name < 2 chars or
@@ -361,7 +340,6 @@ export function ReviewActions({
       }
     );
     setOp(null);
-    setLastDone(Date.now());
     // Hand off to the parent card for the leaving-animation + the
     // deferred router.refresh() (so the card unmounts AFTER the
     // animation plays). If no handler is wired, refresh immediately
@@ -410,7 +388,6 @@ export function ReviewActions({
     }
     setShowRelink(false);
     setOp(null);
-    setLastDone(Date.now());
     router.refresh();
   }
 
@@ -458,7 +435,6 @@ export function ReviewActions({
     setShowRelink(false);
     setRelinkId(null);
     setOp(null);
-    setLastDone(Date.now());
     if (onLeaveStart) {
       onLeaveStart(checkedIds);
     } else {
@@ -571,7 +547,6 @@ export function ReviewActions({
     setShowNew(false);
     setCreateIntent("confirm");
     setOp(null);
-    setLastDone(Date.now());
     // Create flows keep today's refresh path (router.refresh). The
     // leaving animation is only wired on relink+confirm per §2e.
     router.refresh();
@@ -600,8 +575,14 @@ export function ReviewActions({
       toast(`Marked ${fmtCount(marked)} as not food`, { undo: undoCb });
     }
     setOp(null);
-    setLastDone(Date.now());
-    router.refresh();
+    // T5b item 2: every exit plays the leave animation (one quiet
+    // signal), then router.refresh() from the parent. Same path the
+    // Confirm button has had since T4.
+    if (onLeaveStart) {
+      onLeaveStart(checkedIds);
+    } else {
+      router.refresh();
+    }
   }
 
   // Q2 §2: One-off purchase disposition. Real food bought once that
@@ -634,8 +615,11 @@ export function ReviewActions({
       toast(`Marked ${fmtCount(marked)} as one-off purchase${marked === 1 ? "" : "s"}`, { undo: undoCb });
     }
     setOp(null);
-    setLastDone(Date.now());
-    router.refresh();
+    if (onLeaveStart) {
+      onLeaveStart(checkedIds);
+    } else {
+      router.refresh();
+    }
   }
 
   // Retail disposition. Items sold as-is to players (bottled water,
@@ -703,7 +687,6 @@ export function ReviewActions({
         }
       );
       setOp(null);
-      setLastDone(Date.now());
       if (onLeaveStart) {
         onLeaveStart(checkedIds);
       } else {
@@ -742,7 +725,6 @@ export function ReviewActions({
       undo: d.event_id ? undoViaEvent(router, d.event_id) : undefined,
     });
     setOp(null);
-    setLastDone(Date.now());
     if (onLeaveStart) {
       onLeaveStart(checkedIds);
     } else {
@@ -778,70 +760,17 @@ export function ReviewActions({
       toast(`Archived ${fmtCount(marked)} item${marked === 1 ? "" : "s"}`, { undo: undoCb });
     }
     setOp(null);
-    setLastDone(Date.now());
-    router.refresh();
-  }
-
-  // Flag. Orthogonal to disposition - doesn't move anything, just
-  // stamps flagged/flag_note/flagged_by/flagged_at. A follow-up
-  // reviewer sees these on the Overview flagged panel. Unflag/resolve
-  // happens from that panel. T2 §5: the former window.prompt is now
-  // an in-page note form (see the render below); flagSave posts the
-  // chosen note.
-  function openFlagForm() {
-    if (op || noneChecked) return;
-    setFlagError(null);
-    setFlagNote("");
-    setFlagFormOpen(true);
-  }
-  async function flagSave() {
-    if (op || noneChecked) return;
-    setOp("flag");
-    setFlagError(null);
-    const r = await postJson("/api/review/flag", {
-      itemIds: checkedIds,
-      flagged: true,
-      note: flagNote.trim() || null,
-    });
-    if (!r.ok) {
-      setFlagError(saveErrorSentence(r) ?? "Nothing was saved.");
-      setOp(null);
-      return;
-    }
-    toast(`Flagged ${fmtCount(checkedCount)} item${checkedCount === 1 ? "" : "s"} for review`);
-    setOp(null);
-    setFlagFormOpen(false);
-    setFlagNote("");
-    setLastDone(Date.now());
-    router.refresh();
-  }
-
-  async function keepSeparate() {
-    if (op || noneChecked) return;
-    setBarError(null);
-    setOp("keepsep");
-    const r = await postJson("/api/review/keep-separate", { itemIds: checkedIds });
-    if (!r.ok) {
-      // T4 §6: sentence stays in the card.
-      setBarError(saveErrorSentence(r) ?? "Nothing was saved.");
-      setOp(null);
-      return;
-    }
-    const d = (r.data ?? {}) as { marked?: number; skipped?: number; event_id?: string | null };
-    const marked = Number(d.marked ?? 0);
-    const skipped = Number(d.skipped ?? 0);
-    const undoCb = d.event_id ? undoViaEvent(router, d.event_id) : undefined;
-    if (marked === 0) {
-      toast("Nothing changed - already decided");
-    } else if (skipped > 0) {
-      toast(`${fmtCount(marked)} item${marked === 1 ? "" : "s"} held out of this group (${fmtCount(skipped)} already decided)`, { undo: undoCb });
+    if (onLeaveStart) {
+      onLeaveStart(checkedIds);
     } else {
-      toast(`${fmtCount(marked)} item${marked === 1 ? "" : "s"} held out of this group`, { undo: undoCb });
+      router.refresh();
     }
-    setOp(null);
-    setLastDone(Date.now());
-    router.refresh();
   }
+
+  // T5b item 1: the card-level Flag's note form and keepSeparate are
+  // retired. Routes still answer (row-level flag toggle still posts to
+  // /api/review/flag; Keep separate decisions already in Recent
+  // decisions can still be undone from there).
 
   return (
     <div className="kf-rvc__actions">
@@ -849,20 +778,27 @@ export function ReviewActions({
           their icons; group 3 keeps them. The selected count is NOT
           here - it lives in the head (§2a), once. */}
       <div className="kf-rvc__actions-row">
-        {/* Group 1: Confirm + Relink + New ingredient. */}
+        {/* T5b item 1 + item 3: the lead button is the only filled
+            button on a card. When a panel is open the lead draws
+            as a line button (reference vCard rule). The notfood
+            variant's lead calls markNotFood directly - the "Yes,
+            not food" text is its own, and the busy label is the
+            shared "Saving..." phrase. */}
         <button
           type="button"
-          className={`kf-btn kf-btn--primary kf-btn--sm${op === "confirming" ? " is-busy" : ""}`}
+          className={`kf-btn ${showRelink || showNew ? "kf-btn--line" : "kf-btn--primary"} kf-btn--sm${op === "confirming" || op === "notfood" ? " is-busy" : ""}`}
           disabled={op !== null || noneChecked}
-          onClick={confirmChecked}
+          onClick={kind === "notfood" ? markNotFood : confirmChecked}
         >
-          {op === "confirming"
-            ? "Saving..."
-            : kind === "new"
-              ? "Create ingredient"
-              : ingredientResale
-                ? "Confirm as retail"
-                : "Confirm"}
+          {kind === "notfood"
+            ? (op === "notfood" ? "Saving..." : "Yes, not food")
+            : op === "confirming"
+              ? "Saving..."
+              : kind === "new"
+                ? "Create ingredient"
+                : ingredientResale
+                  ? "Confirm as retail"
+                  : "Confirm"}
         </button>
 
         {/* N10 §2a: opening one panel closes the other.
@@ -882,7 +818,7 @@ export function ReviewActions({
             }
           }}
         >
-          Relink
+          {kind === "notfood" ? "It is food: pick an ingredient" : "Relink"}
         </button>
 
         {kind === "existing" ? (
@@ -905,200 +841,99 @@ export function ReviewActions({
           </button>
         ) : null}
 
-        {/* Group 2: Keep separate + Flag. */}
-        <button
-          type="button"
-          className={`kf-btn kf-btn--ghost kf-btn--sm${op === "keepsep" ? " is-busy" : ""}`}
-          disabled={op !== null || noneChecked}
-          onClick={keepSeparate}
-          title="Hold these items out of this group permanently"
-        >
-          {op === "keepsep" ? "Saving..." : "Keep separate"}
-        </button>
+        {/* T5b item 1: Keep separate and the card-level Flag are off
+            the card. Their routes stay; the row-level flag toggle
+            and existing Keep separate decisions in Recent decisions
+            can still be undone. */}
 
-        <button
-          type="button"
-          className={`kf-btn kf-btn--ghost kf-btn--sm${op === "flag" ? " is-busy" : ""}`}
-          disabled={op !== null || noneChecked}
-          onClick={openFlagForm}
-          title="Mark for a second look (optional note); stays in the queue, shows on the Overview flagged panel"
+        {/* T5b item 1: the four exits as one labelled group. Icons
+            keep the eye sorting. Order follows the reference's
+            vCard(): Retail, One-off, Archive, Not food.
+            T5b item 3: the notfood card has two buttons total (the
+            lead above + Relink). The exits group is suppressed. */}
+        {kind === "notfood" ? null : (
+        <span
+          className="kf-rvc__exits"
+          role="group"
+          aria-label="Not for recipes"
         >
-          {op === "flag" ? "Saving..." : "Flag"}
-        </button>
-        {flagFormOpen ? (
-          <div className="kf-ing-note-form" role="group" aria-label="Flag note">
-            <label className="kf-ing-note-form__label" htmlFor="rvc-flag-note">
-              {`Flag ${checkedCount} item${checkedCount === 1 ? "" : "s"} for a second look. Optional note:`}
-            </label>
-            <input
-              id="rvc-flag-note"
-              type="text"
-              className="kf-ing-note-form__input"
-              value={flagNote}
-              onChange={(e) => setFlagNote(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  // T4 §6: a typed note is typed work. Ask before
-                  // dropping it. Scoped to this component so the item
-                  // panel never asks on its own typed fields.
-                  if (flagNote.trim().length > 0) {
-                    setFlagDiscardAsk(true);
-                  } else {
-                    setFlagFormOpen(false);
-                    setFlagNote("");
-                    setFlagError(null);
-                  }
-                } else if (e.key === "Enter") {
-                  e.preventDefault();
-                  flagSave();
-                }
-              }}
-              disabled={op === "flag"}
-              placeholder="(optional)"
-              autoFocus
-            />
-            <div className="kf-ing-note-form__actions">
-              <button
-                type="button"
-                className={`kf-btn kf-btn--primary kf-btn--sm${op === "flag" ? " is-busy" : ""}`}
-                disabled={op === "flag"}
-                onClick={flagSave}
-              >
-                {op === "flag" ? "Saving..." : "Flag"}
-              </button>
-              <button
-                type="button"
-                className="kf-btn kf-btn--line kf-btn--sm"
-                disabled={op === "flag"}
-                onClick={() => {
-                  // T4 §6: ask when the field has text.
-                  if (flagNote.trim().length > 0) {
-                    setFlagDiscardAsk(true);
-                  } else {
-                    setFlagFormOpen(false);
-                    setFlagNote("");
-                    setFlagError(null);
-                  }
-                }}
-              >
-                Cancel
-              </button>
-              {flagError ? (
-                <span className="kf-dpn__flash kf-dpn__flash--err" role="alert">
-                  {flagError}
-                </span>
-              ) : null}
-              {flagDiscardAsk ? (
-                // T4 §6: inline ask - stays scoped to this form so the
-                // item panel's own Discard ask never fires on this
-                // field. "Discard" drops the typed text and closes;
-                // "Keep editing" returns to the input.
-                <div className="kf-ing-note-form__discard-ask" role="alertdialog" aria-label="Discard what you typed?">
-                  <span className="kf-ing-note-form__ask-text">Discard what you typed?</span>
-                  <button
-                    type="button"
-                    className="kf-btn kf-btn--primary kf-btn--sm"
-                    onClick={() => setFlagDiscardAsk(false)}
-                  >
-                    Keep editing
-                  </button>
-                  <button
-                    type="button"
-                    className="kf-btn kf-btn--line kf-btn--sm"
-                    onClick={() => {
-                      setFlagDiscardAsk(false);
-                      setFlagFormOpen(false);
-                      setFlagNote("");
-                      setFlagError(null);
-                    }}
-                  >
-                    Discard
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
+          <span className="kf-rvc__exits-kicker" aria-hidden>Not for recipes</span>
+          <button
+            type="button"
+            className={`kf-btn kf-btn--soft kf-btn--sm${op === "resale" ? " is-busy" : ""}`}
+            disabled={op !== null || noneChecked}
+            onClick={markResale}
+            title="Sold as-is to players (water, snacks, sandwiches); tracked as retail spend, not a recipe ingredient"
+          >
+            <ShoppingBag size={14} strokeWidth={1.5} aria-hidden />
+            <span>{op === "resale" ? "Saving..." : "Retail"}</span>
+          </button>
 
-        {/* Divider before "not for recipes" group. */}
-        <span className="kf-rvc__actions-sep" aria-hidden />
+          <button
+            type="button"
+            className={`kf-btn kf-btn--soft kf-btn--sm${op === "oneoff" ? " is-busy" : ""}`}
+            disabled={op !== null || noneChecked}
+            onClick={markOneOff}
+            title="Real food bought once that doesn't deserve a master (parked, not tracked in recipe coverage or retail)"
+          >
+            <Clock size={14} strokeWidth={1.5} aria-hidden />
+            <span>{op === "oneoff" ? "Saving..." : "One-off"}</span>
+          </button>
 
-        {/* Group 3: Retail + Archive + One-off + Not food. Soft chrome;
-            keep the icons - the four are the "not for recipes" cluster
-            and the icon is how the eye sorts them. */}
-        <button
-          type="button"
-          className={`kf-btn kf-btn--soft kf-btn--sm${op === "resale" ? " is-busy" : ""}`}
-          disabled={op !== null || noneChecked}
-          onClick={markResale}
-          title="Sold as-is to players (water, snacks, sandwiches); tracked as retail spend, not a recipe ingredient"
-        >
-          <ShoppingBag size={14} strokeWidth={1.5} aria-hidden />
-          <span>{op === "resale" ? "Saving..." : "Retail"}</span>
-        </button>
+          <button
+            type="button"
+            className={`kf-btn kf-btn--soft kf-btn--sm${op === "archived" ? " is-busy" : ""}`}
+            disabled={op !== null || noneChecked}
+            onClick={markArchived}
+            title="Mistake or dead item; parked and not tracked in recipe coverage or retail"
+          >
+            <Archive size={14} strokeWidth={1.5} aria-hidden />
+            <span>{op === "archived" ? "Saving..." : "Archive"}</span>
+          </button>
 
-        <button
-          type="button"
-          className={`kf-btn kf-btn--soft kf-btn--sm${op === "archived" ? " is-busy" : ""}`}
-          disabled={op !== null || noneChecked}
-          onClick={markArchived}
-          title="Mistake or dead item; parked and not tracked in recipe coverage or retail"
-        >
-          <Archive size={14} strokeWidth={1.5} aria-hidden />
-          <span>{op === "archived" ? "Saving..." : "Archive"}</span>
-        </button>
-
-        <button
-          type="button"
-          className={`kf-btn kf-btn--soft kf-btn--sm${op === "oneoff" ? " is-busy" : ""}`}
-          disabled={op !== null || noneChecked}
-          onClick={markOneOff}
-          title="Real food bought once that doesn't deserve a master (parked, not tracked in recipe coverage or retail)"
-        >
-          <Clock size={14} strokeWidth={1.5} aria-hidden />
-          <span>{op === "oneoff" ? "Saving..." : "One-off"}</span>
-        </button>
-
-        <button
-          type="button"
-          className={`kf-btn kf-btn--soft kf-btn--sm${op === "notfood" ? " is-busy" : ""}`}
-          disabled={op !== null || noneChecked}
-          onClick={markNotFood}
-          title="Not a consumable product (fees, freight, supplies)"
-        >
-          <Ban size={14} strokeWidth={1.5} aria-hidden />
-          <span>{op === "notfood" ? "Saving..." : "Not food"}</span>
-        </button>
+          <button
+            type="button"
+            className={`kf-btn kf-btn--soft kf-btn--sm${op === "notfood" ? " is-busy" : ""}`}
+            disabled={op !== null || noneChecked}
+            onClick={markNotFood}
+            title="Not a consumable product (fees, freight, supplies)"
+          >
+            <Ban size={14} strokeWidth={1.5} aria-hidden />
+            <span>{op === "notfood" ? "Saving..." : "Not food"}</span>
+          </button>
+        </span>
+        )}
 
         {op !== null ? (
           <span className="kf-rvc__actions-status kf-rvc__actions-status--busy" aria-live="polite">
             <Loader2 size={12} strokeWidth={2.5} className="kf-rvc__spin" aria-hidden />
             Saving...
           </span>
-        ) : showDone ? (
-          <span className="kf-rvc__actions-status kf-rvc__actions-status--done" aria-live="polite">
-            <Check size={12} strokeWidth={2.5} aria-hidden />
-            Done
-          </span>
         ) : barError ? (
-          // T4 §6: the sentence sits beside the buttons until the next
-          // press. No toast fires. Any of the five bar handlers clears
-          // this at the top of its call.
+          // T4 §6: the sentence sits beside the buttons until the
+          // next press. No toast fires. Any of the bar handlers
+          // clears this at the top of its call.
           <span className="kf-dpn__flash kf-dpn__flash--err" role="alert">
             {barError}
           </span>
         ) : null}
       </div>
 
-      <div className="kf-rvc__actions-foot">
-        <span className="kf-rvc__actions-foot-defs">
-          Not for recipes: <b>Retail</b> sold as-is &middot; <b>Archive</b> mistake or dead item
-          {" "}&middot; <b>One-off</b> bought once &middot; <b>Not food</b> fees and supplies
-        </span>
-        <span className="kf-rvc__actions-foot-moves">{movesLine}</span>
-      </div>
+      {/* T5b item 1 + item 3: with nothing ticked the card says so
+          in one line below the action bar. The old legend + "moves
+          to Linked" footer is retired; the four exits are explained
+          once above the list, in a .kf-helpline above the first
+          card (see ReviewFilter). The notfood variant adds the
+          reference's standing sentence. */}
+      {kind === "notfood" ? (
+        <p className="kf-rvc__help">
+          {noneChecked ? "Select an item to decide it. " : ""}
+          The matcher read these as fees, freight or supplies, so it
+          suggested no ingredient. Say yes and they leave food spend.
+        </p>
+      ) : noneChecked ? (
+        <p className="kf-rvc__help">Select an item to decide it.</p>
+      ) : null}
 
       {showRelink ? (
         <RelinkPanel

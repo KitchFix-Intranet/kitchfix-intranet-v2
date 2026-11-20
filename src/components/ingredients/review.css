@@ -80,21 +80,60 @@
    * the page. */
   overflow: clip;
 }
-/* N9 round 3 fix 3: card-scroll breakpoint follows the table's own
- * min-width. The sum below must match --kf-rvc-table-min declared
- * on .kf-rvc:
- *   sel 52 + vendor 160 + pack 148 + price 256
- *   + annual 88 + sites 112 + activity 144 + item floor 240 = 1200
- * If any <col> width (or the 240 item floor) moves, update both
- * this @media value AND the matching variable up top. Media
- * queries cannot read CSS variables; the comment is the contract.
- * Polish 2: overscroll-behavior: contain so horizontal wheel at
- * the card edge does not scroll the page horizontally. */
-@media (max-width: 1200px) {
-  .kf-rvc {
-    overflow-x: auto;
-    overflow-y: hidden;
-    overscroll-behavior: contain;
+/* T5b item 7: the card no longer scrolls sideways. At <=1100 wide
+ * the item table stacks (reference's kf-itable--stack rule, ported
+ * to this tab's primitives). The old overflow-x: auto rule on
+ * .kf-rvc is retired - a 1366 or 1280 window fits with room; 1100
+ * and below stack. */
+@media (max-width: 1100px) {
+  .kf-rvc__items,
+  .kf-rvc__items > tbody {
+    display: block;
+  }
+  .kf-rvc__items > colgroup,
+  .kf-rvc__items > thead {
+    display: none;
+  }
+  .kf-rvc__items tr {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--sp-sp-1) var(--sp-sp-3);
+    padding: var(--sp-sp-3) var(--sp-sp-3) var(--sp-sp-3) 48px;
+    position: relative;
+    border-bottom: 1px solid var(--sp-line-soft);
+  }
+  .kf-rvc__items tr:last-child { border-bottom: none; }
+  .kf-rvc__items td {
+    display: block;
+    border: none;
+    padding: 0;
+    text-align: left;
+    overflow-wrap: anywhere;
+  }
+  .kf-rvc__items td.kf-table__num { text-align: left; }
+  /* Item name spans the full three-column grid; checkbox is pulled
+   * out into the 48 px left gutter so it stays near the item it
+   * selects. */
+  .kf-rvc__items td[data-l="Item"] { grid-column: 1 / -1; }
+  .kf-rvc__items td.kf-rvc__check-col {
+    position: absolute;
+    left: var(--sp-sp-1);
+    top: var(--sp-sp-3);
+    width: auto;
+  }
+  /* Small cell labels appear only in the stacked view so the eye
+   * can tell Vendor from Pack from Price. Not shown on Item (the
+   * name is self-explanatory) or Select. */
+  .kf-rvc__items td[data-l]:not([data-l="Item"]):not([data-l="Select"])::before {
+    content: attr(data-l);
+    display: block;
+    margin-bottom: 2px;
+    font-family: var(--sp-ui);
+    font-size: var(--sp-t-micro);
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--sp-muted);
   }
 }
 .kf-rvc--new { border-left: 4px solid var(--sp-warn-strong); }
@@ -293,36 +332,13 @@
   transition: color var(--sp-base) var(--sp-ease), opacity var(--sp-base) var(--sp-ease);
   opacity: 0.5;
 }
-.kf-rvc__leaving-overlay {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--sp-sp-2);
-  background: color-mix(in srgb, var(--sp-good-bg) 70%, transparent);
-  color: var(--sp-good);
-  font-family: var(--sp-disp);
-  font-weight: 800;
-  /* Train 5a / ruling 9: --sp-t-h4 was never defined. It fell to
-   * the inherited size (16 px); point explicitly at --sp-t-body
-   * so nothing on screen shifts. These three elements are rebuilt
-   * in 5b. */
-  font-size: var(--sp-t-body);
-  letter-spacing: .5px;
-  border-radius: inherit;
-  animation: kf-rvc-fade var(--sp-base) var(--sp-ease) both;
-}
-@keyframes kf-rvc-fade {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
+/* T5b item 2: the covering sentence element is retired. The leave
+ * animation on .kf-rvc + .kf-rvc__row--leaving stays - that is the
+ * one quiet signal. */
 @media (prefers-reduced-motion: reduce) {
   .kf-rvc { transition: opacity var(--sp-fast) linear; }
   .kf-rvc--leaving { transform: none; }
   .kf-rvc__row--leaving td { transition: opacity var(--sp-fast) linear; }
-  .kf-rvc__leaving-overlay { animation: none; }
 }
 /* N9 §2c: item-name row - the name button (never truncated) + flag
  * icon and catch-weight marker. Replaces the old .kf-rvc__desc stack. */
@@ -478,26 +494,36 @@
   flex-direction: column;
   gap: var(--sp-sp-3);
 }
-/* N9 §2d: three button groups on one row + a foot line of micro text.
- * Confirm/Relink/New ingredient (group 1), Keep separate/Flag
- * (group 2), divider, Retail/Archive/One-off/Not food (group 3). The
- * selected count is NOT in the bar - it lives in the head (§2a). */
+/* T5b item 1: seven buttons on one row, with the Retail / One-off /
+ * Archive / Not food exits collected into a labelled group that
+ * aligns to the right at desk width and wraps underneath on narrow.
+ * The actions-sep divider and the foot (legend + moves line) retire -
+ * the four exits get one standing sentence above the first card
+ * (.kf-helpline) and the empty-selection prompt sits below the
+ * action bar (.kf-rvc__help). */
 .kf-rvc__actions-row {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--sp-sp-2);
 }
-.kf-rvc__actions-sep {
-  display: inline-block;
-  width: 1px;
-  height: 28px;
-  margin: 0 var(--sp-sp-1);
-  background: var(--sp-line);
-  align-self: center;
+.kf-rvc__exits {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  flex-wrap: wrap;
+}
+.kf-rvc__exits-kicker {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-micro);
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--sp-muted);
+  margin-right: var(--sp-sp-1);
 }
 .kf-rvc__actions-status {
-  margin-left: auto;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -508,31 +534,32 @@
   font-weight: 700;
 }
 .kf-rvc__actions-status--busy { background: var(--sp-sky-tint); color: var(--sp-navy); }
-.kf-rvc__actions-status--done { background: var(--sp-good-bg); color: var(--sp-good); }
 .kf-rvc__spin { animation: kf-rvc-spin var(--sp-spin) linear infinite; }
 @keyframes kf-rvc-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
   .kf-rvc__spin { animation: none; }
 }
 
-.kf-rvc__actions-foot {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: var(--sp-sp-5);
+/* T5b item 1: the empty-selection prompt + the notfood card's help
+ * sentence. Quiet secondary copy, sits in the card below the action
+ * bar on its own line. */
+.kf-rvc__help {
+  margin: 0;
+  padding: var(--sp-sp-2) var(--sp-sp-5) var(--sp-sp-4);
   font-family: var(--sp-ui);
-  font-size: var(--sp-t-micro);
-  color: var(--sp-body);
-  line-height: 1.5;
-}
-.kf-rvc__actions-foot-defs b { color: var(--sp-ink); font-weight: 800; }
-/* N9 round 2 fix 6: right-side moves line is plain micro in body
- * colour, same weight as the left defs line. */
-.kf-rvc__actions-foot-moves {
-  flex: 0 0 auto;
-  text-align: right;
+  font-size: var(--sp-t-label);
   color: var(--sp-body);
 }
+
+/* T5b item 1: one standing help line above the first card. Carries
+ * the four exit definitions in one place. */
+.kf-helpline {
+  margin: 0 0 var(--sp-sp-3);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  color: var(--sp-body);
+}
+.kf-helpline b { color: var(--sp-ink); font-weight: 800; }
 
 /* Header select-all checkbox. The <label> provides the 44px click
  * target (header title-wrap is a flex row); the input itself stays
@@ -1174,56 +1201,14 @@
   .kf-review__kicker { width: 100%; margin-right: 0; margin-bottom: calc(-1 * var(--sp-sp-1)); }
 }
 
-.kf-chip {
-  position: relative;            /* anchors the ::before hit area */
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-sp-1);
-  min-height: 32px;
-  padding: var(--sp-sp-1) var(--sp-sp-3);
-  background: var(--sp-card);
-  color: var(--sp-body);
-  border: 1px solid var(--sp-line);
-  border-radius: var(--sp-r-pill);
-  font-family: var(--sp-ui);
-  font-size: var(--sp-t-micro);
-  font-weight: 700;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background var(--sp-fast) var(--sp-ease),
-              color var(--sp-fast) var(--sp-ease),
-              border-color var(--sp-fast) var(--sp-ease),
-              transform var(--sp-fast) var(--sp-ease);
-}
-/* 32px visual, 44px hit area - the notch-toggle precedent from
- * docs/DESIGN.md section 2. Keeps the rail light while meeting the
- * corp control floor. */
-.kf-chip::before { content: ""; position: absolute; inset: -6px -2px; }  /* 32 + 12 = 44 tall; 2px sideways so neighbours barely overlap */
-.kf-chip:hover:not([disabled]) { background: var(--sp-sky-tint); }
-.kf-chip:active:not([disabled]) { transform: translateY(1px); }
-.kf-chip:focus-visible { outline: 2px solid var(--sp-navy); outline-offset: 2px; }
-.kf-chip--on {
-  background: var(--sp-navy);
-  color: var(--sp-card);
-  border-color: var(--sp-navy);
-}
-/* Must out-rank `.kf-chip:hover:not([disabled])` (0,3,0) or the hover
- * paints sky-tint under white text. Measured live before the fix. */
-.kf-chip.kf-chip--on:hover:not([disabled]) { background: var(--sp-navy-deep); border-color: var(--sp-navy-deep); }
-.kf-chip--warn.kf-chip--on:hover:not([disabled]) { background: var(--sp-warn); border-color: var(--sp-warn); }
-/* Hairline between the sort chips and the filter chips so two filled
- * chips on one rail do not read as two active filters. */
-.kf-chips__sep { width: 1px; align-self: stretch; margin: var(--sp-sp-1) var(--sp-sp-1); background: var(--sp-line); }
-.kf-chip--warn { color: var(--sp-warn); border-color: color-mix(in srgb, var(--sp-warn) 40%, var(--sp-line)); }
-.kf-chip--warn.kf-chip--on { background: var(--sp-warn); color: var(--sp-card); border-color: var(--sp-warn); }
-.kf-chip--empty { color: var(--sp-muted); background: var(--sp-ground); cursor: not-allowed; opacity: 0.6; }
-.kf-chip__count {
-  color: inherit;
-  opacity: 0.65;
-  font-variant-numeric: tabular-nums;
-  margin-left: var(--sp-sp-1);
-}
-.kf-chip--on .kf-chip__count { opacity: 0.9; }
+/* T5b item 9: the review tab's local .kf-chip block (32 px painted
+ * with -6 / -2 inset halo) is retired. Chips on this page come from
+ * the shared primitive in ./chips.css (36 / 40 painted with -5 / 0
+ * halo, matching Ingredients / Retail / Vendor items). Modifiers used
+ * only on this tab live beside the shared primitive now - see
+ * chips.css for .kf-chips__sep, .kf-chip__count and .kf-chip--on
+ * .kf-chip__count. The ::before hover / focus rules the shared
+ * primitive already carries cover the rest. */
 
 @media (max-width: 640px) {
   .kf-review__toolbar { gap: var(--sp-sp-2); }

@@ -39,7 +39,9 @@ export type AllergensState = {
 type Props = {
   ingredientId: string;
   allergens: readonly string[];
-  reviewedBy: string | null;
+  // T5b item 6: `reviewedBy` is gone. Only the timestamp decides
+  // whether to seed the "confirmed none" chip (see seedConfirmNone
+  // below). The reviewer's email is not read on this screen.
   reviewedAt: string | null;
   onSaved?: () => void;
   // Fires on mount and on every change to canConfirm / busy / savedAt
@@ -49,7 +51,7 @@ type Props = {
 };
 
 export const IngredientAllergens = forwardRef<AllergensHandle, Props>(function IngredientAllergens(
-  { ingredientId, allergens, reviewedBy: _reviewedBy, reviewedAt, onSaved, onStateChange },
+  { ingredientId, allergens, reviewedAt, onSaved, onStateChange },
   ref,
 ) {
   const router = useRouter();

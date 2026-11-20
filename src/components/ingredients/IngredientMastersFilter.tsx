@@ -106,7 +106,8 @@ export type MasterRow = {
   baseUnit: string;
   resale: boolean;
   allergens: string[];
-  allergensReviewedBy: string | null;
+  // T5b item 6: allergensReviewedBy no longer travels. Ingredients /
+  // Retail never rendered it.
   allergensReviewedAt: string | null;
   linkedCount: number;
   usd12m: number;
@@ -391,7 +392,7 @@ export function IngredientMastersFilter({
       resale: selected.resale,
       base_unit: selected.baseUnit,
       allergens: selected.allergens,
-      allergens_reviewed_by: selected.allergensReviewedBy,
+      // T5b item 6: the shape going into the panel loses the address.
       allergens_reviewed_at: selected.allergensReviewedAt,
       each_measure_qty: selected.eachMeasureQty,
       each_measure_uom: selected.eachMeasureUom,

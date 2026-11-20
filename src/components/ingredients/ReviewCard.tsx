@@ -13,7 +13,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, Pencil, Scale } from "lucide-react";
+import { Pencil, Scale } from "lucide-react";
 import { fmtCount, fmtDate, fmtPackNumbersInText, fmtUsd, fmtUsdLong, monthsAgo, nameFromEmail } from "@/lib/fmt";
 import { canonicalFromBaseUnit } from "@/lib/ingredients/pack";
 import { uomLabel } from "@/lib/ingredients/pack";
@@ -35,7 +35,12 @@ export type { ReviewCardIngredient, ReviewGroupItem } from "./itemTypes";
 
 export type ReviewCardGroup = {
   key: string;
-  kind: "existing" | "new";
+  // T5b item 3: the "notfood" kind draws the matcher's not-food
+  // guesses (link_status='proposed' with reason starting
+  // ai-notfood:) as one card with two buttons - "Yes, not food"
+  // and "It is food: pick an ingredient". ingredient is null and
+  // proposedName / proposedParent are not read for this kind.
+  kind: "existing" | "new" | "notfood";
   ingredient: ReviewCardIngredient | null;
   proposedName: string | null;
   proposedParent: string | null;
@@ -78,14 +83,23 @@ export function ReviewCard({
   group: ReviewCardGroup;
   ingredients: ReviewCardIngredient[];
 }) {
-  const title =
-    group.kind === "existing"
+  // T5b item 3: a notfood card is one group, titled per the
+  // reference, with a muted "To check" pill in place of the kind
+  // pill. No pencil, no category crumb, no low-confidence count.
+  const isNotFood = group.kind === "notfood";
+  const title = isNotFood
+    ? "The matcher thinks these are not food"
+    : group.kind === "existing"
       ? group.ingredient?.name ?? "Unknown"
       : group.proposedName ?? "New ingredient";
-  const parent = group.kind === "existing" ? group.ingredient?.parent ?? null : group.proposedParent;
+  const parent = isNotFood
+    ? null
+    : group.kind === "existing"
+      ? group.ingredient?.parent ?? null
+      : group.proposedParent;
   // Head low-confidence count: LOW rows only, per the ruling. Medium
   // rows carry a per-row pill but do not raise the head count.
-  const lowCount = group.items.filter((it) => it.confidence === "low").length;
+  const lowCount = isNotFood ? 0 : group.items.filter((it) => it.confidence === "low").length;
   const spread = useMemo(() => computeReviewCardSpread(group.items), [group.items]);
 
   // Default to every item selected. State keyed by vendor_item_id.
@@ -120,10 +134,6 @@ export function ReviewCard({
   const memberCount = group.items.length;
   const allChecked = memberCount > 0 && checkedCount === memberCount;
   const someChecked = checkedCount > 0 && !allChecked;
-  const checkedUsd = useMemo(
-    () => group.items.reduce((s, it) => (checked[it.id] ? s + it.usd12m : s), 0),
-    [checked, group.items]
-  );
 
   const selectAllRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -159,14 +169,10 @@ export function ReviewCard({
     }, delay);
   }
 
-  // N9 §2d foot right text (moved out of the separate <footer> strip).
-  const movesLine =
-    checkedCount === 0
-      ? "Select items to confirm."
-      : checkedCount === memberCount
-        ? `${fmtUsd(group.totalUsd12m)} moves to Linked when the whole group is confirmed`
-        : `${fmtUsd(checkedUsd)} moves to Linked for the ${checkedCount} selected items`;
-
+  // T5b item 2: one quiet signal. The "moves to Linked" foot line
+  // and the leaving-overlay sentence are gone; the leave animation +
+  // the Undo toast carry the message. The empty-selection prompt
+  // moves onto the card as a short help line beneath the actions.
   const leavingAll = leaving?.allLeaving ?? false;
   return (
     <article
@@ -186,7 +192,9 @@ export function ReviewCard({
             }}
           />
         </label>
-        {ingredientRow ? (
+        {isNotFood ? (
+          <h3 className="kf-rvc__title">{title}</h3>
+        ) : ingredientRow ? (
           <button
             type="button"
             className="kf-rvc__title kf-rvc__title-btn"
@@ -199,25 +207,29 @@ export function ReviewCard({
         ) : (
           <h3 className="kf-rvc__title">{title}</h3>
         )}
-        <span className={`kf-pill ${group.kind === "new" ? "kf-pill--new" : "kf-pill--info"}`}>
-          {group.kind === "new" ? "New ingredient" : "Existing match"}
-        </span>
-        {ingredientRow?.resale ? (
+        {isNotFood ? (
+          <span className="kf-pill kf-pill--muted">To check</span>
+        ) : (
+          <span className={`kf-pill ${group.kind === "new" ? "kf-pill--new" : "kf-pill--info"}`}>
+            {group.kind === "new" ? "New ingredient" : "Existing match"}
+          </span>
+        )}
+        {!isNotFood && ingredientRow?.resale ? (
           <span className="kf-pill kf-pill--muted">Retail</span>
         ) : null}
-        {lowCount > 0 ? (
+        {!isNotFood && lowCount > 0 ? (
           <span className="kf-pill kf-pill--warn">{fmtCount(lowCount)} low confidence</span>
         ) : null}
-        {ingredientRow?.category || parent ? (
+        {!isNotFood && (ingredientRow?.category || parent) ? (
           <span className="kf-rvc__head-crumb">
             {[ingredientRow?.category ?? null, parent]
               .filter((s): s is string => !!s && s.trim().length > 0)
               .join(" · ")}
           </span>
-        ) : ingredientRow && !ingredientRow.category ? (
+        ) : !isNotFood && ingredientRow && !ingredientRow.category ? (
           <span className="kf-pill kf-pill--warn">Needs category</span>
         ) : null}
-        <HeadSpread spread={spread} />
+        {!isNotFood ? <HeadSpread spread={spread} /> : null}
         <div className="kf-rvc__totals">
           <strong>{fmtUsdLong(group.totalUsd12m)}</strong>
           <span>
@@ -291,7 +303,7 @@ export function ReviewCard({
                   (it.flagged ? " kf-rvc__row--flagged" : "")
                 }
               >
-                <td className="kf-rvc__check-col">
+                <td className="kf-rvc__check-col" data-l="Select">
                   <input
                     type="checkbox"
                     checked={!!checked[it.id]}
@@ -302,7 +314,7 @@ export function ReviewCard({
                     }}
                   />
                 </td>
-                <td>
+                <td data-l="Item">
                   <div className="kf-rvc__nm">
                     <button
                       type="button"
@@ -352,13 +364,13 @@ export function ReviewCard({
                     </div>
                   ) : null}
                 </td>
-                <td>
+                <td data-l="Vendor">
                   <div className="kf-rvc__strong kf-cell-ellipsis">{it.vendor}</div>
                   <div className="kf-rvc__sublabel">
                     {it.itemNumber ? `#${it.itemNumber}` : "no item #"}
                   </div>
                 </td>
-                <td>
+                <td data-l="Pack">
                   <div>
                     {it.packNormalized || it.pack ? (
                       <>
@@ -382,20 +394,20 @@ export function ReviewCard({
                     ) : null;
                   })()}
                 </td>
-                <td className="kf-table__num">
+                <td className="kf-table__num" data-l="Unit price">
                   <UnitPriceCell item={it} ingredient={group.ingredient ?? null} rowTag={rowTag} />
                 </td>
-                <td className="kf-table__num kf-rvc__strong">
+                <td className="kf-table__num kf-rvc__strong" data-l="Annual">
                   ${fmtUsdLong(it.usd12m).replace(/^\$/, "")}
                 </td>
-                <td>
+                <td data-l="Sites">
                   {it.accounts.length > 0 ? (
                     <SitePills codes={it.accounts} max={3} />
                   ) : (
                     <span className="kf-muted">-</span>
                   )}
                 </td>
-                <td>
+                <td data-l="Activity">
                   <div>{it.lines12m === 1 ? "1 line" : `${fmtCount(it.lines12m)} lines`}</div>
                   <div className="kf-rvc__sublabel">
                     {it.lastSeen ? fmtDate(it.lastSeen) : "-"}
@@ -425,15 +437,7 @@ export function ReviewCard({
         checkedCount={checkedCount}
         memberCount={memberCount}
         onLeaveStart={startLeaveAnimation}
-        movesLine={movesLine}
       />
-
-      {leavingAll ? (
-        <div className="kf-rvc__leaving-overlay" aria-live="polite" role="status">
-          <Check size={28} strokeWidth={2} aria-hidden />
-          <span>Confirmed. Leaving the queue.</span>
-        </div>
-      ) : null}
 
       {panelOpen ? (
         <DetailPanel
