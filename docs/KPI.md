@@ -341,21 +341,22 @@ below as `id-list`.
 | `purchasing/loaders.ts:loadCompliance` main | `rippling_report_txns_latest` | `purchased_at, id` | PK (bigint) | paged |
 | `purchasing/loaders.ts:loadCompliance` label map | `spend_work_location_site_map` | `work_location_label, work_location_id` | row grain is `(work_location_id)` | paged |
 | `purchasing/loaders.ts:loadCompliance` region read | `accounts` | `team_key` | PK | paged |
-| `portfolioMembers.ts:resolvePortfolioMembers` | `accounts` | `team_key` | PK | paged |
-| `labor/workerWeekRates.ts:loadWorkerWeekRates` presence read | `rippling_current_presence` | `rippling_id` | PK | paged |
-| `labor/workerWeekRates.ts:loadWorkerWeekRates` pay-segments read | `rippling_raw_pay_segments` | `rippling_id` | PK | paged |
-| `labor/preFloorEstimator.ts:deriveAccountBaseRates` daily read | `labor_actuals_daily` | `work_date, worker_id, line_code` (inside fixed account_key) | row grain `(account_key, worker_id, work_date, line_code)` | paged |
-| `labor/preFloorEstimator.ts:deriveAccountBaseRates` schedule read | `sc_homestand_schedule` | `service_date` (inside fixed account_key) | row grain `(account_key, service_date)` | paged |
-| `labor/preFloorEstimator.ts:foldPreFloorEstimates` weekly read | `labor_actuals_latest` | `week_start, worker_id` (inside fixed account_key) | row grain `(account_key, worker_id, week_start)` | paged |
-| `labor/preFloorEstimator.ts:foldPreFloorEstimates` schedule read | `sc_homestand_schedule` | `service_date` (inside fixed account_key) | row grain `(account_key, service_date)` | paged |
-| `labor/homestandResolver.ts:listHomestands` schedule read | `sc_homestand_schedule` | `service_date` (inside fixed account_key) | row grain `(account_key, service_date)` | paged |
-| `labor/homestandResolver.ts:listHomestands` hourly budget | `kpi_budgets` | `period_no` (inside fixed account_key + line_code + fiscal_year) | PK fixed modulo period_no | paged |
-| `labor/homestandResolver.ts:listHomestands` salary budget | `kpi_budgets` | `period_no` (inside fixed account_key + line_code + fiscal_year) | PK fixed modulo period_no | paged |
-| `labor/homestandResolver.ts:resolveDailyFloor` | `labor_actuals_latest` | n/a (`.limit(1).maybeSingle()`) | single row | exempt |
-| `labor/homestandResolver.ts:foldPerStandSplits` daily read | `labor_actuals_daily` | `work_date, worker_id, line_code` (inside fixed account_key) | row grain `(account_key, worker_id, work_date, line_code)` | paged |
-| `labor/dailyRangeBody.ts:buildDailyRangeBody` members read | `accounts` | `team_key` | PK | paged |
-| `labor/dailyRangeBody.ts:buildDailyRangeBody` daily read | `labor_actuals_daily` | `account_key, worker_id, work_date, line_code` | row grain | paged |
-| `labor/dailyRangeBody.ts:buildDailyRangeBody` budget read | `kpi_budgets` | `account_key, period_no` (inside fixed line_code + fiscal_year) | PK fixed modulo in-filter | paged |
+| `portfolioMembers.ts:resolvePortfolioMembers` | `accounts` | `team_key` | PK `(team_key)` verified in pg_constraint 2026-11-20 | paged |
+| `labor/workerWeekRates.ts:loadWorkerWeekRates` presence read | `rippling_current_presence` | `rippling_id` (`kind` fixed by `.eq`) | PK `(kind, rippling_id)` verified in pg_constraint 2026-11-20 | paged |
+| `labor/workerWeekRates.ts:loadWorkerWeekRates` pay-segments read | `rippling_raw_pay_segments` | `rippling_id, id` | PK is `(id)` not `rippling_id` (rippling_id has 4,428 repeats in 26,527 rows verified 2026-11-20); `(rippling_id, id)` unique by schema | paged |
+| `labor/preFloorEstimator.ts:deriveAccountBaseRates` daily read | `labor_actuals_daily` | `work_date, worker_id, line_code` (`account_key` fixed by `.eq`) | PK `(account_key, worker_id, work_date, line_code)` verified in pg_constraint 2026-11-20 | paged |
+| `labor/preFloorEstimator.ts:deriveAccountBaseRates` schedule read | `sc_homestand_schedule` | `service_date` (`account_key` fixed by `.eq`) | UNIQUE `(account_key, service_date)` verified in pg_constraint 2026-11-20 | paged |
+| `labor/preFloorEstimator.ts:foldPreFloorEstimates` weekly read | `labor_actuals_latest` | `week_start, worker_id, line_code` (`account_key` fixed by `.eq`) | PK of underlying `labor_actuals` is `(account_key, worker_id, week_start, line_code)` verified in pg_constraint 2026-11-20 | paged |
+| `labor/preFloorEstimator.ts:foldPreFloorEstimates` schedule read | `sc_homestand_schedule` | `service_date` (`account_key` fixed by `.eq`) | UNIQUE `(account_key, service_date)` verified 2026-11-20 | paged |
+| `labor/homestandResolver.ts:listHomestands` schedule read | `sc_homestand_schedule` | `service_date` (`account_key` fixed by `.eq`) | UNIQUE `(account_key, service_date)` verified 2026-11-20 | paged |
+| `labor/homestandResolver.ts:listHomestands` hourly budget | `kpi_budgets` | `period_no` (`account_key`, `line_code`, `fiscal_year` fixed by `.eq`) | PK `(account_key, line_code, fiscal_year, period_no)` verified in pg_constraint 2026-11-20 | paged |
+| `labor/homestandResolver.ts:listHomestands` salary budget | `kpi_budgets` | `period_no` (`account_key`, `line_code`, `fiscal_year` fixed by `.eq`) | PK `(account_key, line_code, fiscal_year, period_no)` | paged |
+| `labor/homestandResolver.ts:resolveDailyFloor` | `labor_actuals_latest` | n/a (`.limit(1).maybeSingle()`) | single row by definition | exempt |
+| `labor/homestandResolver.ts:foldPerStandSplits` daily read | `labor_actuals_daily` | `work_date, worker_id, line_code` (`account_key` fixed by `.eq`) | PK `(account_key, worker_id, work_date, line_code)` | paged |
+| `labor/dailyRangeBody.ts:buildDailyRangeBody` members read | `accounts` | `team_key` | PK `(team_key)` | paged |
+| `labor/dailyRangeBody.ts:buildDailyRangeBody` daily read | `labor_actuals_daily` | `account_key, worker_id, work_date, line_code` | PK `(account_key, worker_id, work_date, line_code)` | paged |
+| `labor/dailyRangeBody.ts:buildDailyRangeBody` budget read | `kpi_budgets` | `account_key, period_no` (`line_code`, `fiscal_year` fixed by `.eq`) | PK `(account_key, line_code, fiscal_year, period_no)` | paged |
+| `labor/salaryBoard.ts:loadSalaryActuals` | `labor_salary_actuals` | `account_key, week_start, worker_id` (`.in("account_key", members)`) | UNIQUE `(worker_id, week_start)` verified in pg_constraint 2026-11-20; account_key prefix does not break uniqueness | paged |
 | `entry.ts:fetchAccountsDirectoryLabor` | `accounts` | `team_key` | PK | paged |
 | `entry.ts:getLabor` walk freshness | `rippling_walks` | n/a (`.limit(1).maybeSingle()`) | single row | exempt |
 | `entry.ts:getLabor` weekly derive freshness | `labor_actuals` | n/a (`.limit(1).maybeSingle()`) | single row | exempt |
@@ -372,8 +373,8 @@ below as `id-list`.
 | `entry.ts:getLabor` single unmapped names | `earning_type_unmapped` | `total_amount desc, merged_earning_type_name` | merged_earning_type_name is unique | paged |
 | `entry.ts:getLabor` single pnl budgets | `kpi_budgets` | `period_no` (inside fixed account_key + line_code + fiscal_year) | PK fixed | paged |
 | `entry.ts:getLabor` single sc_labor_budgets | `sc_labor_budgets` | `period, effective_from, id` (inside fixed account_key) | `id` (uuid) PK tie-breaker | paged |
-| `entry.ts:getPurchasing` reimb names | `billcom_ref_accounts` | `account_number` | PK | paged |
-| `entry.ts:getPurchasing` billcom vendor names | `billcom_ref_vendors` | `.in("id", idChunk)` with id PK | ≤ 100 rows per chunk | id-list |
+| `entry.ts:getPurchasing` reimb names | `billcom_ref_accounts` | `account_number, id` | PK is `(id)` not `account_number` (account_number has 150 repeats in 1,072 rows verified 2026-11-20); `(account_number, id)` unique by schema | paged |
+| `entry.ts:getPurchasing` billcom vendor names | `billcom_ref_vendors` | `.in("id", idChunk)` with id PK `(id)` verified 2026-11-20 | ≤ 100 rows per chunk | id-list |
 
 ### Train 2c - labor + purchasing take the inputs (2026-11-20)
 

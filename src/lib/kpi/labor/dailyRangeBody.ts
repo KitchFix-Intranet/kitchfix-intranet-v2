@@ -135,8 +135,9 @@ export async function buildDailyRangeBody(ctx: any) {
 
   // 4. Pro-rated budget.
   // Train 2c: paged via pagedSelect. kpi_budgets PK is
-  // (account_key, fiscal_year, period_no, line_code); line_code +
-  // fiscal_year are fixed so (account_key, period_no) is unique.
+  // (account_key, line_code, fiscal_year, period_no); line_code +
+  // fiscal_year are fixed by .eq() so (account_key, period_no) is
+  // unique within the filter.
   const budgetPeriodsQ: any = await pagedSelect((from: number, to: number) => supa
     .from("kpi_budgets")
     .select("account_key, period_no, amount")

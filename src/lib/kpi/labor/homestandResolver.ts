@@ -252,9 +252,9 @@ export async function listHomestands(supa: any, accountKey: any, fy: FiscalYear,
       [["account_key", accountKey]],
       [["service_date"]],
     ),
-    // Train 2c: kpi_budgets PK is (account_key, fiscal_year, period_no,
-    // line_code); all three are fixed by the eq filters so period_no
-    // alone is unique.
+    // Train 2c: kpi_budgets PK is (account_key, line_code, fiscal_year,
+    // period_no); all three leading components are fixed by the .eq()
+    // filters so period_no alone is unique within the filter.
     fetchAllRange(
       supa,
       "kpi_budgets",

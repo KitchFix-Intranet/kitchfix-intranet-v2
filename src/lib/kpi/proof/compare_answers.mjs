@@ -252,6 +252,7 @@ async function askV2Purchasing(params, caller, todayISO) {
     preview: params.preview,
     drill: params.drill,
     table: params.table,
+    debug: params.debug,
     start: params.start,
     end: params.end,
   };
@@ -484,6 +485,109 @@ async function buildLaborPurchasingCases(todayISO) {
     }
   }
 
+  // Group B - the five v1 branches the 182 do not reach.
+  // Documented in the 2c report. Two accounts per branch.
+  //
+  // B1 - debug=1 on purchasing. v1 fires computeSentinel (a
+  //      correctness probe, not a timer) and sticks the result in
+  //      `_debug.sentinel`.
+  // B2 - table=1 on purchasing. Toggles a different payload shape
+  //      for the Overview's purchasing CP table.
+  // B3 - preview=<acct> on both routes. Preview of an account the
+  //      caller can view; TEST_MODE caller is corporate so preview
+  //      of CIN - AZ + STL - FL is allowed.
+  // B4 - homestand=<iso> on labor for two accounts in
+  //      HOMESTAND_ACCOUNTS_FY2026 with a real GAME day from
+  //      sc_homestand_schedule.
+  // B5 - non-whole-week labor range; this reaches the daily-range
+  //      path (rangeSource.source === "daily"). Spans picked to
+  //      straddle a mid-period boundary so the range is non-aligned
+  //      and >= dailyFloorISO.
+  if (ranges.lastVerified) {
+    const lvs = ranges.lastVerified.start;
+    const lve = ranges.lastVerified.end;
+    // B1 - debug=1
+    for (const acct of ["CIN - AZ", "STL - FL"]) {
+      cases.push({
+        route: "purchasing",
+        group: "B1.purchasing_debug",
+        id: `B1-${acct}-debug`,
+        caller: CORP_CALLER,
+        params: { account: acct, start: lvs, end: lve, debug: "1" },
+        testRole: null,
+      });
+    }
+    // B2 - table=1
+    for (const acct of ["CIN - AZ", "STL - FL"]) {
+      cases.push({
+        route: "purchasing",
+        group: "B2.purchasing_table",
+        id: `B2-${acct}-table`,
+        caller: CORP_CALLER,
+        params: { account: acct, start: lvs, end: lve, table: "1" },
+        testRole: null,
+      });
+    }
+    // B3 - preview (labor + purchasing). Preview parameter means
+    // "show what this other account would look like to its real
+    // owner"; the caller must be allowed to view the previewed one.
+    // Corporate under TEST_MODE can view anything.
+    for (const acct of ["CIN - AZ", "STL - FL"]) {
+      cases.push({
+        route: "labor",
+        group: "B3.labor_preview",
+        id: `B3-labor-${acct}-preview`,
+        caller: CORP_CALLER,
+        params: { account: acct, preview: acct, start: lvs, end: lve, include_salary: "1" },
+        testRole: null,
+      });
+      cases.push({
+        route: "purchasing",
+        group: "B3.purchasing_preview",
+        id: `B3-purchasing-${acct}-preview`,
+        caller: CORP_CALLER,
+        params: { account: acct, preview: acct, start: lvs, end: lve },
+        testRole: null,
+      });
+    }
+    // B4 - homestand selection on labor. The real game dates are
+    // read at run time from sc_homestand_schedule; the proof sets
+    // the two values below to the earliest completed GAME day on
+    // each account verified 2026-11-20.
+    for (const [acct, gameStart] of [["CIN - OH", "2026-03-26"], ["STL - MO", "2026-03-26"]]) {
+      cases.push({
+        route: "labor",
+        group: "B4.labor_homestand",
+        id: `B4-${acct}-homestand`,
+        caller: CORP_CALLER,
+        params: { account: acct, homestand: gameStart, include_salary: "1" },
+        testRole: null,
+      });
+    }
+    // B5 - non-whole-week labor range. Pick a 10-day window inside
+    // the last verified period, starting mid-period so it is not
+    // Monday-Sunday aligned. The daily-range path requires start
+    // >= dailyFloorISO; last verified period is always after the
+    // 2026-04-20 floor so this is safe.
+    const addDays = (iso, n) => {
+      const d = new Date(iso + "T00:00:00Z");
+      d.setUTCDate(d.getUTCDate() + n);
+      return d.toISOString().slice(0, 10);
+    };
+    const nwwStart = addDays(lvs, 2);  // Wednesday
+    const nwwEnd   = addDays(lvs, 11); // Friday following week
+    for (const acct of ["CIN - AZ", "STL - FL"]) {
+      cases.push({
+        route: "labor",
+        group: "B5.labor_daily_range",
+        id: `B5-${acct}-non-whole-week`,
+        caller: CORP_CALLER,
+        params: { account: acct, start: nwwStart, end: nwwEnd, include_salary: "1" },
+        testRole: null,
+      });
+    }
+  }
+
   return { cases, ranges, curP, nextP: null, lastVerifiedP, fyEndCur };
 }
 
@@ -505,7 +609,9 @@ const REDACT_KEYS_SUBSTR = [
   "payee", "work_location_label",
   // DB-sourced timestamps (stored columns, not derived from `now`).
   // Both sides read them from the same row; hash and compare.
-  "derived_at",
+  // Note: `derived_at` is NOT here because on purchasing drill rows
+  // it is computed from `new Date().toISOString()` at request time
+  // (v1 loaders.js:235). It is in LEFT_OUT_KEYS below.
   "last_derive_at",
   "last_billcom_sync",
   "last_rippling_sync",
@@ -527,6 +633,13 @@ const REDACT_VALUE_PATTERNS = [
 const LEFT_OUT_KEYS = new Set([
   "report_age_hours",
   "oldest_age_days",
+  // Clock-derived on purchasing drill rows: v1 sets
+  // derived_at = new Date().toISOString() per drill row at request
+  // time (v1 loaders.js:235), so every v1 call stamps a slightly
+  // different value even on identical data. Treated as left out for
+  // the comparison; the field is stored verbatim on the saved JSON
+  // under its own name but replaced with a sentinel before compare.
+  "derived_at",
 ]);
 
 function redact(value) {

@@ -2056,12 +2056,19 @@ export async function getPurchasing({
     let namesByCode = new Map();
     if (glCodesToName.length > 0) {
       // Train 2c: paged via pagedSelect. billcom_ref_accounts.account_number
-      // is the PK so the sort is unique.
+      // is NOT unique (1,072 rows / 922 distinct account_number = 150
+      // repeats verified 2026-11-20); the primary key is `id`. Sort on
+      // (account_number, id) so the chain is unique for page boundaries.
+      // The downstream `namesByCode.set(String(r.account_number), ...)`
+      // last-write-wins on repeats is preserved: train 2c did not change
+      // the dedupe rule; it only made the sort unique so paging cannot
+      // drop or duplicate rows.
       const nq: any = await pagedSelect((from: number, to: number) => supa
         .from("billcom_ref_accounts")
-        .select("account_number, name")
+        .select("id, account_number, name")
         .in("account_number", glCodesToName)
         .order("account_number")
+        .order("id")
         .range(from, to));
       if (nq.error) return { status: 500, body: safeErrorPurchasing("billcom_ref_accounts", nq.error) };
       for (const r of nq.data || []) namesByCode.set(String(r.account_number), r.name || null);

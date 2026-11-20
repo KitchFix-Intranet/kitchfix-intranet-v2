@@ -357,17 +357,20 @@ export async function foldPreFloorEstimates(supa: any, accountKey: any, homestan
   const wkStarts = [...weeksTouched].sort();
   const minWk = wkStarts[0];
   const maxWk = wkStarts[wkStarts.length - 1];
-  // Train 2c: paged via pagedSelect. labor_actuals_latest row grain
-  // is (account_key, worker_id, week_start); account_key fixed so
-  // (week_start, worker_id) is unique.
+  // Train 2c: paged via pagedSelect. labor_actuals PK is
+  // (account_key, worker_id, week_start, line_code); account_key is
+  // fixed by the filter so the sort must include line_code to be
+  // unique by the schema even though today's data only carries
+  // "3100.1" in this table (verified 2026-11-20).
   const wQ = await pagedSelect((from: number, to: number) => supa
     .from("labor_actuals_latest")
-    .select("week_start, amount, worker_id")
+    .select("week_start, amount, worker_id, line_code")
     .eq("account_key", accountKey)
     .gte("week_start", minWk)
     .lte("week_start", maxWk)
     .order("week_start")
     .order("worker_id")
+    .order("line_code")
     .range(from, to));
   if (wQ.error) throw new Error(`preFloorEstimator weekly read (${accountKey}): ${wQ.error.message}`);
   const weekTotals = new Map<string, number>();

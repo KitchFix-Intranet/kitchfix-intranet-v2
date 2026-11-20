@@ -37,7 +37,7 @@ const KNOWN_TIE_BREAKER_SOURCES = {
   // Labor
   "actuals":            { file: "labor/loaders.ts::paginateActuals + labor/salaryBoard.ts::loadSalaryActuals", sort: "(week_start, account_key, worker_id) + (account_key, week_start, worker_id); salary tie-breaker added in 2c commit 2" },
   "workers":            { file: "labor/board.ts::buildBoard dict keyed by worker_id; built from actuals iteration", sort: "iteration order follows actuals sort chain above" },
-  "worker_week_rates":  { file: "labor/workerWeekRates.ts::loadWorkerWeekRates dict keyed by workerId|weekStart", sort: "(rippling_id) on both presence + raw pay_segments reads; both added in 2c commit 2" },
+  "worker_week_rates":  { file: "labor/workerWeekRates.ts::loadWorkerWeekRates dict keyed by workerId|weekStart", sort: "(kind, rippling_id) on presence PK; (rippling_id, id) on raw pay segments (fixed to include id tie-breaker in 2c round 2 after rippling_id proved non-unique: 26,527 rows / 22,099 distinct = 4,428 repeats)" },
   "name_availability":  { file: "labor/route.js resolver object; derived fields only", sort: "n/a - not an array / dict" },
   // Purchasing (common)
   "pending":            { file: "purchasing/loaders.ts::loadPending array", sort: "(source_line_id) unique per rippling_spend row" },

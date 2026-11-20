@@ -101,8 +101,9 @@ export async function loadWorkerWeekRates(supa: any, { actualsRows }: any) {
   // Load presence + pay_segments + dedupe. One source of truth
   // (dedupePaySegments) so this helper cannot drift from the derive.
   //
-  // Train 2c: paged via pagedSelect. rippling_id is the table's PK so
-  // the sort is unique.
+  // Train 2c: paged via pagedSelect. rippling_current_presence PK is
+  // (kind, rippling_id); kind is fixed by .eq("kind", "pay_segments")
+  // so rippling_id is unique within the filter.
   const presenceSet = new Set<any>();
   {
     const q = await pagedSelect((from: number, to: number) => supa
@@ -172,17 +173,22 @@ export async function loadWorkerWeekRates(supa: any, { actualsRows }: any) {
     "owner_role_id:payload->owner_role->>id",
   ].join(",");
 
-  // Train 2c: paged via pagedSelect. rippling_id is the raw table's
-  // PK so the sort is unique.
+  // Train 2c: paged via pagedSelect. rippling_id is NOT unique in
+  // rippling_raw_pay_segments (26,527 rows / 22,099 distinct
+  // rippling_id = 4,428 repeats verified 2026-11-20); the primary
+  // key is `id`. Sort on (rippling_id, id) so the chain is unique
+  // for page boundaries. dedupePaySegments collapses the repeats
+  // downstream; the paging rule only needs the sort to be unique.
   const raw: any[] = [];
   {
     const q = await pagedSelect((from: number, to: number) => supa
       .from("rippling_raw_pay_segments")
-      .select(RATE_SEG_COLS)
+      .select(RATE_SEG_COLS + ",id")
       .in("payload->owner_role->>id", workerIds)
       .gte("payload->>segment_date", minDate)
       .lte("payload->>segment_date", maxDate)
       .order("rippling_id")
+      .order("id")
       .range(from, to));
     if (q.error) throw new Error(`loadWorkerWeekRates raw: ${q.error.message}`);
     for (const r of q.data || []) {
