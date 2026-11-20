@@ -52,12 +52,23 @@ type BatchResp = {
   reason?: string;
 };
 
+// T5b round 3 item 3: "refused" is sticky. After a 409 we land
+// here and HOLD the "already running" sentence until the loader's
+// next check confirms the run is live or over. The refused state
+// never flashes back to the button mid-check.
 type Mode =
   | { kind: "idle" }
   | { kind: "running"; size: Size; startedAt: number }
   | { kind: "liveFromOtherTab" }
+  | { kind: "refused" }
   | { kind: "done"; sentence: string }
   | { kind: "fail"; sentence: string };
+
+// Fallback for the refused state. If 30 s pass without the loader
+// seeing `inProgress=true`, assume the race ended before the server
+// could record it and return to idle (the user can press again).
+// 30 s matches LIVE_POLL_MS so one poll cycle has had a chance.
+const REFUSED_FALLBACK_MS = 30_000;
 
 export function BatchRunControl({
   unlinkedCount,
@@ -90,9 +101,12 @@ export function BatchRunControl({
 
   useEffect(() => {
     // Keep internal mode in step with the server-supplied flag on
-    // re-render: if the server now says "not in progress", drop the
-    // "liveFromOtherTab" state back to idle.
-    if (inProgress && mode.kind === "idle") {
+    // re-render. T5b round 3 item 3: "refused" is handled here too -
+    // once the loader confirms the run is live we promote refused to
+    // liveFromOtherTab (keeping the UI in a stable in-progress
+    // state); if the loader never sees it live within the fallback
+    // window (next effect below) we return to idle.
+    if (inProgress && (mode.kind === "idle" || mode.kind === "refused")) {
       setMode({ kind: "liveFromOtherTab" });
       return;
     }
@@ -101,8 +115,27 @@ export function BatchRunControl({
     }
   }, [inProgress, mode.kind]);
 
+  // T5b round 3 item 3: refused has its own grace timer. The 409
+  // may land before the server's state has settled (another tab's
+  // claim was cancelled and no matcher started, or the started
+  // row has not been committed yet). We hold the refused sentence
+  // for up to REFUSED_FALLBACK_MS - either inProgress goes true
+  // during that window (the effect above promotes to
+  // liveFromOtherTab) or the timer fires and we return to idle.
   useEffect(() => {
-    if (mode.kind !== "liveFromOtherTab") {
+    if (mode.kind !== "refused") return;
+    const t = window.setTimeout(() => {
+      setMode({ kind: "idle" });
+    }, REFUSED_FALLBACK_MS);
+    return () => window.clearTimeout(t);
+  }, [mode.kind]);
+
+  useEffect(() => {
+    // T5b round 3 item 3: poll while live OR while refused. A
+    // refused press has to hear back from the loader (the "page's
+    // own check") so router.refresh keeps running every
+    // LIVE_POLL_MS plus on visibility.
+    if (mode.kind !== "liveFromOtherTab" && mode.kind !== "refused") {
       if (pollTimerRef.current != null) {
         window.clearInterval(pollTimerRef.current);
         pollTimerRef.current = null;
@@ -152,8 +185,15 @@ export function BatchRunControl({
     }
     const data = (r.data ?? null) as BatchResp | null;
     if (r.status === 409) {
-      // Server refused: another tab started one first.
-      setMode({ kind: "liveFromOtherTab" });
+      // T5b round 3 item 3: the server refused because another
+      // tab started one first (or the race settled on another
+      // caller). Enter the sticky "refused" state - it holds the
+      // "already running" sentence until the loader confirms
+      // live or over. Do NOT fall straight into
+      // liveFromOtherTab: the loader may not have the started
+      // row yet (claim-to-start gap), and the "idle on no-live"
+      // sync would flash the button back.
+      setMode({ kind: "refused" });
       router.refresh();
       return;
     }
@@ -209,6 +249,13 @@ export function BatchRunControl({
     return (
       <span className="kf-msg kf-msg--why" role="status">
         A batch is running.
+      </span>
+    );
+  }
+  if (mode.kind === "refused") {
+    return (
+      <span className="kf-msg kf-msg--why" role="status">
+        A batch is already running. Nothing new was started.
       </span>
     );
   }

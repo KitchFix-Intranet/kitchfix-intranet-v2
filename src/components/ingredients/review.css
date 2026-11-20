@@ -80,21 +80,47 @@
    * the page. */
   overflow: clip;
 }
-/* T5b round 2 item 1: the card decides to stack from its OWN
- * inline-size, not the window's width - a @container query on
- * .kf-rvc fires when the card cannot carry the fixed-layout table.
- * The table's natural width equals --kf-rvc-table-min (1,200 px).
- * When the card is narrower than that we stack. This keeps the
- * stack in step with the space the shell actually leaves (rail
- * shown or slim), without hard-coding a rail width. The old
- * min-width on .kf-rvc__items is dropped below (see the comment
- * next to the --kf-rvc-table-min var): a table with table-layout:
- * fixed draws at the sum of its col widths regardless of
- * min-width, and the stack rule here handles every narrower
- * container.
+/* T5b round 2 item 1 + round 3 item 1: the card decides what to
+ * draw from its OWN inline-size, not the window's. The thresholds
+ * (expressed in CARD width) map to the shell's rail-shown window
+ * widths via rail (236 px) + canvas padding (48 px total):
+ *
+ *   card <= 816   stack    (window <= 1100 with rail)
+ *   card 817-1199 table    (window 1101-1440 with rail)
+ *     columns switch to percent widths so they give way
+ *   card >= 1200  table    (window >= 1441 with rail)
+ *     columns keep their fixed pixel widths - today's wide look
+ *
+ * Two passes below: the narrow-table block switches col widths
+ * to percentages; the stack block takes over for the narrowest
+ * container widths. At phone widths the shell drops the rail
+ * and the card jumps wider (~828 px at window 860), so a sibling
+ * @media rule duplicates the stack declarations. Two rules, one
+ * stacking layout.
+ *
  * See docs/GOTCHAS.md "Media rule placed above the rule it
- * overrides" (train 8 round 2, nov 16) for the related trap. */
-@container kfrvc (max-width: 1200px) {
+ * overrides" (train 8 round 2, nov 16) for the related trap
+ * in CSS ordering. */
+
+/* Narrow-table: columns give way as percentages. Item takes the
+ * rest (no explicit width on .kf-rvc__col--item). 69 % of the
+ * table goes to the sized cols below, 31 % minus the 52 px sel
+ * leaves the item >= ~200 px at card 817 (the tightest table
+ * width). */
+@container kfrvc (max-width: 1199px) {
+  .kf-rvc__col--vendor   { width: 12%; }
+  .kf-rvc__col--pack     { width: 11%; }
+  .kf-rvc__col--price    { width: 18%; }
+  .kf-rvc__col--annual   { width: 7%; }
+  .kf-rvc__col--sites    { width: 9%; }
+  .kf-rvc__col--activity { width: 12%; }
+}
+
+/* Stacked: one card with labelled pairs. The @container rule
+ * catches every desk-rail-shown card at <= 816 px. The @media
+ * rule below catches phone mode where the rail is hidden and
+ * the card jumps wider than the container threshold. */
+@container kfrvc (max-width: 816px) {
   .kf-rvc__items,
   .kf-rvc__items > tbody {
     display: block;
@@ -112,14 +138,22 @@
     border-bottom: 1px solid var(--sp-line-soft);
   }
   .kf-rvc__items tr:last-child { border-bottom: none; }
-  .kf-rvc__items td {
+  /* T5b round 3 item 2 (hairline fix): the base rule
+   * .kf-rvc__items tbody td has a border-bottom at a higher
+   * specificity than a bare `.kf-rvc__items td` selector; match
+   * the base's specificity (tbody + td + class) so the border
+   * actually clears. */
+  .kf-rvc__items tbody td {
     display: block;
     border: none;
     padding: 0;
     text-align: left;
     overflow-wrap: anywhere;
   }
-  .kf-rvc__items td.kf-table__num { text-align: left; }
+  /* T5b round 3 item 2 (alignment fix): the base rule right-aligns
+   * `td.kf-table__num`. To left-align in stacked view we match the
+   * base's specificity (tbody + td + class). */
+  .kf-rvc__items tbody td.kf-table__num { text-align: left; }
   .kf-rvc__items td[data-l="Item"] { grid-column: 1 / -1; }
   .kf-rvc__items td.kf-rvc__check-col {
     position: absolute;
@@ -138,13 +172,81 @@
     text-transform: uppercase;
     color: var(--sp-muted);
   }
+  /* T5b round 3 item 2 (vendor wrap fix): the Vendor cell carries
+   * .kf-cell-ellipsis (white-space: nowrap + overflow: ellipsis)
+   * from the shared table primitive. Stacked, nothing ellipses -
+   * wrap the name to as many lines as it needs. */
+  .kf-rvc__items td[data-l="Vendor"] .kf-cell-ellipsis {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
 }
-/* Phone-only: tighten the stacked grid to two columns so each row's
- * labelled pair stays legible at 360 - 390 px (the container query
- * at <=1200 has already switched the display; this adjusts the
- * grid columns for a phone-width card). */
+
+/* Phone fallback for the stack. At window <= 860 the shell
+ * removes the rail and the card jumps wider than 816 px, so the
+ * @container rule above misses a narrow slice (window 849 - 860,
+ * card 817 - 828). Duplicate the declarations against @media so
+ * phone mode always stacks. */
+@media (max-width: 860px) {
+  .kf-rvc .kf-rvc__items,
+  .kf-rvc .kf-rvc__items > tbody {
+    display: block;
+  }
+  .kf-rvc .kf-rvc__items > colgroup,
+  .kf-rvc .kf-rvc__items > thead {
+    display: none;
+  }
+  .kf-rvc .kf-rvc__items tr {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--sp-sp-1) var(--sp-sp-3);
+    padding: var(--sp-sp-3) var(--sp-sp-3) var(--sp-sp-3) 48px;
+    position: relative;
+    border-bottom: 1px solid var(--sp-line-soft);
+  }
+  .kf-rvc .kf-rvc__items tr:last-child { border-bottom: none; }
+  .kf-rvc .kf-rvc__items tbody td {
+    display: block;
+    border: none;
+    padding: 0;
+    text-align: left;
+    overflow-wrap: anywhere;
+  }
+  .kf-rvc .kf-rvc__items tbody td.kf-table__num { text-align: left; }
+  .kf-rvc .kf-rvc__items td[data-l="Item"] { grid-column: 1 / -1; }
+  .kf-rvc .kf-rvc__items td.kf-rvc__check-col {
+    position: absolute;
+    left: var(--sp-sp-1);
+    top: var(--sp-sp-3);
+    width: auto;
+  }
+  .kf-rvc .kf-rvc__items td[data-l]:not([data-l="Item"]):not([data-l="Select"])::before {
+    content: attr(data-l);
+    display: block;
+    margin-bottom: 2px;
+    font-family: var(--sp-ui);
+    font-size: var(--sp-t-micro);
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--sp-muted);
+  }
+  .kf-rvc .kf-rvc__items td[data-l="Vendor"] .kf-cell-ellipsis {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
+}
+
+/* Two-column grid at the narrowest widths. The @container rule
+ * catches most desk / tablet; the @media rule catches phone.
+ * Both keep the labelled pair readable at ~358 px of card. */
 @container kfrvc (max-width: 480px) {
   .kf-rvc__items tr { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 480px) {
+  .kf-rvc .kf-rvc__items tr { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 .kf-rvc--new { border-left: 4px solid var(--sp-warn-strong); }
 
