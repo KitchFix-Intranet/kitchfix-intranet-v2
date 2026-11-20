@@ -365,25 +365,46 @@ entirely. The chef-floor rule for `.kf-search` uses `max-width:
 none` on phone so the search fills the row without a basis that
 would double as a height.
 
-## 25. A later rule of equal weight wins, so a media rule above the base it overrides does nothing
+## 25. A later rule of equal weight wins, so an override block above the base it overrides does nothing
 
 Two rules with the same specificity resolve by source order:
 whichever appears later in the stylesheet wins. A
-`@media (max-width: 1100px)` that overrides a plain
-`.kf-foo { min-width: 1200px }` must sit AFTER the plain rule, not
-before - put it above and the media rule is dead on every width.
-Review queue hit this in train 5b round 2 (the stack rule at the
-top of review.css never cleared the 1,200 px min below it, so the
-card scrolled the page sideways at every window below 1,200) and
-vendor items hit the same shape on Nov 16. When an `@media` or
-`@container` rule "does nothing", the first check is "is it above
-the base rule it overrides?".
+`@media (max-width: 1100px)` or `@container kfrvc (max-width:
+1199px)` that overrides a plain `.kf-foo { min-width: 1200px }`
+must sit AFTER the plain rule, not before - put it above and the
+conditional rule is dead on every width.
 
-A safer shape when the rules must live apart: put the base rule
-first, then every width-conditioned override later in the file,
-in ascending-specificity order. If a conditional has to go
-earlier for reading flow, raise its specificity (one extra class
-selector is enough) and leave a comment saying why.
+**`@media` and `@container` wrappers add NO specificity.** Only
+the selectors they contain carry weight. An inner
+`.kf-rvc__col--vendor { width: 12% }` has the same specificity as
+a plain `.kf-rvc__col--vendor { width: 160px }`, whether it is
+wrapped in a media query, a container query, both, or neither.
+When the two rules would both apply, source order decides, and
+the later one wins.
+
+Review queue has shipped three successive rounds with the same
+shape:
+- R2: an `@media` stack block sat above the `min-width: 1,200 px`
+  base, so the card stacked only on paper and scrolled the page
+  sideways below 1,200 px.
+- R3: a specificity bump in R2 covered the symptom but the
+  percent-width + stacked blocks still sat above the base col and
+  tbody-td rules, so the "give-way" columns and the border / align
+  overrides never applied.
+- R4: the whole run of width-conditional blocks moved below every
+  base rule for the review card's table. The move is what makes
+  the next override safe by position.
+
+Vendor items hit the same shape on Nov 16.
+
+**Rule of thumb:** when an `@media` or `@container` rule "does
+nothing", the first check is "is it above the base rule it
+overrides?" If yes, move it below. Do not reach for a specificity
+bump unless the base rule has to stay later in the file for
+unavoidable reading-flow reasons - and leave a comment saying why.
+
+An override block carries no ceremony of its own; its correctness
+is **a function of its line number**.
 
 Branch-specific items we have already lived through on
 `step-1-shell-and-ingredients`:
