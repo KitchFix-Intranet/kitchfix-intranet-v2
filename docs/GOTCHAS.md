@@ -415,3 +415,34 @@ overwrite a `not_food` or `one_off` a reviewer set. Kevin's Nov 5
 ruling ended the invoice re-scan and the tool is not run today; it
 must gain a `status NOT IN ('not_food','one_off','archived')` guard
 before it is ever run again.
+
+## G-G Mail: sender domain, upload URI, Bcc, escaped key form
+
+Four things to know about `src/lib/mail.ts :: sendSystemMail`:
+
+1. The `sender` must be a mailbox in our own Google domain. The
+   service account has domain-wide delegation for that domain
+   only; the token's `sub` claim is `sender` and Google refuses
+   any outside address. If a lane needs to send as an outside
+   name, use `replyTo` and keep `sender` inside the domain.
+
+2. The sender POSTs to the upload URI, not the JSON `raw`
+   endpoint:
+   `https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media`
+   with `Content-Type: message/rfc822` and the RFC 5322 bytes
+   directly. The alternative (`users.messages.send` with a
+   base64url `raw` field in a JSON body) has been reported to
+   fail above about 5 MB, which invoice PDFs can exceed. The
+   upload path accepts up to the 25 MB cap enforced in
+   `mailMessage.ts`.
+
+3. `Bcc` is kept in the message handed to Gmail. Gmail strips
+   it from the delivered copy but still honours the address.
+   Nothing special is needed on the caller side; do not try to
+   suppress the header.
+
+4. `GOOGLE_PRIVATE_KEY` is read from the env as a string with
+   literal `\n` sequences escaped as backslash-n (the shape the
+   key export tool prints and Vercel stores). The sender does
+   `raw.replace(/\\n/g, "\n")` before signing. A key stored with
+   real newlines also works because the replace is a no-op.
