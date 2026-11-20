@@ -22,6 +22,8 @@ import {
   inferRangeSelection as fyInferRange,
 } from "@/lib/kpi/labor/periods";
 import { computePeriodMeasures } from "@/lib/kpi/labor/board";
+import type { FiscalYear } from "@/lib/kpi/shared/fiscalYear";
+import { pagedSelect } from "@/lib/kpi/shared/pagedSelect";
 
 // V37 - revenue-flex accounts (TXR - TX - V) budget on a forecast
 // envelope: hourly_budget = revenue_forecast x accounts.labor_ratio,
@@ -79,26 +81,21 @@ const V6_PAGE_DEFAULT = 1000;   // PostgREST default response cap
 // (9 columns) and unchanged.
 export async function paginateActuals(supa: any, { members, start, end, pageSize }: any): Promise<any> {
   const PS = pageSize && pageSize > 0 && pageSize <= V6_PAGE_DEFAULT ? pageSize : V6_PAGE_DEFAULT;
-  const out = [];
-  let from = 0;
-  while (true) {
-    const q = await supa
-      .from("labor_actuals_latest")
-      .select("account_key, worker_id, week_label, week_start, week_end, fiscal_year, hours_regular, hours_overtime, hours_double_time, hours_premium_other, dollars_regular, dollars_overtime, dollars_double_time, dollars_premium_other, amount, hours_without_dollars, coverage_state, draft_entry_count, draft_hours, anomaly_no_clockout, anomaly_under_1h, anomaly_over_16h, approved_hours, oldest_draft_date, still_costing_hours, derived_at")
-      .in("account_key", members)
-      .lte("week_start", end)
-      .gte("week_end", start)
-      .order("week_start", { ascending: true })
-      .order("account_key", { ascending: true })
-      .order("worker_id", { ascending: true })
-      .range(from, from + PS - 1);
-    if (q.error) return { error: q.error };
-    const rows = q.data || [];
-    for (const r of rows) out.push(r);
-    if (rows.length < PS) break;
-    from += PS;
-  }
-  return { data: out };
+  // Train 2b: paged via pagedSelect. labor_actuals_latest is grained
+  // by (account_key, worker_id, week_start); the sort chain hits all
+  // three.
+  const q = await pagedSelect((from: number, to: number) => supa
+    .from("labor_actuals_latest")
+    .select("account_key, worker_id, week_label, week_start, week_end, fiscal_year, hours_regular, hours_overtime, hours_double_time, hours_premium_other, dollars_regular, dollars_overtime, dollars_double_time, dollars_premium_other, amount, hours_without_dollars, coverage_state, draft_entry_count, draft_hours, anomaly_no_clockout, anomaly_under_1h, anomaly_over_16h, approved_hours, oldest_draft_date, still_costing_hours, derived_at")
+    .in("account_key", members)
+    .lte("week_start", end)
+    .gte("week_end", start)
+    .order("week_start", { ascending: true })
+    .order("account_key", { ascending: true })
+    .order("worker_id", { ascending: true })
+    .range(from, to), { pageSize: PS });
+  if (q.error) return { error: q.error };
+  return { data: q.data };
 }
 
 // Resolve the (member) account's budget_periods per playbook 4.5.
@@ -109,36 +106,37 @@ export async function paginateActuals(supa: any, { members, start, end, pageSize
 // which the sub-line surfaces.
 // Empty on truly no rows. Never selects 3100.2 or any group total (8.2).
 //
-// FIN-2027 W1 PR-A year-safety: fiscalYear param added with FY2026
-// default so existing callers stay byte-identical. sc_labor_budgets
-// has no fiscal_year column; scope via effective_from window. FY
-// bounds inlined to avoid dragging the labor client bundle; a general
-// helper lands with the pnl-3 fiscal_periods table in Stage 2 (PR-B).
-export async function resolveMemberBudget(supa: any, accountKey: any, fiscalYear: any = 2026): Promise<any> {
-  const fyBounds = fiscalYear === 2026
-    ? { start: "2025-12-29", end: "2026-12-27" }
-    : null;
+// Train 2b: fiscalYear is now an object. sc_labor_budgets has no
+// fiscal_year column; scope via the effective_from window read from
+// fy.startISO / fy.endISO. kpi_budgets reads use fy.year.
+export async function resolveMemberBudget(supa: any, accountKey: any, fy: FiscalYear): Promise<any> {
+  // Train 2b: both reads route through pagedSelect with a unique sort.
+  // kpi_budgets primary key is (account_key, line_code, fiscal_year,
+  // period_no); the filter fixes the first three, so period_no is
+  // unique in the result. sc_labor_budgets has a unique
+  // (account_key, period, effective_from) key when superseded_at is
+  // null (one live row per account+period); ordering on all three
+  // guarantees unique pagination.
   const [pnlQ, scQ] = await Promise.all([
-    supa
+    pagedSelect((from: number, to: number) => supa
       .from("kpi_budgets")
       .select("period_no, amount")
       .eq("account_key", accountKey)
       .eq("line_code", "3100.1")
-      .eq("fiscal_year", fiscalYear),
-    fyBounds
-      ? supa
-          .from("sc_labor_budgets")
-          .select("period, hourly_budget, reason")
-          .eq("account_key", accountKey)
-          .is("superseded_at", null)
-          .gte("effective_from", fyBounds.start)
-          .lte("effective_from", fyBounds.end)
-      : supa
-          .from("sc_labor_budgets")
-          .select("period, hourly_budget, reason")
-          .eq("account_key", accountKey)
-          .is("superseded_at", null)
-          .eq("period", "__NO_MATCH__"),
+      .eq("fiscal_year", fy.year)
+      .order("period_no")
+      .range(from, to)),
+    pagedSelect((from: number, to: number) => supa
+      .from("sc_labor_budgets")
+      .select("id, period, hourly_budget, reason, effective_from")
+      .eq("account_key", accountKey)
+      .is("superseded_at", null)
+      .gte("effective_from", fy.startISO)
+      .lte("effective_from", fy.endISO)
+      .order("period")
+      .order("effective_from")
+      .order("id")
+      .range(from, to)),
   ]);
   if (pnlQ.error) return { error: pnlQ.error, scope: "kpi_budgets_3100_1" };
   if (scQ.error)  return { error: scQ.error,  scope: "sc_labor_budgets" };
@@ -203,35 +201,35 @@ export async function resolveMemberBudget(supa: any, accountKey: any, fiscalYear
  * either table still get an entry with data: [] - absence is a valid
  * answer and the downstream for-loop expects every member present.
  */
-export async function resolveMemberBudgets(supa: any, members: any, fiscalYear: any = 2026): Promise<any> {
+export async function resolveMemberBudgets(supa: any, members: any, fy: FiscalYear): Promise<any> {
   const out = new Map<any, any>();
   if (!Array.isArray(members) || members.length === 0) return out;
 
-  const fyBounds = fiscalYear === 2026
-    ? { start: "2025-12-29", end: "2026-12-27" }
-    : null;
-
+  // Train 2b: both reads route through pagedSelect with a unique sort.
+  // Scopes are the same as resolveMemberBudget above; here the
+  // account_key dimension is added to the sort chain.
   const [pnlQ, scQ] = await Promise.all([
-    supa
+    pagedSelect((from: number, to: number) => supa
       .from("kpi_budgets")
       .select("account_key, period_no, amount")
       .in("account_key", members)
       .eq("line_code", "3100.1")
-      .eq("fiscal_year", fiscalYear),
-    fyBounds
-      ? supa
-          .from("sc_labor_budgets")
-          .select("account_key, period, hourly_budget, reason")
-          .in("account_key", members)
-          .is("superseded_at", null)
-          .gte("effective_from", fyBounds.start)
-          .lte("effective_from", fyBounds.end)
-      : supa
-          .from("sc_labor_budgets")
-          .select("account_key, period, hourly_budget, reason")
-          .in("account_key", members)
-          .is("superseded_at", null)
-          .eq("period", "__NO_MATCH__"),
+      .eq("fiscal_year", fy.year)
+      .order("account_key")
+      .order("period_no")
+      .range(from, to)),
+    pagedSelect((from: number, to: number) => supa
+      .from("sc_labor_budgets")
+      .select("id, account_key, period, hourly_budget, reason, effective_from")
+      .in("account_key", members)
+      .is("superseded_at", null)
+      .gte("effective_from", fy.startISO)
+      .lte("effective_from", fy.endISO)
+      .order("account_key")
+      .order("period")
+      .order("effective_from")
+      .order("id")
+      .range(from, to)),
   ]);
 
   if (pnlQ.error) {
@@ -299,8 +297,8 @@ export async function resolveMemberBudgets(supa: any, members: any, fiscalYear: 
 // (rangeSelection.kind === "period") with a prior period in FY2026.
 // Returns { applies: false, reason } otherwise; the client renders
 // nothing (no partial fallback per V32-15).
-export async function buildPriorPeriodComparison({ supa, rangeStart, rangeEnd, today, isAggregate, members, account, currentActuals, pageSize }: any): Promise<any> {
-  const selection = fyInferRange(rangeStart, rangeEnd);
+export async function buildPriorPeriodComparison({ supa, rangeStart, rangeEnd, today, isAggregate, members, account, currentActuals, pageSize, fy }: any): Promise<any> {
+  const selection = fyInferRange(rangeStart, rangeEnd, fy);
   if (!selection || selection.kind !== "period") {
     return { applies: false, reason: "range_not_single_period" };
   }
@@ -308,20 +306,20 @@ export async function buildPriorPeriodComparison({ supa, rangeStart, rangeEnd, t
   if (currentPeriodNo <= 1) return { applies: false, reason: "no_prior_period" };
 
   const priorPeriodNo = currentPeriodNo - 1;
-  const priorStart = fyPeriodStart(priorPeriodNo);
-  const priorEnd = fyPeriodEnd(priorPeriodNo);
+  const priorStart = fyPeriodStart(priorPeriodNo, fy);
+  const priorEnd = fyPeriodEnd(priorPeriodNo, fy);
   if (!priorStart || !priorEnd) return { applies: false, reason: "no_prior_range" };
 
   // Current elapsed weeks - closed periods use 4, in-progress uses the
   // fractional elapsed. computePeriodMeasures floors 0 so a not-yet-
   // started period returns null (client hides the strip).
-  const currentPeriodEnd = fyPeriodEnd(currentPeriodNo);
+  const currentPeriodEnd = fyPeriodEnd(currentPeriodNo, fy);
   const isClosed = currentPeriodEnd < today;
   let currentElapsedWeeks;
   if (isClosed) {
     currentElapsedWeeks = 4;
   } else {
-    const currentStart = fyPeriodStart(currentPeriodNo);
+    const currentStart = fyPeriodStart(currentPeriodNo, fy);
     const todayDate = new Date(today).getTime();
     const startDate = new Date(currentStart).getTime();
     const daysIn = Math.max(0, Math.floor((todayDate - startDate) / 86400000) + 1);
@@ -346,10 +344,16 @@ export async function buildPriorPeriodComparison({ supa, rangeStart, rangeEnd, t
     if (q.error) return { error: q.error, scope: "labor_actuals_prior_aggregate" };
     priorActuals = q.data;
   } else {
-    const q = await supa.from("labor_actuals_latest")
+    // Train 2b: paged via pagedSelect. labor_actuals_latest is grained
+    // by (account_key, worker_id, week_start); filtering to one account
+    // leaves (worker_id, week_start) unique.
+    const q = await pagedSelect((from: number, to: number) => supa.from("labor_actuals_latest")
       .select("account_key, worker_id, week_start, week_end, hours_regular, hours_overtime, hours_double_time, hours_premium_other, amount")
       .eq("account_key", account)
-      .lte("week_start", priorEnd).gte("week_end", priorStart);
+      .lte("week_start", priorEnd).gte("week_end", priorStart)
+      .order("week_start")
+      .order("worker_id")
+      .range(from, to));
     if (q.error) return { error: q.error, scope: "labor_actuals_prior_single" };
     priorActuals = q.data;
   }

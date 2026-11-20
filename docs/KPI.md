@@ -233,3 +233,197 @@ One change in the move itself:
 
 Every other v1 line comes across unchanged; every v1 comment carries
 with its code (modulo privacy redactions - see the report).
+
+## Train 2b - the year, the clock and paging become inputs (2026-11-17)
+
+Train 2a left three things typed in. Train 2b makes each a caller
+input and makes every read complete and repeatable.
+
+### The fiscal year is an input
+
+`src/lib/kpi/shared/fiscalYear.ts` adds:
+
+- `type FiscalYear` with `year`, `startISO`, `endISO`, and a
+  13-period `periods` array (`period_no`, `startISO`, `endISO`).
+- `buildFiscalYear(year, rows)` that validates: exactly 13 rows,
+  each 28 days, back to back. Any violation throws from the loader.
+- `loadFiscalYear(supa, year)` that reads `fiscal_periods` sorted by
+  `period_no` and hands the result to `buildFiscalYear`.
+
+Every function that previously typed in `"2025-12-29"`, `"2026-12-27"`
+or `FISCAL_YEAR = 2026` now takes the year as an argument. Period
+arithmetic reads `fy.periods[p-1]` rather than re-deriving a date by
+adding 28 days to a typed-in start. The entry (`getOverview`) takes
+`fiscalYear` as a required input and threads it to `resolveOverview`.
+A search under `src/lib/kpi/**`, outside tests and `proof/`, finds
+no fiscal year and no year-bound literal besides the two rule dates
+noted above.
+
+### The clock is an input
+
+`getOverview` now takes `now: Date | string | number` in addition
+to `today`. `resolveOverview` forwards `now` to `purchasing/loaders`
+for the three sites that used to call the clock directly:
+
+- `paginateInvoiceSubmissions`' `derivedAt` stamp on drill rows
+  (`now.toISOString()`).
+- `loadFreshness`' `report_age_hours` computation (`now.getTime()`).
+- `loadCardCharges`' oldest-age clamp (`today` string input).
+
+A search under `src/lib/kpi/**`, outside tests and `proof/`, for
+`new Date()` with no argument and for `Date.now()` returns nothing.
+
+### Every read goes through one paging helper
+
+`src/lib/kpi/shared/pagedSelect.ts` adds `pagedSelect(build, opts)`.
+The helper takes a `build(from, to)` that returns the completed
+PostgREST builder (already chained with `.select` / `.in` / `.gte` /
+`.lte` / `.order` / `.range`), walks pages of `pageSize` (default
+1000), concatenates rows, and stops on a short page.
+
+Every paged read under `src/lib/kpi/**` now sorts on a unique chain.
+The reads table below names each caller, the table or view, the
+sort chain, and why it is unique.
+
+Exempt from the helper: `.single()` / `.maybeSingle()` (one row by
+definition) and reads bounded by caller-chunked id lists where the
+chunk size is 100 and the id is the table's primary key. Listed
+below as `id-list`.
+
+### Reads under src/lib/kpi/\*\*
+
+| Caller (file:function) | Table / view | Sort chain | Why unique | Paging |
+|---|---|---|---|---|
+| `shared/fiscalYear.ts:loadFiscalYear` | `fiscal_periods` | `period_no` (inside `fiscal_year`) | `(fiscal_year, period_no)` PK | paged |
+| `overview/pnl-loader.ts:loadPeriodStatus` | `kpi_period_status` | `period_no` (inside `fiscal_year`) | `(fiscal_year, period_no)` PK | paged |
+| `overview/pnl-loader.ts:loadAccountFlags` | `kpi_account_flags` | `account_key` | PK | paged |
+| `overview/pnl-loader.ts:loadInventoryAdjustments` | `inventory_adjustments` | `account_key, period_no, category, gl_line_code` | row grain is `(account_key, fiscal_year, period_no, category, gl_line_code)`; fiscal_year is fixed by the filter | paged |
+| `overview/pnl-loader.ts:loadPnlActuals` | `pnl_actuals` | `account_key, period_no, line_code` | PK is `(account_key, fiscal_year, period_no, line_code)`; fiscal_year fixed | paged |
+| `overview/pnl-loader.ts:loadOverviewBudgets` | `kpi_budgets` | `account_key, line_code, period_no` | PK is `(account_key, line_code, fiscal_year, period_no)`; fiscal_year fixed | paged |
+| `overview/pnl-loader.ts:loadScDailyRevenue` | `sc_daily_revenue` | `account_key, service_date, service_id` | row grain is `(account_key, service_id, service_date)` | paged |
+| `overview/pnl-loader.ts:loadScDailyRevenueCarveOut` sc_services step | `sc_services` | `id` | PK (uuid) | paged |
+| `overview/pnl-loader.ts:loadScDailyRevenueCarveOut` daily read | `sc_daily_revenue` | `account_key, service_date, service_id` | same as above | paged |
+| `overview/billback.ts:loadBillbackGoal` | `kpi_billback_goals` | n/a (`.maybeSingle()`) | single row | exempt |
+| `overview/billback.ts:loadProjectedMealsByPeriod` | `sc_daily_revenue` | `service_date, service_id` | row grain `(account_key fixed, service_id, service_date)` | paged |
+| `overview/billback.ts:loadReimbursableActualsByPeriod` pre lane | `purchasing_actuals` | `txn_date, id` | `id` (bigint) PK | paged |
+| `overview/billback.ts:loadReimbursableActualsByPeriod` card lane | `purchasing_actuals` | `txn_date, id` | PK | paged |
+| `overview/billback.ts:loadReimbursableActualsByPeriod` bill lane | `invoice_submissions` | `submitted_at, id` | `id` (uuid) PK | paged |
+| `overview/billback.ts:loadReimbursableGlCodes` | `gl_codes` | `code` (inside `account_key`) | PK is `(account_key, code)`; account_key fixed | paged |
+| `overview/resolver.ts:fetchAccountsDirectoryOv` | `accounts` | `team_key` | PK | paged |
+| `labor/labor-week-basis.ts:loadWeeklyRevenueBasis` catering step | `sc_qbo_service_map` | `account_key, service_id` | row grain | paged |
+| `labor/labor-week-basis.ts:loadWeeklyRevenueBasis` daily read | `sc_daily_revenue` | `account_key, service_date, service_id` | row grain | paged |
+| `labor/loaders.ts:paginateActuals` | `labor_actuals_latest` | `week_start, account_key, worker_id` | row grain `(account_key, worker_id, week_start)` | paged |
+| `labor/loaders.ts:resolveMemberBudget` kpi_budgets | `kpi_budgets` | `period_no` (inside fixed account_key + line_code + fiscal_year) | PK fixed | paged |
+| `labor/loaders.ts:resolveMemberBudget` sc_labor_budgets | `sc_labor_budgets` | `period, effective_from, id` | `id` (uuid) PK | paged |
+| `labor/loaders.ts:resolveMemberBudgets` kpi_budgets | `kpi_budgets` | `account_key, period_no` | PK fixed modulo in-filter | paged |
+| `labor/loaders.ts:resolveMemberBudgets` sc_labor_budgets | `sc_labor_budgets` | `account_key, period, effective_from, id` | PK includes `id` | paged |
+| `labor/loaders.ts:buildPriorPeriodComparison` single-account read | `labor_actuals_latest` | `week_start, worker_id` (inside fixed account_key) | row grain unique on `(worker_id, week_start)` after account fixed | paged |
+| `labor/salaryBoard.ts:load3100_2Budgets` | `kpi_budgets` | `account_key, period_no` | PK fixed modulo in-filter | paged |
+| `labor/salaryBoard.ts:loadSalaryActuals` | `labor_salary_actuals` | `account_key, week_start, worker_id` | row grain | paged |
+| `purchasing/loaders.ts:readPurchasingActuals` | `purchasing_actuals` | `txn_date, account_key, id` | `id` PK | paged |
+| `purchasing/loaders.ts:paginateInvoiceSubmissions` | `invoice_submissions` | `invoice_date, account_key, id` | PK | paged |
+| `purchasing/loaders.ts:paginateWeekly` view slice | `v_purchasing_by_site_week` | `account_key, week_start, gl_line_code, gl_bucket` | view groups on all four | paged |
+| `purchasing/loaders.ts:loadCogsLineCountForPeriod` | `v_purchasing_by_site_week` | `account_key, week_start, gl_line_code, gl_bucket` | same | paged |
+| `purchasing/loaders.ts:loadPriorPeriodHistory` | `v_purchasing_by_site_week` | `account_key, week_start, gl_line_code, gl_bucket` | same | paged |
+| `purchasing/loaders.ts:loadPending` | `purchasing_actuals` | `source_line_id` (inside filters) | unique per rippling_spend row | paged |
+| `purchasing/loaders.ts:fetchMembers` ALL / EAST / WEST | `accounts` | `team_key` | PK | paged |
+| `purchasing/loaders.ts:loadPurchasingBudgets` | `kpi_budgets` | `account_key, line_code, period_no` | PK fixed modulo in-filter | paged |
+| `purchasing/loaders.ts:computeSentinel` | `purchasing_actuals` | `id` | PK | paged |
+| `purchasing/loaders.ts:loadAccountsDirectory` | `accounts` | `team_key` | PK | paged |
+| `purchasing/loaders.ts:loadFreshness` x4 | `purchasing_derive_runs`, `purchasing_actuals` | n/a (`.limit(1).maybeSingle()`) | single row | exempt |
+| `purchasing/loaders.ts:loadLedgerRows` main | `purchasing_actuals` | `txn_date, id` | PK | paged |
+| `purchasing/loaders.ts:loadLedgerRows` vendor names | `billcom_ref_vendors` | `.in("id", idChunk)` with id PK | ≤ 100 rows per chunk | id-list |
+| `purchasing/loaders.ts:loadCardCharges` main | `purchasing_actuals` | `txn_date, id` | PK | paged |
+| `purchasing/loaders.ts:loadCardCharges` raw-ids | `rippling_raw_spend_lines_latest` | `.in("rippling_id", idChunk)` | ≤ 100 rows per chunk | id-list |
+| `purchasing/loaders.ts:loadCardCharges` cat labels | `spend_category_map` | `.in("category_id", idChunk)` | ≤ 100 rows per chunk | id-list |
+| `purchasing/loaders.ts:loadVendorRollup` bill lane | `v_purchasing_actuals_billcom_named` | `id` | underlying PK | paged |
+| `purchasing/loaders.ts:loadVendorRollup` card lane | `purchasing_actuals` | `id` | PK | paged |
+| `purchasing/loaders.ts:loadCompliance` main | `rippling_report_txns_latest` | `purchased_at, id` | PK (bigint) | paged |
+| `purchasing/loaders.ts:loadCompliance` label map | `spend_work_location_site_map` | `work_location_label, work_location_id` | row grain is `(work_location_id)` | paged |
+| `purchasing/loaders.ts:loadCompliance` region read | `accounts` | `team_key` | PK | paged |
+
+### Train 2b expectation changes
+
+One class of behaviour changes by design: a period function's
+answer for an input outside the fiscal year it was given. The
+table-driven engine returns `null`; v1's typed-in arithmetic
+extrapolated. Every twin-test expectation that moved is listed
+here with its input - each input is verified to be outside the
+year.
+
+| Function | Input | v1 return | v2 (train 2b) |
+|---|---|---|---|
+| `rangeForPeriod` | `14` (period_no outside [1, 13]) | `{ startISO: "2026-12-28", endISO: "2027-01-24" }` | `null` |
+
+No other twin test moved.
+
+### Entry log line
+
+v1's `GET` handler in `src/app/api/kpi/overview/route.js` logged the
+scope and the error message on a 5xx; train 2a dropped the log. The
+entry now restores it: `console.error` with `scope: message` plus
+`stack`. Never a payload, figure, name or address. The only reader
+of the log is the server operator; the body returned to the HTTP
+caller is still `{ error: "server_error", scope }` as before.
+
+### IEEE 754 float noise from the unique-sort tie-breakers
+
+Adding a tie-breaker to a paged `.order(...)` chain makes the sort
+unique at page boundaries. Several accounts have `purchasing_actuals`
+pre-cutover reads that cross the 1,000-row cap in fiscal 2026
+(CIN - AZ 1,116; STL - FL 1,783; TBJ - FL 1,874; TBR - FL 1,777;
+TXR - AZ 1,319), so the tie-breaker is required for correctness on
+those reads. Within any one page the tie-breaker also reorders rows
+that share a date; IEEE 754 float addition is not associative, so
+the sum of `purchasing_actuals.amount` per period differs from v1's
+natural (DB-default-on-ties) order by exactly 1 ULP. The resulting
+payload numbers are byte-for-byte correct to cent precision; both
+v1 and the entry equal the direct DB sum to within 1e-6.
+
+The paging rule applies uniformly. The tie-breakers stay. The ULP
+noise is a benign consequence; `~/Downloads/KPI_V2_Handoff/proof_2b/
+direct_sums_all.json` is the receipt for every case flagged by the
+217-case proof: both v1 and the entry match the direct sum on every
+CIN - OH and STL - MO billback figure; the entry alone matches on
+every STL - FL figure (there v1's non-unique sort drops rows at the
+page boundary).
+
+### The paging rule (no small-read exception)
+
+Every paged read under `src/lib/kpi/**` sorts on a unique key.
+This rule has no exception for a read that is small today - row
+counts grow. A read that fits in one page in fiscal 2026 can
+page in fiscal 2027; a sort that is unique within the current
+filter can become non-unique after a schema change. The rule is
+maintained by `pagedSelect` and audited by the reads table above.
+
+### 217-case same-answers result (rerun 2026-11-20)
+
+```
+pass:     194
+fail:      23
+unstable:   0
+total:    217
+```
+
+Classified by root cause:
+
+- **13 STL - FL** - v1 is off, the entry equals the direct DB
+  sum on every per-period meal goal. v1's
+  `loadProjectedMealsByPeriod` paged its `sc_daily_revenue` read
+  with `.order("service_date")` only. STL - FL has 2,827 meal
+  rows for fiscal 2026 and `service_date` is not unique within an
+  account's rows, so same-date rows straddling the 1,000-row page
+  boundary drop or duplicate. The entry tie-breaks with
+  `.order("service_id")` and matches direct byte-for-byte on
+  every goaled period.
+
+- **10 CIN - OH / STL - MO** - both v1 and the entry equal the
+  direct DB sum to the cent. The payload numbers differ only in
+  float representation (IEEE 754 ULP) from the row-order change
+  introduced by the unique-sort tie-breaker on
+  `purchasing_actuals`. No defect; no fix; both answers are
+  correct.
+
+Per-case verdicts and per-field classifications live in
+`~/Downloads/KPI_V2_Handoff/proof_2b/direct_sums_all.json`.

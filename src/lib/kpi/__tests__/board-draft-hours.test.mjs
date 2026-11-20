@@ -16,6 +16,24 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildBoard } from "../labor/board.js";
+import { buildFiscalYear } from "../shared/fiscalYear.js";
+
+// Train 2b: buildBoard now takes `fy` as a required input.
+const FY2026 = buildFiscalYear(2026, [
+  { period_no: 1,  start_date: "2025-12-29", end_date: "2026-01-25" },
+  { period_no: 2,  start_date: "2026-01-26", end_date: "2026-02-22" },
+  { period_no: 3,  start_date: "2026-02-23", end_date: "2026-03-22" },
+  { period_no: 4,  start_date: "2026-03-23", end_date: "2026-04-19" },
+  { period_no: 5,  start_date: "2026-04-20", end_date: "2026-05-17" },
+  { period_no: 6,  start_date: "2026-05-18", end_date: "2026-06-14" },
+  { period_no: 7,  start_date: "2026-06-15", end_date: "2026-07-12" },
+  { period_no: 8,  start_date: "2026-07-13", end_date: "2026-08-09" },
+  { period_no: 9,  start_date: "2026-08-10", end_date: "2026-09-06" },
+  { period_no: 10, start_date: "2026-09-07", end_date: "2026-10-04" },
+  { period_no: 11, start_date: "2026-10-05", end_date: "2026-11-01" },
+  { period_no: 12, start_date: "2026-11-02", end_date: "2026-11-29" },
+  { period_no: 13, start_date: "2026-11-30", end_date: "2026-12-27" },
+]);
 
 // Minimal worker-week fixture for a single closed week with drafts.
 // draft_hours > 0 and hours_without_dollars == 0 mirrors TBR - FL 08/17
@@ -62,7 +80,7 @@ test("P0 fixture - closed week with priced drafts flags as unapproved", () => {
   }
   const board = buildBoard({
     account: "TBR - FL",
-    start, end, today,
+    start, end, today, fy: FY2026,
     actuals,
     budget_periods: [{ period_no: 9, amount: 10000, basis: "envelope" }],
     account_state: "hourly_ok",
@@ -108,7 +126,7 @@ test("no drafts + priced coverage = FINAL / everything approved", () => {
   }
   const board = buildBoard({
     account: "TBR - FL",
-    start, end, today,
+    start, end, today, fy: FY2026,
     actuals,
     budget_periods: [{ period_no: 9, amount: 10000, basis: "envelope" }],
     account_state: "hourly_ok",
@@ -132,7 +150,7 @@ test("closed-state gate is DROPPED - approval status does not expire", () => {
   })];
   const board = buildBoard({
     account: "TBR - FL",
-    start, end, today,
+    start, end, today, fy: FY2026,
     actuals,
     budget_periods: [{ period_no: 8, amount: 10000, basis: "envelope" }],
     account_state: "hourly_ok",

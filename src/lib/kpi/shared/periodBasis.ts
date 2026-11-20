@@ -47,6 +47,7 @@ import {
 } from "@/lib/kpi/overview/pnl-loader";
 import { resolveRevenueSource, assertScReadAllowed } from "@/lib/kpi/overview/revenue-source";
 import { periodStartISO, periodEndISO, endOfLastCompleteWeek } from "@/lib/kpi/labor/periods";
+import type { FiscalYear } from "@/lib/kpi/shared/fiscalYear";
 
 // Re-export so consumers only import from this file.
 export {
@@ -62,7 +63,6 @@ export {
 };
 
 export const CONTRACTUAL_ACCRUAL_LINES = new Set(["2200", "2300", "2600"]);
-const FISCAL_YEAR = 2026;
 
 // [name] ruling 2026-10-05. TBR - FL only.
 // Service groups whose SC revenue books to a line other than 2400.1.
@@ -270,6 +270,7 @@ export function computePeriodRevenueByLine({
   periodStatus,
   accountFlags,
   todayISO,
+  fy,
   overviewBudgets,
   pnl,
   scByAcct,
@@ -279,7 +280,7 @@ export function computePeriodRevenueByLine({
   const perPeriod = new Map<any, any>();
   for (const p of periods) {
     const statusRow = periodStatus.get(p) || null;
-    const state = derivePeriodState({ periodNo: p, todayISO, periodStatusRow: statusRow });
+    const state = derivePeriodState({ periodNo: p, todayISO, periodStatusRow: statusRow, fy });
     if (!perPeriod.has(p)) perPeriod.set(p, { state });
     const perP = perPeriod.get(p);
     const memberContribs = new Map<any, any>();
@@ -327,8 +328,8 @@ export function computePeriodRevenueByLine({
           //     and 2200.
           const carveLineMap = scCarveOutByAcct?.get(m)?.get(line);
           if (carveLineMap) {
-            const pStart = periodStartISO(p);
-            const pEnd = periodEndISO(p);
+            const pStart = periodStartISO(p, fy);
+            const pEnd = periodEndISO(p, fy);
             for (const [day, amt] of carveLineMap) {
               if (day >= pStart && day <= pEnd) {
                 bucket.amount += Number(amt);
@@ -339,8 +340,8 @@ export function computePeriodRevenueByLine({
           } else if (line === "2400.1") {
             const byDate = scByAcct.get(m);
             if (byDate) {
-              const pStart = periodStartISO(p);
-              const pEnd = periodEndISO(p);
+              const pStart = periodStartISO(p, fy);
+              const pEnd = periodEndISO(p, fy);
               const carveByLine = scCarveOutByAcct?.get(m);
               for (const [day, amt] of byDate) {
                 if (day >= pStart && day <= pEnd) {
@@ -364,11 +365,11 @@ export function computePeriodRevenueByLine({
             // accrual, so this branch runs only on accounts without a
             // carve-out for `line` (every account for 2300/2600, and
             // every account except TBR - FL for 2200).
-            const pStart = periodStartISO(p);
-            const pEnd = periodEndISO(p);
+            const pStart = periodStartISO(p, fy);
+            const pEnd = periodEndISO(p, fy);
             const amtRaw = overviewBudgets.get(line)?.get(m)?.get(p);
             if (amtRaw != null && Number(amtRaw) > 0) {
-              const wk = endOfLastCompleteWeek(pStart, pEnd, todayISO);
+              const wk = endOfLastCompleteWeek(pStart, pEnd, todayISO, fy);
               const weeksComplete = wk ? wk.weekNo : 0;
               if (weeksComplete > 0) {
                 bucket.amount += Number(amtRaw) * (weeksComplete / 4);
@@ -385,8 +386,8 @@ export function computePeriodRevenueByLine({
           const amtRaw = byAcct?.get(p);
           if (amtRaw != null) {
             if (state === "open") {
-              const pStart = periodStartISO(p);
-              const pEnd = periodEndISO(p);
+              const pStart = periodStartISO(p, fy);
+              const pEnd = periodEndISO(p, fy);
               const parseISOUTC = (iso: any): any => {
                 const mm = String(iso).slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
                 if (!mm) return null;
@@ -442,15 +443,15 @@ export function sumPeriodRevenue(perPeriodEntry: any): any {
 // Every consumer needs the same five reads. One call, one set of
 // results, no drift on filter shape or ordering.
 
-export async function loadPeriodBasisInputs(supa: any, { members, periods, start, end, today }: any): Promise<any> {
+export async function loadPeriodBasisInputs(supa: any, { members, periods, start, end, today, fy }: any): Promise<any> {
   if (!members?.length || !periods?.length) {
     return { pnl: new Map<any, any>(), overviewBudgets: new Map<any, any>(), scByAcct: new Map<any, any>(), periodStatus: new Map<any, any>(), accountFlags: new Map<any, any>() };
   }
   const [pnlRes, budRes, scRes, statusRes, flagsRes] = await Promise.all([
-    loadPnlActuals(supa, { members, periods, fiscalYear: FISCAL_YEAR }),
-    loadOverviewBudgets(supa, { members, fiscalYear: FISCAL_YEAR }),
+    loadPnlActuals(supa, { members, periods, fiscalYear: fy.year }),
+    loadOverviewBudgets(supa, { members, fiscalYear: fy.year }),
     loadScDailyRevenue(supa, { members, start, end, today }),
-    loadPeriodStatus(supa, FISCAL_YEAR),
+    loadPeriodStatus(supa, fy.year),
     loadAccountFlags(supa),
   ]);
   const errs = [];

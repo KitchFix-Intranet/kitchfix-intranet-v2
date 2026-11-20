@@ -82,6 +82,7 @@ import {
   TRACKED_LINE_CODES,
 } from "@/lib/kpi/purchasing/board";
 import { PURCHASING_ENVELOPE_EXCLUSIONS } from "@/lib/kpi/accountModels";
+import type { FiscalYear } from "@/lib/kpi/shared/fiscalYear";
 
 // The three P&L cost-of-goods buckets.  Keyed by gl_prefix (3200 /
 // 3400 / 3500) per [name]'s PR-2 brief output shape, with the semantic
@@ -161,12 +162,12 @@ function periodLookup(byAcct: any, periodNo: any): any {
   return v == null ? null : Number(v);
 }
 
-function budgetForRange({ budgetMap, glLineCode, members, weeks }: any): any {
+function budgetForRange({ budgetMap, glLineCode, members, weeks, fy }: any): any {
   const perLine = budgetLookup(budgetMap, glLineCode);
   if (!perLine) return 0;
   let total = 0;
   for (const w of weeks) {
-    const p = periodOf(w);
+    const p = periodOf(w, fy);
     if (p == null) continue;
     for (const m of members) {
       if (PURCHASING_ENVELOPE_EXCLUSIONS.has(m)) continue;
@@ -182,7 +183,7 @@ function budgetForRange({ budgetMap, glLineCode, members, weeks }: any): any {
 
 // Bucket-level budget: walk every gl_line_code in budgetMap and sum
 // budgetForRange for those whose code matches the bucket predicate.
-function bucketBudgetForRange({ budgetMap, bucketKey, members, weeks }: any): any {
+function bucketBudgetForRange({ budgetMap, bucketKey, members, weeks, fy }: any): any {
   // @ts-expect-error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type '{
   const pred = GL_PREFIX_FOR_BUCKET[bucketKey];
   if (!pred) return 0;
@@ -192,7 +193,7 @@ function bucketBudgetForRange({ budgetMap, bucketKey, members, weeks }: any): an
     : Object.keys(budgetMap || {});
   for (const gl of keys) {
     if (!pred(gl)) continue;
-    total += budgetForRange({ budgetMap, glLineCode: gl, members, weeks });
+    total += budgetForRange({ budgetMap, glLineCode: gl, members, weeks, fy });
   }
   return Math.round(total * 100) / 100;
 }
@@ -228,7 +229,7 @@ const MS_PER_DAY = 86400000;
 // days_through_yesterday behavior stands so the Purchasing page keeps
 // current semantics. Overview passes throughISO so revenue + cost
 // share one window.
-function budgetToDateDaysForLine({ budgetMap, glLineCode, members, periodsInRange, today, throughISO }: any): any {
+function budgetToDateDaysForLine({ budgetMap, glLineCode, members, periodsInRange, today, throughISO, fy }: any): any {
   const perLine = budgetLookup(budgetMap, glLineCode);
   if (!perLine) return { amount: 0, days_elapsed_current: null, days_in_current: null, current_period_no: null, closed_period_nos: [] };
   const todayD = parseISOUTC(today);
@@ -242,8 +243,8 @@ function budgetToDateDaysForLine({ budgetMap, glLineCode, members, periodsInRang
   let daysElapsedCurrent = null;
   let daysInCurrent = null;
   for (const p of periodsInRange) {
-    const pStart = parseISOUTC(periodStartISO(p));
-    const pEnd = parseISOUTC(periodEndISO(p));
+    const pStart = parseISOUTC(periodStartISO(p, fy));
+    const pEnd = parseISOUTC(periodEndISO(p, fy));
     if (!pStart || !pEnd) continue;
     // Sum across members for this period.
     let periodSum = 0;
@@ -295,7 +296,7 @@ function budgetToDateDaysForLine({ budgetMap, glLineCode, members, periodsInRang
 // Aggregate over every GL in budgetMap that matches the predicate.
 // Returns aggregate amount + a single days_* context (they're all the
 // same today's calendar - one current period, one closed set).
-function budgetToDateDaysForPredicate({ budgetMap, predicate, members, periodsInRange, today, throughISO }: any): any {
+function budgetToDateDaysForPredicate({ budgetMap, predicate, members, periodsInRange, today, throughISO, fy }: any): any {
   let total = 0;
   let anyLine = false;
   let ctx = { days_elapsed_current: null, days_in_current: null, current_period_no: null, closed_period_nos: [] };
@@ -304,7 +305,7 @@ function budgetToDateDaysForPredicate({ budgetMap, predicate, members, periodsIn
     : Object.keys(budgetMap || {});
   for (const gl of keys) {
     if (!predicate(gl)) continue;
-    const r = budgetToDateDaysForLine({ budgetMap, glLineCode: gl, members, periodsInRange, today, throughISO });
+    const r = budgetToDateDaysForLine({ budgetMap, glLineCode: gl, members, periodsInRange, today, throughISO, fy });
     if (r.amount != null) {
       total += r.amount;
       anyLine = true;
@@ -348,6 +349,7 @@ export function buildPurchasingBoard({
   start,
   end,
   today,
+  fy,              // Train 2b: the fiscal year as an input.
   throughISO,      // R-63 ([name] 2026-09-03): Overview passes this so
                    // the buckets_/tracked_ budget-to-date days proration
                    // stops at the same edge as the SC + labor loaders.
@@ -360,7 +362,7 @@ export function buildPurchasingBoard({
                    // never attributed to a bucket (§3.5).
   budgetMap,
 }: any): any {
-  const weeks = weekStartsInRange(start, end);
+  const weeks = weekStartsInRange(start, end, fy);
 
   // ─── Buckets: 3200 / 3400 / 3500 ───────────────────────────────────
   const buckets = {};
@@ -369,7 +371,7 @@ export function buildPurchasingBoard({
     const pred = GL_PREFIX_FOR_BUCKET[key];
     const week_series = seriesForPredicate(weeklyRows, weeks, pred);
     const period_total = sumSeries(week_series);
-    const budget = bucketBudgetForRange({ budgetMap, bucketKey: key, members, weeks });
+    const budget = bucketBudgetForRange({ budgetMap, bucketKey: key, members, weeks, fy });
     // @ts-expect-error TS7053: Element implicitly has an 'any' type because expression of type 'string' can't be used to index type
     buckets[gl_prefix] = {
       key,
@@ -391,7 +393,7 @@ export function buildPurchasingBoard({
     const pred = (gl: any): any => gl === lineCode;
     const week_series = seriesForPredicate(weeklyRows, weeks, pred);
     const period_total = sumSeries(week_series);
-    const budget = budgetForRange({ budgetMap, glLineCode: lineCode, members, weeks });
+    const budget = budgetForRange({ budgetMap, glLineCode: lineCode, members, weeks, fy });
     // @ts-expect-error TS7053: Element implicitly has an 'any' type because expression of type 'string' can't be used to index type
     tracked[lineCode] = {
       line_code: lineCode,
@@ -438,7 +440,7 @@ export function buildPurchasingBoard({
   // weeks touch. Same set the totals blocks above sum against, so
   // day-proration doesn't accidentally include a period outside
   // the requested range.
-  const periodsInRange = [...new Set(weeks.map((w: any): any => periodOf(w)).filter((p: any): any => p != null))].sort((a: any, b: any): any => a - b);
+  const periodsInRange = [...new Set(weeks.map((w: any): any => periodOf(w, fy)).filter((p: any): any => p != null))].sort((a: any, b: any): any => a - b);
   const buckets_budget_to_date_days = budgetToDateDaysForPredicate({
     budgetMap,
     predicate: (gl: any): any => (
@@ -450,6 +452,7 @@ export function buildPurchasingBoard({
     periodsInRange,
     today: today || null,
     throughISO: throughISO || null,
+    fy,
   });
   const tracked_budget_to_date_days = budgetToDateDaysForPredicate({
     budgetMap,
@@ -458,6 +461,7 @@ export function buildPurchasingBoard({
     periodsInRange,
     today: today || null,
     throughISO: throughISO || null,
+    fy,
   });
 
   return {

@@ -16,7 +16,8 @@
 // the shared '@/app/kpi/labor/lib/periods.js' path (known debt, future
 // file move; rule 4 forbids forking).
 
-import { weekStartsInRange, periodOf } from "@/lib/kpi/labor/periods";
+import { weekStartsInRange } from "@/lib/kpi/labor/periods";
+import type { FiscalYear } from "@/lib/kpi/shared/fiscalYear";
 
 // ─── Currency + arrow formatters (inlined, rule 13) ──────────────────
 //
@@ -30,7 +31,7 @@ import { weekStartsInRange, periodOf } from "@/lib/kpi/labor/periods";
  * Format a signed dollar amount with two decimals and thousand
  * separators. Sign is preserved on the returned string (negative gets
  * a leading '-'); use `moneyArrow` when you want an arrow + absolute
- * value instead. Never render `$-1,219.18` - rule 5 of §7.
+ * value instead. Never render `$-[amount]` - rule 5 of §7.
  *
  * @param {number} n
  * @returns {string} e.g. "[amount]" or "-[amount]"
@@ -299,11 +300,11 @@ export const TRACKED_LINE_CODES = ["5002.1", "5002.5", "5017.3"];
  * never fork it) to enumerate the weeks, so this is byte-identical to
  * the route's own week enumeration.
  */
-export function bucketWeeklySpend({ weekly, bucketKey, start, end }: any): any {
+export function bucketWeeklySpend({ weekly, bucketKey, start, end, fy }: any): any {
   // @ts-expect-error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type '{
   const test = GL_PREFIX_FOR_BUCKET[bucketKey];
   if (!test) return [];
-  const weeks = weekStartsInRange(start, end);
+  const weeks = weekStartsInRange(start, end, fy);
   const bySpend = new Map(weeks.map((w: any): any => [w, 0]));
   for (const r of weekly || []) {
     if (!test(r?.gl_line_code)) continue;
@@ -329,8 +330,8 @@ export function bucketWeeklySpend({ weekly, bucketKey, start, end }: any): any {
  * `pendingSum` is not folded here - pending is never in a week bar
  * per §5.3. It lives on the period card copy and in projected_close.
  */
-export function periodWeeklySpend({ weekly, start, end }: any): any {
-  const weeks = weekStartsInRange(start, end);
+export function periodWeeklySpend({ weekly, start, end, fy }: any): any {
+  const weeks = weekStartsInRange(start, end, fy);
   const bySpend = new Map(weeks.map((w: any): any => [w, 0]));
   for (const r of weekly || []) {
     const gl = r?.gl_line_code || "";
@@ -354,8 +355,8 @@ export function periodWeeklySpend({ weekly, start, end }: any): any {
  * of `todayISO`. A week is finished iff its LAST day (week_start + 6d)
  * is strictly before today. The running week is not finished (§5.1).
  */
-export function finishedWeekCount({ start, end, todayISO }: any): any {
-  const weeks = weekStartsInRange(start, end);
+export function finishedWeekCount({ start, end, todayISO, fy }: any): any {
+  const weeks = weekStartsInRange(start, end, fy);
   const MS_PER_DAY = 86400000;
   const today = new Date(todayISO).getTime();
   let n = 0;

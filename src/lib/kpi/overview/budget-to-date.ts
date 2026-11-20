@@ -36,6 +36,7 @@
 //   valid zero, not a null).
 
 import { periodStartISO, periodEndISO } from "@/lib/kpi/labor/periods";
+import type { FiscalYear } from "@/lib/kpi/shared/fiscalYear";
 
 const MS_PER_DAY = 86400000;
 
@@ -52,7 +53,7 @@ function parseISOUTC(iso: any): any {
 // behavior stands. The Overview resolver passes throughISO =
 // effectiveEndISO so revenue budget-to-date and cost budget-to-date
 // both stop at the same edge.
-export function computeBudgetToDateForLine({ budgetByPeriod, periodsInRange, today, throughISO }: any): any {
+export function computeBudgetToDateForLine({ budgetByPeriod, periodsInRange, today, throughISO, fy }: any): any {
   const empty = { amount: null, days_elapsed_current: null, days_in_current: null, current_period_no: null, closed_period_nos: [] };
   if (!budgetByPeriod || (typeof budgetByPeriod.size === "number" && budgetByPeriod.size === 0)) {
     return empty;
@@ -78,8 +79,8 @@ export function computeBudgetToDateForLine({ budgetByPeriod, periodsInRange, tod
   let daysElapsedCurrent = null;
   let daysInCurrent = null;
   for (const p of periodsInRange) {
-    const pStart = parseISOUTC(periodStartISO(p));
-    const pEnd = parseISOUTC(periodEndISO(p));
+    const pStart = parseISOUTC(periodStartISO(p, fy));
+    const pEnd = parseISOUTC(periodEndISO(p, fy));
     if (!pStart || !pEnd) continue;
     const amt = getBudget(p);
     if (pEnd < todayD) {

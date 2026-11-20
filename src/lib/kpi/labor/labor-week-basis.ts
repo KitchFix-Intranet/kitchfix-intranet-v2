@@ -36,58 +36,33 @@
 //   is_non_revenue
 // Filters: NOT is_non_revenue (matches Overview's per-line rule).
 //
-// Week bucketing: FY2026 weeks are Sunday-aligned, step 7 days from
-// FY_START (2025-12-29). See src/app/kpi/labor/lib/periods.js for
-// the weekStartsInRange helper.
+// Week bucketing: fiscal weeks are Sunday-aligned, step 7 days from
+// fy.startISO. See src/lib/kpi/labor/periods.ts for the shared
+// weekStartsInRange helper used here with fy threaded in.
 
 // [name] ruling 2026-09-07: shared periodBasis.js owns REVENUE_LINE_CODES,
 // batr formula, and CONTRACTUAL_ACCRUAL_LINES. Import from there so
 // this file has no locally-owned duplication.
 import { REVENUE_LINE_CODES, CONTRACTUAL_ACCRUAL_LINES } from "@/lib/kpi/shared/periodBasis";
-import { periodOf } from "@/lib/kpi/labor/periods";
+import { periodOf, weekStartsInRange } from "@/lib/kpi/labor/periods";
+import type { FiscalYear } from "@/lib/kpi/shared/fiscalYear";
+import { pagedSelect } from "@/lib/kpi/shared/pagedSelect";
 
 const IN_CHUNK = 60;
 const PS_DEFAULT = 1000;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 // Bucket a service_date into the Sunday-aligned fiscal week_start
-// containing it. Copies the periods.js logic to avoid a route-side
-// dependency on the client-lib import path from a lib/ module.
-const FY_START_ISO = "2025-12-29";
-function weekStartFor(serviceDateISO: any): any {
+// containing it. Weeks step 7 days from fy.startISO.
+function weekStartFor(serviceDateISO: any, fy: FiscalYear): any {
   const svc = new Date(serviceDateISO + "T00:00:00Z");
-  const fy = new Date(FY_START_ISO + "T00:00:00Z");
+  const fyStart = new Date(fy.startISO + "T00:00:00Z");
   // @ts-expect-error TS2345: Argument of type 'Date' is not assignable to parameter of type 'number'.
-  if (!svc || !fy || isNaN(svc) || isNaN(fy) || svc < fy) return null;
-  const days = Math.floor((svc.getTime() - fy.getTime()) / MS_PER_DAY);
+  if (!svc || !fyStart || isNaN(svc) || isNaN(fyStart) || svc < fyStart) return null;
+  const days = Math.floor((svc.getTime() - fyStart.getTime()) / MS_PER_DAY);
   const weekIdx = Math.floor(days / 7);
-  const ws = new Date(fy.getTime() + weekIdx * 7 * MS_PER_DAY);
+  const ws = new Date(fyStart.getTime() + weekIdx * 7 * MS_PER_DAY);
   return ws.toISOString().slice(0, 10);
-}
-
-// Enumerate the Sunday-aligned week_start dates whose 7-day window
-// overlaps [start, end]. Same rule as weekStartsInRange in
-// app/kpi/labor/lib/periods.js.
-function weekStartsInRange(startISO: any, endISO: any): any {
-  const rs = new Date(startISO + "T00:00:00Z");
-  const re = new Date(endISO + "T00:00:00Z");
-  const fy = new Date(FY_START_ISO + "T00:00:00Z");
-  // @ts-expect-error TS2345: Argument of type 'Date' is not assignable to parameter of type 'number'.
-  if (isNaN(rs) || isNaN(re) || isNaN(fy) || rs > re) return [];
-  const rsMs = rs.getTime();
-  const reMs = re.getTime();
-  const fyMs = fy.getTime();
-  const idxStart = Math.max(0, Math.floor((rsMs - 6 * MS_PER_DAY - fyMs) / (7 * MS_PER_DAY)));
-  const out = [];
-  for (let i = idxStart; ; i += 1) {
-    const wStartMs = fyMs + i * 7 * MS_PER_DAY;
-    if (wStartMs > reMs) break;
-    const wEndMs = wStartMs + 6 * MS_PER_DAY;
-    if (wEndMs >= rsMs) {
-      out.push(new Date(wStartMs).toISOString().slice(0, 10));
-    }
-  }
-  return out;
 }
 
 // Chunk helper for .in() clauses under Supabase's row cap.
@@ -134,10 +109,10 @@ function weekTemporalState(weekStartISO: any, todayISO: any): any {
  *   projected_revenue: number,    // sum of projected_revenue where !has_actuals
  * }> }}
  */
-export async function loadWeeklyRevenueBasis(supa: any, { members, start, end, today }: any): Promise<any> {
+export async function loadWeeklyRevenueBasis(supa: any, { members, start, end, today, fy }: any): Promise<any> {
   if (!members || members.length === 0) return { data: [] };
   if (!start || !end) return { data: [] };
-  const weekStarts = weekStartsInRange(start, end);
+  const weekStarts = weekStartsInRange(start, end, fy);
   if (weekStarts.length === 0) return { data: [] };
 
   // Catering (2200) is the SC revenue stream that invoices separately
@@ -148,12 +123,17 @@ export async function loadWeeklyRevenueBasis(supa: any, { members, start, end, t
   // accumulator without a second query per row.
   const cateringKeySet = new Set();
   for (const memberChunk of chunk(members, IN_CHUNK)) {
-    const q = await supa
+    // Train 2b: paged via pagedSelect. Sort (account_key, service_id)
+    // is unique per the sc_qbo_service_map primary key.
+    const q = await pagedSelect((from: number, to: number) => supa
       .from("sc_qbo_service_map")
       .select("account_key, service_id")
       .in("account_key", memberChunk)
       .eq("export_excluded", true)
-      .eq("active", true);
+      .eq("active", true)
+      .order("account_key")
+      .order("service_id")
+      .range(from, to));
     if (q.error) return { error: q.error, scope: "sc_qbo_service_map" };
     for (const r of q.data || []) {
       if (r.account_key && r.service_id) {
@@ -166,26 +146,22 @@ export async function loadWeeklyRevenueBasis(supa: any, { members, start, end, t
   // Query sc_daily_revenue for the whole range, then bucket client-
   // side by week. Same filter Overview applies: NOT is_non_revenue.
   const rows = [];
+  // Train 2b: paged via pagedSelect. (account_key, service_date,
+  // service_id) is unique on sc_daily_revenue.
   for (const memberChunk of chunk(members, IN_CHUNK)) {
-    let from = 0;
-    while (true) {
-      const q = await supa
-        .from("sc_daily_revenue")
-        .select("account_key, service_date, service_id, actual_revenue, projected_revenue, has_actuals, has_projection")
-        .in("account_key", memberChunk)
-        .gte("service_date", start)
-        .lte("service_date", end)
-        .not("is_non_revenue", "is", true)
-        .order("account_key")
-        .order("service_date")
-        .order("service_id")
-        .range(from, from + PS_DEFAULT - 1);
-      if (q.error) return { error: q.error, scope: "sc_daily_revenue" };
-      const data = q.data || [];
-      rows.push(...data);
-      if (data.length < PS_DEFAULT) break;
-      from += PS_DEFAULT;
-    }
+    const q = await pagedSelect((from: number, to: number) => supa
+      .from("sc_daily_revenue")
+      .select("account_key, service_date, service_id, actual_revenue, projected_revenue, has_actuals, has_projection")
+      .in("account_key", memberChunk)
+      .gte("service_date", start)
+      .lte("service_date", end)
+      .not("is_non_revenue", "is", true)
+      .order("account_key")
+      .order("service_date")
+      .order("service_id")
+      .range(from, to), { pageSize: PS_DEFAULT });
+    if (q.error) return { error: q.error, scope: "sc_daily_revenue" };
+    for (const row of q.data) rows.push(row);
   }
 
   // [name] walkthrough item 3 (2026-09-07, corrected). Basis is
@@ -259,7 +235,7 @@ export async function loadWeeklyRevenueBasis(supa: any, { members, start, end, t
     daysWithMeaningfulService: new Set(),
   });
   for (const r of rows) {
-    const ws = weekStartFor(r.service_date);
+    const ws = weekStartFor(r.service_date, fy);
     if (!ws || !byWeek.has(ws)) continue;
     const bucket = byWeek.get(ws);
     bucket.daysWithService.add(r.service_date);
@@ -544,7 +520,7 @@ function daysLeftInRunningWeek(weekStartISO: any, todayISO: any): any {
  * Weeks not present in weeklyBasisData (defensive - the loader is
  * called against the same range) get no attach.
  */
-export function attachWeeklyBasisToBoard(board: any, weeklyBasisData: any, { lineTargetPctByPeriod, todayISO, contractualAccrualByPeriod = null, verifiedPeriodTotals = null, salaryBudgetByPeriod = null, feeBudgetByPeriod = null, mergedTargetPctByPeriod = null }: any): any {
+export function attachWeeklyBasisToBoard(board: any, weeklyBasisData: any, { lineTargetPctByPeriod, todayISO, fy, contractualAccrualByPeriod = null, verifiedPeriodTotals = null, salaryBudgetByPeriod = null, feeBudgetByPeriod = null, mergedTargetPctByPeriod = null }: any): any {
   if (!board || board.applies === false) return board;
   if (!Array.isArray(board.weeks)) return board;
   if (!weeklyBasisData || !Array.isArray(weeklyBasisData.data)) return board;
@@ -584,7 +560,7 @@ export function attachWeeklyBasisToBoard(board: any, weeklyBasisData: any, { lin
   for (const w of board.weeks) {
     const basis = byStart.get(w.week_start);
     if (!basis) continue;
-    const periodNo = periodOf(w.week_start);
+    const periodNo = periodOf(w.week_start, fy);
     if (periodNo == null) continue;
     const cur = scByPeriod.get(periodNo) || 0;
     scByPeriod.set(periodNo, cur + Number(basis.revenue || 0));
@@ -621,7 +597,7 @@ export function attachWeeklyBasisToBoard(board: any, weeklyBasisData: any, { lin
     w.week_catering_confirmed_services = basis.catering_confirmed_services;
     w.week_catering_projected_services = basis.catering_projected_services;
 
-    const periodNo = periodOf(w.week_start);
+    const periodNo = periodOf(w.week_start, fy);
     const isVerified = periodNo != null && verifiedTotals.has(periodNo);
 
     let revenueForWeek;

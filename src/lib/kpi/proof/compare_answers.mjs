@@ -37,8 +37,8 @@ import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
 
-const V1_BASE = "http://localhost:3100";
-const OUT_DIR = path.join(os.homedir(), "Downloads/KPI_V2_Handoff/proof_2a");
+const V1_BASE = process.env.V1_BASE || "http://localhost:3100";
+const OUT_DIR = path.join(os.homedir(), "Downloads/KPI_V2_Handoff/proof_2b");
 
 // Load V2 .env.local via --env-file= if present.
 const envArg = process.argv.find(a => a.startsWith("--env-file="));
@@ -94,6 +94,8 @@ async function askV1(params) {
 let getOverview = null;
 let serviceClient = null;
 let periodHelpers = null;
+let loadFiscalYear = null;
+let FY2026 = null;
 async function loadV2() {
   if (getOverview) return;
   ({ getOverview } = await import("../entry.ts"));
@@ -104,6 +106,11 @@ async function loadV2() {
   // Period helpers for range math (same source v1 uses).
   const p = await import("../labor/periods.ts");
   periodHelpers = p;
+  // Train 2b: load fiscal year from the table once for every case.
+  const fy = await import("../shared/fiscalYear.ts");
+  loadFiscalYear = fy.loadFiscalYear;
+  const supa = serviceClient();
+  FY2026 = await loadFiscalYear(supa, 2026);
 }
 
 async function askV2(params, caller, todayISO, { regionalDirectorEastDisplay = null, regionalDirectorWestDisplay = null } = {}) {
@@ -121,6 +128,12 @@ async function askV2(params, caller, todayISO, { regionalDirectorEastDisplay = n
   const res = await getOverview({
     supa,
     today: todayISO,
+    // Train 2b: real wall-clock now as the clock input. The entry
+    // threads it to purchasing/loaders (freshness age math +
+    // invoice_submissions derived_at). Captured once per request so
+    // two retries within the same probe loop have the same `now`.
+    now: new Date(),
+    fiscalYear: FY2026,
     caller,
     query,
     regionalDirectorEastDisplay,
@@ -132,7 +145,7 @@ async function askV2(params, caller, todayISO, { regionalDirectorEastDisplay = n
 // Build the 217 cases.
 async function buildCases(todayISO) {
   const cases = [];
-  const curP = periodHelpers.currentPeriodNo(todayISO);
+  const curP = periodHelpers.currentPeriodNo(todayISO, FY2026);
   const nextP = (curP != null && curP < 13) ? curP + 1 : null;
   // Last verified: the highest period of fiscal 2026 whose
   // `kpi_period_status.verified_at` is set. Read the live DB with
@@ -146,13 +159,13 @@ async function buildCases(todayISO) {
     .order("period_no", { ascending: false })
     .limit(1);
   const lastVerifiedP = (vq.data && vq.data[0]) ? Number(vq.data[0].period_no) : null;
-  const fyEndCur = periodHelpers.r93FytdEndISO(todayISO) || todayISO;
+  const fyEndCur = periodHelpers.r93FytdEndISO(todayISO, FY2026) || todayISO;
 
   const ranges = {
-    currentPeriod: curP ? { start: periodHelpers.periodStartISO(curP), end: periodHelpers.periodEndISO(curP), label: `period:${curP}` } : null,
-    lastVerified: lastVerifiedP ? { start: periodHelpers.periodStartISO(lastVerifiedP), end: periodHelpers.periodEndISO(lastVerifiedP), label: `period:${lastVerifiedP}` } : null,
-    currentYear: { start: "2025-12-29", end: fyEndCur, label: "fytd" },
-    nextPeriod: nextP ? { start: periodHelpers.periodStartISO(nextP), end: periodHelpers.periodEndISO(nextP), label: `period:${nextP}` } : null,
+    currentPeriod: curP ? { start: periodHelpers.periodStartISO(curP, FY2026), end: periodHelpers.periodEndISO(curP, FY2026), label: `period:${curP}` } : null,
+    lastVerified: lastVerifiedP ? { start: periodHelpers.periodStartISO(lastVerifiedP, FY2026), end: periodHelpers.periodEndISO(lastVerifiedP, FY2026), label: `period:${lastVerifiedP}` } : null,
+    currentYear: { start: FY2026.startISO, end: fyEndCur, label: "fytd" },
+    nextPeriod: nextP ? { start: periodHelpers.periodStartISO(nextP, FY2026), end: periodHelpers.periodEndISO(nextP, FY2026), label: `period:${nextP}` } : null,
   };
 
   // Group 1: corporate × 14 scopes × 3 ranges × 2 salary = 84.
@@ -471,8 +484,10 @@ async function run() {
     // 2. Remove one scalar key (not an object, not an array).
     const removeKey = keys.find(k => k !== numericKey && typeof body[k] !== "object");
     if (removeKey) delete body[removeKey];
-    // 3. Replace one array with an empty array.
-    const arrayKey = keys.find(k => Array.isArray(body[k]) && k !== numericKey && k !== removeKey);
+    // 3. Replace one NON-EMPTY array with an empty array. (An empty
+    // array replaced by another empty array is a no-op; the planted
+    // sentinel needs a genuine value change to fire.)
+    const arrayKey = keys.find(k => Array.isArray(body[k]) && body[k].length > 0 && k !== numericKey && k !== removeKey);
     if (arrayKey) body[arrayKey] = [];
     const differ = diffKeysArrayAsWhole(copy.A.body, body);
     planted = {

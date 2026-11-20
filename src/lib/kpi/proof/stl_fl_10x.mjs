@@ -3,6 +3,11 @@
 // proof uses and the same index-aware comparator. Report per case:
 // pass / fail / unstable counts.
 //
+// Train 2b: the engine takes fiscalYear + now as inputs. The script
+// loads fiscal 2026 once from the fiscal_periods table and passes a
+// fresh `now` on each getOverview call. v1 is unchanged - it reads
+// the clock inside its own route.
+//
 // Usage:
 //   node --import tsx src/lib/kpi/proof/stl_fl_10x.mjs \
 //        [--env-file=/path/to/.env.local]
@@ -14,8 +19,8 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 
-const V1_BASE = "http://localhost:3100";
-const OUT_DIR = path.join(os.homedir(), "Downloads/KPI_V2_Handoff/proof_2a");
+const V1_BASE = process.env.V1_BASE || "http://localhost:3100";
+const OUT_DIR = path.join(os.homedir(), "Downloads/KPI_V2_Handoff/proof_2b");
 
 const envArg = process.argv.find(a => a.startsWith("--env-file="));
 if (envArg) {
@@ -29,9 +34,11 @@ if (envArg) {
   }
 }
 
-const { serviceClient } = await import("/Users/kevinfietek/dev/kpi-engine-2a-overview-move/src/lib/supabase/service.ts");
-const { getOverview } = await import("/Users/kevinfietek/dev/kpi-engine-2a-overview-move/src/lib/kpi/entry.ts");
-const periods = await import("/Users/kevinfietek/dev/kpi-engine-2a-overview-move/src/lib/kpi/labor/periods.ts");
+const HERE = path.dirname(new URL(import.meta.url).pathname);
+const { serviceClient } = await import(path.resolve(HERE, "../../supabase/service.ts"));
+const { getOverview } = await import(path.resolve(HERE, "../entry.ts"));
+const periods = await import(path.resolve(HERE, "../labor/periods.ts"));
+const { loadFiscalYear } = await import(path.resolve(HERE, "../shared/fiscalYear.ts"));
 
 async function askV1(params) {
   const q = new URLSearchParams(params);
@@ -48,11 +55,15 @@ async function askV1(params) {
   throw lastErr;
 }
 
+const SHARED_SUPA = serviceClient();
+const FY2026 = await loadFiscalYear(SHARED_SUPA, 2026);
+
 async function askV2(params, caller, todayISO) {
-  const supa = serviceClient();
   const res = await getOverview({
-    supa,
+    supa: SHARED_SUPA,
     today: todayISO,
+    now: new Date(),
+    fiscalYear: FY2026,
     caller,
     query: {
       account: params.account,
@@ -106,7 +117,7 @@ function walkRedact(node) {
 const seed = await askV1({});
 const todayISO = seed.body?.todayISO;
 if (!todayISO) { console.error("v1 no todayISO"); process.exit(2); }
-const curP = periods.currentPeriodNo(todayISO);
+const curP = periods.currentPeriodNo(todayISO, FY2026);
 
 const CASES = [
   {
@@ -114,8 +125,8 @@ const CASES = [
     caller: { role: "corporate", scope: null, can_see_salary: true },
     params: {
       account: "STL - FL",
-      start: periods.periodStartISO(curP),
-      end: periods.periodEndISO(curP),
+      start: periods.periodStartISO(curP, FY2026),
+      end: periods.periodEndISO(curP, FY2026),
       include_salary: "1",
     },
   },
@@ -127,8 +138,7 @@ const CASES = [
 ];
 
 // Fill the lastVerified params from the live DB.
-const supa = serviceClient();
-const vq = await supa
+const vq = await SHARED_SUPA
   .from("kpi_period_status")
   .select("period_no, verified_at")
   .eq("fiscal_year", 2026)
@@ -139,8 +149,8 @@ const lastVerifiedP = vq.data?.[0]?.period_no;
 if (!lastVerifiedP) { console.error("no verified period found"); process.exit(2); }
 CASES[1].params = {
   account: "STL - FL",
-  start: periods.periodStartISO(lastVerifiedP),
-  end: periods.periodEndISO(lastVerifiedP),
+  start: periods.periodStartISO(lastVerifiedP, FY2026),
+  end: periods.periodEndISO(lastVerifiedP, FY2026),
   include_salary: "1",
 };
 
@@ -161,7 +171,9 @@ for (const c of CASES) {
     let B = await askV1(c.params);
     let stable = deepEq(stripRD(A.body), stripRD(B.body));
     let attempts = 1;
+    let v1Side = null;
     while (!stable && attempts < 3) {
+      v1Side = { aFirst: A.body, bSecond: B.body };
       A = B;
       B = await askV1(c.params);
       stable = deepEq(stripRD(A.body), stripRD(B.body));

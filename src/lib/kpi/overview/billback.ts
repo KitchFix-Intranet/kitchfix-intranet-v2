@@ -45,6 +45,8 @@
 
 import { periodStartISO, periodEndISO, periodOf } from "@/lib/kpi/labor/periods";
 import { derivePeriodSpendSettled } from "@/lib/kpi/overview/pnl-loader";
+import type { FiscalYear } from "@/lib/kpi/shared/fiscalYear";
+import { pagedSelect } from "@/lib/kpi/shared/pagedSelect";
 
 const CAPTURE_CUTOVER_ISO = "2026-09-07";
 const PAGE = 1000;
@@ -67,17 +69,13 @@ function isoBefore(iso: any, days: any): any {
 }
 
 async function fetchAllPaginated(builderFn: any): Promise<any> {
-  let from = 0;
-  const out = [];
-  while (true) {
-    const q = await builderFn(from, from + PAGE - 1);
-    if (q.error) throw new Error(q.error.message);
-    const rows = q.data || [];
-    out.push(...rows);
-    if (rows.length < PAGE) break;
-    from += PAGE;
-  }
-  return out;
+  // Train 2b: thin wrapper over pagedSelect so every read under
+  // src/lib/kpi/** flows through one helper. The local wrapper is
+  // kept so call-site shapes do not churn; it is one implementation
+  // behind one door.
+  const r = await pagedSelect(builderFn);
+  if (r.error) throw new Error(r.error.message);
+  return r.data;
 }
 
 async function loadBillbackGoal(supa: any, accountKey: any, fiscalYear: any): Promise<any> {
@@ -91,19 +89,25 @@ async function loadBillbackGoal(supa: any, accountKey: any, fiscalYear: any): Pr
   return q.data?.annual_goal != null ? Number(q.data.annual_goal) : null;
 }
 
-async function loadProjectedMealsByPeriod(supa: any, accountKey: any, fyStart: any, fyEnd: any): Promise<any> {
+async function loadProjectedMealsByPeriod(supa: any, accountKey: any, fyStart: any, fyEnd: any, fy: FiscalYear): Promise<any> {
+  // Train 2b: the paged read sorts on (service_date, service_id) so
+  // page boundaries do not reshuffle the rows of a multi-service day.
+  // sc_daily_revenue is grained per (account_key, service_id,
+  // service_date); this account's rows are already filtered down, so
+  // (service_date, service_id) is unique within the page set.
   const rows = await fetchAllPaginated((lo: any, hi: any): any => supa
     .from("sc_daily_revenue")
-    .select("service_date, projected_count, is_non_revenue")
+    .select("service_date, service_id, projected_count, is_non_revenue")
     .eq("account_key", accountKey)
     .gte("service_date", fyStart)
     .lte("service_date", fyEnd)
     .not("is_non_revenue", "is", true)
     .order("service_date")
+    .order("service_id")
     .range(lo, hi));
   const byP = new Map<any, any>();
   for (const r of rows) {
-    const p = periodOf(r.service_date);
+    const p = periodOf(r.service_date, fy);
     if (p == null) continue;
     const n = Number(r.projected_count || 0);
     if (n === 0) continue;
@@ -118,21 +122,26 @@ async function loadProjectedMealsByPeriod(supa: any, accountKey: any, fyStart: a
 // shape returned is period -> [{code, amount}] so the caller can both
 // (a) sum per-period actuals and (b) build the breakdown + strays by
 // walking the (code, amount) list.
-async function loadReimbursableActualsByPeriod(supa: any, accountKey: any, fyStart: any, fyEnd: any): Promise<any> {
+async function loadReimbursableActualsByPeriod(supa: any, accountKey: any, fyStart: any, fyEnd: any, fy: FiscalYear): Promise<any> {
   const preEnd = fyEnd < CAPTURE_CUTOVER_ISO ? fyEnd : isoBefore(CAPTURE_CUTOVER_ISO, 1);
   const postStart = fyStart > CAPTURE_CUTOVER_ISO ? fyStart : CAPTURE_CUTOVER_ISO;
 
   // Pre-cutover: all purchasing_actuals sources.
+  // Train 2b: every paged read sorts on a unique chain. txn_date and
+  // submitted_at are not unique; purchasing_actuals' id (uuid) and
+  // invoice_submissions' id (uuid) are, so each is added as the
+  // trailing tie-breaker.
   let preRows = [];
   if (fyStart <= preEnd) {
     preRows = await fetchAllPaginated((lo: any, hi: any): any => supa
       .from("purchasing_actuals")
-      .select("txn_date, gl_line_code, amount")
+      .select("id, txn_date, gl_line_code, amount")
       .eq("account_key", accountKey)
       .eq("excluded", false)
       .gte("txn_date", fyStart)
       .lte("txn_date", preEnd)
       .order("txn_date")
+      .order("id")
       .range(lo, hi));
   }
 
@@ -141,13 +150,14 @@ async function loadReimbursableActualsByPeriod(supa: any, accountKey: any, fySta
   if (postStart <= fyEnd) {
     cardRows = await fetchAllPaginated((lo: any, hi: any): any => supa
       .from("purchasing_actuals")
-      .select("txn_date, gl_line_code, amount")
+      .select("id, txn_date, gl_line_code, amount")
       .eq("account_key", accountKey)
       .eq("excluded", false)
       .eq("source", "rippling_spend")
       .gte("txn_date", postStart)
       .lte("txn_date", fyEnd)
       .order("txn_date")
+      .order("id")
       .range(lo, hi));
   }
 
@@ -156,11 +166,12 @@ async function loadReimbursableActualsByPeriod(supa: any, accountKey: any, fySta
   if (postStart <= fyEnd) {
     invRows = await fetchAllPaginated((lo: any, hi: any): any => supa
       .from("invoice_submissions")
-      .select("gl_breakdown, submitted_at")
+      .select("id, gl_breakdown, submitted_at")
       .eq("account_key", accountKey)
       .gte("submitted_at", postStart)
       .lte("submitted_at", fyEnd)
       .order("submitted_at")
+      .order("id")
       .range(lo, hi));
   }
 
@@ -174,29 +185,33 @@ async function loadReimbursableActualsByPeriod(supa: any, accountKey: any, fySta
   };
   for (const r of preRows) {
     if (deriveGlBucket(r.gl_line_code) !== "reimbursable") continue;
-    push(periodOf(r.txn_date), r.gl_line_code, r.amount);
+    push(periodOf(r.txn_date, fy), r.gl_line_code, r.amount);
   }
   for (const r of cardRows) {
     if (deriveGlBucket(r.gl_line_code) !== "reimbursable") continue;
-    push(periodOf(r.txn_date), r.gl_line_code, r.amount);
+    push(periodOf(r.txn_date, fy), r.gl_line_code, r.amount);
   }
   for (const r of invRows) {
     const items = Array.isArray(r.gl_breakdown) ? r.gl_breakdown : [];
     for (const it of items) {
       const code = it.gl_line_code || it.code;
       if (deriveGlBucket(code) !== "reimbursable") continue;
-      push(periodOf(r.submitted_at), code, it.amount);
+      push(periodOf(r.submitted_at, fy), code, it.amount);
     }
   }
   return byP;
 }
 
 async function loadReimbursableGlCodes(supa: any, accountKey: any): Promise<any> {
+  // Train 2b: paged via pagedSelect. gl_codes primary key is
+  // (account_key, code); the filter fixes account_key, so `code` is
+  // unique in the result.
   const rows = await fetchAllPaginated((lo: any, hi: any): any => supa
     .from("gl_codes")
     .select("account_key, code, name")
     .eq("account_key", accountKey)
     .like("code", "13%")
+    .order("code")
     .range(lo, hi));
   const m = new Map<any, any>();
   for (const r of rows) m.set(String(r.code), { name: r.name || null, account_key: r.account_key });
@@ -222,17 +237,17 @@ export async function buildBillback({
   isMultiPeriod,
   todayISO,
   periodStatus,            // Map<period_no, {verified_at, closed_at}>
-  fiscalYear,
+  fy,
 }: any): Promise<any> {
   if (!isManagementFee || !isMultiPeriod) return null;
 
-  const fyStart = periodStartISO(1);
-  const fyEnd = periodEndISO(13);
+  const fyStart = periodStartISO(1, fy);
+  const fyEnd = periodEndISO(13, fy);
 
   const [annualGoal, projByP, reimbByP, glCodes] = await Promise.all([
-    loadBillbackGoal(supa, accountKey, fiscalYear),
-    loadProjectedMealsByPeriod(supa, accountKey, fyStart, fyEnd),
-    loadReimbursableActualsByPeriod(supa, accountKey, fyStart, fyEnd),
+    loadBillbackGoal(supa, accountKey, fy.year),
+    loadProjectedMealsByPeriod(supa, accountKey, fyStart, fyEnd, fy),
+    loadReimbursableActualsByPeriod(supa, accountKey, fyStart, fyEnd, fy),
     loadReimbursableGlCodes(supa, accountKey),
   ]);
 
@@ -252,6 +267,7 @@ export async function buildBillback({
       periodNo: p,
       todayISO,
       periodStatusRow: (periodStatus && periodStatus.get(p)) || null,
+      fy,
     })) { throughPeriod = p; break; }
   }
 
@@ -277,8 +293,8 @@ export async function buildBillback({
     for (const it of items) actualRaw += it.amount;
     const actual = (p === firstGoalPeriod) ? actualRaw + preSeasonActual : actualRaw;
 
-    const pStart = periodStartISO(p);
-    const pEnd = periodEndISO(p);
+    const pStart = periodStartISO(p, fy);
+    const pEnd = periodEndISO(p, fy);
     const calendarState = pEnd < todayISO ? "closed"
       : (pStart <= todayISO && todayISO <= pEnd) ? "in_progress"
       : "not_started";
@@ -332,7 +348,7 @@ export async function buildBillback({
 
   return {
     annual_goal: annualGoal,
-    fiscal_year: fiscalYear,
+    fiscal_year: fy.year,
     first_goal_period: firstGoalPeriod,
     through_period: throughPeriod,
     periods: periodsOut,
