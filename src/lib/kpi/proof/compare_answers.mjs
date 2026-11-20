@@ -571,6 +571,40 @@ function deepEqual(a, b) {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+// Train 2c: v2's paged reads add a unique sort chain (the "every
+// paged read sorts on a unique key" rule) that v1 does not carry.
+// Both sides return the same SET of rows; v2's order is deterministic
+// and v1's is Postgres-natural. The answer is the same; the array
+// serialisation differs. Before comparing, sort every array-of-
+// objects on a stable identity key so the comparator fires on real
+// data differences, not on row order.
+function canonicaliseArrays(node) {
+  if (node === null || node === undefined) return node;
+  if (Array.isArray(node)) {
+    const mapped = node.map(canonicaliseArrays);
+    if (mapped.length === 0) return mapped;
+    if (typeof mapped[0] !== "object" || mapped[0] === null || Array.isArray(mapped[0])) return mapped;
+    // Stable sort by a deterministic key. JSON.stringify of each
+    // element works because row content is the identity (same row =
+    // same stringification).
+    return [...mapped].sort((a, b) => {
+      const sa = JSON.stringify(a);
+      const sb = JSON.stringify(b);
+      return sa < sb ? -1 : sa > sb ? 1 : 0;
+    });
+  }
+  if (typeof node === "object") {
+    // Also sort object keys so a dict whose key-insertion order
+    // differs between v1 and v2 (worker_week_rates, workers, etc.)
+    // compares equal when the key-set + values match.
+    const sortedKeys = Object.keys(node).sort();
+    const out = {};
+    for (const k of sortedKeys) out[k] = canonicaliseArrays(node[k]);
+    return out;
+  }
+  return node;
+}
+
 // Find the keys that differ between two objects. Returns array of
 // field paths, up to a limit.
 function diffKeys(a, b, prefix = "", out = [], limit = 50) {
@@ -687,11 +721,20 @@ async function runCase(c, timeoutCounters, sharedTodayISO = null) {
 
   let B = await askV1For(v1Params);
   let attempt = 1;
-  let stable = deepEqual(stripRegionalDirectors(A.body), stripRegionalDirectors(B.body));
+  // Stability check also redacts (time-sensitive + address/email) and
+  // canonicalises array order so a wall-clock drift between the two
+  // v1 calls does not mark the case unstable. Both A and B are v1 on
+  // its own server; the only legitimate drift the proof cares about
+  // is the row set or the numbers, not a redacted-anyway timestamp.
+  const stableCompare = (a, b) => deepEqual(
+    canonicaliseArrays(walkAndRedact(stripRegionalDirectors(a), () => {})),
+    canonicaliseArrays(walkAndRedact(stripRegionalDirectors(b), () => {})),
+  );
+  let stable = stableCompare(A.body, B.body);
   while (!stable && attempt < 3) {
     A = B;
     B = await askV1For(v1Params);
-    stable = deepEqual(stripRegionalDirectors(A.body), stripRegionalDirectors(B.body));
+    stable = stableCompare(A.body, B.body);
     attempt++;
   }
   return { A, V, B, stable, attempts: attempt };
@@ -896,7 +939,7 @@ async function run() {
       } else {
         const aR = walkAndRedact(stripRegionalDirectors(r.A.body), (k) => { redactCounts[k] = (redactCounts[k] || 0) + 1; });
         const vR = walkAndRedact(stripRegionalDirectors(r.V.body), (k) => {});
-        if (deepEqual(aR, vR) && r.A.status === r.V.status) {
+        if (deepEqual(canonicaliseArrays(aR), canonicaliseArrays(vR)) && r.A.status === r.V.status) {
           status = "pass"; pass++;
         } else {
           status = "FAIL"; fail++;
