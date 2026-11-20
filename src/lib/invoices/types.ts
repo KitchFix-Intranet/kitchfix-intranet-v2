@@ -190,19 +190,10 @@ export interface DraftView {
 
 // GL line on a draft. Train 2 stores amount as entered (positive);
 // train 3 owns the credit sign.
-//
-// Train 2b fix-before-push #4: `auto` is true when the single-code
-// 9-in-10 fill planted the line. While the line is still the
-// tool's auto-fill, the amount follows the total as it changes.
-// Any user edit to the row (code or amount) clears the flag.
-// Not stored on the server - the server strips it in patchDraft
-// so `invoice_drafts.gl_breakdown` carries only { code, name,
-// amount }.
 export interface GlLineDraft {
   code: string;
   name: string;
   amount: number;
-  auto?: boolean;
 }
 
 // Answers to one-time questions the server keeps on the draft.

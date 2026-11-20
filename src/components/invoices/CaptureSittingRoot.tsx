@@ -138,6 +138,14 @@ export function CaptureSittingRoot({
   const vendorButtonRef = useRef<HTMLButtonElement | null>(null);
   const moreTriggerRef = useRef<HTMLButtonElement | null>(null);
   const morePhoneTriggerRef = useRef<HTMLButtonElement | null>(null);
+  // Train 2b round-2 fix #2: the 9-in-10 fill mark lives here,
+  // outside the coding row, so it survives server round-trips
+  // (patchDraft strips extra fields and flush() replaces `draft`
+  // with the server response). Set true only by the fill helper
+  // when it plants or updates the auto line; cleared by any
+  // user-driven coding action (chip, Add a code, Put the rest,
+  // updateLine, removeLine).
+  const fillMarkedRef = useRef<boolean>(false);
   const pageTriggerRef = useRef<HTMLButtonElement | null>(null);
   const sendButtonRef = useRef<HTMLButtonElement | null>(null);
   const addFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -145,14 +153,31 @@ export function CaptureSittingRoot({
 
   useEffect(() => { draftRef.current = draft; }, [draft]);
 
-  // Train 2b fix-before-push #2: when the server-rendered draft
-  // prop changes (router.refresh after a 409, or a navigation
-  // that didn't change the draft id but re-ran page.tsx), adopt
-  // the server's newest state. The 409 said this tab's view was
-  // stale, so any in-flight staged patch is dropped. One toast,
-  // one reload. The initial mount is the same path - initialDraft
-  // arrives as the state's first value, so no extra render.
+  // Train 2b round-2 fix #1. An effect runs on first mount no
+  // matter what - so the re-sync's writeLocal(false) was deleting
+  // the device copy before the flush-dirty-patch effect could
+  // read it. A mount guard skips the first run. From the second
+  // run onward (initialDraft.updated_at or .id changing AFTER
+  // mount - a router.refresh() on a 409, or page.tsx re-running
+  // for the same draft), the component adopts the server's
+  // newest state and drops the staged patch.
+  //
+  // Verified by code-read: hasMountedRef starts false; the
+  // if-block below returns BEFORE writeLocal is called; the
+  // flush-dirty-patch effect further down reads the device copy
+  // on its own first mount and schedules a flush when the dirty
+  // flag is set. Round-trip: type into the invoice number box
+  // (onInvNumChange -> stage -> writeLocal(true), the key is on
+  // the device); reload (hard navigation remounts this
+  // component); on the new mount hasMountedRef is false so the
+  // re-sync skips; the flush-dirty-patch effect reads the key
+  // and schedules the flush; the patch reaches the server.
+  const hasMountedRef = useRef(false);
   useEffect(() => {
+    if (!hasMountedRef.current) {
+      hasMountedRef.current = true;
+      return;
+    }
     setDraft(initialDraft);
     setInvNumLocal(initialDraft.invoice_number ?? "");
     setInvDateLocal(toBoxDate(initialDraft.invoice_date));
@@ -163,6 +188,7 @@ export function CaptureSittingRoot({
     setErrors([]);
     setCopyMatch(null);
     setSaveState("idle");
+    fillMarkedRef.current = false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialDraft.id, initialDraft.updated_at]);
 
@@ -338,14 +364,17 @@ export function CaptureSittingRoot({
     setTotalLocal(v);
     const parsed = parseMoneyInput(v);
     stage("total_amount", parsed);
-    // 9-in-10 fill (train 2b fix-before-push #4): pure helper
-    // decides whether to plant the line, update its amount, or
-    // leave the user's coding alone. The amount tracks the total
-    // while the line is still the tool's own auto-fill.
+    // 9-in-10 fill (train 2b round-2 fix #2). The mark comes from
+    // fillMarkedRef (outside the row) and flows back out from the
+    // helper. The helper returns the SAME coding reference when
+    // nothing changed, so an unchanged total does not stage a
+    // save; the `if (next !== current)` guard below reads that.
     if (usual.singleCodeFill) {
       const current = draft.gl_breakdown ?? [];
-      const next = applySingleCodeFill(parsed, current, usual.singleCodeFill);
-      if (next !== current) {
+      const result = applySingleCodeFill(parsed, current, usual.singleCodeFill, fillMarkedRef.current);
+      fillMarkedRef.current = result.isFilled;
+      if (result.coding !== current) {
+        const next = result.coding as GlLineDraft[];
         stage("gl_breakdown", next);
         setDraft((d) => ({ ...d, gl_breakdown: next }));
       }
@@ -393,29 +422,36 @@ export function CaptureSittingRoot({
     stage("gl_breakdown", next);
     setDraft((d) => ({ ...d, gl_breakdown: next }));
   };
+  // Every user-driven coding action clears the fill mark (train 2b
+  // round-2 fix #2). The fill helper reads the mark on the next
+  // total keystroke and hands off.
   const putAllToCode = (code: UsualCode) => {
     if (totalNum == null) { toast("Type the total first.", { tone: "ink" }); return; }
+    fillMarkedRef.current = false;
     updateGl([{ code: code.code, name: code.name, amount: totalNum }]);
   };
   const addSplitLine = (code: UsualCode) => {
+    fillMarkedRef.current = false;
     const left = totalNum != null ? leftToCode(totalNum, gl) : 0;
     const amount = left > 0 ? Math.round(left * 100) / 100 : 0;
     updateGl([...gl, { code: code.code, name: code.name, amount }]);
   };
   const addEmptyRow = () => {
+    fillMarkedRef.current = false;
     updateGl([...gl, { code: "", name: "", amount: 0 }]);
   };
   const putRestOn = (code: string, name: string) => {
+    fillMarkedRef.current = false;
     const left = totalNum != null ? leftToCode(totalNum, gl) : 0;
     if (left <= 0) return;
     updateGl([...gl, { code, name, amount: Math.round(left * 100) / 100 }]);
   };
   const updateLine = (idx: number, patch: Partial<GlLineDraft>) => {
-    // Train 2b fix-before-push #4: any user edit clears the auto
-    // flag so the fill helper stops writing to this line.
-    updateGl(gl.map((l, i) => (i === idx ? { ...l, ...patch, auto: false } : l)));
+    fillMarkedRef.current = false;
+    updateGl(gl.map((l, i) => (i === idx ? { ...l, ...patch } : l)));
   };
   const removeLine = (idx: number) => {
+    fillMarkedRef.current = false;
     updateGl(gl.filter((_, i) => i !== idx));
   };
 

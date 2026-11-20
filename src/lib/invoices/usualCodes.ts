@@ -91,42 +91,58 @@ export function computeUsualCodes(past: readonly PastInvoiceLite[]): UsualCodesR
   return { codes, singleCodeFill, sampleSize: sample.length };
 }
 
-// Train 2b fix-before-push #4. Pure.
+// Train 2b round-2 fix #2. Pure.
 //
 // The 9-in-10 fill plants a single coding line equal to the total.
-// Before this fix the fill only fired once (when the coding was
-// empty), so a user typing "100" saw "1", "10", "100" each stage:
-// the first keystroke filled the code with "1" and then stuck
-// there while the total grew. Now, while the coding is still the
-// tool's own fill (one line with `auto: true` and the fillCode's
-// code), the amount follows the total. Once the user edits the
-// code or the amount, `auto` flips off and the tool stops writing.
+// While the coding is still the tool's own fill AND the user has
+// not touched it, the amount follows the total as it changes.
 //
-// Inputs: the parsed total (or null), the current coding, and
-// the vendor's singleCodeFill (or null). Returns the next coding.
+// The "did the tool fill this and has the user touched it" mark
+// cannot live on the row: the PATCH route strips extra fields, and
+// flush() calls setDraft(out.draft), so any row-level mark is lost
+// after the first save and the fill sticks again on the next
+// keystroke. Instead the component owns the mark (a ref), passes
+// it IN, and reads the next value OUT. Nothing about the mark
+// goes to the server.
+//
+// Return contract:
+//   - When nothing changed, `coding` is the same reference the
+//     caller passed in (so an unchanged total does not stage a
+//     save in the component).
+//   - `isFilled` reads true only when the tool is actively
+//     tracking a single-line fill for the current fillCode.
+export interface LineLite {
+  code: string;
+  name: string;
+  amount: number;
+}
+
+export interface SingleCodeFillResult {
+  coding: ReadonlyArray<LineLite>;
+  isFilled: boolean;
+}
+
 export function applySingleCodeFill(
   total: number | null,
-  coding: ReadonlyArray<{ code: string; name: string; amount: number; auto?: boolean }>,
+  coding: ReadonlyArray<LineLite>,
   fillCode: { code: string; name: string } | null,
-): Array<{ code: string; name: string; amount: number; auto?: boolean }> {
-  if (!fillCode) return coding.slice();
-  if (total == null) return coding.slice();
+  isFilled: boolean,
+): SingleCodeFillResult {
+  if (!fillCode) return { coding, isFilled: false };
+  if (total == null) return { coding, isFilled };
 
-  // No coding yet - plant the auto-fill line.
   if (coding.length === 0) {
-    return [{ code: fillCode.code, name: fillCode.name, amount: total, auto: true }];
+    const planted: LineLite[] = [{ code: fillCode.code, name: fillCode.name, amount: total }];
+    return { coding: planted, isFilled: true };
   }
 
-  // Coding is one line, it's the tool's own auto-fill for the same
-  // code: update the amount to match the new total.
-  if (coding.length === 1) {
-    const only = coding[0];
-    if (only.auto && only.code === fillCode.code) {
-      if (only.amount === total) return coding.slice();
-      return [{ ...only, amount: total, auto: true }];
+  if (coding.length === 1 && isFilled && coding[0].code === fillCode.code) {
+    if (coding[0].amount === total) {
+      return { coding, isFilled: true };
     }
+    const updated: LineLite[] = [{ ...coding[0], amount: total }];
+    return { coding: updated, isFilled: true };
   }
 
-  // User-edited coding - leave it alone.
-  return coding.slice();
+  return { coding, isFilled: false };
 }

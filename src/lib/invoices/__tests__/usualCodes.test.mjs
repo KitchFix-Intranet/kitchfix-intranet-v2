@@ -83,67 +83,87 @@ test("usualCodes: empty past -> empty result", () => {
   assert.deepEqual(r.codes, []);
 });
 
-// ─── applySingleCodeFill: train 2b fix-before-push #4 ─────────────
+// ─── applySingleCodeFill: train 2b round-2 fix #2 ────────────────
+//
+// The mark ("the tool filled this, the user has not touched it")
+// is passed IN and the new value is returned OUT. Nothing about it
+// lives on the row. When the helper has nothing to change it
+// returns the SAME coding reference so the component's
+// `next !== current` guard holds and an unchanged total does not
+// stage a save.
 
 const fill = { code: "5000", name: "Food - Dairy" };
 
-test("applySingleCodeFill: no fillCode -> no change", () => {
-  assert.deepEqual(applySingleCodeFill(100, [], null), []);
+test("applySingleCodeFill: no fillCode -> coding same ref, mark false", () => {
+  const coding = [];
+  const r = applySingleCodeFill(100, coding, null, true);
+  assert.equal(r.coding, coding);
+  assert.equal(r.isFilled, false);
+
+  const otherCoding = [{ code: "5100", name: "Produce", amount: 50 }];
+  const r2 = applySingleCodeFill(100, otherCoding, null, true);
+  assert.equal(r2.coding, otherCoding);
+  assert.equal(r2.isFilled, false);
+});
+
+test("applySingleCodeFill: total null -> coding same ref, mark carries forward", () => {
+  const coding = [];
+  const r = applySingleCodeFill(null, coding, fill, true);
+  assert.equal(r.coding, coding);
+  assert.equal(r.isFilled, true);
+
+  const r2 = applySingleCodeFill(null, coding, fill, false);
+  assert.equal(r2.coding, coding);
+  assert.equal(r2.isFilled, false);
+});
+
+test("applySingleCodeFill: coding empty + total present -> plants line + marks", () => {
+  const r = applySingleCodeFill(100, [], fill, false);
+  assert.deepEqual(r.coding, [{ code: "5000", name: "Food - Dairy", amount: 100 }]);
+  assert.equal(r.isFilled, true);
+});
+
+test("applySingleCodeFill: marked line tracks the total", () => {
+  // User typed "1", tool filled (mark true); user typed "10";
+  // the amount updates, mark stays true.
+  let r = applySingleCodeFill(1, [], fill, false);
+  assert.equal(r.isFilled, true);
+  r = applySingleCodeFill(10, r.coding, fill, r.isFilled);
+  assert.equal(r.coding.length, 1);
+  assert.equal(r.coding[0].amount, 10);
+  assert.equal(r.isFilled, true);
+});
+
+test("applySingleCodeFill: total unchanged -> same coding ref, mark stays true", () => {
+  const coding = [{ code: "5000", name: "Food - Dairy", amount: 50 }];
+  const r = applySingleCodeFill(50, coding, fill, true);
+  assert.equal(r.coding, coding);         // reference-equal: no save staged
+  assert.equal(r.isFilled, true);
+});
+
+test("applySingleCodeFill: user has touched the line -> hands off, mark stays false", () => {
+  // The component clears the mark on updateLine; this is what the
+  // helper sees on the next keystroke.
+  const coding = [{ code: "5000", name: "Food - Dairy", amount: 999 }];
+  const r = applySingleCodeFill(50, coding, fill, false);
+  assert.equal(r.coding, coding);
+  assert.equal(r.isFilled, false);
+});
+
+test("applySingleCodeFill: code no longer matches -> hands off, mark flips to false", () => {
   const coding = [{ code: "5100", name: "Produce", amount: 50 }];
-  assert.deepEqual(applySingleCodeFill(100, coding, null), coding);
+  const r = applySingleCodeFill(100, coding, fill, true);
+  assert.equal(r.coding, coding);
+  assert.equal(r.isFilled, false);
 });
 
-test("applySingleCodeFill: total null -> no change", () => {
-  assert.deepEqual(applySingleCodeFill(null, [], fill), []);
-});
-
-test("applySingleCodeFill: coding empty + total present -> plants auto line", () => {
-  const next = applySingleCodeFill(100, [], fill);
-  assert.deepEqual(next, [{ code: "5000", name: "Food - Dairy", amount: 100, auto: true }]);
-});
-
-test("applySingleCodeFill: coding is the tool's auto line -> amount follows the total", () => {
-  // User typed "1", tool filled; then user typed "10"; tool must
-  // update the amount, not leave it at 1.
-  let coding = applySingleCodeFill(1, [], fill);
-  coding = applySingleCodeFill(10, coding, fill);
-  assert.equal(coding.length, 1);
-  assert.equal(coding[0].amount, 10);
-  assert.equal(coding[0].auto, true);
-});
-
-test("applySingleCodeFill: total unchanged -> same reference-equal values", () => {
-  const coding = [{ code: "5000", name: "Food - Dairy", amount: 50, auto: true }];
-  const next = applySingleCodeFill(50, coding, fill);
-  // Behavior: when amount already matches, the helper returns the
-  // same shape (no-op from the user's POV).
-  assert.equal(next.length, 1);
-  assert.equal(next[0].amount, 50);
-  assert.equal(next[0].auto, true);
-});
-
-test("applySingleCodeFill: user edited the amount -> hands off", () => {
-  // auto=false: the user has touched this line. The tool stops
-  // writing to it even though the total changes.
-  const coding = [{ code: "5000", name: "Food - Dairy", amount: 999, auto: false }];
-  const next = applySingleCodeFill(50, coding, fill);
-  assert.deepEqual(next, coding);
-});
-
-test("applySingleCodeFill: user changed the code -> hands off", () => {
-  // The code no longer matches the fill - user picked something
-  // else. Leave it alone.
-  const coding = [{ code: "5100", name: "Produce", amount: 50, auto: true }];
-  const next = applySingleCodeFill(100, coding, fill);
-  assert.deepEqual(next, coding);
-});
-
-test("applySingleCodeFill: more than one line -> hands off", () => {
+test("applySingleCodeFill: more than one line -> hands off, mark false", () => {
   // Splitting is a deliberate user action; never overwrite it.
   const coding = [
-    { code: "5000", name: "Food - Dairy", amount: 60, auto: false },
-    { code: "5100", name: "Produce", amount: 40, auto: false },
+    { code: "5000", name: "Food - Dairy", amount: 60 },
+    { code: "5100", name: "Produce", amount: 40 },
   ];
-  const next = applySingleCodeFill(100, coding, fill);
-  assert.deepEqual(next, coding);
+  const r = applySingleCodeFill(100, coding, fill, true);
+  assert.equal(r.coding, coding);
+  assert.equal(r.isFilled, false);
 });
