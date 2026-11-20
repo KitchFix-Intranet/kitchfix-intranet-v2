@@ -41,6 +41,7 @@ import {
 import { readActiveIngredients, type MinimalSupabase } from "@/lib/ingredients/readIngredients";
 import { startTimer, mark, endTimer } from "@/lib/timing";
 import { nameFromEmail } from "@/lib/fmt";
+import { canRestore as canRestoreItem, getVendorItemState } from "@/lib/ingredients/vendorItemState";
 // M2 §4B part 2: shape helpers no longer called here. Nothing on
 // screen reads each_measure_*; the GET returns the raw legacy
 // values when present (type-level back-compat) and the real
@@ -447,6 +448,24 @@ export async function GET(req: NextRequest) {
     // on a linked (confirmed) row and shows the sentence. The client
     // needs linkStatus to render that.
     linkStatus: (it as unknown as { link_status?: string | null }).link_status ?? undefined,
+    // T4 R2 §3: server computes state + canRestore from the one
+    // helper so the panel head, the row label and the chip filters
+    // read the same answer. Old-shape rows (one-off stored as
+    // status='archived' with reason='oneoff', person-marked not-food
+    // stored as status='active' with reason='notfood') both resolve
+    // to the new word here, regardless of what status column says.
+    state: getVendorItemState({
+      status: it.status,
+      link_status: (it as unknown as { link_status?: string | null }).link_status ?? null,
+      link_reason: it.link_reason,
+      is_food: it.is_food,
+    }),
+    canRestore: canRestoreItem({
+      status: it.status,
+      link_status: (it as unknown as { link_status?: string | null }).link_status ?? null,
+      link_reason: it.link_reason,
+      is_food: it.is_food,
+    }),
     isFood: it.is_food,
     foodReason: it.food_reason,
   };

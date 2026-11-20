@@ -65,32 +65,32 @@ export const PanelHead = forwardRef<HTMLButtonElement, {
   // "Not linked yet"); kind === "ingredient" -> head has no status
   // line at all, no pill.
 
-  // N13 R4: status pill when the item sits outside the normal
-  // active flow. One pill, muted tone; nothing for plain active.
-  // T4 ruling 4: "Not food" is named here the same way "One-off" is,
-  // for both intake-flagged rows (is_food=false) and person-marked
-  // rows (status='not_food' new shape, or the pre-correction old
-  // shape where is_food=true but status still active). The latter
-  // reaches the panel via PanelHead reading `item.status`.
+  // T4 R2 §3: the state name comes from `item.state`, which the
+  // server computed via getVendorItemState. That reads the old and
+  // new shapes the same way, so an old-shape one-off (status still
+  // 'archived') reads "One-off" here, matching what the list beside
+  // the panel says. Nothing in this component branches on
+  // `item.status` / `item.isFood` / `item.link_reason` directly.
+  const state = kind === "item" ? item?.state : null;
   const statusPill =
-    kind === "item" && item
-      ? item.status === "archived"
-        ? "Archived"
-        : item.status === "one_off"
-          ? "One-off"
-          : item.status === "not_food"
-            ? "Not food"
-            : item.status === "duplicate"
-              ? "Duplicate"
-              : item.status === "resale"
-                ? "Retail"
-                : null
-      : null;
-  // The "Not food" pill still appears for intake-flagged rows whose
-  // status is 'active' (the common case before train 4). statusPill
-  // above covers the new state; this covers the AI-only classification.
+    state === "archived"
+      ? "Archived"
+      : state === "one_off"
+        ? "One-off"
+        : state === "not_food"
+          ? "Not food"
+          : state === "duplicate"
+            ? "Duplicate"
+            : state === "retail"
+              ? "Retail"
+              : null;
+  // Intake-flagged not-food (is_food=false) gets the plain "Not food"
+  // pill too - but the state helper already returns "not_food" for
+  // those rows, so the statusPill above covers it. showNotFoodPill
+  // stays for the foodReason sub-line, which only has meaning when
+  // intake was the classifier.
   const showNotFoodPill =
-    kind === "item" && item?.isFood === false && item.status !== "not_food";
+    kind === "item" && state === "not_food" && item?.isFood === false;
 
   return (
     <div className="kf-ipanel__head">

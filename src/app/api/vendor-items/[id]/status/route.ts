@@ -43,7 +43,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           { status: 400 },
         );
       }
-      return NextResponse.json({ ok: true, marked: r.marked, skipped: r.skipped, usd: r.usd });
+      return NextResponse.json({ ok: true, marked: r.marked, skipped: r.skipped, usd: r.usd, event_id: r.eventId ?? null });
     }
     if (action === "one-off") {
       const r = await markOneOff(client, { itemIds: [id], actorEmail: gate.email });
@@ -53,14 +53,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           { status: 400 },
         );
       }
-      return NextResponse.json({ ok: true, marked: r.marked, skipped: r.skipped });
+      return NextResponse.json({ ok: true, marked: r.marked, skipped: r.skipped, event_id: r.eventId ?? null });
     }
     // action === "restore"
     const r = await restoreVendorItem(client, { itemId: id, actorEmail: gate.email });
     if (!r.ok) {
       return NextResponse.json({ error: r.error ?? "Nothing was saved." }, { status: 400 });
     }
-    return NextResponse.json({ ok: true, restored: r.restored });
+    return NextResponse.json({ ok: true, restored: r.restored, event_id: r.eventId ?? null });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ error: msg }, { status: 500 });

@@ -19,7 +19,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/ui/Toaster";
-import { postJson, saveErrorSentence } from "./panel/common";
+import { postJson, saveErrorSentence, undoViaEvent } from "./panel/common";
 import { anyDirty, discardAll, DirtyScopeProvider } from "./panel/dirty";
 
 // T2 round 2 §4: every editor inside the item panel registers under
@@ -386,29 +386,29 @@ export function DetailPanel({
 // link_status + link_reason) is set and the decision event carries a
 // before snapshot Undo can read.
 //
-// On a linked (confirmed) item, Archive and One-off are disabled
-// with the sentence ruling 8 asks for. Restore shows only on a row
-// that is a person's disposition today (archived / one-off / person-
-// marked not food - via the state helper so both old and new shapes
-// resolve the same).
+// T4 R2 §3: Archive-disabled / One-off-disabled / Restore-visible
+// branch on `item.state` and `item.canRestore`, which the server
+// computed via getVendorItemState / canRestore. The panel does not
+// read `item.status` / `item.isFood` / `item.link_reason` directly.
+//
+// T4 R2 §4: Restore uses the in-page "What happens" ask (same shape
+// as Send back): one sentence, then Restore + Cancel. Archive and
+// One-off act at once with Undo in the toast.
 function ItemStatusFooter({ item, onDone }: { item: ReviewGroupItem; onDone: () => void }) {
   const [busy, setBusy] = useState<null | "archive" | "one-off" | "restore">(null);
   const [error, setError] = useState<string | null>(null);
+  // T4 R2 §4: Restore uses the in-page ask. Open on click; the ask
+  // carries the "What happens" sentence and Restore / Cancel.
+  const [restoreAsk, setRestoreAsk] = useState(false);
+  const router = useRouter();
 
-  // Classify the item's current shape. The three decisions act only
-  // on proposed / not-matched rows (ruling 8); on a confirmed row the
-  // sentence names why they are disabled.
-  const linkStatus = item.linkStatus ?? "";
-  const isLinked = linkStatus === "confirmed";
-  const isArchived = item.status === "archived";
-  const isOneOff = item.status === "one_off";
-  const isNotFood = item.status === "not_food";
-  // Person-marked not-food OLD shape stays as status='active' +
-  // link_status='rejected' + reason-prefix notfood; the server's
-  // restoreVendorItem reads link_reason to spot it, so this surface
-  // only needs to offer Restore for the rows it can see clearly. On
-  // the new shape every person disposition reads from `status` alone.
-  const showRestore = isArchived || isOneOff || isNotFood;
+  // T4 R2 §3: the state the server resolved. Both old and new shapes
+  // land on these labels.
+  const state = item.state ?? "";
+  const isLinked = (item.linkStatus ?? "") === "confirmed";
+  const isArchived = state === "archived";
+  const isOneOff = state === "one_off";
+  const showRestore = item.canRestore === true;
 
   async function run(action: "archive" | "one-off" | "restore", successCopy: string) {
     if (busy) return;
@@ -420,28 +420,19 @@ function ItemStatusFooter({ item, onDone }: { item: ReviewGroupItem; onDone: () 
       setBusy(null);
       return;
     }
+    const d = (r.data ?? {}) as { event_id?: string | null };
     toast(successCopy, {
-      undo: async () => {
-        // Restore walks the decision event. Archive / One-off are
-        // decisions themselves and have their own events; a toast
-        // Undo rolls them back through restoreVendorItem so the
-        // panel-footer click is reversible in the same ten seconds.
-        if (action === "restore") {
-          // Reverse a restore: re-mark archived (the common prior
-          // state) only when the user's original shape was archived;
-          // otherwise the user would need Recent decisions.
-          const u = await postJson(`/api/vendor-items/${item.id}/status`, { action: "archive" });
-          if (!u.ok) throw new Error(saveErrorSentence(u) ?? "Nothing was saved.");
-        } else {
-          const u = await postJson(`/api/vendor-items/${item.id}/status`, { action: "restore" });
-          if (!u.ok) throw new Error(saveErrorSentence(u) ?? "Nothing was saved.");
-        }
-        onDone();
-      },
+      undo: d.event_id ? undoViaEvent(router, d.event_id) : undefined,
     });
     onDone();
     setBusy(null);
   }
+
+  async function doRestore() {
+    setRestoreAsk(false);
+    await run("restore", "Restored - back to not matched yet");
+  }
+
   return (
     <div className="kf-ipanel__footer-strip">
       <span className="kf-ipanel__footer-label">Not for recipes</span>
@@ -468,15 +459,14 @@ function ItemStatusFooter({ item, onDone }: { item: ReviewGroupItem; onDone: () 
           <button
             type="button"
             className={`kf-btn kf-btn--soft kf-btn--sm${busy === "restore" ? " is-busy" : ""}`}
-            disabled={busy !== null}
-            onClick={() => run("restore", "Restored - back to not matched yet")}
+            disabled={busy !== null || restoreAsk}
+            onClick={() => setRestoreAsk(true)}
             title="Put this item back to not matched yet; it can be matched again."
           >
             Restore
           </button>
         ) : null}
         {isLinked ? (
-          // T4 ruling 8: sentence sits beside the disabled buttons.
           <span className="kf-ipanel__footer-note" role="note">
             Linked to an ingredient. Send it back to review first.
           </span>
@@ -487,6 +477,31 @@ function ItemStatusFooter({ item, onDone }: { item: ReviewGroupItem; onDone: () 
           </span>
         ) : null}
       </div>
+      {restoreAsk ? (
+        <div className="kf-ipanel__footer-ask" role="alertdialog" aria-label="Restore?">
+          <p className="kf-ipanel__footer-ask-text">
+            This item goes back to not matched yet and can be matched again.
+          </p>
+          <div className="kf-ipanel__footer-ask-actions">
+            <button
+              type="button"
+              className={`kf-btn kf-btn--primary kf-btn--sm${busy === "restore" ? " is-busy" : ""}`}
+              disabled={busy !== null}
+              onClick={doRestore}
+            >
+              {busy === "restore" ? "Saving..." : "Restore"}
+            </button>
+            <button
+              type="button"
+              className="kf-btn kf-btn--line kf-btn--sm"
+              disabled={busy !== null}
+              onClick={() => setRestoreAsk(false)}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

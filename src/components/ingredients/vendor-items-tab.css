@@ -320,6 +320,26 @@
   color: var(--sp-ink-dim);
   padding: 0 var(--sp-sp-2);
 }
+/* T4 R2 §4: in-page "What happens" ask for Restore. Shape mirrors
+ * the Send back ask - one sentence then Restore / Cancel. */
+.kf-ipanel__footer-ask {
+  margin-top: var(--sp-sp-3);
+  padding: var(--sp-sp-3);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  background: var(--sp-card);
+}
+.kf-ipanel__footer-ask-text {
+  margin: 0 0 var(--sp-sp-3);
+  font-size: var(--sp-t-body);
+  color: var(--sp-ink);
+}
+.kf-ipanel__footer-ask-actions {
+  display: flex;
+  gap: var(--sp-sp-2);
+  flex-wrap: wrap;
+  align-items: center;
+}
 .kf-btn--soft {
   background: var(--sp-sky-tint);
   color: var(--sp-navy);

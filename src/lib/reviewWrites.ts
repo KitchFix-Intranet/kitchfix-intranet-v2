@@ -10,6 +10,7 @@
 // only - no email address - and old-shape readers accept either form
 // via `getVendorItemState` / `reasonVerb`.
 
+import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { CATEGORY_BY_PARENT, categoryForParent, inferBaseUnit, type SuperCategory } from "@/lib/ingredients/categories";
 import { canonicalIngredientName } from "@/lib/ingredients/nameNorm";
@@ -83,6 +84,14 @@ export type ConfirmResult = {
   // ingredient is Retail. Reported in the Review-queue toast so the
   // user sees the side-effect of confirming into a Retail master.
   movedToResale?: number;
+  // T4 R2: the event id of the primary `review_confirm` row this call
+  // wrote. The client's toast hands it to /api/review/undo so Undo
+  // reads the snapshot. Null when nothing was confirmable.
+  eventId?: string | null;
+  // T4 R2: the click id shared by every event this call emitted.
+  // Multi-event clicks (create+confirm, create+retail) pass this
+  // down so Undo rolls the whole click back as one.
+  clickId?: string;
 };
 
 type ItemRow = {
@@ -128,10 +137,11 @@ async function readItems(client: SupabaseClient, itemIds: string[]): Promise<Ite
 // write. See docs/GOTCHAS.md if we introduce a 'learned' kind later.
 export async function confirmItems(
   client: SupabaseClient,
-  args: { ingredientId: string; itemIds: string[]; actorEmail: string }
+  args: { ingredientId: string; itemIds: string[]; actorEmail: string; clickId?: string }
 ): Promise<ConfirmResult> {
   const { ingredientId, itemIds, actorEmail } = args;
-  const result: ConfirmResult = { confirmed: 0, usd: 0, errors: [] };
+  const clickId = args.clickId ?? randomUUID();
+  const result: ConfirmResult = { confirmed: 0, usd: 0, errors: [], eventId: null, clickId };
   if (itemIds.length === 0) return result;
 
   // Validate ingredient exists + is active (not merged). Also carry
@@ -250,38 +260,47 @@ export async function confirmItems(
   // can find a decision from the event alone - no per-item event needed.
   // Retail-at-confirm bumps are described by the snapshot's status ("active"
   // before, "resale" after).
-  await client.from("pr_events").insert({
-    entity_type: "ingredient",
-    entity_id: ingredientId,
-    kind: "review_confirm",
-    before: {
-      items: confirmedSnapshots,
-    },
-    after: {
-      item_ids: confirmedSnapshots.map((s) => s.item_id),
-      ingredient_id: ingredientId,
-      confirmed: result.confirmed,
-      usd: Math.round(result.usd),
-      aliases: uniqueAliasRows.length,
-      // T4 ruling 2: tag the Retail-at-confirm path on the event. Undo
-      // reads this to know which items also need status restored.
-      moved_to_resale: result.movedToResale ?? 0,
-      ingredient_is_retail: ingredientIsRetail,
-    },
-    actor: actorEmail,
-  });
+  if (confirmedSnapshots.length > 0) {
+    const { data: inserted } = await client.from("pr_events").insert({
+      entity_type: "ingredient",
+      entity_id: ingredientId,
+      kind: "review_confirm",
+      before: {
+        items: confirmedSnapshots,
+      },
+      after: {
+        item_ids: confirmedSnapshots.map((s) => s.item_id),
+        ingredient_id: ingredientId,
+        confirmed: result.confirmed,
+        usd: Math.round(result.usd),
+        aliases: uniqueAliasRows.length,
+        // T4 ruling 2: tag the Retail-at-confirm path on the event.
+        // Undo reads this to know which items also need status restored.
+        moved_to_resale: result.movedToResale ?? 0,
+        ingredient_is_retail: ingredientIsRetail,
+        // T4 R2: the click id shared by every event this user click
+        // emitted. undoDecisionEvent fetches all events with this id
+        // and rolls the whole click back as one.
+        click_id: clickId,
+      },
+      actor: actorEmail,
+    }).select("id").single();
+    result.eventId = (inserted as { id: string } | null)?.id ?? null;
+  }
 
   return result;
 }
 
 export async function markNotFood(
   client: SupabaseClient,
-  args: { itemIds: string[]; actorEmail: string }
-): Promise<{ marked: number; skipped: number; errors: string[] }> {
+  args: { itemIds: string[]; actorEmail: string; clickId?: string }
+): Promise<{ marked: number; skipped: number; errors: string[]; eventId: string | null; clickId: string }> {
   const { itemIds, actorEmail } = args;
+  const clickId = args.clickId ?? randomUUID();
   const errors: string[] = [];
   let marked = 0;
   let skipped = 0;
+  let firstEventId: string | null = null;
   // T4: snapshot every candidate row BEFORE the write so the event
   // carries what Undo needs. Writes stay serial on purpose - a race on
   // link_status is still the per-row guard.
@@ -319,7 +338,7 @@ export async function markNotFood(
     }
     marked += 1;
     const snap = before.get(id);
-    await client.from("pr_events").insert({
+    const { data: ev } = await client.from("pr_events").insert({
       entity_type: "vendor_item",
       entity_id: id,
       kind: "review_notfood",
@@ -334,11 +353,13 @@ export async function markNotFood(
             link_reason: "notfood",
           },
         ],
+        click_id: clickId,
       },
       actor: actorEmail,
-    });
+    }).select("id").single();
+    if (firstEventId == null && ev) firstEventId = (ev as { id: string }).id;
   }
-  return { marked, skipped, errors };
+  return { marked, skipped, errors, eventId: firstEventId, clickId };
 }
 
 // Q2 §2: One-off purchase disposition. Real food bought once that
@@ -355,12 +376,14 @@ export async function markNotFood(
 // not a re-classification. Same reasoning as markNotFood.
 export async function markOneOff(
   client: SupabaseClient,
-  args: { itemIds: string[]; actorEmail: string }
-): Promise<{ marked: number; skipped: number; errors: string[] }> {
+  args: { itemIds: string[]; actorEmail: string; clickId?: string }
+): Promise<{ marked: number; skipped: number; errors: string[]; eventId: string | null; clickId: string }> {
   const { itemIds, actorEmail } = args;
+  const clickId = args.clickId ?? randomUUID();
   const errors: string[] = [];
   let marked = 0;
   let skipped = 0;
+  let firstEventId: string | null = null;
   // T4: snapshot every candidate row BEFORE the write.
   const before = await readItemSnapshots(client, itemIds);
   for (const id of itemIds) {
@@ -388,7 +411,7 @@ export async function markOneOff(
     }
     marked += 1;
     const snap = before.get(id);
-    await client.from("pr_events").insert({
+    const { data: ev } = await client.from("pr_events").insert({
       entity_type: "vendor_item",
       entity_id: id,
       kind: "review_oneoff",
@@ -403,11 +426,13 @@ export async function markOneOff(
             link_reason: "oneoff",
           },
         ],
+        click_id: clickId,
       },
       actor: actorEmail,
-    });
+    }).select("id").single();
+    if (firstEventId == null && ev) firstEventId = (ev as { id: string }).id;
   }
-  return { marked, skipped, errors };
+  return { marked, skipped, errors, eventId: firstEventId, clickId };
 }
 
 // Retail disposition. Retail = sold as-is to players (bottled water,
@@ -440,31 +465,38 @@ export async function markOneOff(
 // stays recipe. The UI surfaces that disconnect to the user.
 export async function markResale(
   client: SupabaseClient,
-  args: { ingredientId: string; itemIds: string[]; actorEmail: string }
+  args: { ingredientId: string; itemIds: string[]; actorEmail: string; clickId?: string }
 ): Promise<{
   confirmed: number;
   marked: number;
   usd: number;
   ingredientIsRetail: boolean;
   errors: string[];
+  eventId: string | null;
+  clickId: string;
 }> {
   const { ingredientId, itemIds, actorEmail } = args;
+  const clickId = args.clickId ?? randomUUID();
   const errors: string[] = [];
   if (itemIds.length === 0) {
-    return { confirmed: 0, marked: 0, usd: 0, ingredientIsRetail: false, errors };
+    return { confirmed: 0, marked: 0, usd: 0, ingredientIsRetail: false, errors, eventId: null, clickId };
   }
 
   // Delegate link confirmation to the shared path. This flips
-  // link_status='confirmed' + link_reason='confirmed:<actor>' on
-  // every item that was 'proposed'; it writes golden_links rows and
-  // emits the same pr_events the Confirm button does. Retail and
-  // Confirm now produce byte-identical link state.
+  // link_status='confirmed' + link_reason='confirmed' on every item
+  // that was 'proposed'; writes golden_links rows and emits the same
+  // review_confirm event the Confirm button does. Retail and Confirm
+  // produce byte-identical link state.
+  //
+  // T4 R2: the click id passes down so the retail-flavoured
+  // review_confirm and this function's post-confirm status write
+  // share a click id; Undo rolls them back as one.
   let confirmResult: ConfirmResult;
   try {
-    confirmResult = await confirmItems(client, { ingredientId, itemIds, actorEmail });
+    confirmResult = await confirmItems(client, { ingredientId, itemIds, actorEmail, clickId });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { confirmed: 0, marked: 0, usd: 0, ingredientIsRetail: false, errors: [msg] };
+    return { confirmed: 0, marked: 0, usd: 0, ingredientIsRetail: false, errors: [msg], eventId: null, clickId };
   }
   errors.push(...confirmResult.errors);
 
@@ -529,6 +561,11 @@ export async function markResale(
     usd: Math.round(confirmResult.usd),
     ingredientIsRetail,
     errors,
+    // T4 R2: hand the caller the primary event id so the toast's Undo
+    // can roll this click (review_confirm + the non-retail-master
+    // post-confirm status write) back as one unit.
+    eventId: confirmResult.eventId ?? null,
+    clickId,
   };
 }
 
@@ -604,11 +641,12 @@ export async function setFlag(
 // Per-item event carries the full batch aggregate in after.
 export async function markArchived(
   client: SupabaseClient,
-  args: { itemIds: string[]; actorEmail: string }
-): Promise<{ marked: number; skipped: number; usd: number; errors: string[] }> {
+  args: { itemIds: string[]; actorEmail: string; clickId?: string }
+): Promise<{ marked: number; skipped: number; usd: number; errors: string[]; eventId: string | null; clickId: string }> {
   const { itemIds, actorEmail } = args;
+  const clickId = args.clickId ?? randomUUID();
   const errors: string[] = [];
-  if (itemIds.length === 0) return { marked: 0, skipped: 0, usd: 0, errors };
+  if (itemIds.length === 0) return { marked: 0, skipped: 0, usd: 0, errors, eventId: null, clickId };
 
   const rows = await readItems(client, itemIds);
   const eligible = rows.filter((r) => r.link_status === "proposed" || r.link_status === "none");
@@ -647,9 +685,10 @@ export async function markArchived(
   const changedUsd = rows
     .filter((r) => changedIds.includes(r.id))
     .reduce((s, r) => s + Number(r.usd_12m ?? 0), 0);
+  let firstEventId: string | null = null;
   for (const id of changedIds) {
     const snap = before.get(id);
-    await client.from("pr_events").insert({
+    const { data: ev } = await client.from("pr_events").insert({
       entity_type: "vendor_item",
       entity_id: id,
       kind: "review_archive",
@@ -666,21 +705,25 @@ export async function markArchived(
             link_reason: "archived",
           },
         ],
+        click_id: clickId,
       },
       actor: actorEmail,
-    });
+    }).select("id").single();
+    if (firstEventId == null && ev) firstEventId = (ev as { id: string }).id;
   }
-  return { marked, skipped, usd: Math.round(changedUsd), errors };
+  return { marked, skipped, usd: Math.round(changedUsd), errors, eventId: firstEventId, clickId };
 }
 
 export async function keepSeparate(
   client: SupabaseClient,
-  args: { itemIds: string[]; actorEmail: string }
-): Promise<{ marked: number; skipped: number; errors: string[] }> {
+  args: { itemIds: string[]; actorEmail: string; clickId?: string }
+): Promise<{ marked: number; skipped: number; errors: string[]; eventId: string | null; clickId: string }> {
   const { itemIds, actorEmail } = args;
+  const clickId = args.clickId ?? randomUUID();
   const errors: string[] = [];
   let marked = 0;
   let skipped = 0;
+  let firstEventId: string | null = null;
   // T4: snapshot every candidate row BEFORE the write.
   const before = await readItemSnapshots(client, itemIds);
   // "Keep separate" = don't propose this item into the current group ever
@@ -709,7 +752,7 @@ export async function keepSeparate(
     }
     marked += 1;
     const snap = before.get(id);
-    await client.from("pr_events").insert({
+    const { data: ev } = await client.from("pr_events").insert({
       entity_type: "vendor_item",
       entity_id: id,
       kind: "review_keep_separate",
@@ -723,21 +766,25 @@ export async function keepSeparate(
             link_reason: "keep_separate",
           },
         ],
+        click_id: clickId,
       },
       actor: actorEmail,
-    });
+    }).select("id").single();
+    if (firstEventId == null && ev) firstEventId = (ev as { id: string }).id;
   }
-  return { marked, skipped, errors };
+  return { marked, skipped, errors, eventId: firstEventId, clickId };
 }
 
 export async function relinkItems(
   client: SupabaseClient,
-  args: { ingredientId: string; itemIds: string[]; actorEmail: string }
-): Promise<{ relinked: number; marked: number; skipped: number; errors: string[] }> {
+  args: { ingredientId: string; itemIds: string[]; actorEmail: string; clickId?: string }
+): Promise<{ relinked: number; marked: number; skipped: number; errors: string[]; eventId: string | null; clickId: string }> {
   const { ingredientId, itemIds, actorEmail } = args;
+  const clickId = args.clickId ?? randomUUID();
   const errors: string[] = [];
   let relinked = 0;
   let skipped = 0;
+  let firstEventId: string | null = null;
 
   // Validate ingredient.
   const { data: ing, error: ingErr } = await client
@@ -775,7 +822,7 @@ export async function relinkItems(
     }
     relinked += 1;
     const snap = before.get(id);
-    await client.from("pr_events").insert({
+    const { data: ev } = await client.from("pr_events").insert({
       entity_type: "vendor_item",
       entity_id: id,
       kind: "review_relink",
@@ -789,14 +836,13 @@ export async function relinkItems(
             link_reason: "relinked",
           },
         ],
+        click_id: clickId,
       },
       actor: actorEmail,
-    });
+    }).select("id").single();
+    if (firstEventId == null && ev) firstEventId = (ev as { id: string }).id;
   }
-  // `marked` mirrors the shape of the other review helpers so route
-  // callers can read one field whether they called relink, not-food,
-  // or archive. relinked stays for existing readers.
-  return { relinked, marked: relinked, skipped, errors };
+  return { relinked, marked: relinked, skipped, errors, eventId: firstEventId, clickId };
 }
 
 // Soft-revoke undo. The pr_ tables grant no DELETE (PR24 never-delete),
@@ -924,17 +970,18 @@ export async function undoConfirmMany(
 // dispositions only.
 export async function restoreVendorItem(
   client: SupabaseClient,
-  args: { itemId: string; actorEmail: string }
-): Promise<{ ok: boolean; error?: string; restored: boolean }> {
+  args: { itemId: string; actorEmail: string; clickId?: string }
+): Promise<{ ok: boolean; error?: string; restored: boolean; eventId: string | null; clickId: string }> {
   const { itemId, actorEmail } = args;
+  const clickId = args.clickId ?? randomUUID();
 
   const { data: curData, error: curErr } = await client
     .from("pr_vendor_items")
     .select(ITEM_SNAPSHOT_COLUMNS + ",is_food")
     .eq("id", itemId)
     .maybeSingle();
-  if (curErr) return { ok: false, error: curErr.message, restored: false };
-  if (!curData) return { ok: false, error: "Item not found", restored: false };
+  if (curErr) return { ok: false, error: curErr.message, restored: false, eventId: null, clickId };
+  if (!curData) return { ok: false, error: "Item not found", restored: false, eventId: null, clickId };
   const cur = curData as unknown as {
     id: string;
     status: string | null;
@@ -953,7 +1000,7 @@ export async function restoreVendorItem(
     (cur.status === "active" && cur.link_status === "rejected" && verb === "notfood" && cur.is_food === true);
 
   if (!(isArchived || isOneOff || isPersonNotFood)) {
-    return { ok: false, error: "This item is not archived, one-off or not food.", restored: false };
+    return { ok: false, error: "This item is not archived, one-off or not food.", restored: false, eventId: null, clickId };
   }
 
   const beforeSnap: ItemSnapshot = {
@@ -982,12 +1029,12 @@ export async function restoreVendorItem(
     .eq("status", cur.status ?? "")
     .eq("link_status", cur.link_status ?? "")
     .select("id");
-  if (error) return { ok: false, error: error.message, restored: false };
+  if (error) return { ok: false, error: error.message, restored: false, eventId: null, clickId };
   if (!data || data.length === 0) {
-    return { ok: false, error: "This item was changed again since. Nothing was undone.", restored: false };
+    return { ok: false, error: "This item was changed again since. Nothing was undone.", restored: false, eventId: null, clickId };
   }
 
-  await client.from("pr_events").insert({
+  const { data: ev } = await client.from("pr_events").insert({
     entity_type: "vendor_item",
     entity_id: cur.id,
     kind: "review_restore",
@@ -1004,24 +1051,36 @@ export async function restoreVendorItem(
           ingredient_id: null,
         },
       ],
+      click_id: clickId,
     },
     actor: actorEmail,
-  });
+  }).select("id").single();
 
-  return { ok: true, restored: true };
+  return { ok: true, restored: true, eventId: (ev as { id: string } | null)?.id ?? null, clickId };
 }
 
-// T4 §3: the one function that takes any decision event back. Reads
-// `before.items` and writes each snapshot back, guarded on the row
-// still matching the `after` the decision left behind. If any guard
-// fails, every write is still safe (per-row guard blocks overwrite),
-// but the result reports `refused` with the plain sentence so the UI
-// can say it out loud.
+// T4 R2 §2: one function takes a click back. Reads every event that
+// shares the chosen event's click_id and walks them in reverse time
+// order. For each item snapshot:
+//   - every field the event set must still hold the value the event
+//     set (ingredient_id and link_reason included);
+//   - if any item in the click has moved on, nothing is written for
+//     that item - that one is `refused`. A click is never half undone.
+//
+// A click that touched `pr_ingredients` (ingredient_created or
+// ingredient_revived) is walked too. Undo retires an ingredient the
+// click created, and returns a revived-retired ingredient to its
+// pre-revive state (status + category + parent + base_unit).
+//
+// Idempotent: a `review_undo` with `undid_click_id = <this click>`
+// already in pr_events means this click was already undone, and
+// `undoDecisionEvent` returns ok with zero work (no event written).
 //
 // Scope: supports review_confirm, review_archive, review_oneoff,
 // review_notfood, review_keep_separate, review_relink,
-// ingredient_split_create, review_restore. Everything else returns
-// an unsupported-kind error.
+// ingredient_split_create, review_restore. Also walks sibling
+// ingredient_created / ingredient_revived rows when they share the
+// click_id. Everything else returns a plain-words refusal.
 export async function undoDecisionEvent(
   client: SupabaseClient,
   args: { eventId: string; actorEmail: string }
@@ -1036,20 +1095,23 @@ export async function undoDecisionEvent(
 
   const { data: ev, error: evErr } = await client
     .from("pr_events")
-    .select("id,kind,entity_type,entity_id,before,after,actor")
+    .select("id,kind,entity_type,entity_id,before,after,actor,at")
     .eq("id", eventId)
     .maybeSingle();
   if (evErr) return { ok: false, error: evErr.message, reverted: 0, refused: 0 };
-  if (!ev) return { ok: false, error: "Decision not found.", reverted: 0, refused: 0 };
+  if (!ev) return { ok: false, error: "This decision was not found.", reverted: 0, refused: 0 };
 
-  const event = ev as {
+  type EventShape = {
     id: string;
     kind: string;
     entity_type: string;
     entity_id: string;
     before: Record<string, unknown> | null;
     after: Record<string, unknown> | null;
+    actor: string | null;
+    at: string;
   };
+  const event = ev as EventShape;
 
   const SUPPORTED = new Set([
     "review_confirm",
@@ -1062,17 +1124,47 @@ export async function undoDecisionEvent(
     "review_restore",
   ]);
   if (!SUPPORTED.has(event.kind)) {
-    return { ok: false, error: `Undo is not available for ${event.kind}.`, reverted: 0, refused: 0 };
+    return { ok: false, error: "Undo is not available for this decision.", reverted: 0, refused: 0 };
   }
 
-  const beforeItems = extractItemSnapshots(event.before?.items);
-  const afterItems = extractItemSnapshots(event.after?.items);
-  if (beforeItems.length === 0) {
-    // Decisions written before this train have no snapshot. For
-    // review_confirm the legacy undoConfirmMany path still works - it
-    // puts link_status back to proposed from the current row - so we
-    // call it. For every other kind pre-T4 we refuse with the user
-    // sentence; the ledger row already says so.
+  // Collect the whole click: every event that shares this one's
+  // click_id. Fall back to the single event when the event predates
+  // click_id (pre-R2 rows).
+  const clickId = (event.after as { click_id?: unknown } | null)?.click_id;
+  type ClickEvent = EventShape;
+  let clickEvents: ClickEvent[] = [event];
+  if (typeof clickId === "string" && clickId.length > 0) {
+    const { data: siblings } = await client
+      .from("pr_events")
+      .select("id,kind,entity_type,entity_id,before,after,actor,at")
+      .eq("after->>click_id", clickId)
+      .order("at", { ascending: true });
+    const rows = ((siblings ?? []) as ClickEvent[]);
+    if (rows.length > 0) clickEvents = rows;
+
+    // Idempotency: a review_undo with undid_click_id = this one means
+    // the click was already rolled back. Return ok with zero work and
+    // write no new event.
+    const { data: prior } = await client
+      .from("pr_events")
+      .select("id")
+      .eq("kind", "review_undo")
+      .eq("before->>undid_click_id", clickId)
+      .limit(1);
+    if (prior && prior.length > 0) {
+      return { ok: true, reverted: 0, refused: 0, retiredIngredientId: null };
+    }
+  }
+
+  // Walk the click in REVERSE time order so a confirm that followed a
+  // create is undone first. Each event's snapshot is applied with the
+  // strict per-field guard.
+  const walkOrder = [...clickEvents].sort((a, b) => (a.at < b.at ? 1 : -1));
+
+  // Legacy path: single event with no snapshot (pre-T4 row). Only
+  // review_confirm has a usable fallback.
+  const totalBefore = walkOrder.reduce((s, e) => s + extractItemSnapshots(e.before?.items).length, 0);
+  if (totalBefore === 0) {
     if (event.kind === "review_confirm") {
       const itemIds = extractStringArray(event.after?.item_ids);
       if (itemIds.length === 0) {
@@ -1084,138 +1176,263 @@ export async function undoDecisionEvent(
     return { ok: false, error: "This decision was made before Undo existed. Use Restore instead.", reverted: 0, refused: 0 };
   }
 
-  // Build the afterGuard map (item_id -> expected current shape) so
-  // the per-item UPDATE guards on the state the decision left. Fall
-  // back to an empty guard for review_confirm (whose before.items
-  // snapshot is complete; the current shape is derived from the
-  // decision).
-  const afterGuard = new Map<string, Partial<ItemSnapshot>>();
-  for (const a of afterItems) {
-    afterGuard.set(a.item_id, a);
+  // Phase 1: plan every write per item.
+  //
+  // For each itemId involved in the click:
+  //   - patch = the FIRST event's before snapshot for that item
+  //     (that is the true pre-click shape).
+  //   - guard = the NET after state across every event in the click,
+  //     merged in time order (later fields win). The net is what the
+  //     click actually left on the row, which is what current row
+  //     must still match for Undo to go.
+  //
+  // For a "Create + confirm" click, the split writes
+  // link_reason='split' and the confirm writes link_reason='confirmed'
+  // + link_status='confirmed'; the net after is the confirm's values.
+  // When the guard checks that net against the current row, it sees
+  // confirmed/confirmed on both sides and the click is undoable even
+  // though an intermediate value was different.
+  //
+  // For review_confirm events that lack after.items (ingredient-scoped
+  // event shape), fall back to the implicit (link_status='confirmed',
+  // link_reason='confirmed') pair for the guard.
+  // Walk events in TIME-ASCENDING order so later events override
+  // earlier ones in the merged net-after. The reverse-time walkOrder
+  // is used in Phase 5 only (for ingredient side effects that must
+  // undo the last click-side-effect first).
+  const timeAscending = [...clickEvents].sort((a, b) => (a.at < b.at ? -1 : 1));
+  const firstBeforeByItem = new Map<string, ItemSnapshot>();
+  const netAfterByItem = new Map<string, Record<string, unknown>>();
+  for (const e of timeAscending) {
+    const beforeItems = extractItemSnapshots(e.before?.items);
+    for (const snap of beforeItems) {
+      if (!firstBeforeByItem.has(snap.item_id)) {
+        firstBeforeByItem.set(snap.item_id, snap);
+      }
+    }
+    const afterItems = extractItemSnapshots(e.after?.items);
+    const impliedConfirm =
+      e.kind === "review_confirm"
+        ? { link_status: "confirmed", link_reason: "confirmed" }
+        : null;
+    const confirmItemIds = impliedConfirm ? beforeItems.map((s) => s.item_id) : [];
+    for (const itemId of confirmItemIds) {
+      const prev = netAfterByItem.get(itemId) ?? {};
+      netAfterByItem.set(itemId, { ...prev, ...impliedConfirm });
+    }
+    for (const after of afterItems) {
+      const prev = netAfterByItem.get(after.item_id) ?? {};
+      const nextFields: Record<string, unknown> = { ...prev };
+      if ("status" in after) nextFields.status = after.status ?? null;
+      if ("link_status" in after) nextFields.link_status = after.link_status ?? null;
+      if ("link_reason" in after) nextFields.link_reason = after.link_reason ?? null;
+      if ("link_confidence" in after) nextFields.link_confidence = after.link_confidence ?? null;
+      if ("ingredient_id" in after) nextFields.ingredient_id = after.ingredient_id ?? null;
+      netAfterByItem.set(after.item_id, nextFields);
+    }
   }
 
-  // Alias-revoke tracking for Confirm undo.
-  const confirmUndoNeedsAliasRevoke = event.kind === "review_confirm";
+  type PlannedWrite = {
+    itemId: string;
+    guard: Record<string, unknown>;
+    patch: Record<string, unknown>;
+  };
+  const plannedItemWrites: PlannedWrite[] = [];
+  const refusedItemIds: string[] = [];
+  for (const [itemId, snap] of firstBeforeByItem) {
+    const patch: Record<string, unknown> = {};
+    if ("status" in snap) patch.status = snap.status ?? null;
+    if ("link_status" in snap) patch.link_status = snap.link_status ?? null;
+    if ("link_reason" in snap) patch.link_reason = snap.link_reason ?? null;
+    if ("link_confidence" in snap) patch.link_confidence = snap.link_confidence ?? null;
+    if ("ingredient_id" in snap) patch.ingredient_id = snap.ingredient_id ?? null;
+    plannedItemWrites.push({
+      itemId,
+      guard: netAfterByItem.get(itemId) ?? {},
+      patch,
+    });
+  }
 
-  let reverted = 0;
-  let refused = 0;
-  for (const snap of beforeItems) {
-    const itemId = snap.item_id;
-    const guard = afterGuard.get(itemId);
-
-    // Compose the UPDATE from the snapshot. Null values are written
-    // as null so Restore's `ingredient_id=null` really clears the
-    // column.
-    const update: Record<string, unknown> = {};
-    if ("status" in snap) update.status = snap.status ?? null;
-    if ("link_status" in snap) update.link_status = snap.link_status ?? null;
-    if ("link_reason" in snap) update.link_reason = snap.link_reason ?? null;
-    if ("link_confidence" in snap) update.link_confidence = snap.link_confidence ?? null;
-    if ("ingredient_id" in snap) update.ingredient_id = snap.ingredient_id ?? null;
-
-    // Per-row guard: only write when the row still matches what the
-    // decision set. For review_confirm the after shape is implied
-    // (link_status='confirmed', link_reason='confirmed'); check that.
-    let q = client.from("pr_vendor_items").update(update).eq("id", itemId);
-    if (guard?.status != null) q = q.eq("status", guard.status);
-    if (guard?.link_status != null) q = q.eq("link_status", guard.link_status);
-    else if (event.kind === "review_confirm") q = q.eq("link_status", "confirmed");
-    const { data, error } = await q.select("id");
-    if (error) {
-      refused += 1;
+  // Phase 2: dry-run every guard against the current row to decide
+  // whether the whole click goes. One failed guard = whole click
+  // refused.
+  const uniqueItemIds = Array.from(new Set(plannedItemWrites.map((p) => p.itemId)));
+  const currentById = new Map<string, Record<string, unknown>>();
+  if (uniqueItemIds.length > 0) {
+    const { data: rows } = await client
+      .from("pr_vendor_items")
+      .select("id,status,link_status,link_reason,link_confidence,ingredient_id")
+      .in("id", uniqueItemIds);
+    for (const r of ((rows ?? []) as Array<Record<string, unknown>>)) {
+      currentById.set(r.id as string, r);
+    }
+  }
+  for (const p of plannedItemWrites) {
+    const cur = currentById.get(p.itemId);
+    if (!cur) {
+      refusedItemIds.push(p.itemId);
       continue;
     }
-    if (!data || data.length === 0) {
-      refused += 1;
-      continue;
+    for (const [col, want] of Object.entries(p.guard)) {
+      const got = cur[col] ?? null;
+      if ((got ?? null) !== (want ?? null)) {
+        refusedItemIds.push(p.itemId);
+        break;
+      }
+    }
+  }
+  if (refusedItemIds.length > 0) {
+    // Entire click refuses. Nothing is written. No review_undo row.
+    return {
+      ok: false,
+      error: "This item was changed again since. Nothing was undone.",
+      reverted: 0,
+      refused: refusedItemIds.length,
+    };
+  }
+
+  // Phase 3: apply the writes in reverse time order. The per-row
+  // guard is re-applied on the UPDATE itself as a race-safe backstop.
+  let reverted = 0;
+  const walkedSnapshots: ItemSnapshot[] = [];
+  const walkedAfters: ItemSnapshot[] = [];
+  for (const p of plannedItemWrites) {
+    let q = client.from("pr_vendor_items").update(p.patch).eq("id", p.itemId);
+    for (const [col, val] of Object.entries(p.guard)) {
+      if (val === null) q = q.is(col, null);
+      else q = q.eq(col, val);
+    }
+    const { data: updated, error: upErr } = await q.select("id");
+    if (upErr) {
+      // A transient DB error after planning - count the item as
+      // refused so the sentence names the shape honestly.
+      return { ok: false, error: upErr.message, reverted, refused: 1 };
+    }
+    if (!updated || updated.length === 0) {
+      return {
+        ok: false,
+        error: "This item was changed again since. Nothing was undone.",
+        reverted,
+        refused: 1,
+      };
     }
     reverted += 1;
+    walkedSnapshots.push({
+      item_id: p.itemId,
+      ...p.patch,
+    } as ItemSnapshot);
+    walkedAfters.push({
+      ...(p.guard as unknown as ItemSnapshot),
+      item_id: p.itemId,
+    });
+  }
 
-    if (confirmUndoNeedsAliasRevoke) {
-      // Mirror undoConfirm's alias / golden-link revoke policy (the
-      // snapshot path doesn't go through undoConfirm). Revoke the
-      // active golden link for this item; revoke the learned alias
-      // only if no OTHER confirmed item on the same
-      // (description_key, ingredient_id) still relies on it.
-      const nowIso = new Date().toISOString();
+  // Phase 4: for every review_confirm in the click, revoke the
+  // golden link and (when no sibling confirmed item still uses it)
+  // the learned alias. Done AFTER every item write so the sibling
+  // count read in phase 4 sees the updated link_status.
+  for (const e of walkOrder) {
+    if (e.kind !== "review_confirm") continue;
+    const beforeItems = extractItemSnapshots(e.before?.items);
+    const nowIso = new Date().toISOString();
+    const confirmedIngredientId = (e.after?.ingredient_id as string | undefined) ?? e.entity_id;
+    for (const snap of beforeItems) {
       await client
         .from("pr_golden_links")
         .update({ revoked_at: nowIso })
-        .eq("vendor_item_id", itemId)
+        .eq("vendor_item_id", snap.item_id)
         .is("revoked_at", null);
-      if (snap.ingredient_id) {
-        // We don't carry description_key on the snapshot; re-read it
-        // from the row (it is intake-owned and never overwritten).
-        const { data: row } = await client
-          .from("pr_vendor_items")
-          .select("description_key")
-          .eq("id", itemId)
-          .maybeSingle();
-        const dkey = (row as { description_key: string } | null)?.description_key;
-        const targetIng = (event.after?.ingredient_id as string | undefined) ?? event.entity_id;
-        if (dkey) {
-          const { count } = await client
-            .from("pr_vendor_items")
-            .select("id", { count: "exact", head: true })
-            .eq("link_status", "confirmed")
-            .eq("ingredient_id", targetIng)
-            .eq("description_key", dkey);
-          if ((count ?? 0) === 0) {
-            await client
-              .from("pr_ingredient_aliases")
-              .update({ revoked_at: nowIso })
-              .eq("alias_norm", dkey)
-              .eq("kind", "manual")
-              .eq("ingredient_id", targetIng)
-              .is("revoked_at", null);
-          }
-        }
+      if (!snap.ingredient_id && !confirmedIngredientId) continue;
+      const { data: row } = await client
+        .from("pr_vendor_items")
+        .select("description_key")
+        .eq("id", snap.item_id)
+        .maybeSingle();
+      const dkey = (row as { description_key: string } | null)?.description_key;
+      if (!dkey) continue;
+      const { count } = await client
+        .from("pr_vendor_items")
+        .select("id", { count: "exact", head: true })
+        .eq("link_status", "confirmed")
+        .eq("ingredient_id", confirmedIngredientId)
+        .eq("description_key", dkey);
+      if ((count ?? 0) === 0) {
+        await client
+          .from("pr_ingredient_aliases")
+          .update({ revoked_at: nowIso })
+          .eq("alias_norm", dkey)
+          .eq("kind", "manual")
+          .eq("ingredient_id", confirmedIngredientId)
+          .is("revoked_at", null);
       }
     }
   }
 
-  // T4 ruling 5: Undo on Create retires the created ingredient when
-  // this decision CREATED it AND no item of any link state still
-  // points at it. Named-match or revive-retired paths leave the
-  // ingredient alone.
+  // Phase 5: ingredient side effects.
+  //   - ingredient_split_create with create_kind='created' retires
+  //     the new ingredient when nothing points at it.
+  //   - ingredient_revived returns the row to retired AND restores
+  //     the fields the revive overwrote (category, parent, base_unit).
   let retiredIngredientId: string | null = null;
-  if (event.kind === "ingredient_split_create") {
-    const createKind = (event.after as { create_kind?: unknown } | null)?.create_kind;
-    const ingredientId = event.entity_id;
-    if (createKind === "created" && ingredientId) {
-      const { count } = await client
-        .from("pr_vendor_items")
-        .select("id", { count: "exact", head: true })
-        .eq("ingredient_id", ingredientId);
-      if ((count ?? 0) === 0) {
-        const { error: retErr } = await client
+  for (const e of walkOrder) {
+    if (e.kind === "ingredient_split_create") {
+      const createKind = (e.after as { create_kind?: unknown } | null)?.create_kind;
+      const ingredientId = e.entity_id;
+      if (createKind === "created" && ingredientId) {
+        const { count } = await client
+          .from("pr_vendor_items")
+          .select("id", { count: "exact", head: true })
+          .eq("ingredient_id", ingredientId);
+        if ((count ?? 0) === 0) {
+          const { error: retErr } = await client
+            .from("pr_ingredients")
+            .update({ status: "retired", updated_at: new Date().toISOString() })
+            .eq("id", ingredientId)
+            .eq("status", "active");
+          if (!retErr) retiredIngredientId = ingredientId;
+        }
+      }
+    }
+    if (e.kind === "ingredient_revived") {
+      const beforeIng = e.before ?? {};
+      const ingredientId = e.entity_id;
+      if (ingredientId) {
+        const restorePatch: Record<string, unknown> = {};
+        if ("status" in beforeIng) restorePatch.status = beforeIng.status ?? "retired";
+        if ("category" in beforeIng) restorePatch.category = beforeIng.category ?? null;
+        if ("parent" in beforeIng) restorePatch.parent = beforeIng.parent ?? null;
+        if ("base_unit" in beforeIng) restorePatch.base_unit = beforeIng.base_unit ?? "each";
+        restorePatch.updated_at = new Date().toISOString();
+        await client
           .from("pr_ingredients")
-          .update({ status: "retired", updated_at: new Date().toISOString() })
-          .eq("id", ingredientId)
-          .eq("status", "active");
-        if (!retErr) retiredIngredientId = ingredientId;
+          .update(restorePatch)
+          .eq("id", ingredientId);
       }
     }
   }
 
   // Emit a `review_undo` with the full snapshot and a pointer to the
-  // event it reversed. If no row was actually written, skip the event -
-  // the caller refuses with the user sentence.
-  if (reverted > 0) {
-    await client.from("pr_events").insert({
-      entity_type: "vendor_item",
-      entity_id: beforeItems[0].item_id,
-      kind: "review_undo",
-      before: { items: afterItems, undid_event_id: event.id, undid_kind: event.kind },
-      after: { items: beforeItems, item_ids: beforeItems.map((s) => s.item_id), retired_ingredient_id: retiredIngredientId },
-      actor: actorEmail,
-    });
-  }
+  // click it reversed (so a second Undo on the same click is a no-op).
+  const anchorItemId = walkedSnapshots[0]?.item_id ?? event.entity_id;
+  await client.from("pr_events").insert({
+    entity_type: "vendor_item",
+    entity_id: anchorItemId,
+    kind: "review_undo",
+    before: {
+      items: walkedAfters,
+      undid_event_id: event.id,
+      undid_kind: event.kind,
+      undid_click_id: clickId ?? null,
+    },
+    after: {
+      items: walkedSnapshots,
+      item_ids: walkedSnapshots.map((s) => s.item_id),
+      retired_ingredient_id: retiredIngredientId,
+    },
+    actor: actorEmail,
+  });
 
-  if (reverted === 0 && refused > 0) {
-    return { ok: false, error: "This item was changed again since. Nothing was undone.", reverted, refused, retiredIngredientId };
-  }
-  return { ok: true, reverted, refused, retiredIngredientId };
+  return { ok: true, reverted, refused: 0, retiredIngredientId };
 }
 
 // Narrowing helpers for the untyped jsonb columns on pr_events.
@@ -1241,6 +1458,11 @@ export async function createIngredient(
     name: string;
     parent: string | null;
     actorEmail: string;
+    // T4 R2: when a retired ingredient with the same name_norm is
+    // found and revived, the caller's clickId is shared with the
+    // revive event so Undo takes the revive back as part of the
+    // click's rollback.
+    clickId?: string;
     // When provided, honor the user's chosen super-category exactly
     // (even if it disagrees with categoryForParent(parent)). When
     // omitted or undefined, fall back to the parent map default. null
@@ -1274,17 +1496,22 @@ export async function createIngredient(
   // RETIRED row with the same name_norm. The live unique index
   // (`pr_ingredients_name_norm_live_uq WHERE status <> 'merged'`) keeps
   // the name reserved for retired rows too, so a plain insert would
-  // hit the index. Revive the retired row (status='active', bump
-  // updated_at) and use it in place of an insert. Emits
-  // `ingredient_revived` so Recent decisions can name the moment.
+  // hit the index. Revive the retired row and use it in place of an
+  // insert. Emits `ingredient_revived` so Recent decisions can name
+  // the moment.
+  //
+  // T4 R2 ruling 6: when the retired row is revived it takes the
+  // user's chosen category + parent + base_unit (same as a new
+  // insert) and the event's `before` carries its pre-revive values
+  // so Undo returns it to retired exactly as it was.
   const { data: existing } = await client
     .from("pr_ingredients")
-    .select("id,base_unit,status")
+    .select("id,base_unit,status,category,parent")
     .eq("name_norm", nameNorm)
     .neq("status", "merged")
     .maybeSingle();
   if (existing) {
-    const row = existing as { id: string; base_unit: string; status: string };
+    const row = existing as { id: string; base_unit: string; status: string; category: SuperCategory | null; parent: string | null };
     // N6 A3: validate the stored base_unit against the shared allow-set.
     let existingUnit: BaseUnit;
     if (SHARED_BASE_UNIT_VALUES.has(row.base_unit as BaseUnit)) {
@@ -1296,23 +1523,46 @@ export async function createIngredient(
       existingUnit = "each";
     }
     if (row.status === "retired") {
-      // T4 ruling 5: bring the retired row back and use it. No new
-      // row, no schema change. Emits one event so the ledger carries
-      // the moment.
+      // T4 R2 ruling 6: the user just chose these; apply them to the
+      // revived row, same as a brand-new insert would.
+      const nextCategory = args.category !== undefined ? args.category : row.category;
+      const nextParent = args.parent?.trim() || row.parent;
+      const nextBaseUnit = args.baseUnit ?? existingUnit;
       const { error: reviveErr } = await client
         .from("pr_ingredients")
-        .update({ status: "active", updated_at: new Date().toISOString() })
+        .update({
+          status: "active",
+          category: nextCategory,
+          parent: nextParent,
+          base_unit: nextBaseUnit,
+          updated_at: new Date().toISOString(),
+        })
         .eq("id", row.id);
       if (reviveErr) throw reviveErr;
       await client.from("pr_events").insert({
         entity_type: "ingredient",
         entity_id: row.id,
         kind: "ingredient_revived",
-        before: { status: "retired" },
-        after: { status: "active", name: trimmed, via: "create_on_retired_name" },
+        // Full pre-revive snapshot so Undo restores status AND the
+        // fields the revive overwrote (category / parent / base_unit).
+        before: {
+          status: "retired",
+          category: row.category,
+          parent: row.parent,
+          base_unit: row.base_unit,
+        },
+        after: {
+          status: "active",
+          name: trimmed,
+          category: nextCategory,
+          parent: nextParent,
+          base_unit: nextBaseUnit,
+          via: "create_on_retired_name",
+          click_id: args.clickId ?? null,
+        },
         actor: args.actorEmail,
       });
-      return { id: row.id, baseUnit: existingUnit, kind: "revived_retired" };
+      return { id: row.id, baseUnit: nextBaseUnit, kind: "revived_retired" };
     }
     return { id: row.id, baseUnit: existingUnit, kind: "matched_active" };
   }
@@ -1351,7 +1601,7 @@ export async function createIngredient(
     entity_type: "ingredient",
     entity_id: id,
     kind: "ingredient_created",
-    after: { name: trimmed, parent, category },
+    after: { name: trimmed, parent, category, click_id: args.clickId ?? null },
     actor: args.actorEmail,
   });
   return { id, baseUnit: insertedBaseUnit, kind: "created" };
@@ -1377,11 +1627,13 @@ export async function splitToNewIngredient(
     category: SuperCategory | null;
     itemIds: string[];
     actorEmail: string;
+    clickId?: string;
   }
-): Promise<{ ok: boolean; error?: string; ingredientId: string | null; moved: number; baseUnit: BaseUnit }> {
+): Promise<{ ok: boolean; error?: string; ingredientId: string | null; moved: number; baseUnit: BaseUnit; eventId: string | null; clickId: string }> {
   const { name, parent, category, itemIds, actorEmail } = args;
+  const clickId = args.clickId ?? randomUUID();
   if (name.trim().length < 2) {
-    return { ok: false, error: "Ingredient name is required", ingredientId: null, moved: 0, baseUnit: "each" };
+    return { ok: false, error: "Ingredient name is required", ingredientId: null, moved: 0, baseUnit: "each", eventId: null, clickId };
   }
 
   // N4: infer base_unit from the vendor items' pack uoms before the
@@ -1419,17 +1671,18 @@ export async function splitToNewIngredient(
       category,
       baseUnit,
       actorEmail,
+      clickId,
     });
     ingredientId = created.id;
     resolvedBaseUnit = created.baseUnit;
     createKind = created.kind;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { ok: false, error: msg, ingredientId: null, moved: 0, baseUnit };
+    return { ok: false, error: msg, ingredientId: null, moved: 0, baseUnit, eventId: null, clickId };
   }
 
   if (itemIds.length === 0) {
-    return { ok: true, ingredientId, moved: 0, baseUnit: resolvedBaseUnit };
+    return { ok: true, ingredientId, moved: 0, baseUnit: resolvedBaseUnit, eventId: null, clickId };
   }
 
   // T4: snapshot every candidate row BEFORE the write so the split
@@ -1449,21 +1702,20 @@ export async function splitToNewIngredient(
     .eq("link_status", "proposed")
     .select("id");
   if (error) {
-    return { ok: false, error: error.message, ingredientId, moved: 0, baseUnit: resolvedBaseUnit };
+    return { ok: false, error: error.message, ingredientId, moved: 0, baseUnit: resolvedBaseUnit, eventId: null, clickId };
   }
   const movedIds = ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
   const movedSnapshots = movedIds
     .map((id) => before.get(id))
     .filter((s): s is ItemSnapshot => s != null);
 
-  await client.from("pr_events").insert({
+  const { data: insertedEv } = await client.from("pr_events").insert({
     entity_type: "ingredient",
     entity_id: ingredientId,
     kind: "ingredient_split_create",
     before: { items: movedSnapshots, item_ids: itemIds },
     // N4 + N5 4f: base_unit carried on the create event so the audit
-    // trail matches what landed on pr_ingredients. A later unit change
-    // by a human emits a separate ingredient_base_unit_set event.
+    // trail matches what landed on pr_ingredients.
     //
     // T4 ruling 5: `create_kind` tags whether a new ingredient row was
     // inserted ("created"), an existing active row was matched
@@ -1482,11 +1734,13 @@ export async function splitToNewIngredient(
         ingredient_id: ingredientId,
         link_reason: "split",
       })),
+      click_id: clickId,
     },
     actor: actorEmail,
-  });
+  }).select("id").single();
+  const eventId = (insertedEv as { id: string } | null)?.id ?? null;
 
-  return { ok: true, ingredientId, moved: movedIds.length, baseUnit: resolvedBaseUnit };
+  return { ok: true, ingredientId, moved: movedIds.length, baseUnit: resolvedBaseUnit, eventId, clickId };
 }
 
 // ---------------------------------------------------------------------------

@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
   try {
     const client = serviceClient();
     const result = await relinkItems(client, { ingredientId, itemIds, actorEmail: gate.email });
-    return NextResponse.json(result);
+    return NextResponse.json({ ...result, event_id: result.eventId ?? null });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ error: msg }, { status: 500 });

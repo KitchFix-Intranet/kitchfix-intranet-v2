@@ -7,6 +7,37 @@
 
 export type SaveKind = "ok" | "no-reply" | "server" | "refused";
 
+// T4 R2 §1: every decision's success toast hands an event id to
+// this helper. The returned callback POSTs to /api/review/undo,
+// surfaces a partly-refused result as a plain sentence, refreshes
+// the page so it shows the truth, and throws on a refusal/failure
+// so the Toaster announces it (T1 §4).
+export function undoViaEvent(
+  router: { refresh: () => void },
+  eventId: string,
+): () => Promise<void> {
+  return async () => {
+    const u = await postJson("/api/review/undo", { eventId });
+    router.refresh();
+    if (!u.ok) {
+      const explicit = errMsg(u.data, "");
+      throw new Error(explicit || saveErrorSentence(u) || "Nothing was undone.");
+    }
+    const d = (u.data ?? {}) as { reverted?: number; refused?: number };
+    const reverted = Number(d.reverted ?? 0);
+    const refused = Number(d.refused ?? 0);
+    if (reverted === 0 && refused > 0) {
+      throw new Error("This item was changed again since. Nothing was undone.");
+    }
+    if (reverted > 0 && refused > 0) {
+      // Partly-refused: name the split. The Toaster "undo failure"
+      // path surfaces this throw as a block toast.
+      throw new Error(`${reverted} back, ${refused} changed again.`);
+    }
+    // reverted > 0, refused === 0: clean undo, no throw.
+  };
+}
+
 export type SaveOutcome = {
   ok: boolean;
   status: number;

@@ -29,6 +29,13 @@ import { getVendorItemState } from "../src/lib/ingredients/vendorItemState.ts";
 
 // --- stand-in supabase --------------------------------------------------
 
+let eventSeq = 0;
+function nextEventAt() {
+  eventSeq += 1;
+  // ISO-ish string that sorts correctly as text.
+  return new Date(Date.UTC(2026, 10, 20, 0, 0, 0, 0) + eventSeq).toISOString();
+}
+
 function makeDb() {
   return {
     pr_vendor_items: new Map(),
@@ -81,35 +88,49 @@ function seedIngredient(db, overrides = {}) {
   return id;
 }
 
+// Resolve a PostgREST column reference to a value on `row`. Handles
+// the `col->>key` operator the production code uses to filter events
+// by after.click_id / before.undid_click_id.
+function readCol(row, col) {
+  const m = col.match(/^(\w+)->>(\w+)$/);
+  if (m) {
+    const parent = row[m[1]];
+    if (parent == null || typeof parent !== "object") return null;
+    return parent[m[2]] ?? null;
+  }
+  return row[col];
+}
+
 function matchRow(row, filters) {
   for (const f of filters) {
+    const got = readCol(row, f.col);
     if (f.op === "eq") {
-      if ((row[f.col] ?? null) !== f.value) return false;
+      if ((got ?? null) !== f.value) return false;
     } else if (f.op === "neq") {
-      if ((row[f.col] ?? null) === f.value) return false;
+      if ((got ?? null) === f.value) return false;
     } else if (f.op === "in") {
-      if (!f.values.includes(row[f.col])) return false;
+      if (!f.values.includes(got)) return false;
     } else if (f.op === "is") {
       if (f.value === null) {
-        if (row[f.col] != null) return false;
+        if (got != null) return false;
       } else {
-        if (row[f.col] !== f.value) return false;
+        if (got !== f.value) return false;
       }
     } else if (f.op === "not") {
       if (f.inner === "is") {
         if (f.value === null) {
-          if (row[f.col] == null) return false;
-        } else if (row[f.col] === f.value) return false;
+          if (got == null) return false;
+        } else if (got === f.value) return false;
       } else if (f.inner === "in") {
-        if (f.values.includes(row[f.col])) return false;
+        if (f.values.includes(got)) return false;
       }
     } else if (f.op === "like") {
       const pattern = String(f.value).replace(/%/g, ".*");
-      if (!(new RegExp(`^${pattern}$`)).test(String(row[f.col] ?? ""))) return false;
+      if (!(new RegExp(`^${pattern}$`)).test(String(got ?? ""))) return false;
     } else if (f.op === "gt") {
-      if (!(row[f.col] > f.value)) return false;
+      if (!(got > f.value)) return false;
     } else if (f.op === "lt") {
-      if (!(row[f.col] < f.value)) return false;
+      if (!(got < f.value)) return false;
     } else {
       throw new Error(`unknown filter op: ${f.op}`);
     }
@@ -119,7 +140,7 @@ function matchRow(row, filters) {
 
 function makeQuery(db, table) {
   const filters = [];
-  let opts = { count: false, head: false, selectCols: "*" };
+  let opts = { count: false, head: false, selectCols: "*", orderBy: null, orderAsc: true, limit: null };
   const api = {
     select(cols, o = {}) {
       opts.selectCols = cols;
@@ -133,28 +154,42 @@ function makeQuery(db, table) {
     is(col, value) { filters.push({ op: "is", col, value }); return api; },
     not(col, inner, value) { filters.push({ op: "not", col, inner, value, values: Array.isArray(value) ? value : undefined }); return api; },
     or(_expr) {
-      // Not used by the functions under test; accept and no-op so a
-      // future reader can at least match "everything".
+      // Not used by the functions under test on write paths; accept.
       return api;
     },
     like(col, value) { filters.push({ op: "like", col, value }); return api; },
     gt(col, value) { filters.push({ op: "gt", col, value }); return api; },
     lt(col, value) { filters.push({ op: "lt", col, value }); return api; },
-    order() { return api; },
+    order(col, o = {}) { opts.orderBy = col; opts.orderAsc = o.ascending !== false; return api; },
     range() { return api; },
+    limit(n) { opts.limit = n; return api; },
     maybeSingle() {
       const rows = Array.from(db[table].values()).filter((r) => matchRow(r, filters));
       if (rows.length === 0) return Promise.resolve({ data: null, error: null });
-      return Promise.resolve({ data: rows[0], error: null });
+      // Return a shallow copy - Postgres hands back a row value, not
+      // a reference into some shared mutable store. Keeping a shared
+      // reference let `row.category` read back the post-update value
+      // when the caller captured `row` before writing.
+      return Promise.resolve({ data: { ...rows[0] }, error: null });
     },
     single() {
       const rows = Array.from(db[table].values()).filter((r) => matchRow(r, filters));
       if (rows.length !== 1) return Promise.resolve({ data: null, error: { message: "not one" } });
-      return Promise.resolve({ data: rows[0], error: null });
+      return Promise.resolve({ data: { ...rows[0] }, error: null });
     },
     then(resolve) {
-      const rows = Array.from(db[table].values()).filter((r) => matchRow(r, filters));
-      const data = opts.head ? null : rows;
+      let rows = Array.from(db[table].values()).filter((r) => matchRow(r, filters));
+      if (opts.orderBy) {
+        const k = opts.orderBy;
+        rows = rows.slice().sort((a, b) => {
+          const av = a[k];
+          const bv = b[k];
+          if (av === bv) return 0;
+          return (av < bv ? -1 : 1) * (opts.orderAsc ? 1 : -1);
+        });
+      }
+      if (typeof opts.limit === "number") rows = rows.slice(0, opts.limit);
+      const data = opts.head ? null : rows.map((r) => ({ ...r }));
       const count = opts.count ? rows.length : null;
       return resolve({ data, error: null, count });
     },
@@ -183,7 +218,10 @@ function makeQuery(db, table) {
         const id = row.id ?? randomUUID();
         const full = { id, ...row };
         if (table === "pr_events") {
-          full.at = new Date().toISOString();
+          // Monotonically increasing `at` so the production code's
+          // `.order("at")` is deterministic across same-millisecond
+          // inserts. Real Postgres uses now() with its own clock.
+          full.at = nextEventAt();
           full.entity_type = row.entity_type ?? null;
         }
         db[table].set(id, full);
@@ -483,6 +521,157 @@ await testRoundTrip(
   ok(r.ok && r.restored, "Restore ok");
   eq(db.pr_vendor_items.get(itemId).status, "active", "Restored row is active");
   eq(db.pr_vendor_items.get(itemId).link_status, "none", "Restored row is link_status=none");
+}
+
+// --- T4 R2 additions ----------------------------------------------------
+
+// g) Relink, relink again, then Undo the FIRST relink is refused.
+//    The strict guard catches that `ingredient_id` moved to a third
+//    target since the first relink. Nothing is written.
+{
+  const db = makeDb();
+  const client = makeClient(db);
+  const sourceId = seedIngredient(db, { name: "Source" });
+  const targetA = seedIngredient(db, { name: "Target A" });
+  const targetB = seedIngredient(db, { name: "Target B" });
+  const itemId = seedItem(db, { link_status: "proposed", link_reason: "ai:ok", ingredient_id: sourceId });
+  // First relink: source -> A
+  const r1 = await relinkItems(client, { ingredientId: targetA, itemIds: [itemId], actorEmail: "tester@kf.local" });
+  const firstEventId = r1.eventId;
+  ok(firstEventId != null, "First relink wrote a decision event");
+  // Second relink: A -> B
+  await relinkItems(client, { ingredientId: targetB, itemIds: [itemId], actorEmail: "tester@kf.local" });
+  eq(db.pr_vendor_items.get(itemId).ingredient_id, targetB, "Row is now pointed at Target B");
+  // Undo the first relink. Strict guard sees ingredient_id has moved.
+  const u = await undoDecisionEvent(client, { eventId: firstEventId, actorEmail: "tester@kf.local" });
+  ok(!u.ok, "Undo of the first relink is refused (strict guard)");
+  ok(/changed again/i.test(u.error ?? ""), "Refusal carries the plain sentence");
+  eq(db.pr_vendor_items.get(itemId).ingredient_id, targetB, "Row still points at Target B after the refused undo");
+}
+
+// h) Create-and-confirm then Undo returns the starting row AND revokes
+//    the live golden link AND revokes the learned alias.
+{
+  const db = makeDb();
+  const client = makeClient(db);
+  const itemId = seedItem(db, { link_status: "proposed", link_reason: "ai-new:{\"proposed_name\":\"Thyme\"}" });
+  const createResult = await splitToNewIngredient(client, {
+    name: "Thyme",
+    parent: null,
+    category: null,
+    itemIds: [itemId],
+    actorEmail: "tester@kf.local",
+  });
+  ok(createResult.ok, "Create+split ok");
+  // Follow-up confirm (same clickId).
+  const confirmResult = await confirmItems(client, {
+    ingredientId: createResult.ingredientId,
+    itemIds: [itemId],
+    actorEmail: "tester@kf.local",
+    clickId: createResult.clickId,
+  });
+  ok(confirmResult.confirmed === 1, "Confirm in the same click ok");
+  // Golden link and alias exist.
+  const goldenBefore = Array.from(db.pr_golden_links.values()).filter((g) => g.vendor_item_id === itemId && !g.revoked_at);
+  eq(goldenBefore.length, 1, "One live golden link");
+  const aliasBefore = Array.from(db.pr_ingredient_aliases.values()).filter((a) => a.alias_norm === "widget-1" && !a.revoked_at);
+  eq(aliasBefore.length, 1, "One live learned alias");
+  // Undo from the confirm event (any event in the click works).
+  const u = await undoDecisionEvent(client, { eventId: confirmResult.eventId, actorEmail: "tester@kf.local" });
+  ok(u.ok, "Undo of create-and-confirm ok");
+  eq(db.pr_vendor_items.get(itemId).link_status, "proposed", "Row is back at proposed");
+  eq(db.pr_vendor_items.get(itemId).link_reason, "ai-new:{\"proposed_name\":\"Thyme\"}", "Original link_reason restored");
+  eq(db.pr_vendor_items.get(itemId).ingredient_id, null, "ingredient_id back to null");
+  const goldenAfter = Array.from(db.pr_golden_links.values()).filter((g) => g.vendor_item_id === itemId && !g.revoked_at);
+  eq(goldenAfter.length, 0, "Golden link revoked");
+  const aliasAfter = Array.from(db.pr_ingredient_aliases.values()).filter((a) => a.alias_norm === "widget-1" && !a.revoked_at);
+  eq(aliasAfter.length, 0, "Learned alias revoked");
+  // The created ingredient is retired (no items point at it).
+  eq(db.pr_ingredients.get(createResult.ingredientId).status, "retired", "Created ingredient retired");
+}
+
+// i) Create-and-retail then Undo returns the starting row AND revokes
+//    the live golden link AND revokes the learned alias AND the item
+//    is NOT retail anymore (status back to 'active').
+{
+  const db = makeDb();
+  const client = makeClient(db);
+  const itemId = seedItem(db, { link_status: "proposed", link_reason: "ai-new:{\"proposed_name\":\"Oregano\"}" });
+  const createResult = await splitToNewIngredient(client, {
+    name: "Oregano",
+    parent: null,
+    category: null,
+    itemIds: [itemId],
+    actorEmail: "tester@kf.local",
+  });
+  const retailResult = await markResale(client, {
+    ingredientId: createResult.ingredientId,
+    itemIds: [itemId],
+    actorEmail: "tester@kf.local",
+    clickId: createResult.clickId,
+  });
+  ok(retailResult.confirmed === 1, "Retail in the same click ok");
+  eq(db.pr_vendor_items.get(itemId).status, "resale", "Row is retail after click");
+  // Undo the click.
+  const u = await undoDecisionEvent(client, { eventId: retailResult.eventId, actorEmail: "tester@kf.local" });
+  ok(u.ok, "Undo of create-and-retail ok");
+  eq(db.pr_vendor_items.get(itemId).status, "active", "Row status back to active");
+  eq(db.pr_vendor_items.get(itemId).link_status, "proposed", "link_status back to proposed");
+  eq(db.pr_vendor_items.get(itemId).ingredient_id, null, "ingredient_id back to null");
+  const goldenAfter = Array.from(db.pr_golden_links.values()).filter((g) => g.vendor_item_id === itemId && !g.revoked_at);
+  eq(goldenAfter.length, 0, "Golden link revoked (retail path)");
+  eq(db.pr_ingredients.get(createResult.ingredientId).status, "retired", "Created ingredient retired (retail path)");
+}
+
+// j) Pressing Undo twice on the same click is a no-op the second time
+//    and writes no event.
+{
+  const db = makeDb();
+  const client = makeClient(db);
+  const itemId = seedItem(db, { link_status: "proposed", link_reason: "ai:ok" });
+  const r = await markArchived(client, { itemIds: [itemId], actorEmail: "tester@kf.local" });
+  const u1 = await undoDecisionEvent(client, { eventId: r.eventId, actorEmail: "tester@kf.local" });
+  ok(u1.ok && u1.reverted === 1, "First Undo rolled it back");
+  const undoEventsBefore = Array.from(db.pr_events.values()).filter((e) => e.kind === "review_undo").length;
+  const u2 = await undoDecisionEvent(client, { eventId: r.eventId, actorEmail: "tester@kf.local" });
+  ok(u2.ok, "Second Undo returns ok (idempotent)");
+  eq(u2.reverted, 0, "Second Undo reverts nothing");
+  const undoEventsAfter = Array.from(db.pr_events.values()).filter((e) => e.kind === "review_undo").length;
+  eq(undoEventsAfter, undoEventsBefore, "Second Undo writes no new event");
+}
+
+// k) Revived ingredient Undo returns the row to retired AND to its
+//    pre-revive category / parent / base_unit.
+{
+  const db = makeDb();
+  const client = makeClient(db);
+  const retiredId = seedIngredient(db, {
+    name: "Basil",
+    status: "retired",
+    category: "Produce",
+    parent: "Herbs",
+    base_unit: "lb",
+  });
+  const itemId = seedItem(db, { link_status: "proposed", link_reason: "ai-new:{\"proposed_name\":\"Basil\"}" });
+  // Create with different chosen fields than what was stored.
+  const createResult = await splitToNewIngredient(client, {
+    name: "Basil",
+    parent: "Herbs and spices",
+    category: "Dairy",
+    itemIds: [itemId],
+    actorEmail: "tester@kf.local",
+  });
+  ok(createResult.ingredientId === retiredId, "Revived the retired row");
+  eq(db.pr_ingredients.get(retiredId).status, "active", "Revived status active");
+  eq(db.pr_ingredients.get(retiredId).category, "Dairy", "Revived took the chosen category");
+  eq(db.pr_ingredients.get(retiredId).parent, "Herbs and spices", "Revived took the chosen parent");
+  // Undo the click (the revive and the split belong to the same click).
+  const u = await undoDecisionEvent(client, { eventId: createResult.eventId, actorEmail: "tester@kf.local" });
+  ok(u.ok, "Undo of revive+split ok");
+  eq(db.pr_ingredients.get(retiredId).status, "retired", "Retired again");
+  eq(db.pr_ingredients.get(retiredId).category, "Produce", "Category restored");
+  eq(db.pr_ingredients.get(retiredId).parent, "Herbs", "Parent restored");
+  eq(db.pr_ingredients.get(retiredId).base_unit, "lb", "base_unit restored");
 }
 
 // --- summary ------------------------------------------------------------
