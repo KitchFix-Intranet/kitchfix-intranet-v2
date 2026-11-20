@@ -19,6 +19,7 @@ import { canWriteForAccount } from "@/lib/sc/access/canWriteForAccount";
 import { loadReviewScreen } from "@/lib/sc/submit/reviewLoader";
 import { isSubmitAllowed } from "@/lib/sc/submit/billedOutboundGate";
 import { canPushAgainDb } from "@/lib/sc/submit/pushAgainScope";
+import { canReopenForAccount } from "@/lib/sc/submit/canReopenScope";
 import type { AccountLite, ViewerLite } from "@/lib/sc/calendar/types";
 import { ReviewPage } from "@/components/service/review/ReviewPage";
 import "../service.css";
@@ -96,9 +97,20 @@ export default async function Page({
     ? await canPushAgainDb(sb, ownerEmail)
     : false;
 
+  // Train 5: who may reopen this week. Only evaluated for a
+  // submitted V2 week; a v1-era week (submittedVia != 'v2') cannot
+  // be reopened from V2 at all (lean A), so the panel never renders.
+  // Role is NOT shipped to the client; the page sees only a boolean.
+  const canReopen =
+    view.isAlreadySubmitted && view.submittedVia === "v2"
+      ? (await canReopenForAccount(sb, ownerEmail)).ok
+      : false;
+
+  const viewWithScope = { ...view, canReopen };
+
   return (
     <ReviewPage
-      view={view}
+      view={viewWithScope}
       backHref={backHref}
       outboundBlock={outboundBlock}
       canPushAgain={canPushAgain}

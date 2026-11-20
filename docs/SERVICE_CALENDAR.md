@@ -2,6 +2,137 @@
 
 Lane: Service Calendar (SC). This file is updated in the same PR as the SC work it describes.
 
+## Train 5 - reopen a submitted week (2026-11-20)
+
+One action: a submitted week goes back to open so its numbers can be corrected and submitted again. In v1 the word was "revert"; in V2 the word on screen is **reopen**. The master's rule set from the arc kickoff is unchanged — this train lands the plumbing.
+
+### The route
+
+**`POST /api/service/reopen`** — body `{ accountKey, weekStart, reason }`. Not a verb on `/api/service/submit-week`; nothing it shares with submit is reused, and a separate path keeps the audit of "what touched invoices" readable.
+
+Gate order (Kevin ruling 2026-11-20):
+
+1. `requireOwnerApi()` → 401/404 verbatim.
+2. Resolve the viewer + the account; the viewer must have scope on the account. 403 `NOT_AUTHORIZED` → "You do not have access to this site."
+3. `canReopenForAccount(sb, email)` — any ACTIVE `people` row with `is_sc_lock_override = true` (role `override`) OR `is_regional_director = true` (role `rd`, **no region bind**). 403 `NOT_ALLOWED` → "Reopening a week is for the office and the regional directors." The `role` is server-only; it is never shipped to the client.
+4. Validate reason: non-empty, trim, ≤ 280. 400 `REASON_MISSING` / `REASON_TOO_LONG`.
+5. If `role === 'rd'`: look up the fiscal period that holds `weekStart`, call `sc_is_period_closed_fy`. On `closed = true` **or any read error**, refuse with 403 `PERIOD_CLOSED` → "This period is closed. &lt;first names&gt; can reopen it." The first names come from `people` where `is_sc_lock_override = true, status = 'ACTIVE'`, never a string in code. Any failure to read falls back to "the office".
+6. `reopenWeek(sb, args)` — eleven steps, returns the specific refusal code per the table below. Status codes: `NOT_LIVE` 404; `NOT_V2`, `CANNOT_REOPEN_STATUS`, `OUTBOUND_OFF_HAS_INVOICE`, `WEEK_HAS_LIVE_INVOICE` 403; `QBO_CHECK_FAILED` 502; `LEDGER_SUPERSEDE_FAILED`, `REOPEN_WRITE_FAILED` 500.
+
+### The refusal words
+
+| Code | Message |
+|---|---|
+| `NOT_AUTHORIZED` | You do not have access to this site. |
+| `NOT_ALLOWED` | Reopening a week is for the office and the regional directors. |
+| `PERIOD_CLOSED` | This period is closed. &lt;first names&gt; can reopen it. |
+| `NOT_V2` | This week was submitted in the old calendar. Reopen it there. |
+| `NOT_LIVE` | This week is not submitted, so there is nothing to reopen. |
+| `CANNOT_REOPEN_STATUS` | This week cannot be reopened from here. Tell the office. |
+| `OUTBOUND_OFF_HAS_INVOICE` | This week has an invoice, and billing from this calendar is switched off right now. It cannot be reopened here yet. |
+| `WEEK_HAS_LIVE_INVOICE` | QuickBooks still holds invoice &lt;number&gt;. A voided invoice still counts. Accounting deletes it in QuickBooks first. |
+| `QBO_CHECK_FAILED` | QuickBooks could not be reached, so the week was not reopened. Nothing changed. Try again in a few minutes. |
+| `LEDGER_SUPERSEDE_FAILED` | The invoice could not be marked as replaced, so the week was not reopened. Tell the office. |
+| `REOPEN_WRITE_FAILED` | The week was not reopened. Tell the office before trying again. |
+
+`NOT_V2` is the one place the old calendar is named, because that is where that week lives. `REOPEN_WRITE_FAILED` names no partial state on screen — the recovery path (second run finds no live ledger rows, step 9 runs) completes the reopen; a test pins it.
+
+### How "is this invoice still in QuickBooks?" is answered
+
+`src/lib/sc/submit/qboCheckInvoice.ts` — the three-way wrapper around `composeQueryUrl` + `networkFetch` + `QBO_PROXY_KEY`. Given `{ qbo_doc_number, qbo_invoice_id }`:
+
+- Ask by **DocNumber** when set, and by **Id** when set. Both queries use `SELECT * FROM Invoice WHERE <col> = '<escaped value>'` (single quotes doubled). Each goes through `networkFetch`, so `SC_V2_OUTBOUND = 'off'` throws before the wire (the route maps that case to `OUTBOUND_OFF_HAS_INVOICE` earlier when a live ledger row exists).
+- **still_there**: either side returned a row. Voided invoices (`Balance = 0`, `PrivateNote = 'Voided'`) are **still entities in QuickBooks** and read as still_there. Kevin ruling 2026-11-20 train 5: V2 refuses on voided too; v1's message accepted a void and we are not inheriting it.
+- **gone**: both asked sides returned zero rows.
+- **cannot_ask**: either asked side errored (relay error, parse failure, `networkFetch` threw), or the ledger row holds neither value, or the relay credentials are missing.
+
+The four big-league accounts use `qbo_doc_number` + `qbo_invoice_id` today; the AND discipline means a deleted DocNumber + an orphan Id cannot pass as "gone".
+
+### The writes, in order
+
+With a live ledger row and QBO says "gone":
+
+1. **`sc_export_ledger`** — one `UPDATE SET status = 'superseded', superseded_by, superseded_at, superseded_by_finalize_id = null WHERE account_key, week_start, status = 'created', is_test = false`. One statement either changes every matching row or none. Row count must equal the number of live rows we asked QBO about; mismatch → `LEDGER_SUPERSEDE_FAILED` **before** step 2.
+2. **`sc_week_finalize`** — `UPDATE SET status = 'reverted', reverted_by, reverted_at, revert_reason WHERE id = <row.id>`.
+3. **`sc_day_metadata`** — `clearReviewStateForDays(account, unitSpanDates)` across all 7 (weekly) or 14 (biweekly) dates. Non-fatal; logs a warning on failure.
+4. **`sc_day_note_entries`** — one row on the unit's first day: `Week reopened by <name>: <reason>` or `Two weeks reopened by <name>: <reason>` for a pair. Author = the signed-in email; name resolves server-side via `people.display_name`. Non-fatal.
+
+On a step-2 crash after step-1 succeeded, the ledger rows are `superseded` and the finalize row is still `finalized`. A second run finds no live ledger rows (step 1's WHERE matches zero), step 1 is a no-op (0 asked, 0 matched), and step 2 completes. Test `step 9 fails after 8c succeeds: a second reopen completes (ledger already superseded)` proves it.
+
+### The ledger columns
+
+Three nullable columns on `sc_export_ledger`, applied 2026-11-20 as migration `20261120180756`:
+
+- `superseded_by text` — work email of the person whose reopen marked the row superseded.
+- `superseded_at timestamptz` — when that happened.
+- `superseded_by_finalize_id uuid` — soft link to the reopen's successor `sc_week_finalize.id`. The reopen itself writes null; a future refinement could set this at the next successful submit.
+
+No check constraint — one row superseded by hand in September has no record and never will. Migration file lives at `supabase/migrations/20261120180756_sc_export_ledger_superseded_audit_2026_11_20.sql` as the record of a change already applied; `if not exists` on every statement so a re-run is a no-op.
+
+### The next invoice number
+
+`scWeekFinalize.ts:946-966` reads superseded ledger rows per `(account_key, week_start, invoice_slot)` and sets `revision = 1 + supCount`. After a reopen + re-submit the DocNumber becomes `KF<CODE><YYMMDD><SLOT>2` (first reopen), then `…3` (second reopen). Unchanged by this train — the counter uses the `superseded` rows our new write produces.
+
+### Test-mode weeks
+
+A week submitted while `SC_V2_OUTBOUND = 'test'` (or an account with `qbo_mode != 'live'` under `live`) carries ledger rows with `status = 'test', is_test = true`. The route's pre-flight SELECT filters `is_test = false`, so no row is a candidate for the "ask QBO" step, no row is superseded, and the reopen proceeds. The test ledger row stays — it is an audit entry.
+
+### Mid-push + retry-pending
+
+- **Mid-try**: the push's three completion UPDATEs in `push.ts` all filter `.neq("status", "reverted")`. A reopen that lands between claim and completion flips the row to `reverted`; the push's completion write finds zero rows. Existing test `push-revert-during-attempt.test.mjs` covers this mechanic unchanged.
+- **Waiting on a retry**: the reopen UPDATE wins outright. The next cron tick's `findAndAttemptDuePushRows` claim filter `.neq("status", "reverted")` returns zero matches; `attemptPushForRow` returns `claim_lost`. Test `reopen while a push is waiting on a retry` proves it.
+
+### The Reds' pair
+
+The page passes the **closing** Monday (`W2` or `W4`) as `weekStart`. `resolveFinalizeReviewSpan(accountKey, weekStart, sb)` returns the 14-day unit; the ledger is keyed on `spanStart` (the pair's opening Monday); the finalize row flipped is the one at `weekStart` (the closing Monday). All 14 dates' review marks clear. The system note lands on `spanStart` with the "Two weeks" wording. Test `biweekly closing week: unit spans 14 days, note reads 'Two weeks'` pins it.
+
+### What v1 does that V2 is not carrying over
+
+- The explicit `isPerMealBillingAccount(accountKey)` gate (v1 route.js:2036). V2 inherits implicitly: fee sites have no `sc_week_finalize` row, so step 6's `NOT_LIVE` refuses.
+- `status = 'billed'` → `WEEK_BILLED_NO_REVERT`. V2 never writes `'billed'`. `CANNOT_REOPEN_STATUS` covers a v1-era row.
+- `alertReviewClearFailure` Slack alert. Outbound; silenced by the gate. The response's `clearWarning` carries the signal to the UI.
+- One note per day of the unit (v1 route.js:2199). V2 writes **one** note on the unit's first day. Cleaner for the fold, same audit.
+- "Re-approval required before re-finalize" copy on every day note. V2 relies on the cleared `review_status` to drive the re-look — no phrase needed.
+
+### Where it lives on screen
+
+On the week check of a submitted V2 week, under the "Submitted and on record" banner, visible only when `view.canReopen` is true. The server evaluates `canReopenForAccount` and ships a boolean; the role never crosses the wire. A viewer who cannot reopen sees no button.
+
+Idle shape: one quiet `kf-btn--line` reading "Reopen this week" or "Reopen these two weeks". Clicking opens a reason textarea in place with a filled Submit. No modal, no "are you sure" prompt — the required reason is the pause. The maximum is 280 characters; the hint reads "&lt;N&gt; of 280" live.
+
+After a successful reopen the client `router.replace`s to `/service?site=<slug>&fy=<year>&p=<period>&reopened=<weekStart>`. The calendar renders with a one-line notice above the period stage: "Week of <dates> is open again." For a pair: "The two weeks of <dates> are open again." The notice is a status role, no icon, and disappears on the next navigation.
+
+### Files
+
+**New (7):**
+- `src/lib/sc/submit/canReopenScope.ts` — server-only scope decision.
+- `src/lib/sc/submit/overrideNames.ts` — first-name list from `people`.
+- `src/lib/sc/submit/qboCheckInvoice.ts` — three-way QBO wrapper.
+- `src/lib/sc/submit/reopen.ts` — the orchestration.
+- `src/app/api/service/reopen/route.ts` — the route shell.
+- `src/components/service/review/ReopenPanel.tsx` — the client island.
+- `supabase/migrations/20261120180756_sc_export_ledger_superseded_audit_2026_11_20.sql` — the record of the applied migration.
+
+**Changed (5):**
+- `src/lib/sc/billing/qboAdapter.ts` — exports `readInvoiceByDocNumber` (previously private); adds twin `readInvoiceById`.
+- `src/lib/sc/submit/reviewLoader.ts` — carries `canReopen: boolean`.
+- `src/app/(shell)/service/review/page.tsx` — server-side `canReopenForAccount` evaluation.
+- `src/components/service/review/ReviewPage.tsx` — mounts `ReopenPanel`.
+- `src/app/(shell)/service/service.css` — `.kf-sc-reopened-notice` class.
+- `src/app/(shell)/service/review/review.css` — reopen panel styles + four new file-local tokens.
+- `src/app/(shell)/service/page.tsx` — reads `?reopened=<iso>` on `/service` and threads it.
+- `src/components/service/CalendarPage.tsx` — `ReopenedNotice` component above the period stage.
+- `src/components/service/mlb/BigLeagueCalendar.tsx` — season year derived from the loaded span (train 5 carry-in 1).
+- `src/lib/sc/billing/__tests__/_supa-mock-submit.mjs` — one-line extension so the reopen tests can see non-finalize inserts land.
+
+### Tests
+
+- `canReopenScope.test.mjs` (7): override; rd (no region bind); override wins when both flags; neither flag; terminated row only; empty email; null email.
+- `qboCheckInvoice.test.mjs` (11): both-empty-gone, DocNumber-only-found, Id-only-found, voided-still-there, either-errors-cannot-ask, parse-fail-cannot-ask, neither-id-cannot-ask-no-wire, missing-creds-cannot-ask-no-wire, DocNumber-only-row-empty-gone, Id-only-row-empty-gone, single-quote-escaped.
+- `reopen.test.mjs` (13): NOT_LIVE, NOT_V2, CANNOT_REOPEN_STATUS, no-live-ledger happy, QBO-gone happy, WEEK_HAS_LIVE_INVOICE, voided-same-refusal, QBO_CHECK_FAILED, step-9-fail-then-retry, biweekly-pair-14-days, row-count-mismatch (documented by the retry-completes test), OUTBOUND_OFF_HAS_INVOICE-no-wire, reopen-during-pending-push.
+
+**Full suite after this train: 454 pass, 0 fail.**
+
 ## Train 4 - the Sites board, big-league calendar, notes and history (2026-11-20)
 
 Three mostly read-only surfaces, plus four carry-ins from train 3. Nothing here bills, emails or changes a submitted week; the only writes are an authored note, two system notes, and the push-again reset on `sc_week_finalize`.

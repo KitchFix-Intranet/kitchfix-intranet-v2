@@ -95,6 +95,11 @@ export interface ReviewView {
   finalizeRowId: string | null;
   submittedVia: string | null;
   pushGaveUp: boolean;
+  // Train 5: whether the viewer may reopen the week. Evaluated
+  // server-side (role never crosses the wire). The page uses this
+  // boolean to decide whether to render the reopen panel at all.
+  // Any failure to read the scope collapses to false.
+  canReopen: boolean;
 }
 
 interface SvcRow {
@@ -431,6 +436,11 @@ export async function loadReviewScreen(
     finalizeRowId,
     submittedVia,
     pushGaveUp,
+    // Train 5: defaults to false; the page server overwrites after
+    // calling canReopenForAccount. Loader stays transport-free of
+    // the scope helper so the test harness can exercise the loader
+    // without the people table.
+    canReopen: false,
   };
 }
 

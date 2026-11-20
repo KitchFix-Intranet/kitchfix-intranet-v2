@@ -28,7 +28,7 @@ import "./service.css";
 export default async function Page({
   searchParams,
 }: {
-  searchParams: Promise<{ site?: string | string[]; fy?: string | string[]; p?: string | string[]; as?: string | string[]; day?: string | string[]; moved?: string | string[]; region?: string | string[] }>;
+  searchParams: Promise<{ site?: string | string[]; fy?: string | string[]; p?: string | string[]; as?: string | string[]; day?: string | string[]; moved?: string | string[]; region?: string | string[]; reopened?: string | string[]; rend?: string | string[]; rpair?: string | string[] }>;
 }) {
   const { email: ownerEmail } = await requireOwnerPage();
   const sp = await searchParams;
@@ -40,6 +40,11 @@ export default async function Page({
   const movedRaw = pickOne(sp.moved);
   const regionRaw = pickOne(sp.region);
   const region: "all" | "East" | "West" = regionRaw === "East" ? "East" : regionRaw === "West" ? "West" : "all";
+  const reopenedRaw = pickOne(sp.reopened);
+  const reopenedIso = reopenedRaw && /^\d{4}-\d{2}-\d{2}$/.test(reopenedRaw) ? reopenedRaw : null;
+  const rendRaw = pickOne(sp.rend);
+  const reopenedEndIso = rendRaw && /^\d{4}-\d{2}-\d{2}$/.test(rendRaw) ? rendRaw : null;
+  const reopenedIsPair = pickOne(sp.rpair) === "1";
 
   const sb = serviceClient();
   const { viewer } = await resolveViewer(sb, ownerEmail, asWorkerId, /* isOwner */ true);
@@ -184,6 +189,9 @@ export default async function Page({
         basePath="/service"
         asQuery={asQ}
         previewName={previewName}
+        reopenedIso={reopenedIso}
+        reopenedEndIso={reopenedEndIso}
+        reopenedIsPair={reopenedIsPair}
       />
       {drawer ? (
         <DayDrawer
