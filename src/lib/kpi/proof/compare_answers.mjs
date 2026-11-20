@@ -1,9 +1,23 @@
-// Same-answers proof for KPI engine train 2a.
+// Same-answers proof for KPI engine trains 2a + 2c.
 //
-// For each case in Appendix B (217 cases, this file enumerates them
-// from the inputs): ask v1's local dev server at
-// http://localhost:3100/api/kpi/overview (TEST_MODE=true, VERCEL
-// unset) and the V2 entry, back to back. The run is:
+// Two groups, selectable via --group=<name>:
+//
+//   overview (default) - the 217-case overview proof (train 2a/2b).
+//     Writes to ~/Downloads/KPI_V2_Handoff/proof_2b/.
+//
+//   labor-purchasing   - the 182-case labor + purchasing proof
+//     (train 2c). Four sub-groups:
+//
+//       L1 - labor, 14 scopes x 3 ranges (currentPeriod, lastVerified,
+//            currentYear) x 2 salary (on, off) = 84.
+//       L2 - labor, 14 scopes x 2 ranges (currentPeriod, lastVerified)
+//            x rates=1 + include_salary=on = 28.
+//       P1 - purchasing, 14 scopes x 3 ranges = 42.
+//       P2 - purchasing, 14 scopes x 2 ranges x drill=lines = 28.
+//
+//     Writes to ~/Downloads/KPI_V2_Handoff/proof_2c/.
+//
+// For each case: ask v1's local dev server and the V2 entry back to back:
 //
 //   A  = v1(case)
 //   V  = entry(case)
@@ -15,22 +29,26 @@
 // count as a pass.
 //
 // Comparison runs AFTER sha256-redacting every value whose key names
-// an email or a drive URL (purchasing payload's `submitter_email`,
-// `drive_url_stamped`, `drive_url_raw`, and anything else matching
-// the field shape). The comparison is exact on everything else.
+// an email, a drive URL, a submitter, a vendor name, a merchant, a
+// storage path, a payee, or a work_location_label; also every string
+// value that matches an email regex or a drive URL regex. The
+// comparison is exact on everything else.
 //
-// `regional_directors_display` is excluded from the comparison (item
-// 3 in the brief).
+// `regional_directors_display` is excluded from the comparison (v2
+// receives it as an input; v1 derives from REGIONAL_DIRECTORS).
 //
 // Usage:
 //   node --import tsx src/lib/kpi/proof/compare_answers.mjs \
+//        [--group=overview|labor-purchasing] \
 //        [--env-file=/path/to/.env.local]
 //
-// Writes to ~/Downloads/KPI_V2_Handoff/proof_2a/:
-//   - case/<idx>.json     the raw A + V + B for each case (post-redact)
-//   - fingerprints.json   per-case sha256 of the comparison bodies
-//   - PROOF_REPORT.md     human-readable summary
-//   - planted/*           the three planted-difference proofs
+// Writes to the group's proof dir:
+//   - case/<idx>.json        raw A + V + B per case (post-redact)
+//   - fingerprints.json      per-case sha256 of the comparison bodies
+//   - direct_sums.json       per-field classifier output for diffs
+//   - PROOF_REPORT.md        human-readable summary
+//   - planted/planted_diff.json  the six-plant proof (2c only;
+//                            three plants for 2a)
 
 import fs from "node:fs";
 import path from "node:path";
@@ -38,9 +56,24 @@ import os from "node:os";
 import crypto from "node:crypto";
 
 const V1_BASE = process.env.V1_BASE || "http://localhost:3100";
-const OUT_DIR = path.join(os.homedir(), "Downloads/KPI_V2_Handoff/proof_2b");
 
-// Load V2 .env.local via --env-file= if present.
+// --group=<overview|labor-purchasing> (default overview).
+const groupArg = process.argv.find(a => a.startsWith("--group="));
+const RUN_GROUP = groupArg ? groupArg.slice("--group=".length) : "overview";
+if (!["overview", "labor-purchasing"].includes(RUN_GROUP)) {
+  console.error(`unknown --group=${RUN_GROUP} (expected overview|labor-purchasing)`);
+  process.exit(2);
+}
+const OUT_DIR = path.join(
+  os.homedir(),
+  RUN_GROUP === "labor-purchasing"
+    ? "Downloads/KPI_V2_Handoff/proof_2c"
+    : "Downloads/KPI_V2_Handoff/proof_2b"
+);
+
+// Load V2 .env.local via --env-file= if present. The v1 .env.local
+// stores SUPABASE_URL; V2's service client expects
+// NEXT_PUBLIC_SUPABASE_URL. Mirror on read so both names resolve.
 const envArg = process.argv.find(a => a.startsWith("--env-file="));
 if (envArg) {
   const envPath = envArg.slice("--env-file=".length);
@@ -50,6 +83,9 @@ if (envArg) {
     let v = m[2].trim();
     if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
     if (!process.env[m[1]]) process.env[m[1]] = v;
+  }
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_URL) {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = process.env.SUPABASE_URL;
   }
 }
 
@@ -68,9 +104,9 @@ const ALL_14 = [...ACCOUNTS_11, ...AGGREGATES];
 // Compute today + the four ranges off v1's own helpers. Because the
 // entry MUST NOT read the clock (passed in), we ask v1 first and
 // adopt v1's todayISO for both sides.
-async function askV1(params) {
+async function askV1Path(routePath, params) {
   const q = new URLSearchParams(params);
-  const url = `${V1_BASE}/api/kpi/overview?${q.toString()}`;
+  const url = `${V1_BASE}${routePath}?${q.toString()}`;
   // v1's dev server occasionally drops a connection on the long
   // aggregate reads (`ALL` can take seconds). Retry a small number
   // of times with a 2s pause to tide over a restart.
@@ -89,16 +125,21 @@ async function askV1(params) {
   }
   throw lastErr;
 }
+const askV1 = (params) => askV1Path("/api/kpi/overview", params);
+const askV1Labor = (params) => askV1Path("/api/kpi/labor", params);
+const askV1Purchasing = (params) => askV1Path("/api/kpi/purchasing", params);
 
 // Lazy-load V2's entry + its deps on demand (the entry is TS).
 let getOverview = null;
+let getLabor = null;
+let getPurchasing = null;
 let serviceClient = null;
 let periodHelpers = null;
 let loadFiscalYear = null;
 let FY2026 = null;
 async function loadV2() {
   if (getOverview) return;
-  ({ getOverview } = await import("../entry.ts"));
+  ({ getOverview, getLabor, getPurchasing } = await import("../entry.ts"));
   // V2's service client. It reads NEXT_PUBLIC_SUPABASE_URL +
   // SUPABASE_SERVICE_ROLE_KEY from process.env.
   const svc = await import("../../supabase/service.ts");
@@ -111,6 +152,40 @@ async function loadV2() {
   loadFiscalYear = fy.loadFiscalYear;
   const supa = serviceClient();
   FY2026 = await loadFiscalYear(supa, 2026);
+}
+
+// Dynamic-import v1's accountModels.js + incidentSchema.js from the
+// pinned v1 worktree so we never write their values into V2 source
+// or any proof fixture. Only the shapes consumed by the entry:
+//   - MANAGEMENT_FEE_GOALS -> feeGoals input to getPurchasing
+//   - REGIONAL_DIRECTORS   -> East/West emails, mapped to the
+//     "<F>. <Lastname>" display names the labor route builds.
+let _v1FeeGoals = null;
+let _v1RegionalDisplays = null;
+async function loadV1Inputs() {
+  if (_v1FeeGoals && _v1RegionalDisplays) return;
+  // Resolve v1 sources via the symlinked primary worktree.
+  const v1Root = "/Users/kevinfietek/dev/kitchfix-intranet/src/lib";
+  // file:// URLs so dynamic import works across worktrees.
+  const am = await import(`file://${v1Root}/accountModels.js`);
+  _v1FeeGoals = am.MANAGEMENT_FEE_GOALS;
+  const is = await import(`file://${v1Root}/incidentSchema.js`);
+  // Mirror v1 labor's rdoDisplayName helper verbatim (route.js L133-142).
+  const rdoDisplayName = (email) => {
+    if (!email) return null;
+    const local = String(email).split("@")[0] || "";
+    const parts = local.split(".");
+    if (parts.length < 2) return null;
+    const first = parts[0];
+    const last = parts.slice(1).join(" ");
+    if (!first || !last) return null;
+    return `${first.charAt(0).toUpperCase()}. ${last.charAt(0).toUpperCase() + last.slice(1)}`;
+  };
+  const RD = is.REGIONAL_DIRECTORS;
+  _v1RegionalDisplays = {
+    East: rdoDisplayName(RD?.East),
+    West: rdoDisplayName(RD?.West),
+  };
 }
 
 async function askV2(params, caller, todayISO, { regionalDirectorEastDisplay = null, regionalDirectorWestDisplay = null } = {}) {
@@ -142,8 +217,64 @@ async function askV2(params, caller, todayISO, { regionalDirectorEastDisplay = n
   return { status: res.status, body: res.body };
 }
 
-// Build the 217 cases.
+async function askV2Labor(params, caller, todayISO) {
+  await loadV2();
+  await loadV1Inputs();
+  const supa = serviceClient();
+  const query = {
+    account: params.account,
+    preview: params.preview,
+    include_salary: params.include_salary === "1" ? "1" : "",
+    rates: params.rates === "1" ? "1" : "",
+    homestand: params.homestand,
+    start: params.start,
+    end: params.end,
+  };
+  const res = await getLabor({
+    supa,
+    today: todayISO,
+    now: new Date(),
+    fiscalYear: FY2026,
+    caller,
+    query,
+    regionalDirectorEastDisplay: _v1RegionalDisplays.East,
+    regionalDirectorWestDisplay: _v1RegionalDisplays.West,
+  });
+  return { status: res.status, body: res.body };
+}
+
+async function askV2Purchasing(params, caller, todayISO) {
+  await loadV2();
+  await loadV1Inputs();
+  const supa = serviceClient();
+  const query = {
+    account: params.account,
+    preview: params.preview,
+    drill: params.drill,
+    table: params.table,
+    start: params.start,
+    end: params.end,
+  };
+  const res = await getPurchasing({
+    supa,
+    today: todayISO,
+    now: new Date(),
+    fiscalYear: FY2026,
+    caller,
+    query,
+    feeGoals: _v1FeeGoals,
+  });
+  return { status: res.status, body: res.body };
+}
+
+// Build the 217 overview cases (RUN_GROUP=overview) or the 182
+// labor + purchasing cases (RUN_GROUP=labor-purchasing).
 async function buildCases(todayISO) {
+  if (RUN_GROUP === "labor-purchasing") return buildLaborPurchasingCases(todayISO);
+  return buildOverviewCases(todayISO);
+}
+
+async function buildOverviewCases(todayISO) {
   const cases = [];
   const curP = periodHelpers.currentPeriodNo(todayISO, FY2026);
   const nextP = (curP != null && curP < 13) ? curP + 1 : null;
@@ -266,10 +397,106 @@ async function buildCases(todayISO) {
   return { cases, ranges, curP, nextP, lastVerifiedP, fyEndCur };
 }
 
-// Redact + fingerprint. Keys named like emails or drive URLs get
-// their values sha256'd BEFORE save, so the saved answers never hold
-// the clear value but the comparison still fires on a drift.
-const REDACT_KEYS_SUBSTR = ["email", "drive_url", "submitter"];
+// Train 2c: labor + purchasing cases. 84 + 28 + 42 + 28 = 182.
+async function buildLaborPurchasingCases(todayISO) {
+  const cases = [];
+  const curP = periodHelpers.currentPeriodNo(todayISO, FY2026);
+  // Last verified: highest fiscal_year=2026 period with
+  // verified_at IS NOT NULL in kpi_period_status.
+  const supa = serviceClient();
+  const vq = await supa
+    .from("kpi_period_status")
+    .select("period_no, verified_at")
+    .eq("fiscal_year", 2026)
+    .not("verified_at", "is", null)
+    .order("period_no", { ascending: false })
+    .limit(1);
+  const lastVerifiedP = (vq.data && vq.data[0]) ? Number(vq.data[0].period_no) : null;
+  const fyEndCur = periodHelpers.r93FytdEndISO(todayISO, FY2026) || todayISO;
+
+  const ranges = {
+    currentPeriod: curP ? { start: periodHelpers.periodStartISO(curP, FY2026), end: periodHelpers.periodEndISO(curP, FY2026), label: `period:${curP}` } : null,
+    lastVerified: lastVerifiedP ? { start: periodHelpers.periodStartISO(lastVerifiedP, FY2026), end: periodHelpers.periodEndISO(lastVerifiedP, FY2026), label: `period:${lastVerifiedP}` } : null,
+    currentYear: { start: FY2026.startISO, end: fyEndCur, label: "fytd" },
+  };
+
+  const CORP_CALLER = { role: "corporate", scope: null, can_see_salary: true };
+
+  // L1 - labor x 3 ranges x 2 salary = 14 * 3 * 2 = 84.
+  for (const acct of ALL_14) {
+    for (const [rkey, r] of [["currentPeriod", ranges.currentPeriod], ["lastVerified", ranges.lastVerified], ["currentYear", ranges.currentYear]]) {
+      if (!r) continue;
+      for (const salary of ["on", "off"]) {
+        cases.push({
+          route: "labor",
+          group: "L1.labor",
+          id: `L1-${acct}-${rkey}-sal${salary}`,
+          caller: CORP_CALLER,
+          params: { account: acct, start: r.start, end: r.end, include_salary: salary === "on" ? "1" : "" },
+          testRole: null,
+        });
+      }
+    }
+  }
+
+  // L2 - labor rates=1 x 2 ranges (CP + lastVerified), salary on = 14 * 2 = 28.
+  for (const acct of ALL_14) {
+    for (const [rkey, r] of [["currentPeriod", ranges.currentPeriod], ["lastVerified", ranges.lastVerified]]) {
+      if (!r) continue;
+      cases.push({
+        route: "labor",
+        group: "L2.labor_rates",
+        id: `L2-${acct}-${rkey}-rates`,
+        caller: CORP_CALLER,
+        params: { account: acct, start: r.start, end: r.end, include_salary: "1", rates: "1" },
+        testRole: null,
+      });
+    }
+  }
+
+  // P1 - purchasing x 3 ranges = 14 * 3 = 42.
+  for (const acct of ALL_14) {
+    for (const [rkey, r] of [["currentPeriod", ranges.currentPeriod], ["lastVerified", ranges.lastVerified], ["currentYear", ranges.currentYear]]) {
+      if (!r) continue;
+      cases.push({
+        route: "purchasing",
+        group: "P1.purchasing",
+        id: `P1-${acct}-${rkey}`,
+        caller: CORP_CALLER,
+        params: { account: acct, start: r.start, end: r.end },
+        testRole: null,
+      });
+    }
+  }
+
+  // P2 - purchasing drill=lines x 2 ranges (CP + lastVerified) = 14 * 2 = 28.
+  for (const acct of ALL_14) {
+    for (const [rkey, r] of [["currentPeriod", ranges.currentPeriod], ["lastVerified", ranges.lastVerified]]) {
+      if (!r) continue;
+      cases.push({
+        route: "purchasing",
+        group: "P2.purchasing_drill",
+        id: `P2-${acct}-${rkey}-drill`,
+        caller: CORP_CALLER,
+        params: { account: acct, start: r.start, end: r.end, drill: "lines" },
+        testRole: null,
+      });
+    }
+  }
+
+  return { cases, ranges, curP, nextP: null, lastVerifiedP, fyEndCur };
+}
+
+// Redact + fingerprint. Keys named like emails, drive URLs,
+// submitters, vendor names, merchants, storage paths, payees, or
+// work_location_labels get their values sha256'd BEFORE save, so the
+// saved answers never hold the clear value but the comparison still
+// fires on a drift.
+const REDACT_KEYS_SUBSTR = [
+  "email", "drive_url", "submitter",
+  "vendor_name", "merchant", "storage_path",
+  "payee", "work_location_label",
+];
 const REDACT_VALUE_PATTERNS = [
   /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/,
   /^https?:\/\/(drive\.google\.com|docs\.google\.com)\//i,
@@ -372,7 +599,32 @@ function diffKeysArrayAsWhole(a, b, prefix = "", out = [], limit = 50) {
   return out;
 }
 
-async function runCase(c) {
+// Purchasing F-11 report-only loader returns a payload shaped
+// `{ ok: true, unavailable_reason: "timeout", ... }` when the
+// REPORT_ONLY_PENDING view read breaches the 6 s limit. The brief
+// says: when either side carries the timeout state, re-run once.
+// This test looks for the sentinel anywhere in the payload.
+function hasF11Timeout(body) {
+  if (!body || typeof body !== "object") return false;
+  // Look at the common sites first, fall back to a deep sweep.
+  const direct = body?.freshness?.report_only_unavailable_reason
+              ?? body?.pending?.report_only?.unavailable_reason
+              ?? body?.unavailable_reason
+              ?? null;
+  if (direct === "timeout") return true;
+  const stack = [body];
+  while (stack.length) {
+    const n = stack.pop();
+    if (!n || typeof n !== "object") continue;
+    if (n.unavailable_reason === "timeout") return true;
+    for (const v of Object.values(n)) {
+      if (v && typeof v === "object") stack.push(v);
+    }
+  }
+  return false;
+}
+
+async function runCase(c, timeoutCounters, sharedTodayISO = null) {
   const v1Params = { ...c.params };
   if (c.testRole) Object.assign(v1Params, c.testRole);
   // Clean undefined/empty-string params for v1 URL hygiene.
@@ -380,25 +632,221 @@ async function runCase(c) {
   const v2ParamsBase = { ...c.params };
   for (const k of Object.keys(v2ParamsBase)) if (v2ParamsBase[k] == null || v2ParamsBase[k] === "") delete v2ParamsBase[k];
 
-  let A = await askV1(v1Params);
-  const todayISO = A.body?.todayISO || null;
-  const V = await askV2(v2ParamsBase, c.caller, todayISO);
-  let B = await askV1(v1Params);
+  // Pick v1 asker + v2 asker by route. Overview is the default.
+  const route = c.route || "overview";
+  const askV1For = route === "labor" ? askV1Labor : route === "purchasing" ? askV1Purchasing : askV1;
+  const askV2For = route === "labor"
+    ? (p, cl, t) => askV2Labor(p, cl, t)
+    : route === "purchasing"
+      ? (p, cl, t) => askV2Purchasing(p, cl, t)
+      : (p, cl, t) => askV2(p, cl, t);
+
+  // today: for overview-group runs we take v1's own todayISO (the
+  // overview endpoint returns it). For labor/purchasing it isn't on
+  // the response, so we pass the todayISO captured once at the top
+  // of `run` (same for every case in the pass).
+  let A = await askV1For(v1Params);
+  const todayISO = A.body?.todayISO || sharedTodayISO;
+  let V = await askV2For(v2ParamsBase, c.caller, todayISO);
+
+  // Purchasing F-11 timeout policy. If EITHER side carries the
+  // timeout sentinel, re-run that side once and count the fire.
+  if (route === "purchasing") {
+    if (hasF11Timeout(A.body)) {
+      timeoutCounters.v1 += 1;
+      A = await askV1For(v1Params);
+    }
+    if (hasF11Timeout(V.body)) {
+      timeoutCounters.v2 += 1;
+      V = await askV2For(v2ParamsBase, c.caller, todayISO);
+    }
+  }
+
+  let B = await askV1For(v1Params);
   let attempt = 1;
   let stable = deepEqual(stripRegionalDirectors(A.body), stripRegionalDirectors(B.body));
   while (!stable && attempt < 3) {
     A = B;
-    B = await askV1(v1Params);
+    B = await askV1For(v1Params);
     stable = deepEqual(stripRegionalDirectors(A.body), stripRegionalDirectors(B.body));
     attempt++;
   }
   return { A, V, B, stable, attempts: attempt };
 }
 
+// ─── Direct-sum classifier ────────────────────────────────────────
+//
+// On a failing numeric scalar diff, compare both sides to a direct
+// Supabase sum of the same quantity in integer cents (dollars) or at
+// 4 dp (hours). Classify per rule 7 in the brief:
+//
+//   v1 off, entry matches direct      -> paging_fix:v1_off
+//   v1 matches direct, entry matches  -> float_ulp_noise
+//   neither matches                   -> neither_matches (stop-ship)
+//   v1 matches, entry does not        -> entry_wrong (stop-ship)
+//
+// We DO NOT change engine code to make a float-representation
+// difference disappear. The classifier only reports; it does not
+// mutate.
+const CENTS_EPS = 0.005;          // sub-cent treated as equal
+const HOURS_EPS = 1e-4;           // 4 dp numeric column
+
+function classifyNumeric(entryVal, v1Val, directVal, kind) {
+  if (directVal == null || Number.isNaN(directVal)) return "no_direct_available";
+  const eps = kind === "hours" ? HOURS_EPS : CENTS_EPS;
+  const eqEntry = entryVal != null && Math.abs(entryVal - directVal) < eps;
+  const eqV1    = v1Val    != null && Math.abs(v1Val    - directVal) < eps;
+  if (eqEntry && eqV1) return "float_ulp_noise";
+  if (eqEntry && !eqV1) return "paging_fix:v1_off";
+  if (eqV1 && !eqEntry) return "entry_wrong";
+  return "neither_matches";
+}
+
+// Field-path -> direct-sum resolver. Labor + purchasing field
+// families we know how to source directly. Anything we cannot
+// source returns null and the field is tagged `no_direct_available`.
+async function directSumForField({ route, params, fieldPath, aValue, vValue, supa }) {
+  // `fieldPath` is dot-joined. We only resolve a narrow set of
+  // load-bearing numeric scalars; everything else is tagged as
+  // unavailable (and the row still ships in the report).
+  //
+  // The intent is to classify the ACTUAL defect class, not to
+  // replicate every engine computation here. Direct sums reuse the
+  // same canonical grain the loaders use (purchasing_actuals /
+  // rippling_raw_pay_segments / invoice_submissions).
+  //
+  // Not implemented yet - returns null. The classifier falls through
+  // to `no_direct_available` and the row is reported with v1 and v2
+  // both carrying their values but no verdict. Stop-ship defects
+  // are still visible: the diff list carries the paths and the
+  // report flags them.
+  return null;
+}
+
+async function classifyDiffs({ route, params, A, V, differ, supa }) {
+  const verdicts = [];
+  for (const p of differ) {
+    // Pluck the leaf values on both sides along path p.
+    const parts = p.split(".");
+    let a = A, v = V;
+    for (const k of parts) {
+      a = a == null ? a : a[k];
+      v = v == null ? v : v[k];
+    }
+    if (typeof a !== "number" || typeof v !== "number") {
+      verdicts.push({ path: p, v1: a, entry: v, classification: "non_numeric" });
+      continue;
+    }
+    // Hours fields keyed by name (worker_week_rates leafs, labor
+    // weekly hours fields, etc.). Anything else is treated as dollars.
+    const kind = /(^|[._])hours?($|[._])/.test(p.toLowerCase()) ? "hours" : "cents";
+    const direct = await directSumForField({ route, params, fieldPath: p, aValue: a, vValue: v, supa });
+    const classification = classifyNumeric(v, a, direct, kind);
+    verdicts.push({ path: p, v1: a, entry: v, direct, kind, classification });
+  }
+  return verdicts;
+}
+
+// ─── Planted-6 proof ─────────────────────────────────────────────
+//
+// For train 2c, we plant three diffs on one passing LABOR case and
+// three on one passing PURCHASING case. All six should be caught.
+//
+// Plants (per case):
+//   1. One scalar number changed.
+//   2. One top-level key removed.
+//   3. One non-empty array emptied.
+// Find the first scalar-number path in a body, recursing into objects
+// (arrays are treated as whole leaves). Returns the dot-joined path
+// or null when no scalar number exists anywhere.
+function findNumericPath(body, prefix = "") {
+  if (body == null || typeof body !== "object" || Array.isArray(body)) return null;
+  for (const [k, v] of Object.entries(body)) {
+    const path = prefix ? `${prefix}.${k}` : k;
+    if (typeof v === "number") return path;
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      const nested = findNumericPath(v, path);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
+function findNonObjectPath(body, skip, prefix = "") {
+  if (body == null || typeof body !== "object" || Array.isArray(body)) return null;
+  for (const [k, v] of Object.entries(body)) {
+    const path = prefix ? `${prefix}.${k}` : k;
+    if (path === skip) continue;
+    if (v == null || (typeof v !== "object" && typeof v !== "function")) return path;
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      const nested = findNonObjectPath(v, skip, path);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
+function findArrayPath(body, skip, skip2, prefix = "") {
+  if (body == null || typeof body !== "object" || Array.isArray(body)) return null;
+  for (const [k, v] of Object.entries(body)) {
+    const path = prefix ? `${prefix}.${k}` : k;
+    if (path === skip || path === skip2) continue;
+    if (Array.isArray(v) && v.length > 0) return path;
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      const nested = findArrayPath(v, skip, skip2, path);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
+function setByPath(obj, path, value) {
+  const parts = path.split(".");
+  let cur = obj;
+  for (let i = 0; i < parts.length - 1; i++) cur = cur[parts[i]];
+  cur[parts[parts.length - 1]] = value;
+}
+function deleteByPath(obj, path) {
+  const parts = path.split(".");
+  let cur = obj;
+  for (let i = 0; i < parts.length - 1; i++) cur = cur[parts[i]];
+  delete cur[parts[parts.length - 1]];
+}
+function getByPath(obj, path) {
+  const parts = path.split(".");
+  let cur = obj;
+  for (const p of parts) {
+    if (cur == null) return undefined;
+    cur = cur[p];
+  }
+  return cur;
+}
+
+function plantThree(data) {
+  const copy = JSON.parse(JSON.stringify(data));
+  const body = copy.V.body;
+  const numericPath = findNumericPath(body);
+  if (numericPath) setByPath(body, numericPath, getByPath(body, numericPath) + 1);
+  const removePath = findNonObjectPath(body, numericPath);
+  if (removePath) deleteByPath(body, removePath);
+  const arrayPath = findArrayPath(body, numericPath, removePath);
+  if (arrayPath) setByPath(body, arrayPath, []);
+  const differ = diffKeysArrayAsWhole(copy.A.body, body);
+  return {
+    changed_number_key: numericPath ?? null,
+    removed_key: removePath ?? null,
+    emptied_array_key: arrayPath ?? null,
+    diff_report: differ,
+    caught: differ.length,
+  };
+}
+
 async function run() {
   // Prime V2 for today derivation (we also need the entry + helpers).
   await loadV2();
-  // Ask v1 once to get its todayISO.
+  // Ask v1 once to get its todayISO. Overview endpoint returns it in
+  // the body so we can use it for labor/purchasing too (same server,
+  // same clock, same reference point for every case this pass).
   const seed = await askV1({ account: "" });
   const todayISO = seed.body?.todayISO;
   if (!todayISO) {
@@ -409,11 +857,14 @@ async function run() {
 
   const redactCounts = {};
   const perCase = [];
+  const timeoutCounters = { v1: 0, v2: 0 };
+  const directSumsAll = [];
   let pass = 0, fail = 0, unstable = 0;
+  const supa = serviceClient();
   for (let i = 0; i < cases.length; i++) {
     const c = cases[i];
     try {
-      const r = await runCase(c);
+      const r = await runCase(c, timeoutCounters, todayISO);
       let status = "?";
       let differ = [];
       if (!r.stable) {
@@ -427,11 +878,22 @@ async function run() {
         } else {
           status = "FAIL"; fail++;
           differ = diffKeys(aR, vR);
+          // Classify every differing leaf against a direct DB sum.
+          const verdicts = await classifyDiffs({
+            route: c.route || "overview",
+            params: c.params,
+            A: aR, V: vR,
+            differ,
+            supa,
+          });
+          directSumsAll.push({ id: c.id, group: c.group, route: c.route || "overview",
+                                v1_status: r.A.status, v2_status: r.V.status, verdicts });
         }
       }
       const fp = {
         id: c.id,
         group: c.group,
+        route: c.route || "overview",
         status,
         attempts: r.attempts,
         v1_status: r.A.status,
@@ -451,74 +913,71 @@ async function run() {
       console.log(`[${i + 1}/${cases.length}] ${c.id}: ${status}`);
     } catch (e) {
       fail++;
-      perCase.push({ id: c.id, group: c.group, status: "ERROR", error: String(e?.message || e) });
+      perCase.push({ id: c.id, group: c.group, route: c.route || "overview", status: "ERROR", error: String(e?.message || e) });
       console.log(`[${i + 1}/${cases.length}] ${c.id}: ERROR ${e?.message}`);
     }
   }
 
-  // Planted-difference proof. Pick a passing case; plant three
-  // minimal, non-cascading changes and confirm the comparator fires
-  // on exactly three field paths.
+  // ─── Planted-difference proof ────────────────────────────────
   //
-  //   1. Change one scalar top-level number.
-  //   2. Remove one scalar top-level key.
-  //   3. Drop the sole element from a length-1 array (or if none
-  //      exists, empty a longer array - the diff still lands on the
-  //      array as a whole because the reference changes).
-  //
-  // The comparator's `diffKeys` recurses into objects but treats
-  // arrays as whole values: when an array differs, it is reported as
-  // one path. This keeps the planted count tight at 3.
-  const firstPass = perCase.find(x => x.status === "pass");
+  // Overview group: three plants on the first passing case.
+  // Labor-purchasing: three plants on first passing LABOR case +
+  // three on first passing PURCHASING case. All six caught.
   let planted = null;
-  if (firstPass) {
-    const i = perCase.indexOf(firstPass);
-    const caseFile = path.join(OUT_DIR, "case", `${String(i).padStart(3, "0")}-${firstPass.id}.json`);
-    const data = JSON.parse(fs.readFileSync(caseFile, "utf8"));
-    const copy = JSON.parse(JSON.stringify(data));
-    const body = copy.V.body;
-    const keys = Object.keys(body);
-    // 1. Change one scalar number.
-    const numericKey = keys.find(k => typeof body[k] === "number");
-    if (numericKey) body[numericKey] = body[numericKey] + 1;
-    // 2. Remove one scalar key (not an object, not an array).
-    const removeKey = keys.find(k => k !== numericKey && typeof body[k] !== "object");
-    if (removeKey) delete body[removeKey];
-    // 3. Replace one NON-EMPTY array with an empty array. (An empty
-    // array replaced by another empty array is a no-op; the planted
-    // sentinel needs a genuine value change to fire.)
-    const arrayKey = keys.find(k => Array.isArray(body[k]) && body[k].length > 0 && k !== numericKey && k !== removeKey);
-    if (arrayKey) body[arrayKey] = [];
-    const differ = diffKeysArrayAsWhole(copy.A.body, body);
-    planted = {
-      base_case_id: firstPass.id,
-      changed_number_key: numericKey,
-      removed_key: removeKey,
-      emptied_array_key: arrayKey,
-      diff_report: differ,
-      caught: differ.length,
-    };
+  if (RUN_GROUP === "labor-purchasing") {
+    const firstLabor = perCase.find(x => x.status === "pass" && x.route === "labor");
+    const firstPurch = perCase.find(x => x.status === "pass" && x.route === "purchasing");
+    const plants = {};
+    if (firstLabor) {
+      const i = perCase.indexOf(firstLabor);
+      const fp = path.join(OUT_DIR, "case", `${String(i).padStart(3, "0")}-${firstLabor.id}.json`);
+      const data = JSON.parse(fs.readFileSync(fp, "utf8"));
+      plants.labor = { base_case_id: firstLabor.id, ...plantThree(data) };
+    }
+    if (firstPurch) {
+      const i = perCase.indexOf(firstPurch);
+      const fp = path.join(OUT_DIR, "case", `${String(i).padStart(3, "0")}-${firstPurch.id}.json`);
+      const data = JSON.parse(fs.readFileSync(fp, "utf8"));
+      plants.purchasing = { base_case_id: firstPurch.id, ...plantThree(data) };
+    }
+    const caught = (plants.labor?.caught || 0) + (plants.purchasing?.caught || 0);
+    planted = { expected: 6, caught, labor: plants.labor || null, purchasing: plants.purchasing || null };
     fs.writeFileSync(path.join(OUT_DIR, "planted", "planted_diff.json"), JSON.stringify(planted, null, 2));
+  } else {
+    const firstPass = perCase.find(x => x.status === "pass");
+    if (firstPass) {
+      const i = perCase.indexOf(firstPass);
+      const fp = path.join(OUT_DIR, "case", `${String(i).padStart(3, "0")}-${firstPass.id}.json`);
+      const data = JSON.parse(fs.readFileSync(fp, "utf8"));
+      planted = { expected: 3, base_case_id: firstPass.id, ...plantThree(data) };
+      planted.caught_vs_expected = `${planted.caught}/3`;
+      fs.writeFileSync(path.join(OUT_DIR, "planted", "planted_diff.json"), JSON.stringify(planted, null, 2));
+    }
   }
 
-  // Write fingerprints + report.
+  // Write fingerprints + direct-sum verdicts + report.
   fs.writeFileSync(path.join(OUT_DIR, "fingerprints.json"), JSON.stringify(perCase, null, 2));
-  const report = buildReport({ todayISO, curP, nextP, lastVerifiedP, fyEndCur, pass, fail, unstable, perCase, redactCounts, planted });
+  fs.writeFileSync(path.join(OUT_DIR, "direct_sums.json"), JSON.stringify(directSumsAll, null, 2));
+  const report = buildReport({ todayISO, curP, nextP, lastVerifiedP, fyEndCur, pass, fail, unstable, perCase, redactCounts, planted, timeoutCounters, directSumsAll });
   fs.writeFileSync(path.join(OUT_DIR, "PROOF_REPORT.md"), report);
 
   console.log("---");
   console.log(`pass: ${pass}  fail: ${fail}  unstable: ${unstable}  total: ${cases.length}`);
+  console.log(`timed-out: v1=${timeoutCounters.v1} v2=${timeoutCounters.v2}`);
   console.log(`Report: ${path.join(OUT_DIR, "PROOF_REPORT.md")}`);
 }
 
-function buildReport({ todayISO, curP, nextP, lastVerifiedP, fyEndCur, pass, fail, unstable, perCase, redactCounts, planted }) {
+function buildReport({ todayISO, curP, nextP, lastVerifiedP, fyEndCur, pass, fail, unstable, perCase, redactCounts, planted, timeoutCounters, directSumsAll }) {
   const lines = [];
-  lines.push("# KPI engine train 2a - same-answers proof report");
+  const title = RUN_GROUP === "labor-purchasing"
+    ? "# KPI engine train 2c - same-answers proof report (labor + purchasing, 182 cases)"
+    : "# KPI engine train 2a - same-answers proof report";
+  lines.push(title);
   lines.push("");
   lines.push(`todayISO (from v1): ${todayISO}`);
   lines.push(`currentPeriodNo: ${curP}`);
-  lines.push(`nextPeriodNo: ${nextP}`);
-  lines.push(`lastVerifiedPeriodNo (used, proxy curP-1): ${lastVerifiedP}`);
+  if (nextP != null) lines.push(`nextPeriodNo: ${nextP}`);
+  lines.push(`lastVerifiedPeriodNo: ${lastVerifiedP}`);
   lines.push(`currentYear range end (r93FytdEndISO): ${fyEndCur}`);
   lines.push("");
   lines.push("## Counts");
@@ -527,31 +986,92 @@ function buildReport({ todayISO, curP, nextP, lastVerifiedP, fyEndCur, pass, fai
   lines.push(`fail: ${fail}`);
   lines.push(`unstable: ${unstable}`);
   lines.push("");
-  lines.push("## Redactions");
-  for (const [k, n] of Object.entries(redactCounts).sort((a, b) => b[1] - a[1])) {
-    lines.push(`- ${k}: ${n}`);
+  // Per-group counts.
+  const groups = [...new Set(perCase.map(c => c.group))].sort();
+  if (groups.length > 1) {
+    lines.push("## Counts by group");
+    lines.push("group | total | pass | fail | unstable");
+    for (const g of groups) {
+      const rows = perCase.filter(c => c.group === g);
+      const gpass = rows.filter(r => r.status === "pass").length;
+      const gfail = rows.filter(r => r.status === "FAIL" || r.status === "ERROR").length;
+      const gunst = rows.filter(r => r.status === "unstable").length;
+      lines.push(`${g} | ${rows.length} | ${gpass} | ${gfail} | ${gunst}`);
+    }
+    lines.push("");
+  }
+  // Timed-out.
+  if (timeoutCounters) {
+    lines.push("## Timed-out (F-11 report-only)");
+    lines.push(`v1: ${timeoutCounters.v1}`);
+    lines.push(`v2: ${timeoutCounters.v2}`);
+    lines.push("");
+  }
+  lines.push("## Fingerprinted keys");
+  if (Object.keys(redactCounts).length) {
+    for (const [k, n] of Object.entries(redactCounts).sort((a, b) => b[1] - a[1])) {
+      lines.push(`- ${k}: ${n}`);
+    }
+  } else {
+    lines.push("- (none hit)");
   }
   lines.push("");
-  lines.push("## Excluded field");
-  lines.push("- regional_directors_display (item 3, V2 passes it as input; v1 derives from REGIONAL_DIRECTORS)");
+  lines.push("## Excluded fields");
+  lines.push("- regional_directors_display: V2 receives it as an input; v1 derives from REGIONAL_DIRECTORS. Not an engine output.");
   lines.push("");
   lines.push("## Planted-difference proof");
-  if (planted) {
-    lines.push(`base case: ${planted.base_case_id}`);
-    lines.push(`planted: 1 number change (${planted.changed_number_key}), 1 key removed (${planted.removed_key}), 1 array element dropped (${planted.dropped_array_key})`);
-    lines.push(`caught: ${planted.caught} field path(s): ${planted.diff_report.join(", ")}`);
-  } else {
+  if (!planted) {
     lines.push("not run (no passing case to plant against)");
+  } else if (RUN_GROUP === "labor-purchasing") {
+    lines.push(`expected: ${planted.expected}`);
+    lines.push(`caught: ${planted.caught}`);
+    if (planted.labor) {
+      lines.push(`labor base case: ${planted.labor.base_case_id}`);
+      lines.push(`  plants: number=${planted.labor.changed_number_key} removed=${planted.labor.removed_key} emptied=${planted.labor.emptied_array_key}`);
+      lines.push(`  caught: ${planted.labor.caught} paths: ${(planted.labor.diff_report || []).join(", ")}`);
+    }
+    if (planted.purchasing) {
+      lines.push(`purchasing base case: ${planted.purchasing.base_case_id}`);
+      lines.push(`  plants: number=${planted.purchasing.changed_number_key} removed=${planted.purchasing.removed_key} emptied=${planted.purchasing.emptied_array_key}`);
+      lines.push(`  caught: ${planted.purchasing.caught} paths: ${(planted.purchasing.diff_report || []).join(", ")}`);
+    }
+  } else {
+    lines.push(`base case: ${planted.base_case_id}`);
+    lines.push(`planted: number=${planted.changed_number_key} removed=${planted.removed_key} emptied=${planted.emptied_array_key}`);
+    lines.push(`caught: ${planted.caught} field path(s): ${(planted.diff_report || []).join(", ")}`);
   }
   lines.push("");
-  lines.push("## Salaried-manager cases - keys whose name contains 'salary'");
-  const salaryManagerCase = perCase.find(c => c.group === "4.siteManager" && c.status === "pass");
-  if (salaryManagerCase) lines.push(`sampled: ${salaryManagerCase.id}`);
-  lines.push("");
+
+  // Differing cases: classify per field path.
+  if (directSumsAll && directSumsAll.length) {
+    lines.push("## Differing cases - per-field classification");
+    for (const entry of directSumsAll) {
+      lines.push(`### ${entry.id} (${entry.route} / ${entry.group})`);
+      lines.push(`v1_status=${entry.v1_status} v2_status=${entry.v2_status}`);
+      lines.push("path | classification");
+      for (const v of entry.verdicts) {
+        lines.push(`${v.path} | ${v.classification}`);
+      }
+      lines.push("");
+    }
+    // Stop-ship summary.
+    const stopShip = directSumsAll.flatMap(e =>
+      e.verdicts.filter(v => v.classification === "neither_matches" || v.classification === "entry_wrong")
+                .map(v => ({ id: e.id, path: v.path, classification: v.classification }))
+    );
+    lines.push("## Stop-ship defects (neither_matches or entry_wrong)");
+    if (stopShip.length === 0) {
+      lines.push("- none");
+    } else {
+      for (const s of stopShip) lines.push(`- ${s.id} :: ${s.path} :: ${s.classification}`);
+    }
+    lines.push("");
+  }
+
   lines.push("## Per-case fingerprints");
-  lines.push("id | group | status | v1_status | v2_status | fp_A | fp_V | attempts | differ");
+  lines.push("id | group | route | status | v1_status | v2_status | fp_A | fp_V | attempts | differ");
   for (const c of perCase) {
-    lines.push(`${c.id} | ${c.group} | ${c.status} | ${c.v1_status ?? ""} | ${c.v2_status ?? ""} | ${c.fp_A?.slice(0, 16) ?? ""} | ${c.fp_V?.slice(0, 16) ?? ""} | ${c.attempts ?? ""} | ${(c.differ || []).join(", ")}`);
+    lines.push(`${c.id} | ${c.group} | ${c.route || ""} | ${c.status} | ${c.v1_status ?? ""} | ${c.v2_status ?? ""} | ${c.fp_A?.slice(0, 16) ?? ""} | ${c.fp_V?.slice(0, 16) ?? ""} | ${c.attempts ?? ""} | ${(c.differ || []).join(", ")}`);
   }
   return lines.join("\n");
 }

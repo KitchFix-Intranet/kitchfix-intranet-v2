@@ -258,6 +258,7 @@ export function withSalary(body: any, {
   //    their hourly-only board returned applies:false.
   const mergedBoard = buildBoard({
     account, start, end, today,
+    fy,
     actuals: mergedActuals,
     budget_periods: merged.periods,
     account_state: "hourly_ok",
@@ -319,7 +320,7 @@ export function withSalary(body: any, {
   //    buildWeekBudgets is passed by the caller so this module has
   //    no direct dep on lib/board.
   const week_budgets = (typeof buildWeekBudgets === "function")
-    ? buildWeekBudgets({ start, end, budget_periods: merged.periods })
+    ? buildWeekBudgets({ start, end, budget_periods: merged.periods, fy })
     : body.week_budgets;
 
   // [name] walkthrough R-68 for Labor (2026-09-07). This module used

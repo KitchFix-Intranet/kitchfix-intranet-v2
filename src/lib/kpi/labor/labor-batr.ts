@@ -74,11 +74,11 @@ function sumRevenueBudget(overviewBudgets: any, { members, periods }: any) {
  * (#1049). Consolidated 2026-09-07 - see periodBasis.js header for
  * the drift-prevention reasoning.
  */
-export async function loadRangeRevenueBasis(supa: any, { members, periods, start, end, today }: any) {
+export async function loadRangeRevenueBasis(supa: any, { members, periods, start, end, today, fy }: any) {
   if (!members || members.length === 0) return { totalRevenue: null, revenueBudgetFullPeriod: null, perPeriodRevenue: new Map() };
   if (!periods || periods.length === 0) return { totalRevenue: null, revenueBudgetFullPeriod: null, perPeriodRevenue: new Map() };
 
-  const inputs = await loadPeriodBasisInputs(supa, { members, periods, start, end, today });
+  const inputs = await loadPeriodBasisInputs(supa, { members, periods, start, end, today, fy });
   if (inputs.error) return { totalRevenue: null, revenueBudgetFullPeriod: null, perPeriodRevenue: new Map(), error: { scope: inputs.error.scope, message: inputs.error.error?.message || String(inputs.error.error) } };
 
   // Same picker + rules Overview uses. revSource fixed to "sc"

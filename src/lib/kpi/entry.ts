@@ -1182,6 +1182,7 @@ export async function getLabor({
     start,
     end,
     today,
+    fy: fiscalYear,
   });
   const [revenueBasisSingle, weeklyBasisSingle, overviewBudgetsSingle, pnlResp, periodStatusResp]: any = await Promise.all([
     revenueBasisPromiseSingle,
@@ -1651,11 +1652,11 @@ export async function getPurchasing({
     dirResp, priorHistoryResp, complianceResp, budgetsResp,
     vehicleR, equipR, repairR, reimbR, cardChR, vendorRollupR,
   ]: any = await Promise.all([
-    paginateWeekly(supa, { members, start: effStart, end: effEnd, fy: fiscalYear } as any),
+    paginateWeekly(supa, { members, start: effStart, end: effEnd, fy: fiscalYear, now } as any),
     loadPending(supa, { members, start: effStart, end: effEnd }),
     reportOnlyPromise,
-    paginatePurchasingActuals(supa, { members, start: effStart, end: effEnd, pageSize: pageSizeParam, includeLines }),
-    loadFreshness(supa),
+    paginatePurchasingActuals(supa, { members, start: effStart, end: effEnd, pageSize: pageSizeParam, includeLines, now } as any),
+    loadFreshness(supa, { now } as any),
     loadAccountsDirectory(supa),
     isClosedSinglePeriod
       ? loadPriorPeriodHistory(supa, { members, periodNo: singlePeriodNo, fy: fiscalYear } as any)
@@ -1666,7 +1667,7 @@ export async function getPurchasing({
     loadLedgerRows(supa, { members, start: effStart, end: effEnd, glLineCode: "5002.5", cap: 25 }),
     loadLedgerRows(supa, { members, start: effStart, end: effEnd, glLineCode: "5002.1", cap: 25 }),
     loadLedgerRows(supa, { members, start: effStart, end: effEnd, glLikePrefix: "13%", cap: 25 }),
-    loadCardCharges(supa, { members, start: effStart, end: effEnd, cap: 50, reportOnlyPromise } as any),
+    loadCardCharges(supa, { members, start: effStart, end: effEnd, today, cap: 50, reportOnlyPromise } as any),
     loadVendorRollup(supa, { members, start: effStart, end: effEnd }),
   ]);
   if (weeklyResp.error) return { status: 500, body: safeErrorPurchasing("v_purchasing_by_site_week", weeklyResp.error) };
@@ -1890,7 +1891,7 @@ export async function getPurchasing({
     if (start === fyStartISO && end === today) {
       fyWeekly = weekly;
     } else {
-      const fyWeeklyResp: any = await paginateWeekly(supa, { members, start: fyStartISO, end: today, fy: fiscalYear } as any);
+      const fyWeeklyResp: any = await paginateWeekly(supa, { members, start: fyStartISO, end: today, fy: fiscalYear, now } as any);
       if (fyWeeklyResp.error) {
         return { status: 500, body: safeErrorPurchasing("periods_weekly", fyWeeklyResp.error) };
       }
