@@ -45,6 +45,9 @@ export async function GET(req: Request): Promise<Response> {
     const got = await tryClaim(sb, sendId, now);
     if (!got) continue;
     claimed += 1;
+    // Fix 4: deliverSend may keep the claim if the sent-mark
+    // UPDATE failed 3x. Do not release in that case.
+    let keepClaim = false;
     try {
       const row = await readSendForDelivery(sb, sendId);
       if (!row) continue;
@@ -60,11 +63,12 @@ export async function GET(req: Request): Promise<Response> {
         sb, sendId, invoiceId: row.submission_id,
         rowMode: row.mode, switchMode: mode,
       });
+      keepClaim = Boolean(result.keepClaim);
       if (result.kind === "delivered") delivered += 1;
       else if (result.kind === "gave_up") gaveUp += 1;
       else held += 1;
     } finally {
-      await releaseClaim(sb, sendId);
+      if (!keepClaim) await releaseClaim(sb, sendId);
     }
   }
 

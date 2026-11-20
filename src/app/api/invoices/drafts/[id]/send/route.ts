@@ -22,6 +22,17 @@
 // out. No second read, no other site's details.
 //
 // Correction 9: maxDuration = 60.
+//
+// Pre-push fix 7: if the draft's status is already 'sent' we
+// skip the Ready re-run. The copy check would otherwise find
+// the draft's own submitted invoice and answer not_ready.
+// Commit is still called - the DB function returns already_sent
+// and we go on to deliver (or no-op if already delivered).
+//
+// Pre-push fix 4 ride-along: deliverSend may ask us to KEEP the
+// claim (sent-mark failed 3x) by returning keepClaim=true.
+// Skip releaseClaim in that case; an operator clears the row
+// by hand.
 
 import { NextResponse } from "next/server";
 import { openInvoiceApi } from "@/lib/invoices/apiGuard";
@@ -37,7 +48,7 @@ import { commitSend } from "@/lib/invoices/sendCommit";
 import { tryClaim, releaseClaim } from "@/lib/invoices/claim";
 import { deliverSend } from "@/lib/invoices/deliverSend";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { DraftRow } from "@/lib/invoices/types";
+import type { DraftRow, ReadyResult } from "@/lib/invoices/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -60,17 +71,35 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return new Response(null, { status: 404 });
   }
 
-  // Re-run Ready with the same inputs the check route uses.
-  const [files, codeSet, vendorOk, copyResult] = await Promise.all([
-    listFilesForDraft(sb, ownerEmail, draftId),
-    activeCodesSetForSite(sb, draft.account_key),
-    draft.vendor_id ? vendorIsAvailable(sb, draft.vendor_id) : Promise.resolve(false),
-    copyCheck(sb, ownerEmail, draft),
-  ]);
-  const check = runReadyCheck({
-    draft, files, activeCodesForSite: codeSet, vendorInScope: vendorOk,
-    copyError: copyResult ? copyResult.kind : null,
-  });
+  // Fix 7: a draft that is already 'sent' carries submission_id;
+  // the Ready check's copy check would match the draft's own
+  // submitted invoice and refuse. Skip Ready, go straight to
+  // commit (which returns already_sent) and on to deliver.
+  const skipReady = draft.status === "sent";
+
+  // Re-run Ready with the same inputs the check route uses
+  // (unless skipping - fix 7).
+  let check: ReadyResult;
+  let codeSet: ReadonlySet<string>;
+  let copyResult: Awaited<ReturnType<typeof copyCheck>> = null;
+  if (skipReady) {
+    codeSet = await activeCodesSetForSite(sb, draft.account_key);
+    check = { ready: true, errors: [] };
+  } else {
+    const [files, codeSetLocal, vendorOk, copyLocal] = await Promise.all([
+      listFilesForDraft(sb, ownerEmail, draftId),
+      activeCodesSetForSite(sb, draft.account_key),
+      draft.vendor_id ? vendorIsAvailable(sb, draft.vendor_id) : Promise.resolve(false),
+      copyCheck(sb, ownerEmail, draft),
+    ]);
+    void files; // runReadyCheck takes it next
+    codeSet = codeSetLocal;
+    copyResult = copyLocal;
+    check = runReadyCheck({
+      draft, files, activeCodesForSite: codeSet, vendorInScope: vendorOk,
+      copyError: copyResult ? copyResult.kind : null,
+    });
+  }
 
   // 1. Switch off: refuse with 409 sending_off per prompt §5.
   //    The body still carries today's check-route shape so the
@@ -144,10 +173,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   // 5. Deliver + release. The deliver function records its own
   //    attempt rows and transitions invoice_sends.
+  //    Fix 4: if deliverSend asks us to keep the claim (sent-
+  //    mark UPDATE failed 3x), do not release it here.
+  let keepClaim = false;
   try {
     const result = await deliverSend({
       sb, sendId: sendRow.id, invoiceId, rowMode, switchMode: mode,
     });
+    keepClaim = Boolean(result.keepClaim);
     return NextResponse.json({
       kind: result.kind,
       invoice_id: invoiceId,
@@ -156,7 +189,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       ...(result.code ? { code: result.code } : {}),
     }, { status: 200 });
   } finally {
-    await releaseClaim(sb, sendRow.id);
+    if (!keepClaim) await releaseClaim(sb, sendRow.id);
   }
 }
 

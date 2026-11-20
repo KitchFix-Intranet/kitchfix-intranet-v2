@@ -26,6 +26,29 @@
 //   - Later attempts: post a SECOND time only when the row
 //     transitions to 'sent' or 'gave_up'. Not on a repeat
 //     'held'.
+//
+// Pre-push fixes applied here:
+//   fix 1: a download failure in buildOutboundPdf now throws
+//     OriginalReadFailed; we catch it and hold with the code
+//     `original_read_failed` so the retry tries again. An
+//     invoice is never emailed unless every live original is in
+//     the email.
+//   fix 2: buildOutboundPdf returns { bytes, extras }. The
+//     extras ride as REAL email attachments (never as PDF-
+//     embedded attach() payloads). When nothing would ship we
+//     hold with `no_pages`.
+//   fix 4: after the mail provider acks, the invoice_sends
+//     "mark sent" UPDATE is retried up to 3 times. If all 3
+//     fail, DO NOT release the claim - extend claimed_until by
+//     24 hours and post a Slack "sent, but could not be marked
+//     sent". The result carries keepClaim=true so the routes
+//     skip their finally releaseClaim. The row is cleared once
+//     an operator manually sets email_status='sent' and
+//     claimed_until=null (or the 24h hold lapses and a human
+//     intervenes).
+//   mayDeliver: the defence-in-depth path writes nothing now -
+//     it just returns held. The route-level and retry-level
+//     gates are the real control.
 
 if (typeof window !== "undefined") {
   throw new Error("src/lib/invoices/deliverSend.ts is server-only");
@@ -38,7 +61,12 @@ import { mayDeliver } from "./mayDeliver";
 import { resolveRecipients, type RowMode } from "./recipients";
 import type { OutboundMode } from "./outboundGate";
 import { buildCodingPageData } from "./codingPageData";
-import { buildOutboundPdf, type OutboundFileRef } from "./buildOutboundPdf";
+import {
+  buildOutboundPdf,
+  OriginalReadFailed,
+  type OutboundFileRef,
+  type ExtraAttachment,
+} from "./buildOutboundPdf";
 import { outboundFileName } from "./outboundFileName";
 import { buildSubject } from "./emailSubject";
 import { buildEmailBody } from "./emailBody";
@@ -59,20 +87,26 @@ export interface DeliverArgs {
 export interface DeliverResult {
   kind: "delivered" | "held" | "gave_up";
   code?: string;
+  // Fix 4: when the sent-mark UPDATE failed 3 times, the caller
+  // MUST NOT release the claim. The row stays locked for 24h.
+  keepClaim?: boolean;
 }
 
 const BUCKET = "invoice-files";
 const SIGNED_URL_SECS = 60;
+const MARK_SENT_RETRIES = 3;
+const KEEP_CLAIM_EXTEND_MS = 24 * 60 * 60 * 1000;
 
 export async function deliverSend(args: DeliverArgs): Promise<DeliverResult> {
   const { sb, sendId, invoiceId, rowMode, switchMode } = args;
 
-  // Defence in depth: mayDeliver should always be true by this
+  // Defence in depth. mayDeliver should always be true by this
   // point (the send route gates on switch !== off, the retry
   // route gates the same way, and the row's mode was set at
-  // commit). Hold rather than send if the matrix says no.
+  // commit). Return held and write NOTHING - the real gates
+  // live at the route layer.
   if (!mayDeliver(rowMode, switchMode)) {
-    return await recordHeld(sb, sendId, invoiceId, "may_not_deliver", /*slackIsFirst*/ false, /*slackText*/ null);
+    return { kind: "held", code: "may_not_deliver" };
   }
 
   // Load the current send row + the invoice.
@@ -137,35 +171,63 @@ export async function deliverSend(args: DeliverArgs): Promise<DeliverResult> {
     return await failAndMaybeGiveUp(sb, send.id, invoiceId, send.email_attempts, send.created_at, rec.code, send.slack_status === "pending", slackText);
   }
 
-  // Build or reuse the outbound PDF.
+  // Build the outbound PDF. The retry path rebuilds the SAME
+  // attachments from the SAME originals - previously the retry
+  // branch read only the stored PDF and dropped extras, so a
+  // retry for an invoice whose originals were a locked PDF or a
+  // WebP would ship a coding page with no invoice. Always collect
+  // originals + run buildOutboundPdf; only the store-and-insert
+  // step is skipped when outbound_file_id is already set. A read
+  // failure of any original on first try or retry holds with
+  // code original_read_failed.
   let outboundFileId: string | null = send.outbound_file_id ?? null;
-  let outboundBytes: Uint8Array | null = null;
   let outboundFileNameValue = outboundFileName(inv.vendor_name, inv.invoice_date, inv.invoice_number, rowMode);
 
-  if (outboundFileId == null) {
-    // Need to build it. Collect the live originals.
-    const { data: origFiles } = await sb
-      .from("invoice_files")
-      .select("id, storage_path, mime_type, rotation, sort_order")
-      .eq("submission_id", invoiceId)
-      .eq("kind", "original")
-      .is("removed_at", null)
-      .order("sort_order", { ascending: true });
-    const refs: OutboundFileRef[] = (origFiles ?? []).map((f: { storage_path: string; mime_type: string; rotation: number }) => ({
-      storage_path: f.storage_path,
-      mime_type: f.mime_type,
-      rotation: (f.rotation ?? 0) as 0 | 90 | 180 | 270,
-    }));
-    try {
-      outboundBytes = await buildOutboundPdf(sb, refs, coding);
-    } catch {
-      return await failAndMaybeGiveUp(sb, send.id, invoiceId, send.email_attempts, send.created_at, "pdf_build_failed", send.slack_status === "pending", buildSlackText({
-        mode: rowMode, kind: inv.type as "invoice" | "credit",
-        site: inv.account_key, vendor: inv.vendor_name, number: inv.invoice_number,
-        who: nameParts.first_name, outcome: "held: pdf_build_failed",
-      }));
-    }
+  const { data: origFiles } = await sb
+    .from("invoice_files")
+    .select("id, storage_path, mime_type, rotation, sort_order, file_name")
+    .eq("submission_id", invoiceId)
+    .eq("kind", "original")
+    .is("removed_at", null)
+    .order("sort_order", { ascending: true });
+  const refs: OutboundFileRef[] = (origFiles ?? []).map((f: { storage_path: string; mime_type: string; rotation: number; file_name: string | null }) => ({
+    storage_path: f.storage_path,
+    mime_type: f.mime_type,
+    rotation: (f.rotation ?? 0) as 0 | 90 | 180 | 270,
+    file_name: f.file_name ?? null,
+  }));
 
+  // Fix 2: zero originals would mean emailing an invoice-less
+  // message. Refuse.
+  if (refs.length === 0) {
+    return await failAndMaybeGiveUp(sb, send.id, invoiceId, send.email_attempts, send.created_at, "no_pages", send.slack_status === "pending", buildSlackText({
+      mode: rowMode, kind: inv.type as "invoice" | "credit",
+      site: inv.account_key, vendor: inv.vendor_name, number: inv.invoice_number,
+      who: nameParts.first_name, outcome: "held: no_pages",
+    }));
+  }
+
+  let outboundBytes: Uint8Array;
+  let extras: ExtraAttachment[] = [];
+  try {
+    const built = await buildOutboundPdf(sb, refs, coding);
+    outboundBytes = built.bytes;
+    extras = built.extras;
+  } catch (e) {
+    // Fix 1: an original that failed to download does not get
+    // silently skipped; the whole build fails so the retry can
+    // try again later. Same rule on retries.
+    const code = e instanceof OriginalReadFailed ? "original_read_failed" : "pdf_build_failed";
+    return await failAndMaybeGiveUp(sb, send.id, invoiceId, send.email_attempts, send.created_at, code, send.slack_status === "pending", buildSlackText({
+      mode: rowMode, kind: inv.type as "invoice" | "credit",
+      site: inv.account_key, vendor: inv.vendor_name, number: inv.invoice_number,
+      who: nameParts.first_name, outcome: `held: ${code}`,
+    }));
+  }
+
+  if (outboundFileId == null) {
+    // First try: store + insert so the drawer's view link works
+    // and the row ties the send to a persisted file.
     const fileId = randomUUID();
     const storagePath = `outbound/${invoiceId}/${fileId}.pdf`;
     const up = await sb.storage.from(BUCKET).upload(storagePath, outboundBytes, {
@@ -190,7 +252,6 @@ export async function deliverSend(args: DeliverArgs): Promise<DeliverResult> {
       uploadedBy: subEmailLower || "system",
     });
     if (!ins.row) {
-      // Clean up the stored object on an insert failure.
       await sb.storage.from(BUCKET).remove([storagePath]);
       return await failAndMaybeGiveUp(sb, send.id, invoiceId, send.email_attempts, send.created_at, "outbound_insert_failed", send.slack_status === "pending", buildSlackText({
         mode: rowMode, kind: inv.type as "invoice" | "credit",
@@ -201,22 +262,14 @@ export async function deliverSend(args: DeliverArgs): Promise<DeliverResult> {
     outboundFileId = ins.row.id;
     await sb.from("invoice_sends").update({ outbound_file_id: outboundFileId, updated_at: new Date().toISOString() }).eq("id", sendId);
   } else {
-    // Retry: read the stored bytes via a signed URL. Fail-closed
-    // on any read error (will retry via schedule).
+    // Retry: preserve the first try's filename so the email
+    // header matches. Bytes come from the rebuild above.
     const { data: fileRow } = await sb
       .from("invoice_files")
-      .select("storage_path, file_name")
+      .select("file_name")
       .eq("id", outboundFileId)
       .maybeSingle();
-    if (!fileRow) {
-      return await failAndMaybeGiveUp(sb, send.id, invoiceId, send.email_attempts, send.created_at, "outbound_file_missing", false, null);
-    }
-    outboundFileNameValue = fileRow.file_name || outboundFileNameValue;
-    const dl = await sb.storage.from(BUCKET).download(fileRow.storage_path);
-    if (dl.error || !dl.data) {
-      return await failAndMaybeGiveUp(sb, send.id, invoiceId, send.email_attempts, send.created_at, "outbound_file_read_failed", false, null);
-    }
-    outboundBytes = new Uint8Array(await dl.data.arrayBuffer());
+    if (fileRow?.file_name) outboundFileNameValue = fileRow.file_name;
   }
 
   // Compose the message.
@@ -235,9 +288,13 @@ export async function deliverSend(args: DeliverArgs): Promise<DeliverResult> {
     }));
   }
 
-  // Early size check so we can post the "too big to email"
-  // Slack on the first attempt cleanly.
-  if (outboundBytes.byteLength > MAX_MESSAGE_BYTES) {
+  // Fix 2: total payload (main PDF + extras) must fit. Each
+  // extra's base64 adds ~4/3 of its raw byte count to the
+  // message, plus header overhead; we approximate with the
+  // sum of decoded sizes.
+  const extrasRawBytes = extras.reduce((acc, a) => acc + Math.floor((a.base64.length * 3) / 4), 0);
+  const totalBytes = outboundBytes.byteLength + extrasRawBytes;
+  if (totalBytes > MAX_MESSAGE_BYTES) {
     const slackText = `${rowMode === "test" ? "[TEST] " : ""}${inv.account_key} - ${inv.vendor_name} - ${inv.type === "credit" ? "credit" : "invoice"} #${inv.invoice_number}${nameParts.first_name ? ` from ${nameParts.first_name}` : ""} - held: file is too big to email.`;
     return await failAndMaybeGiveUp(sb, send.id, invoiceId, send.email_attempts, send.created_at, "too_large", send.slack_status === "pending", slackText);
   }
@@ -251,11 +308,10 @@ export async function deliverSend(args: DeliverArgs): Promise<DeliverResult> {
     replyTo: (inv.submitter_email ?? "").trim() || undefined,
     subject,
     html,
-    attachments: [{
-      filename: outboundFileNameValue,
-      mimeType: "application/pdf",
-      base64,
-    }],
+    attachments: [
+      { filename: outboundFileNameValue, mimeType: "application/pdf", base64 },
+      ...extras,
+    ],
   });
 
   const slackBase = {
@@ -267,21 +323,30 @@ export async function deliverSend(args: DeliverArgs): Promise<DeliverResult> {
   const isFirstSlack = send.slack_status === "pending";
 
   if (mailResult.ok) {
-    // Delivered. Transition the row, mark the submission, log
-    // the attempt, post Slack (first or second).
+    // Delivered. The email is OUT; we now mark the row sent.
+    // Fix 4: the "mark sent" UPDATE itself may fail (network,
+    // transient DB). Retry up to MARK_SENT_RETRIES times. If
+    // all retries fail: extend the claim 24h, post Slack
+    // "sent, but could not be marked sent", return keepClaim.
     const nowIso = new Date().toISOString();
-    await sb
-      .from("invoice_sends")
-      .update({
-        email_status: "sent",
-        email_attempts: send.email_attempts + 1,
-        email_last_error: null,
-        email_sent_at: nowIso,
-        email_message_id: mailResult.messageId,
-        email_next_attempt_at: null,
-        updated_at: nowIso,
-      })
-      .eq("id", sendId);
+    const markOk = await markSentWithRetry(sb, sendId, send.email_attempts + 1, mailResult.messageId, nowIso);
+    if (!markOk) {
+      // Keep the claim so the retry job cannot email a second
+      // time. Extend claimed_until +24h and tell someone.
+      const extendedUntil = new Date(Date.now() + KEEP_CLAIM_EXTEND_MS).toISOString();
+      await sb
+        .from("invoice_sends")
+        .update({ claimed_until: extendedUntil, updated_at: new Date().toISOString() })
+        .eq("id", sendId);
+      const alertText = `${rowMode === "test" ? "[TEST] " : ""}${inv.account_key} - ${inv.vendor_name} - ${inv.type === "credit" ? "credit" : "invoice"} #${inv.invoice_number}${nameParts.first_name ? ` from ${nameParts.first_name}` : ""} - sent, but could not be marked sent. The claim is held for 24 hours; set email_status='sent' and claimed_until=null on invoice_sends ${sendId} by hand once it is safe.`;
+      await postSlack(alertText, process.env.SLACK_INVOICE_WEBHOOK);
+      return { kind: "delivered", keepClaim: true };
+    }
+
+    // The sent mark landed. Also mark the submission and log
+    // the attempt. These writes are best-effort - if they fail
+    // we are no longer at risk of double-sending because the
+    // send row already says sent.
     await sb
       .from("invoice_submissions")
       .update({ email_sent: true })
@@ -344,6 +409,36 @@ async function recordSlack(
   await sb.from("invoice_send_attempts").insert({
     send_id: sendId, channel: "slack", result, error_code: null,
   });
+}
+
+// Fix 4: the "mark sent" UPDATE is retried up to
+// MARK_SENT_RETRIES times. We use .select() so we can tell a
+// returned-no-rows failure (did not match our id) apart from a
+// network/transport error. Both are retried the same way.
+async function markSentWithRetry(
+  sb: SupabaseClient,
+  sendId: string,
+  nextAttempts: number,
+  messageId: string,
+  nowIso: string,
+): Promise<boolean> {
+  for (let i = 0; i < MARK_SENT_RETRIES; i += 1) {
+    const { data, error } = await sb
+      .from("invoice_sends")
+      .update({
+        email_status: "sent",
+        email_attempts: nextAttempts,
+        email_last_error: null,
+        email_sent_at: nowIso,
+        email_message_id: messageId,
+        email_next_attempt_at: null,
+        updated_at: nowIso,
+      })
+      .eq("id", sendId)
+      .select("id");
+    if (!error && Array.isArray(data) && data.length > 0) return true;
+  }
+  return false;
 }
 
 // Writes a held or gave_up row, logs the failed attempt, posts
@@ -414,8 +509,9 @@ async function failAndMaybeGiveUp(
 }
 
 // A direct "mark held and leave the email alone" path for the
-// mayDeliver defence-in-depth case + the invoice_missing /
-// send_missing short-circuits. Does not increment attempts.
+// invoice_missing / send_missing short-circuits. Does not
+// increment attempts. (The mayDeliver=false case is handled by
+// a bare return above - it writes nothing.)
 async function recordHeld(
   sb: SupabaseClient,
   sendId: string,
