@@ -87,14 +87,29 @@ export function PriceOverrideBlock({
     });
   }
 
-  // T6 round 2 item 1: autofocus first field + Esc with ask.
+  // T6 round 2 item 1 + round 3 small 1-2: autofocus first field
+  // with its value selected; capture last-focused field before the
+  // ask opens so Keep editing returns focus there.
   const priceRef = useRef<HTMLInputElement>(null);
-  useEffect(() => { priceRef.current?.focus(); }, []);
+  const lastFieldRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    priceRef.current?.focus();
+    try { priceRef.current?.select(); } catch { /* noop */ }
+  }, []);
   const [askOpen, setAskOpen] = useState(false);
   function tryClose() {
     if (busy) return;
-    if (dirty) { setAskOpen(true); return; }
+    if (dirty) {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) lastFieldRef.current = active;
+      setAskOpen(true);
+      return;
+    }
     if (onCancel) onCancel();
+  }
+  function keepEditing() {
+    setAskOpen(false);
+    window.setTimeout(() => { lastFieldRef.current?.focus(); }, 0);
   }
   function discardAndClose() {
     resetDrafts();
@@ -174,7 +189,7 @@ export function PriceOverrideBlock({
             type="button"
             className="kf-btn kf-btn--primary kf-btn--sm"
             autoFocus
-            onClick={() => setAskOpen(false)}
+            onClick={keepEditing}
           >
             Keep editing
           </button>

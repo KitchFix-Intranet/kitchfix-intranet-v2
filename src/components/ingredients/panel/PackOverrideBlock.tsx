@@ -437,16 +437,31 @@ export function PackOverrideBlock({
   // state we feed to decidePackSave on the next save, so only the
   // price POST fires. The retry does NOT re-post the pack.
   const [partialPackSaved, setPartialPackSaved] = useState(false);
-  // T6 round 2 item 1: per-editor Esc ask. Replaces the half-done
-  // tryCloseEditor that dropped typed work without asking.
+  // T6 round 2 item 1 + round 3 small 1: per-editor Esc ask +
+  // autofocus the first TEXT field on open. The cursor lands in
+  // "How many in a case" for fixed pack or "Price per lb" for
+  // catch, with the value selected so typing replaces it. On an
+  // Attention-driven open the Qty-ref focus below takes over.
   const [editorAskOpen, setEditorAskOpen] = useState(false);
-  // T6 round 2 item 1: autofocus the first field on open. The
-  // segmented control is the first focusable; after mount we focus
-  // the first mode button so Enter + Tab + Esc all read as expected.
-  const firstFieldRef = useRef<HTMLButtonElement>(null);
+  // T6 round 3 small 2: remember the field the user was in before
+  // the ask opened, so Keep editing returns focus to it instead of
+  // leaving the body focused. Captured on the keydown that would
+  // open the ask (in the form's Esc handler) + in tryCloseEditor.
+  const lastFieldRef = useRef<HTMLElement | null>(null);
+  // Points at the perLb input (catch) or the Qty input (fixed)
+  // depending on which mode renders. One ref, two targets.
+  const firstTextFieldRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
-    // Only on initial mount; hint-driven focus takes over below.
-    if (!hint) firstFieldRef.current?.focus();
+    // Only on initial mount; hint-driven focus (qtyInputRef) wins.
+    if (hint) return;
+    const el = firstTextFieldRef.current;
+    if (!el) return;
+    el.focus();
+    try {
+      el.select();
+    } catch {
+      /* number inputs on some browsers do not support select() */
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -647,17 +662,27 @@ export function PackOverrideBlock({
     }
   }
 
-  // T6 round 2 item 1: Esc / Cancel ask first when the editor has
-  // typed work. Discard resets every editor field + closes the
-  // row; Keep editing stays put. Train 2's rule: typed work is
-  // never dropped without an ask.
+  // T6 round 2 item 1 + round 3 small 2: Esc / Cancel asks first
+  // when the editor has typed work. Before the ask opens we
+  // remember which field the user was in; Keep editing returns
+  // focus there. Train 2's rule: typed work is never dropped.
   function tryCloseEditor() {
     if (busy) return;
     if (dirty) {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) lastFieldRef.current = active;
       setEditorAskOpen(true);
       return;
     }
     if (onCancel) onCancel();
+  }
+  function keepEditing() {
+    setEditorAskOpen(false);
+    // Micro-task so the ask has unmounted its buttons before we
+    // move focus back.
+    window.setTimeout(() => {
+      lastFieldRef.current?.focus();
+    }, 0);
   }
   function discardAndClose() {
     resetDrafts();
@@ -686,7 +711,6 @@ export function PackOverrideBlock({
       <div className="kf-ipanel__editor-toprow">
       <div className="kf-ipanel__seg" role="group" aria-label="How it is sold">
         <button
-          ref={firstFieldRef}
           type="button"
           className="kf-ipanel__seg-btn"
           aria-pressed={!catchWeight}
@@ -727,6 +751,7 @@ export function PackOverrideBlock({
             <label className="kf-ipanel__editor-field">
               Price per lb
               <input
+                ref={firstTextFieldRef}
                 type="number"
                 inputMode="decimal"
                 step="0.01"
@@ -776,7 +801,10 @@ export function PackOverrideBlock({
             <label className="kf-ipanel__editor-field">
               How many in a case
               <input
-                ref={qtyInputRef}
+                ref={(el) => {
+                  qtyInputRef.current = el;
+                  firstTextFieldRef.current = el;
+                }}
                 type="number"
                 inputMode="numeric"
                 step="1"
@@ -999,7 +1027,7 @@ export function PackOverrideBlock({
             type="button"
             className="kf-btn kf-btn--primary kf-btn--sm"
             autoFocus
-            onClick={() => setEditorAskOpen(false)}
+            onClick={keepEditing}
           >
             Keep editing
           </button>
@@ -1055,11 +1083,16 @@ export function PackOverrideBlock({
             ? "Saving..."
             : catchWeight
               ? "Save pack"
-              : packPristine && !catchWeightChanged && caseFieldChanged
+              : /* T6 round 3 small 3: after a partial save (pack
+                 * landed, price did not), the retry sends only the
+                 * price. The label follows the action. */
+              partialPackSaved && caseFieldChanged
                 ? "Save price"
-                : caseFieldChanged
-                  ? "Save pack and price"
-                  : "Save pack"}
+                : packPristine && !catchWeightChanged && caseFieldChanged
+                  ? "Save price"
+                  : caseFieldChanged
+                    ? "Save pack and price"
+                    : "Save pack"}
         </button>
         <SaveFlash savedAt={savedAt} error={partialPackSaved ? null : error} />
       </div>

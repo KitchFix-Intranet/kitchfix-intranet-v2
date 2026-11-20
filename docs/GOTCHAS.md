@@ -406,6 +406,36 @@ unavoidable reading-flow reasons - and leave a comment saying why.
 An override block carries no ceremony of its own; its correctness
 is **a function of its line number**.
 
+## 26. State that belongs to an item lives under a key on that item
+
+A panel that swaps which item it is showing (Prev / Next in the
+item panel, an external id change, a click-through in a list) must
+either lift every item-scoped piece of state into the parent and
+reset it on id change, or wrap the item-scoped subtree in a keyed
+boundary - `<div key={item.id}>...</div>` - so React unmounts and
+remounts the subtree on an id change. Local `useState` in child
+editors survives a prop change on its parent (that is useState's
+whole purpose); it does not survive a key change on an ancestor.
+A key is how you say "these are different components to React,
+even though the shape is the same."
+
+T6 shipped a panel where the pack editor's `qty`, `size`, `uom`,
+the typed price, the "Set a price" row's state, the partial-save
+flag and the editor's own Discard ask all survived a step to the
+next item, with the head reading the new item's name while the
+fields held the previous item's values. One Save press would
+have written the previous item's pack and price onto the current
+one.
+
+T6 round 3 fixed it by keying the item-scoped block of
+DetailPanel on `item.id` and resetting the three panel-level
+item-scoped slots (packHint, measureOpen, costedPerFocusNonce)
+via a `useEffect(() => { ... }, [currentItemId])`. A new state
+slot added later is safe without anyone remembering to reset
+it: if it lives under the key it resets on remount; if it is
+panel-level, the useEffect catches it. Say which it is the day
+you add it.
+
 Branch-specific items we have already lived through on
 `step-1-shell-and-ingredients`:
 

@@ -133,6 +133,39 @@ export function DetailPanel({
   const [measureOpen, setMeasureOpen] = useState<{ uom: string; qty: number | null; pickUnit: boolean; nonce: number } | null>(null);
   const [costedPerFocusNonce, setCostedPerFocusNonce] = useState(0);
 
+  // T6 round 3 item 1: every piece of state the panel carries for
+  // THE CURRENT item must reset when the item changes under the
+  // panel (Prev / Next, external id swap). Two moves together:
+  //
+  //  1. Every item-scoped child component (PanelAttention,
+  //     PanelItemZone and its editors, the unmatched-ingredient
+  //     zone) renders inside an item-keyed boundary below. React
+  //     unmounts + remounts on an id change, so any state held in
+  //     those children starts fresh. A new state slot added later
+  //     is safe without anyone remembering to reset it.
+  //
+  //  2. State that lives HERE in DetailPanel because it crosses
+  //     those children (packHint from Attention -> PanelItemZone,
+  //     measureOpen / costedPerFocusNonce from Attention ->
+  //     PanelIngredientZone) resets on item.id change via the
+  //     effect below.
+  //
+  // Nothing item-scoped sits outside the key below: scanned every
+  // state slot in this file plus every editor; the list is in the
+  // PR comment.
+  const currentItemId = open.kind === "item" ? open.itemId : null;
+  useEffect(() => {
+    setPackHint(null);
+    setMeasureOpen(null);
+    setCostedPerFocusNonce(0);
+    // The panel-level discard ask also references the item under
+    // the panel at the time it opened. On a step through the ask,
+    // the Discard handler clears it before firing the step; the
+    // reset here is belt-and-suspenders for any external id swap.
+    setDiscardAskOpen(false);
+    setPendingStep(null);
+  }, [currentItemId]);
+
   // T4 §2a: when the caller passed parentOptions explicitly, use it;
   // otherwise derive from `parents` the way we always have. Review
   // queue callers still pass the full ingredients list as `parents`
@@ -328,37 +361,46 @@ export function DetailPanel({
           <PanelStrip item={item} ingredient={ingredient} />
         ) : null}
 
-        {/* T6 round 2 item 4: on a put-away item, Attention is
-            already hidden (attention.tsx's isAway gate); zone 1 is
-            not rendered; and zone 2 ("How it prices on ...") must
-            not render either, since Costed per + Measures save and
-            would change every item on that ingredient. */}
-        {open.kind === "item" && item && !itemIsAway(item) ? (
-          <PanelAttention
-            item={item}
-            ingredient={ingredient}
-            onFixPack={(uom) => setPackHint({ uom, nonce: Date.now() })}
-            onAddMeasure={(uom, qty) => setMeasureOpen({ uom, qty: qty ?? null, pickUnit: qty == null, nonce: Date.now() })}
-            onChangeCostedPer={() => setCostedPerFocusNonce((n) => n + 1)}
-            siblingPacks={items.map((i) => ({
-              id: i.id,
-              packQty: i.packQty ?? null,
-              packSize: i.packSize ?? null,
-              packUom: i.packUom ?? null,
-              usd12m: i.usd12m,
-            }))}
-            blendPerBase={blendPerBase}
-          />
-        ) : null}
+        {/* T6 round 3 item 1: everything item-scoped renders inside
+            this fragment with a key on the item's id. React
+            unmounts + remounts the subtree on an id change so
+            nothing typed, no editor-open flag, no partial-save
+            state and no "Saved" flash crosses from one item to the
+            next. The ingredient zone is NOT keyed here because its
+            editor state keys on the ingredient (ingredient mode
+            only) and in item mode it only renders Costed per /
+            Measures / Open ingredient - all directly bound to the
+            ingredient's current values. */}
+        {open.kind === "item" && item ? (
+          <div key={item.id} className="kf-ipanel__itemscope">
+            {!itemIsAway(item) ? (
+              <PanelAttention
+                item={item}
+                ingredient={ingredient}
+                onFixPack={(uom) => setPackHint({ uom, nonce: Date.now() })}
+                onAddMeasure={(uom, qty) => setMeasureOpen({ uom, qty: qty ?? null, pickUnit: qty == null, nonce: Date.now() })}
+                onChangeCostedPer={() => setCostedPerFocusNonce((n) => n + 1)}
+                siblingPacks={items.map((i) => ({
+                  id: i.id,
+                  packQty: i.packQty ?? null,
+                  packSize: i.packSize ?? null,
+                  packUom: i.packUom ?? null,
+                  usd12m: i.usd12m,
+                }))}
+                blendPerBase={blendPerBase}
+              />
+            ) : null}
 
-        {open.kind === "item" && item && !itemIsAway(item) ? (
-          <PanelItemZone
-            item={item}
-            ingredient={ingredient}
-            packHint={packHint}
-            onDone={onDone}
-            showStatusActions={showStatusActions}
-          />
+            {!itemIsAway(item) ? (
+              <PanelItemZone
+                item={item}
+                ingredient={ingredient}
+                packHint={packHint}
+                onDone={onDone}
+                showStatusActions={showStatusActions}
+              />
+            ) : null}
+          </div>
         ) : null}
 
         {/* T6 round 2 item 4: zone 2 only renders when the item is

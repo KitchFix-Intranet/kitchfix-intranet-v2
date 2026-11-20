@@ -152,23 +152,33 @@ export function CaseWeightBlock({
   })();
   const casePriceHint = liveCwHint;
 
-  // T6 round 2 item 1: Esc + autofocus. The input carries ref +
-  // initial focus; the row's onKeyDown catches Escape and closes
-  // the row (ask first when dirty).
+  // T6 round 2 item 1 + round 3 small 1-2: autofocus the weight
+  // input with its value selected; capture last-focused element
+  // before the ask opens so Keep editing returns there.
   const inputRef = useRef<HTMLInputElement>(null);
+  const lastFieldRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
-    if (open && storedCw == null) inputRef.current?.focus();
+    if (open) {
+      inputRef.current?.focus();
+      try { inputRef.current?.select(); } catch { /* noop */ }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
   const [askOpen, setAskOpen] = useState(false);
   function tryCloseRow() {
     if (busy) return;
     if (dirty) {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) lastFieldRef.current = active;
       setAskOpen(true);
       return;
     }
     setOpen(false);
     setVal(storedCw != null ? String(storedCw) : "");
+  }
+  function keepEditing() {
+    setAskOpen(false);
+    window.setTimeout(() => { lastFieldRef.current?.focus(); }, 0);
   }
   function discardAndClose() {
     setVal(storedCw != null ? String(storedCw) : "");
@@ -221,7 +231,7 @@ export function CaseWeightBlock({
               type="button"
               className="kf-btn kf-btn--primary kf-btn--sm"
               autoFocus
-              onClick={() => setAskOpen(false)}
+              onClick={keepEditing}
             >
               Keep editing
             </button>
