@@ -14,11 +14,13 @@
 // to render <Menu>.
 //
 // Train 2b fix 1 / 2.2: on unmount (Escape, outside-click, pick,
-// explicit close), focus returns to whatever had focus at the
-// moment the Menu first mounted - i.e. the trigger that opened
-// it. If that element has been detached from the DOM (the opener
-// was unmounted during a navigation), focus stays where it is and
-// the destination page's own mount-focus takes over.
+// explicit close), focus returns to anchorRef.current - the
+// menu's own trigger. document.activeElement is unreliable here:
+// Safari on macOS does not focus a <button> on click, so capturing
+// activeElement at mount gets the body. If the opener is gone
+// (detached from the DOM after a navigation, e.g. Delete routed
+// to the next draft), we do nothing - the destination page's own
+// mount-focus takes over.
 
 import { useCallback, useEffect, useRef } from "react";
 
@@ -32,12 +34,6 @@ interface MenuItemSpec {
   // onClose) then invokes this on the next tick so focus-return
   // happens before any destination navigation.
   onPick: () => void;
-  // Destructive items render in red. Kept for Change-the-page's
-  // "Remove the file" (an action that cannot be undone in one
-  // click when a file is the only one on the draft). Train 2b
-  // fix 1 / 2.4 removes this flag from "Delete this invoice"
-  // because Delete carries an Undo.
-  destructive?: boolean;
 }
 
 interface Props {
@@ -52,21 +48,23 @@ interface Props {
 
 export function Menu({ label, items, onClose, anchorRef, align = "down-left" }: Props) {
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const returnFocusRef = useRef<HTMLElement | null>(null);
 
-  // Remember what had focus before the menu opened; move focus to
-  // the first item; give focus back on unmount. Same pattern as
-  // Sheet.tsx.
+  // Move focus to the first item on mount. On unmount give focus
+  // back to anchorRef.current (the menu's own trigger). Safari on
+  // macOS does not focus a <button> on click, so document
+  // .activeElement at mount is the body on that platform - we
+  // cannot use it. If the opener is detached, do nothing and let
+  // the destination page's own mount-focus take over.
   useEffect(() => {
-    const previously = document.activeElement;
-    if (previously instanceof HTMLElement) returnFocusRef.current = previously;
     const first = rootRef.current?.querySelector<HTMLElement>(FOCUSABLE_ITEM);
     first?.focus();
     return () => {
-      const el = returnFocusRef.current;
-      if (el && typeof el.focus === "function" && document.contains(el)) el.focus();
+      const opener = anchorRef?.current ?? null;
+      if (opener && typeof opener.focus === "function" && document.contains(opener)) {
+        opener.focus();
+      }
     };
-  }, []);
+  }, [anchorRef]);
 
   // Outside-click close. `mousedown` is fine here because the item
   // onClick fires AFTER mousedown/mouseup; and when the user
@@ -139,7 +137,7 @@ export function Menu({ label, items, onClose, anchorRef, align = "down-left" }: 
           key={it.key}
           type="button"
           role="menuitem"
-          className={`kf-inv-menu__item${it.destructive ? " is-destructive" : ""}`}
+          className="kf-inv-menu__item"
           onClick={() => pick(it)}
         >
           {it.icon ? <span className="kf-inv-menu__icon" aria-hidden>{it.icon}</span> : null}

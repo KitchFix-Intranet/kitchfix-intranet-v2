@@ -977,7 +977,6 @@ export function CaptureSittingRoot({
                             key: "remove",
                             label: "Remove the file",
                             icon: <Trash2 size={18} aria-hidden />,
-                            destructive: true,
                             onPick: () => void removeActive(),
                           },
                         ]}
