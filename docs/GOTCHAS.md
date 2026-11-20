@@ -286,6 +286,32 @@ the count. A page shows its error block; a picker says so in place
 and offers nothing to pick. Proof: `scripts/t2_reader_proof.mjs`
 stands in a 2,350-row fake and a page-drop variant.
 
+## 22. A layout gate and a slot `default.tsx` both only run on a full page load
+
+`(shell)/layout.tsx` calls `requireAppAccess(pathname)` with the pathname
+of the **first full load**. On a soft nav to another route inside the
+same shared layout, Next does not re-execute the layout, so its gate
+does not re-run. If the layout is the only thing gating a protected
+page, a role whose first full load lands on an opened path (e.g. Academy
+with the release flag on) click-throughs into any other page that
+depends on the same layout gate - including owner-only pages - with no
+gate running at all. Rule: every page that reads data must call a gate
+in its own `page.tsx` (first awaited thing, before any server component
+is returned or any `redirect(...)`), the way `(shell)/page.tsx` and
+`(shell)/people/page.tsx` already do. A layout gate is for shaping the
+chrome the viewer sees, not for authorising the page.
+
+The same asymmetry applies to the `@topbar` parallel slot: `default.tsx`
+is only picked up on a full load. On a soft nav, Next keeps the slot's
+previous page unless the new route matches a slot page, which is why
+`Run intake` from `/stockpot/ingredients` used to linger on Home. Fix:
+match every path to a slot page. One `@topbar/page.tsx` for `/` (a
+catch-all does not match an empty segment list) + one
+`@topbar/[...catchAll]/page.tsx` for every other unmatched path; both
+return null. `default.tsx` stays for full-load behaviour. Next's route
+precedence (static > dynamic > catch-all) keeps every existing named
+slot page winning over the catch-all.
+
 Branch-specific items we have already lived through on
 `step-1-shell-and-ingredients`:
 
