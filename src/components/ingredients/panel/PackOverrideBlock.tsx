@@ -134,13 +134,14 @@ export function PackOverrideBlock({
   const { save: runSave, busy, savedAt, error, clearError } = useSaveWithRefresh();
   const [lastTwins, setLastTwins] = useState<number | null>(null);
 
-  // S4: case-price source. Three options now (catalog, billed, avg)
-  // and the default is the source that produced the stored per_base,
-  // not the S2 ">25% disagreement" rule. When the stored source is an
-  // averaged tier (actuals_*), surface the engine's case figure as an
-  // "invoice average" option so the dropdown can honestly reproduce
-  // the saved price. Falls back to the S2 bigGap heuristic only when
-  // the item has no stored source (new / unpriced).
+  // T6 item 5: the price field is now a single text input the user
+  // can type or fill from a "Prices on file" shortcut, matching the
+  // reference's vPackEditor(). State: caseFieldStr (typed value) +
+  // caseSrcHint (null when typed, or the source name when the user
+  // clicked a shortcut and has not edited after). The field opens
+  // holding the case price the server would choose today (from
+  // storedSrc, or the biggest-gap heuristic). Shortcuts fill it;
+  // every other key clears caseSrcHint back to null.
   const catalogV =
     item.catalogPrice != null && item.catalogPrice > 0 ? item.catalogPrice : null;
   const billedV = item.unitPrice != null && item.unitPrice > 0 ? item.unitPrice : null;
@@ -153,9 +154,6 @@ export function PackOverrideBlock({
     catalogV != null && billedV != null
       ? Math.abs(catalogV - billedV) / Math.max(catalogV, billedV) > 0.25
       : false;
-  // Which source produced the stored per_base? Used both to default
-  // the dropdown and to decide whether the Result row shows the
-  // stored figure (showStored below).
   const storedSrc: "catalog" | "billed" | "avg" | null =
     item.caseSource === "catalog"
       ? "catalog"
@@ -164,16 +162,37 @@ export function PackOverrideBlock({
         : item.caseSource != null && item.caseSource.startsWith("actuals_")
           ? "avg"
           : null;
+  // Default source for the "no pick, server would choose" case.
   const defaultCaseSrc: "catalog" | "billed" | "avg" | null =
     storedSrc ??
     (bigGap ? "billed" : catalogV != null ? "catalog" : billedV != null ? "billed" : null);
-  const initialCaseSrc = defaultCaseSrc;
-  const [caseSrc, setCaseSrc] = useState<"catalog" | "billed" | "avg" | null>(initialCaseSrc);
+  function valueForSrc(src: "catalog" | "billed" | "avg" | null): number | null {
+    if (src === "catalog") return catalogV;
+    if (src === "billed") return billedV;
+    if (src === "avg") return avgV;
+    return null;
+  }
+  const defaultCaseVal = valueForSrc(defaultCaseSrc);
+  const defaultCaseFieldStr =
+    defaultCaseVal != null ? defaultCaseVal.toFixed(2) : "";
+  const [caseFieldStr, setCaseFieldStr] = useState<string>(defaultCaseFieldStr);
+  const [caseSrcHint, setCaseSrcHint] = useState<"catalog" | "billed" | "avg" | null>(
+    defaultCaseSrc,
+  );
+  function parseMoney(s: string): number | null {
+    const trimmed = s.trim().replace(/^\$/, "").replace(/,/g, "");
+    if (trimmed.length === 0) return null;
+    const n = Number(trimmed);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+  function moneyEqual(a: number | null, b: number | null): boolean {
+    if (a == null || b == null) return a === b;
+    return Math.round(a * 100) === Math.round(b * 100);
+  }
+  const caseFieldVal = parseMoney(caseFieldStr);
 
-  // N7 commit 2: Cancel restores every editor draft to its mount-time
-  // seed. Catch-weight mode, pack qty/size/uom, perLb display, billed
-  // unit, case-price source, note, and the catchWeightEdited flag all
-  // snap back. Error + lastTwins also clear so the surface reads fresh.
+  // N7 commit 2 + T6 item 5: Cancel restores every editor draft to
+  // its mount-time seed.
   function resetDrafts() {
     setCatchWeight(initialCatchWeight);
     setCatchWeightEdited(false);
@@ -183,10 +202,15 @@ export function PackOverrideBlock({
     setPerLbStr(initialPerLbStr);
     setBilledUnit(initialBilledUnit);
     setNote("");
-    setCaseSrc(initialCaseSrc);
+    setCaseFieldStr(defaultCaseFieldStr);
+    setCaseSrcHint(defaultCaseSrc);
     clearError();
     setLastTwins(null);
+    setPartialPackSaved(false);
   }
+  // T6 item 5: the "case price typed" check is to the cent. A user
+  // who retypes the same number has changed nothing.
+  const caseFieldChanged = !moneyEqual(caseFieldVal, defaultCaseVal);
   const dirty =
     catchWeight !== initialCatchWeight ||
     catchWeightEdited ||
@@ -196,24 +220,26 @@ export function PackOverrideBlock({
     perLbStr !== initialPerLbStr ||
     billedUnit !== initialBilledUnit ||
     note.trim().length > 0 ||
-    caseSrc !== initialCaseSrc;
-  // T2 §3: panel Discard ask -> resetDrafts() snaps every field back
-  // to the row the server rendered.
+    caseFieldChanged;
   useDirtyEditor(`pack-${item.id}`, dirty && !busy, resetDrafts);
-  const previewCasePrice =
-    caseSrc === "catalog" && catalogV != null
-      ? { v: catalogV, src: "catalog" as const }
-      : caseSrc === "billed" && billedV != null
-        ? { v: billedV, src: "billed" as const }
-        : caseSrc === "avg" && avgV != null
-          ? { v: avgV, src: "avg" as const }
-          : catalogV != null
-            ? { v: catalogV, src: "catalog" as const }
-            : billedV != null
-              ? { v: billedV, src: "billed" as const }
-              : avgV != null
-                ? { v: avgV, src: "avg" as const }
-                : null;
+  // T6 item 5: the preview uses the TYPED case price when there is one;
+  // otherwise falls back to the file-source default. previewCasePrice.v
+  // carries the number; previewCasePrice.src carries a source label
+  // when the number came from a shortcut (or matches a shortcut to the
+  // cent), else "typed".
+  const previewCasePrice: { v: number; src: "catalog" | "billed" | "avg" | "typed" } | null =
+    caseFieldVal != null
+      ? (() => {
+          // If the typed value equals one of the on-file prices to
+          // the cent, label it as that source regardless of the
+          // user's last click (so an edit that lands on catalog
+          // reads "catalog" too).
+          if (moneyEqual(caseFieldVal, catalogV)) return { v: caseFieldVal, src: "catalog" as const };
+          if (moneyEqual(caseFieldVal, billedV)) return { v: caseFieldVal, src: "billed" as const };
+          if (moneyEqual(caseFieldVal, avgV)) return { v: caseFieldVal, src: "avg" as const };
+          return { v: caseFieldVal, src: "typed" as const };
+        })()
+      : null;
 
   const qty = Number(qtyStr);
   const size = Number(sizeStr);
@@ -243,15 +269,17 @@ export function PackOverrideBlock({
   // yet - pack inputs are at their seeded values, the mode has not
   // been toggled, and the case-price dropdown is still on the source
   // that produced the stored price. The master list reads the stored
-  // price; the panel must agree with it on open. Rotating the
-  // dropdown to a different source puts the chain into "what-if"
-  // mode and the recomputed figure takes over - rotating back to the
-  // stored source restores the stored figure.
+  // price; the panel must agree with it on open. Typing a different
+  // price into the field puts the chain into "what-if" mode and the
+  // recomputed figure takes over - clearing the field back to the
+  // default (or clicking the stored-source shortcut) restores the
+  // stored figure. T6 item 5: the "caseFieldChanged" check replaces
+  // round-1's caseSrc dropdown comparison.
   const chainPristine =
     !catchWeight &&
     packPristine &&
     !catchWeightEdited &&
-    caseSrc === storedSrc;
+    !caseFieldChanged;
   const showStored =
     chainPristine &&
     item.perBase != null &&
@@ -389,62 +417,98 @@ export function PackOverrideBlock({
     }
   }
 
-  // S6: moving the Case-price dropdown counts as a change, so a user
-  // who ONLY picks "billed" (keeping the pack) can save. The save
-  // routes to the A2.1 price-override path in save() below (durable;
-  // the backfill skips pack_override.price_only). Catch-weight path
-  // is unchanged - it has no case-price dropdown.
-  const caseSrcChanged = caseSrc !== defaultCaseSrc;
-  // S7: flipping the mode toggle counts as a change too. Shrimp live
-  // example: fixed 4x5 LB case stored catch_weight=true, so the
-  // catch-weight tier wrote the case total ($172.99) as $/lb. Flip
-  // to "priced by the case" with no other edit must save and re-cost
-  // via the normal pack path (172.99 / 20 = $8.65/lb). Compare
-  // against item.catchWeight so toggling off then back on nets to
-  // "no change" and leaves Save disabled.
+  // T6 item 5: the price field counts as a change when the typed /
+  // shortcut-filled value differs from the default money-to-the-cent.
+  // The save path below reads this to decide pack-only, price-only,
+  // or pack-then-price. Catch-weight path has no case-price field so
+  // this check is irrelevant there.
+  const caseFieldChangedNonCw = !catchWeight && caseFieldChanged;
   const catchWeightChanged = catchWeight !== (item.catchWeight ?? false);
   const readyToSave =
     (catchWeight
       ? perLbValid && !perLbPristine
-      : qtyValid && sizeValid && uomToBase(uom) != null && (!packPristine || caseSrcChanged || catchWeightChanged));
+      : qtyValid && sizeValid && uomToBase(uom) != null && (!packPristine || caseFieldChangedNonCw || catchWeightChanged));
+  // T6 ruling 1: when the second POST of a pack-then-price run fails
+  // after the first succeeded, we leave the editor open with the
+  // price still in the field and show "The pack was saved. The price
+  // was not." + train 2's sentence. A second press saves the price
+  // alone (pack is now in the stored row so packPristine = true from
+  // that save onward - the state here just drives the extra sentence).
+  const [partialPackSaved, setPartialPackSaved] = useState(false);
+  const [partialSentence, setPartialSentence] = useState<string | null>(null);
 
+  // T6 ruling 1: five save branches, one for each row of the memo's
+  // table. "One save, one effect" where today's editor can express
+  // the same facts; "pack-then-price" where the user changed both.
+  //
+  //   catch weight           -> set-pack-override          (one POST)
+  //   pack dirty, price default -> set-pack-override       (one POST)
+  //   pack pristine, price shortcut -> set-price-override  (one POST)
+  //   pack pristine, price typed    -> set-price-override  (one POST)
+  //   pack dirty, price dirty       -> pack then price     (two POSTs)
+  //
+  // See scripts/t6_pack_save_proof.mjs for the proof table.
+  function priceReason(): string {
+    if (!previewCasePrice) return "";
+    const userNote = note.trim();
+    if (previewCasePrice.src === "typed") {
+      // Memo wording: note, else "Price typed in the pack editor".
+      return userNote.length > 0 ? userNote : "Price typed in the pack editor";
+    }
+    // Shortcut source: today's auto, note appended.
+    const auto = `Costed from ${previewCasePrice.src} case price ${fmtUsd(previewCasePrice.v)} instead of the default`;
+    return userNote.length > 0 ? `${auto}. ${userNote}` : auto;
+  }
+  function perBaseFromCase(): { perBase: number; baseUom: "LB" | "FLOZ" | "EA" } | null {
+    if (!previewCasePrice) return null;
+    const b = uomToBase(uom);
+    if (!b) return null;
+    const total = qty * size * b.factor;
+    if (!(total > 0)) return null;
+    return { perBase: previewCasePrice.v / total, baseUom: b.base };
+  }
   async function save() {
     if (busy || !readyToSave) return;
     setLastTwins(null);
+    setPartialSentence(null);
 
-    // S6: pack pristine + ONLY the case-price source moved -> write a
-    // durable price override through A2.1's /set-price-override. This
-    // is the branch where the user picked catalog-vs-billed in the
-    // dropdown and clicked save; before S6 the pristine-pack check
-    // would have left Save disabled, and even bypassing that the
-    // pack-override route recomputes case price catalog-first and
-    // discards the pick. Reuses setVendorItemPriceOverride (writes
-    // pack_override.price_only, which the backfill skips). When the
-    // user changed BOTH the pack and the case source, the pack
-    // override wins - one save, one effect, no double-write.
-    // S7: also skip when the toggle flipped - a mode change needs a
-    // pack-override recompute (new tier), not a price pin. Same "one
-    // save, one effect" rule.
-    if (!catchWeight && packPristine && caseSrcChanged && !catchWeightChanged && previewCasePrice) {
-      const b = uomToBase(uom)!;
-      const total = qty * size * b.factor;
-      const perBaseInDim = previewCasePrice.v / total;
-      const srcLabel = previewCasePrice.src;
-      const userNote = note.trim();
-      const auto = `Costed from ${srcLabel} case price ${fmtUsd(previewCasePrice.v)} instead of the default`;
-      const reason = userNote ? `${auto}. ${userNote}` : auto;
+    const packDirty = !catchWeight && (!packPristine || catchWeightChanged);
+
+    // Branch 1: catch weight.
+    if (catchWeight) {
+      await runSave({
+        op: () =>
+          postJson("/api/review/set-pack-override", {
+            itemId: item.id,
+            catchWeight: true,
+            perLb,
+            billedUnit: billedUnit.trim() || null,
+            note: note.trim() || null,
+          }),
+        successMessage: (d) => {
+          const twins = readTwins(d);
+          setLastTwins(twins);
+          return twins > 0
+            ? `Saved: pack override (applied to ${fmtCount(twins + 1)} matching items)`
+            : "Saved: pack override";
+        },
+        onDone,
+      });
+      return;
+    }
+
+    // Branch 2: price only. Pack pristine, caseField changed.
+    if (!packDirty && caseFieldChanged) {
+      const pb = perBaseFromCase();
+      if (!pb) return;
       await runSave({
         op: () =>
           postJson("/api/review/set-price-override", {
             itemId: item.id,
-            perBase: perBaseInDim,
-            baseUom: b.base,
-            reason,
+            perBase: pb.perBase,
+            baseUom: pb.baseUom,
+            reason: priceReason(),
           }),
-        // T4 §3: success message closes over the server's twins count
-        // so the "applied to N matching items" wording stays. The
-        // response shape is the same the old inline save read; the
-        // narrow cast stays here, not inside the hook.
         successMessage: (d) => {
           const twins = readTwins(d);
           setLastTwins(twins);
@@ -457,30 +521,91 @@ export function PackOverrideBlock({
       return;
     }
 
-    const body: Record<string, unknown> = {
-      itemId: item.id,
-      catchWeight,
-      billedUnit: billedUnit.trim() || null,
-      note: note.trim() || null,
-    };
-    if (catchWeight) {
-      body.perLb = perLb;
-    } else {
-      body.qty = qty;
-      body.size = size;
-      body.uom = uom;
+    // Branches 3 + 4: pack dirty. One POST for pack; then price only
+    // when caseField also changed.
+    if (packDirty && !caseFieldChanged) {
+      await runSave({
+        op: () =>
+          postJson("/api/review/set-pack-override", {
+            itemId: item.id,
+            catchWeight: false,
+            qty,
+            size,
+            uom,
+            billedUnit: billedUnit.trim() || null,
+            note: note.trim() || null,
+          }),
+        successMessage: (d) => {
+          const twins = readTwins(d);
+          setLastTwins(twins);
+          return twins > 0
+            ? `Saved: pack override (applied to ${fmtCount(twins + 1)} matching items)`
+            : "Saved: pack override";
+        },
+        onDone,
+      });
+      return;
     }
-    await runSave({
-      op: () => postJson("/api/review/set-pack-override", body),
-      successMessage: (d) => {
-        const twins = readTwins(d);
-        setLastTwins(twins);
-        return twins > 0
-          ? `Saved: pack override (applied to ${fmtCount(twins + 1)} matching items)`
-          : "Saved: pack override";
-      },
-      onDone,
-    });
+
+    // Branch 5: pack and price both. Two POSTs; the lib nests the
+    // price into the just-saved pack (setVendorItemPriceOverride at
+    // reviewWrites.ts:3236-3239 reads item.pack_override after the
+    // pack POST landed and composes). No route change.
+    if (packDirty && caseFieldChanged) {
+      const packRes = await postJson("/api/review/set-pack-override", {
+        itemId: item.id,
+        catchWeight: false,
+        qty,
+        size,
+        uom,
+        billedUnit: billedUnit.trim() || null,
+        note: note.trim() || null,
+      });
+      if (!packRes.ok) {
+        // Pack failed - don't touch price. Route the failure through
+        // runSave so the UI reads the same as a pack-only failure.
+        await runSave({
+          op: async () => packRes,
+          successMessage: () => "",
+          onDone,
+        });
+        return;
+      }
+      const packTwins = readTwins(packRes.data);
+      // Pack landed. Any failure past this point is "pack saved,
+      // price not" per T6 ruling 1.
+      setPartialPackSaved(true);
+      const pb = perBaseFromCase();
+      if (!pb) {
+        // Shouldn't happen (caseFieldChanged with valid preview
+        // implies pb), but be defensive: leave the editor open.
+        return;
+      }
+      const priceRes = await runSave({
+        op: () =>
+          postJson("/api/review/set-price-override", {
+            itemId: item.id,
+            perBase: pb.perBase,
+            baseUom: pb.baseUom,
+            reason: priceReason(),
+          }),
+        successMessage: (d) => {
+          const priceTwins = readTwins(d);
+          const total = Math.max(packTwins, priceTwins);
+          setLastTwins(total);
+          return total > 0
+            ? `Saved: pack and price override (applied to ${fmtCount(total + 1)} matching items)`
+            : "Saved: pack and price override";
+        },
+        onDone,
+      });
+      if (priceRes.ok) {
+        // Both landed; clear the partial flag so the next edit is
+        // clean state.
+        setPartialPackSaved(false);
+      }
+      return;
+    }
   }
 
   // "Read as" row: dynamic label + body.
@@ -589,8 +714,38 @@ export function PackOverrideBlock({
     }
   }
 
+  // T6 item 5: the editor sits inside a <form> so Enter in any
+  // field submits (saves when the form is valid). Esc closes the
+  // editor row (ask first if dirty, same registry the panel uses).
+  function tryCloseEditor() {
+    if (busy) return;
+    if (dirty) {
+      // Panel's useDirtyEditor registration above fires resetDrafts
+      // on discard via the one Discard-ask. Here we just close; the
+      // panel's own Esc handler owns the ask flow so pressing Esc
+      // inside a field bubbles up and the panel handles it.
+      if (onCancel) onCancel();
+      return;
+    }
+    if (onCancel) onCancel();
+  }
   return (
-    <div className="kf-ipanel__editor" aria-label="Pack and price editor">
+    <form
+      className="kf-ipanel__editor"
+      aria-label="Pack and price editor"
+      noValidate
+      onSubmit={(e) => {
+        e.preventDefault();
+        save();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          tryCloseEditor();
+        }
+      }}
+    >
       {/* N8 §1f: segmented mode toggle on the left, invoice-reads on
           the right, same baseline. */}
       <div className="kf-ipanel__editor-toprow">
@@ -743,40 +898,28 @@ export function PackOverrideBlock({
               </select>
             </label>
           </div>
+          {/* T6 item 5: "Price on the invoice" is a text input, not a
+              select. It opens holding the case price in use today
+              (defaultCaseFieldStr). A row of "Prices on file:"
+              shortcut buttons below fills it with catalog / billed /
+              avg values. Editing the field after a shortcut clears
+              the hint so the auto-reason falls back to the typed
+              phrase. */}
           <div className="kf-ipanel__editor-grid kf-ipanel__editor-grid--2">
             <label className="kf-ipanel__editor-field">
-              Case price
-              {(() => {
-                const options: Array<{ src: "catalog" | "billed" | "avg"; label: string; v: number }> = [];
-                if (catalogV != null) options.push({ src: "catalog", label: `${fmtUsd(catalogV)} - catalog`, v: catalogV });
-                if (billedV != null) options.push({ src: "billed", label: `${fmtUsd(billedV)} - billed, latest invoice line`, v: billedV });
-                if (avgV != null) options.push({ src: "avg", label: `${fmtUsd(avgV)} - invoice average`, v: avgV });
-                if (options.length >= 2) {
-                  return (
-                    <select
-                      value={caseSrc ?? options[0].src}
-                      onChange={(e) =>
-                        setCaseSrc(e.target.value as "catalog" | "billed" | "avg")
-                      }
-                      disabled={busy}
-                    >
-                      {options.map((o) => (
-                        <option key={o.src} value={o.src}>{o.label}</option>
-                      ))}
-                    </select>
-                  );
-                }
-                if (options.length === 1) {
-                  return (
-                    <div className="kf-ipanel__editor-read" style={{ paddingTop: 6 }}>{options[0].label}</div>
-                  );
-                }
-                return (
-                  <div className="kf-ipanel__editor-read" style={{ paddingTop: 6 }}>
-                    none - pack will save, per-unit will be blank
-                  </div>
-                );
-              })()}
+              Price on the invoice
+              <input
+                type="text"
+                inputMode="decimal"
+                autoComplete="off"
+                value={caseFieldStr}
+                onChange={(e) => {
+                  setCaseFieldStr(e.target.value);
+                  setCaseSrcHint(null);
+                }}
+                placeholder="e.g. 298.75"
+                disabled={busy}
+              />
             </label>
             <label className="kf-ipanel__editor-field">
               Note (optional)
@@ -789,6 +932,50 @@ export function PackOverrideBlock({
               />
             </label>
           </div>
+          {(catalogV != null || billedV != null || avgV != null) ? (
+            <div className="kf-known">
+              <span className="kf-word">Prices on file:</span>
+              {catalogV != null ? (
+                <button
+                  type="button"
+                  className="kf-rowlink"
+                  onClick={() => {
+                    setCaseFieldStr(catalogV.toFixed(2));
+                    setCaseSrcHint("catalog");
+                  }}
+                  disabled={busy}
+                >
+                  catalog {fmtUsd(catalogV)}
+                </button>
+              ) : null}
+              {billedV != null ? (
+                <button
+                  type="button"
+                  className="kf-rowlink"
+                  onClick={() => {
+                    setCaseFieldStr(billedV.toFixed(2));
+                    setCaseSrcHint("billed");
+                  }}
+                  disabled={busy}
+                >
+                  billed {fmtUsd(billedV)}
+                </button>
+              ) : null}
+              {avgV != null ? (
+                <button
+                  type="button"
+                  className="kf-rowlink"
+                  onClick={() => {
+                    setCaseFieldStr(avgV.toFixed(2));
+                    setCaseSrcHint("avg");
+                  }}
+                  disabled={busy}
+                >
+                  invoice average {fmtUsd(avgV)}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           {bigGap ? (
             <div className="kf-ipanel__editor-foot">catalog and billed disagree by more than 25%</div>
           ) : null}
@@ -842,8 +1029,40 @@ export function PackOverrideBlock({
           );
         })() : null}
 
-      {/* Actions - right-aligned Cancel + Save. */}
+      {/* T6 ruling 1 partial-save sentence: the pack saved but the
+          price did not. The editor stays open with the price still
+          in the field so the next press sends the price alone. */}
+      {partialPackSaved && error ? (
+        <div className="kf-ipanel__editor-foot" role="alert">
+          The pack was saved. The price was not. {error}
+        </div>
+      ) : null}
+
+      {/* T6 item 5: Cancel + Save on one row. Save label follows the
+          action: "Save price" for a price-only or pack-pristine save,
+          "Save pack" for a pack-only save, "Save pack and price" when
+          both. Submit type so Enter in any field saves. */}
       <div className="kf-ipanel__editor-actions">
+        {/* T6 item 5: when Save is disabled, a short why-sentence
+            reads beside it (reference words). "Nothing has changed
+            yet." is the floor. */}
+        {!busy && !readyToSave ? (
+          <span className="kf-ipanel__editor-why">
+            {!dirty
+              ? "Nothing has changed yet."
+              : catchWeight
+                ? !perLbValid
+                  ? "Enter a price per lb."
+                  : "Nothing has changed yet."
+                : !qtyValid
+                  ? "Enter how many in a case."
+                  : !sizeValid
+                    ? "Enter the size of each."
+                    : !uomToBase(uom)
+                      ? "Pick a unit."
+                      : "Nothing has changed yet."}
+          </span>
+        ) : null}
         <button
           type="button"
           className="kf-btn kf-btn--ghost kf-btn--sm"
@@ -856,20 +1075,21 @@ export function PackOverrideBlock({
           Cancel
         </button>
         <button
-          type="button"
+          type="submit"
           className={`kf-btn kf-btn--primary kf-btn--sm${busy ? " is-busy" : ""}`}
           disabled={busy || !readyToSave}
-          onClick={save}
         >
-          {/* S6: label follows the action. Pack pristine + source
-              moved -> price-override write ("Save price"). */}
           {busy
             ? "Saving..."
-            : !catchWeight && packPristine && caseSrcChanged && !catchWeightChanged
-              ? "Save price"
-              : "Save pack"}
+            : catchWeight
+              ? "Save pack"
+              : packPristine && !catchWeightChanged && caseFieldChanged
+                ? "Save price"
+                : caseFieldChanged
+                  ? "Save pack and price"
+                  : "Save pack"}
         </button>
-        <SaveFlash savedAt={savedAt} error={error} />
+        <SaveFlash savedAt={savedAt} error={partialPackSaved ? null : error} />
       </div>
 
       {lastTwins != null && lastTwins > 0 ? (
@@ -880,7 +1100,7 @@ export function PackOverrideBlock({
       {item.gtin ? (
         <div className="kf-ipanel__editor-foot">GTIN {item.gtin}</div>
       ) : null}
-    </div>
+    </form>
   );
 }
 

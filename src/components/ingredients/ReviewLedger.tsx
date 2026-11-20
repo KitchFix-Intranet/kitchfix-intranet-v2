@@ -147,6 +147,15 @@ export async function ReviewLedger({ ingredients }: { ingredients: Ingredient[] 
     for (const id of asStringArray(e.after?.item_ids)) mentionedIds.add(id);
     for (const row of extractItemObjects(e.after?.items)) mentionedIds.add(row.item_id);
     for (const row of extractItemObjects(e.before?.items)) mentionedIds.add(row.item_id);
+    // T6 ruling 10: pre-T4 item-scoped events (review_archive /
+    // review_oneoff / review_notfood / review_keep_separate /
+    // review_undo) wrote one row per item with no after.item_ids or
+    // after.items - the only link to the item is event.entity_id with
+    // entity_type='vendor_item'. The /api/review/ledger paging route
+    // already includes these; the first-page loader was missing them,
+    // so 8 of 25 rows on production read "Item" though the item
+    // exists. Add the entity id here so one helper serves both pages.
+    if (e.entity_type === "vendor_item") mentionedIds.add(e.entity_id);
   }
   const currentShape = new Map<string, {
     status: string | null;

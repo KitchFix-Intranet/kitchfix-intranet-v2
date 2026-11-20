@@ -439,17 +439,44 @@ export function ReviewCard({
         onLeaveStart={startLeaveAnimation}
       />
 
-      {panelOpen ? (
-        <DetailPanel
-          open={panelOpen}
-          onClose={() => setPanelOpen(null)}
-          ingredient={ingredientRow}
-          items={group.items}
-          parents={ingredients}
-          proposedName={group.proposedName}
-          proposedParent={group.proposedParent}
-        />
-      ) : null}
+      {panelOpen ? (() => {
+        // T6 item 8: Prev/Next step inside the group's own items, in
+        // the order the card draws them (dollar-ordered by the
+        // server). The counter reads "N of M". Null stepIndex hides
+        // the buttons (on an ingredient-mode open).
+        const stepIds = group.items.map((i) => i.id);
+        const stepIndex =
+          panelOpen.kind === "item" ? stepIds.indexOf(panelOpen.itemId) : -1;
+        const step = stepIndex >= 0
+          ? {
+              index: stepIndex,
+              total: stepIds.length,
+              onPrev:
+                stepIndex > 0
+                  ? () => setPanelOpen({ kind: "item", itemId: stepIds[stepIndex - 1] })
+                  : undefined,
+              onNext:
+                stepIndex < stepIds.length - 1
+                  ? () => setPanelOpen({ kind: "item", itemId: stepIds[stepIndex + 1] })
+                  : undefined,
+            }
+          : null;
+        return (
+          <DetailPanel
+            open={panelOpen}
+            onClose={() => setPanelOpen(null)}
+            ingredient={ingredientRow}
+            items={group.items}
+            parents={ingredients}
+            proposedName={group.proposedName}
+            proposedParent={group.proposedParent}
+            stepIndex={step?.index ?? null}
+            stepTotal={step?.total ?? null}
+            onPrev={step?.onPrev}
+            onNext={step?.onNext}
+          />
+        );
+      })() : null}
     </article>
   );
 }

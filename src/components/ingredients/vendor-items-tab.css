@@ -290,57 +290,45 @@
 }
 .kf-vi__phone-grid-right { text-align: right; }
 
-/* --- Item panel footer (R5) + 2 new closed rows ------------- */
-.kf-ipanel__footer-strip {
-  padding: var(--sp-sp-4) var(--sp-sp-5);
-  border-top: 1px solid var(--sp-line);
-  background: var(--sp-raise);
-  display: flex;
-  flex-direction: column;
+/* T6 ruling 2: the .kf-ipanel__footer-strip and its family retired.
+ * Archive and Mark one-off live in zone 1 as a Put-away row
+ * (.kf-ipanel__row--putaway); Restore rides in the away bar
+ * (.kf-ipanel__away) under the head. Both ride on existing
+ * primitives: the row uses .kf-ipanel__row's grid; the away bar
+ * is a small bar styled in drawer.css. The .kf-btn--soft rule
+ * below stays - the Put-away row uses it. */
+/* T6 ruling 1: Put-away row. Grid frame comes from
+ * .kf-ipanel__row above; this rule tightens the action layout so
+ * the two buttons sit on one line + a hint wraps below them. */
+.kf-ipanel__row--putaway .kf-ipanel__row-value {
   gap: var(--sp-sp-2);
 }
-.kf-ipanel__footer-label {
-  font-family: var(--sp-disp);
-  font-weight: 700;
-  font-size: var(--sp-t-micro);
-  letter-spacing: 1.5px;
-  text-transform: uppercase;
-  color: var(--sp-muted);
-}
-.kf-ipanel__footer-actions {
-  display: flex;
-  gap: var(--sp-sp-2);
+.kf-ipanel__putaway-actions {
+  display: inline-flex;
   flex-wrap: wrap;
+  gap: var(--sp-sp-2);
   align-items: center;
 }
-/* T4 ruling 8: sentence beside the disabled Archive / One-off buttons
- * on a linked item. Muted so it reads as context, not a warning. */
-.kf-ipanel__footer-note {
-  font-size: var(--sp-t-label);
-  /* Train 5a / ruling 9: --sp-ink-dim was never defined; land on
-   * --sp-body so nothing on screen shifts. --sp-muted misses the
-   * contrast floor at 13 px on white. */
-  color: var(--sp-body);
-  padding: 0 var(--sp-sp-2);
-}
-/* T4 R2 §4: in-page "What happens" ask for Restore. Shape mirrors
- * the Send back ask - one sentence then Restore / Cancel. */
-.kf-ipanel__footer-ask {
-  margin-top: var(--sp-sp-3);
-  padding: var(--sp-sp-3);
-  border: 1px solid var(--sp-line);
-  border-radius: var(--sp-r-card);
-  background: var(--sp-card);
-}
-.kf-ipanel__footer-ask-text {
-  margin: 0 0 var(--sp-sp-3);
-  font-size: var(--sp-t-body);
+/* T6 item 2: away bar. One sentence + optional Restore under the
+ * head. Scoped to the item panel so it does not reach into the
+ * Ingredients tab's price tile (which does not mount an item). */
+.kf-ipanel__away {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-sp-3);
+  padding: var(--sp-sp-3) var(--sp-sp-5);
+  background: var(--sp-raise);
+  border-bottom: 1px solid var(--sp-line-soft);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
   color: var(--sp-ink);
 }
-.kf-ipanel__footer-ask-actions {
-  display: flex;
-  gap: var(--sp-sp-2);
+.kf-ipanel__away-body { flex: 1 1 auto; min-width: 0; }
+.kf-ipanel__away-actions {
+  display: inline-flex;
   flex-wrap: wrap;
+  gap: var(--sp-sp-2);
   align-items: center;
 }
 .kf-btn--soft {

@@ -17,12 +17,15 @@
 // goes on the row's muted micro sub-line beneath the summary.
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtDate, fmtPackNumber, fmtPackNumbersInText, fmtUsd } from "@/lib/fmt";
 import { DIM_BY_UOM } from "@/lib/ingredients/pack";
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 import { ItemGradeBlock } from "./ItemGradeBlock";
 import { PackOverrideBlock } from "./PackOverrideBlock";
 import { PriceOverrideBlock } from "./PriceOverrideBlock";
+import { postJson, saveErrorSentence, undoViaEvent } from "./common";
 import { itemConfidenceWord, itemFacts } from "./itemFacts";
 // M2 §4B §2.7: ItemEachMeasureBlock is no longer mounted. The item-
 // side override is now CaseWeightBlock (case_weight_lb); the "One
@@ -144,11 +147,18 @@ export function PanelItemZone({
   ingredient,
   packHint,
   onDone,
+  showStatusActions = false,
 }: {
   item: ReviewGroupItem;
   ingredient: ReviewCardIngredient | null;
   packHint: PackHint | null;
   onDone: () => void;
+  // T6 ruling 1: Archive + Mark one-off render as one quiet "Put this
+  // item away" row at the end of zone 1, on Vendor items only, on a
+  // not-away item. The flag carries through from DetailPanel's
+  // showStatusActions prop (set by VendorItemsView; false on review
+  // card and Ingredients drawer).
+  showStatusActions?: boolean;
 }) {
   const [packOpen, setPackOpen] = useState(false);
   const [priceOpen, setPriceOpen] = useState(false);
@@ -351,7 +361,7 @@ export function PanelItemZone({
 
       {/* Row 4: Price override ---------------------------------- */}
       <div className="kf-ipanel__row">
-        <div className="kf-ipanel__row-label">Price override</div>
+        <div className="kf-ipanel__row-label">Price by hand</div>
         <div className="kf-ipanel__row-value">
           {item.priceManualOverride && item.perBase != null && item.perBaseUom ? (
             <div className="kf-ipanel__pack-summary">
@@ -386,6 +396,88 @@ export function PanelItemZone({
           </div>
         ) : null}
       </div>
+
+      {/* T6 ruling 1: Put this item away row. Vendor items only (the
+          showStatusActions flag). Only renders when the item is NOT
+          already put away - the away bar under the head carries the
+          Restore button for that state. Two routes stay unchanged:
+          /api/vendor-items/[id]/status with action=archive or
+          action=one-off. Undo rides in the toast per train 4. */}
+      {showStatusActions && !isAway(item) ? (
+        <PutAwayRow item={item} onDone={onDone} />
+      ) : null}
     </section>
+  );
+}
+
+// T6 ruling 1: isAway mirrors the server-side helper so this view
+// can decide what to render without a re-fetch. Matches the states
+// getVendorItemState emits.
+function isAway(item: ReviewGroupItem): boolean {
+  const s = item.state ?? "";
+  return s === "archived" || s === "one_off" || s === "not_food" || s === "duplicate";
+}
+
+function PutAwayRow({ item, onDone }: { item: ReviewGroupItem; onDone: () => void }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState<null | "archive" | "one-off">(null);
+  const [error, setError] = useState<string | null>(null);
+  const isLinked = (item.linkStatus ?? "") === "confirmed";
+
+  async function run(action: "archive" | "one-off", successCopy: string) {
+    if (busy) return;
+    setBusy(action);
+    setError(null);
+    const r = await postJson(`/api/vendor-items/${item.id}/status`, { action });
+    if (!r.ok) {
+      setError(saveErrorSentence(r) ?? "Nothing was saved.");
+      setBusy(null);
+      return;
+    }
+    const d = (r.data ?? {}) as { event_id?: string | null };
+    toast(successCopy, {
+      undo: d.event_id ? undoViaEvent(router, d.event_id) : undefined,
+    });
+    onDone();
+    setBusy(null);
+  }
+
+  return (
+    <div className="kf-ipanel__row kf-ipanel__row--putaway">
+      <div className="kf-ipanel__row-label">Put this item away</div>
+      <div className="kf-ipanel__row-value">
+        <div className="kf-ipanel__putaway-actions">
+          <button
+            type="button"
+            className={`kf-btn kf-btn--soft kf-btn--sm${busy === "archive" ? " is-busy" : ""}`}
+            disabled={busy !== null || isLinked}
+            onClick={() => run("archive", "Archived")}
+            title={isLinked ? "Send this item back to review first." : undefined}
+          >
+            {busy === "archive" ? "Saving..." : "Archive"}
+          </button>
+          <button
+            type="button"
+            className={`kf-btn kf-btn--soft kf-btn--sm${busy === "one-off" ? " is-busy" : ""}`}
+            disabled={busy !== null || isLinked}
+            onClick={() => run("one-off", "Marked one-off")}
+            title={isLinked ? "Send this item back to review first." : undefined}
+          >
+            {busy === "one-off" ? "Saving..." : "Mark one-off"}
+          </button>
+        </div>
+        {isLinked ? (
+          <div className="kf-ipanel__row-hint" role="note">
+            Linked to an ingredient. Send it back to review first.
+          </div>
+        ) : null}
+        {error ? (
+          <div className="kf-dpn__flash kf-dpn__flash--err" role="alert">
+            {error}
+          </div>
+        ) : null}
+      </div>
+      <div className="kf-ipanel__row-action" />
+    </div>
   );
 }

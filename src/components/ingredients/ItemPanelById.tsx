@@ -27,13 +27,19 @@ export function ItemPanelById({
   itemId,
   onClose,
   showStatusActions = false,
+  neighborIds,
+  onStep,
 }: {
   itemId: string | null;
   onClose: () => void;
-  // N13 R5: Archive + Mark one-off footer renders ONLY when the panel
-  // is opened from the Vendor items tab. Default off; the review
-  // queue and the Ingredients tab never show it.
+  // N13 R5 + T6 ruling 1: Archive + Mark one-off render as a Put-away
+  // row in zone 1, Vendor-items-only. Review queue and Ingredients
+  // tab leave this false.
   showStatusActions?: boolean;
+  // T6 item 8: the surface's own list for Prev/Next. Null or
+  // length <= 1 hides the buttons.
+  neighborIds?: string[] | null;
+  onStep?: (nextId: string) => void;
 }) {
   const [state, setState] = useState<
     | { phase: "idle" }
@@ -107,6 +113,10 @@ export function ItemPanelById({
 
   if (state.phase === "ready") {
     const { item, ingredient, parentOptions } = state.data;
+    // T6 item 8: Prev/Next within the surface's neighborIds list.
+    const idx = neighborIds && onStep ? neighborIds.indexOf(item.id) : -1;
+    const total = neighborIds?.length ?? 0;
+    const showSteps = idx >= 0 && total > 1 && !!onStep;
     return (
       <DetailPanel
         open={{ kind: "item", itemId: item.id }}
@@ -120,6 +130,18 @@ export function ItemPanelById({
         proposedParent={null}
         onInvalidate={() => setNonce((n) => n + 1)}
         showStatusActions={showStatusActions}
+        stepIndex={showSteps ? idx : null}
+        stepTotal={showSteps ? total : null}
+        onPrev={
+          showSteps && idx > 0 && onStep
+            ? () => onStep(neighborIds![idx - 1])
+            : undefined
+        }
+        onNext={
+          showSteps && idx < total - 1 && onStep
+            ? () => onStep(neighborIds![idx + 1])
+            : undefined
+        }
       />
     );
   }

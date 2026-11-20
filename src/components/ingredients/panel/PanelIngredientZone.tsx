@@ -261,6 +261,79 @@ export function PanelIngredientZone({
   // M2 §4B part 2: measureFoot removed. PanelMeasuresBlock owns the
   // saved-state copy below its own list rows.
 
+  // T6 item 6 + ruling 5: two modes.
+  // - item mode (open.kind="item"): only Costed per + Measures +
+  //   "Open ingredient" with the reference's sentence. Name, Category,
+  //   Allergens, Yield, Recipes-can-use chips are hidden; they are
+  //   edited on the ingredient panel reachable via Open ingredient.
+  // - ingredient mode (open.kind="ingredient", item is null): the full
+  //   editor stands as it did in T5b; nothing changes in this train.
+  // Branch on item != null: that is the only reliable signal the
+  // component has for the surface.
+  const isItemMode = item != null;
+
+  if (isItemMode) {
+    const targetHref = ingredient.resale
+      ? `/stockpot/ingredients/retail?open=${encodeURIComponent(ingredient.id)}`
+      : `/stockpot/ingredients/ingredients?open=${encodeURIComponent(ingredient.id)}`;
+    return (
+      <section className="kf-ipanel__zone kf-ipanel__zone--ing" aria-label={`How it prices on ${ingredient.name}`}>
+        <header className="kf-ipanel__zone-head">
+          <span className="kf-ipanel__zone-head-title">
+            How it prices on
+            <span className="kf-ipanel__zone-head-title-suffix"> &middot; {ingredient.name}</span>
+          </span>
+          <span className="kf-ipanel__zone-head-sub">
+            Changes here apply to every item linked to it.
+          </span>
+        </header>
+
+        {/* Costed per - saves at once with train 2's Undo. */}
+        <div className="kf-ipanel__row kf-ipanel__row--split kf-ipanel__row--costed" ref={costedPerRef}>
+          <div className="kf-ipanel__row-label">Costed per</div>
+          <BaseUnitControl
+            row={{ id: ingredient.id, name: ingredient.name, baseUnit: ingredient.base_unit }}
+            onSaved={onDone}
+          />
+          <div className="kf-ipanel__row-hint">How recipes count this ingredient.</div>
+        </div>
+
+        {/* Measures block, in-place. Same component used by the full
+            ingredient panel. */}
+        <PanelMeasuresBlock
+          ingredient={ingredient}
+          measures={measuresForBlock}
+          suggestionCandidates={suggestionCandidates}
+          itemsReachBase={itemsReachBase}
+          openAddForUom={addForUom}
+          openAddPrefillQty={addPrefillQty}
+          openAddPickUnit={addPickUnit}
+          onAfterAdd={() => { setAddForUom(null); setAddPrefillQty(null); setAddPickUnit(false); }}
+          onDone={onDone}
+        />
+
+        {/* Open ingredient link out. T6 ruling 3: the ?open= query key
+            is read by the Ingredients + Retail tabs on load. Writing
+            the key is train 7's job. */}
+        <div className="kf-ipanel__row">
+          <div className="kf-ipanel__row-label">Ingredient</div>
+          <div className="kf-ipanel__row-value">
+            <a
+              className="kf-btn kf-btn--line kf-btn--sm"
+              href={targetHref}
+            >
+              Open ingredient
+            </a>
+            <div className="kf-ipanel__row-hint">
+              Name, category, allergens and yield are edited there.
+            </div>
+          </div>
+          <div className="kf-ipanel__row-action" />
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="kf-ipanel__zone kf-ipanel__zone--ing" aria-label="Ingredient">
       <header className="kf-ipanel__zone-head">

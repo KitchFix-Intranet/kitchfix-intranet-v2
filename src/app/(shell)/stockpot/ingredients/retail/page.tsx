@@ -10,7 +10,17 @@ export const dynamic = "force-dynamic";
 // slug is /retail; mode value is "resale"; column is "resale".
 // One workbench, two consumers; no new component tree, no new
 // query shape - just a server-side filter on pr_ingredients.resale.
-export default async function Page() {
+// T6 ruling 3: ?open=<ingredient id> reads the same query key as
+// the Ingredients tab (the two tabs share one workbench). Read-only
+// in this train; train 7 writes.
+export default async function Page({
+  searchParams,
+}: {
+  searchParams?: Promise<{ open?: string | string[] }>;
+}) {
   await requireOwnerPage();
-  return <IngredientMasters mode="resale" />;
+  const params = (await searchParams) ?? {};
+  const raw = Array.isArray(params.open) ? params.open[0] : params.open;
+  const openId = typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
+  return <IngredientMasters mode="resale" openId={openId} />;
 }

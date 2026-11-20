@@ -409,11 +409,17 @@ export function VendorItemsView(props: VendorItemsViewProps) {
         )}
       </section>
 
-      {/* --- Item panel (opens on row click) ----------------- */}
+      {/* --- Item panel (opens on row click) -----------------
+          T6 item 8 + ruling 4: Prev/Next steps within the current
+          page's rows in display order. The step handler replaces the
+          `drawer` value in the URL via router.replace so Back still
+          closes the panel in one press (no history entry per step). */}
       <ItemPanelById
         itemId={liveOpenId}
         onClose={closePanel}
         showStatusActions
+        neighborIds={props.rows.map((r) => r.id)}
+        onStep={(nextId) => push({ drawer: nextId }, "replace")}
       />
     </div>
   );

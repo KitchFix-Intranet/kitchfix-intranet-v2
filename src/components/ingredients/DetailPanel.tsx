@@ -69,6 +69,10 @@ export function DetailPanel({
   proposedParent,
   onInvalidate,
   showStatusActions = false,
+  stepIndex = null,
+  stepTotal = null,
+  onPrev,
+  onNext,
 }: {
   open: Exclude<DetailPanelOpen, null>;
   onClose: () => void;
@@ -94,14 +98,26 @@ export function DetailPanel({
   // change the data the wrapper fetched. ReviewCard leaves it
   // undefined and router.refresh() handles the server path.
   onInvalidate?: () => void;
-  // N13 R5: Archive + Mark one-off footer renders ONLY when the
-  // panel is opened from the Vendor items tab. Default off.
+  // N13 R5 + T6 ruling 1: Archive + Mark one-off now ride at the end
+  // of zone 1 as a "Put this item away" row (not the retired footer).
+  // The flag carries through to PanelItemZone unchanged: true only
+  // on the Vendor items surface.
   showStatusActions?: boolean;
+  // T6 item 8 + ruling 4: Prev/Next within the surface's own list.
+  // Null index or <= 1 list disables both. Steps run within the
+  // caller's list; the panel never crosses a page boundary.
+  stepIndex?: number | null;
+  stepTotal?: number | null;
+  onPrev?: () => void;
+  onNext?: () => void;
 }) {
   const router = useRouter();
   const labelId = useId();
   const asideRef = useRef<HTMLDivElement>(null);
-  const closeBtnRef = useRef<HTMLButtonElement>(null);
+  // T6 ruling 9: on open, focus goes to the panel's name heading
+  // (made focusable via tabIndex=-1). A screen reader then hears what
+  // opened and the first Tab lands on the first real control.
+  const headNameRef = useRef<HTMLHeadingElement>(null);
   const [closing, setClosing] = useState(false);
   // Pack-hint from PanelAttention's "Fix the pack" button; threaded
   // into PanelItemZone which forces the Pack and price row open.
@@ -179,7 +195,11 @@ export function DetailPanel({
   }, [discardAskOpen]);
 
   useEffect(() => {
-    closeBtnRef.current?.focus();
+    // T6 ruling 9: focus the name heading, not the Close button, so
+    // a screen reader hears what opened. The heading is marked
+    // tabIndex=-1 in PanelHead so this programmatic focus works
+    // without adding it to the Tab order.
+    headNameRef.current?.focus();
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const onKey = (e: KeyboardEvent) => {
@@ -243,16 +263,17 @@ export function DetailPanel({
         aria-labelledby={labelId}
       >
       <DirtyScopeProvider scope={PANEL_SCOPE}>
-        {/* T8: PanelHead and PanelStrip share one sticky wrapper so
-            the four summary cells stay on screen during a scroll.
-            Costs about 48 px of pinned real estate (head + strip).
-            T7's thin facts line was removed; it was a workaround
-            for this same problem and reads worse than the labelled
-            block. The wrapper is item-mode-aware through the strip's
-            own render guard: ingredient mode gets a head-only wrapper. */}
+        {/* T6 item 1: only the head (vendor + # line, name, status,
+            step buttons, close) is pinned. The four facts strip moved
+            BELOW the pin so it scrolls with the panel. This frees
+            the first screen for the editors and keeps the panel at
+            about 1.2 screens for an ordinary linked item. The pin
+            class scope still gates the item-panel-only shrink rules
+            in drawer.css; the Ingredients tab's price tile
+            (.kf-ingp__dzone-strip, outside any pin) is unchanged. */}
         <div className="kf-ipanel__pin">
           <PanelHead
-            ref={closeBtnRef}
+            ref={headNameRef}
             labelId={labelId}
             kind={open.kind}
             item={item}
@@ -260,12 +281,24 @@ export function DetailPanel({
             proposedName={proposedName}
             attentionCount={attentionCounts.total}
             onClose={tryClose}
+            stepIndex={stepIndex}
+            stepTotal={stepTotal}
+            onPrev={onPrev}
+            onNext={onNext}
           />
-
-          {open.kind === "item" && item ? (
-            <PanelStrip item={item} ingredient={ingredient} />
-          ) : null}
         </div>
+
+        {/* T6 item 2: when an item is put away, one bar under the head
+            says which + offers Restore (where train 4 allows it) or
+            "Open that item" for a duplicate. Shown on every surface
+            (not just Vendor items); replaces the retired footer. */}
+        {open.kind === "item" && item && itemIsAway(item) ? (
+          <AwayBar item={item} onDone={onDone} />
+        ) : null}
+
+        {open.kind === "item" && item ? (
+          <PanelStrip item={item} ingredient={ingredient} />
+        ) : null}
 
         {open.kind === "item" && item ? (
           <PanelAttention
@@ -285,12 +318,13 @@ export function DetailPanel({
           />
         ) : null}
 
-        {open.kind === "item" && item ? (
+        {open.kind === "item" && item && !itemIsAway(item) ? (
           <PanelItemZone
             item={item}
             ingredient={ingredient}
             packHint={packHint}
             onDone={onDone}
+            showStatusActions={showStatusActions}
           />
         ) : null}
 
@@ -328,16 +362,10 @@ export function DetailPanel({
           onDone={onDone}
         />
 
-        {showStatusActions && item ? (
-          <ItemStatusFooter item={item} onDone={() => {
-            // N13 R5: after a change close the panel and refresh the
-            // underlying list. router.refresh() picks up the status
-            // flip from the server-rendered VendorItemsPage.
-            close();
-            router.refresh();
-            if (onInvalidate) onInvalidate();
-          }} />
-        ) : null}
+        {/* T6 ruling 2: the footer is removed entirely. Archive and
+            Mark one-off ride at the end of zone 1 as a "Put this
+            item away" row (via showStatusActions); Restore rides in
+            the away bar under the head on every surface. */}
 
       </DirtyScopeProvider>
         {discardAskOpen ? (
@@ -379,127 +407,98 @@ export function DetailPanel({
   );
 }
 
-// T4 §5 + §7: inline footer with Archive, Mark one-off and Restore.
-// Each button routes through /api/vendor-items/[id]/status with the
-// three allowed actions; the server runs them through markArchived /
-// markOneOff / restoreVendorItem so the full shape (status +
-// link_status + link_reason) is set and the decision event carries a
-// before snapshot Undo can read.
+// T6 item 2: when the item is put away, one bar under the head says
+// what it is in plain words plus Restore (where train 4's canRestore
+// allows it) or "Open that item" for a duplicate. The pack / grade /
+// price-by-hand editors below do not render for an away item.
 //
-// T4 R2 §3: Archive-disabled / One-off-disabled / Restore-visible
-// branch on `item.state` and `item.canRestore`, which the server
-// computed via getVendorItemState / canRestore. The panel does not
-// read `item.status` / `item.isFood` / `item.link_reason` directly.
-//
-// T4 R2 §4: Restore uses the in-page "What happens" ask (same shape
-// as Send back): one sentence, then Restore + Cancel. Archive and
-// One-off act at once with Undo in the toast.
-function ItemStatusFooter({ item, onDone }: { item: ReviewGroupItem; onDone: () => void }) {
-  const [busy, setBusy] = useState<null | "archive" | "one-off" | "restore">(null);
-  const [error, setError] = useState<string | null>(null);
-  // T4 R2 §4: Restore uses the in-page ask. Open on click; the ask
-  // carries the "What happens" sentence and Restore / Cancel.
-  const [restoreAsk, setRestoreAsk] = useState(false);
+// Replaces the retired .kf-ipanel__footer-strip. The two "put this
+// item away" actions (Archive, Mark one-off) moved into zone 1 as a
+// row (PutAwayRow in PanelItemZone), Vendor-items-only, not-away
+// only. Restore uses the same /api/vendor-items/[id]/status route
+// train 4 wired, with the in-page ask unchanged.
+function itemIsAway(item: ReviewGroupItem): boolean {
+  const s = item.state ?? "";
+  return s === "archived" || s === "one_off" || s === "not_food" || s === "duplicate";
+}
+
+function AwayBar({ item, onDone }: { item: ReviewGroupItem; onDone: () => void }) {
   const router = useRouter();
-
-  // T4 R2 §3: the state the server resolved. Both old and new shapes
-  // land on these labels.
+  const [busy, setBusy] = useState<null | "restore">(null);
+  const [error, setError] = useState<string | null>(null);
+  const [restoreAsk, setRestoreAsk] = useState(false);
   const state = item.state ?? "";
-  const isLinked = (item.linkStatus ?? "") === "confirmed";
-  const isArchived = state === "archived";
-  const isOneOff = state === "one_off";
   const showRestore = item.canRestore === true;
-
-  async function run(action: "archive" | "one-off" | "restore", successCopy: string) {
+  const words =
+    state === "archived"
+      ? "Archived. Put away as a mistake or a dead item."
+      : state === "one_off"
+        ? "One-off. Bought once and kept out of recipes."
+        : state === "not_food"
+          ? "Not food. Left out of food spend and out of recipes."
+          : state === "duplicate"
+            ? "Duplicate. Invoices for this item are counted on another item."
+            : "Put away.";
+  async function doRestore() {
     if (busy) return;
-    setBusy(action);
+    setBusy("restore");
     setError(null);
-    const r = await postJson(`/api/vendor-items/${item.id}/status`, { action });
+    const r = await postJson(`/api/vendor-items/${item.id}/status`, { action: "restore" });
     if (!r.ok) {
       setError(saveErrorSentence(r) ?? "Nothing was saved.");
       setBusy(null);
       return;
     }
     const d = (r.data ?? {}) as { event_id?: string | null };
-    toast(successCopy, {
+    toast("Restored - back to not matched yet", {
       undo: d.event_id ? undoViaEvent(router, d.event_id) : undefined,
     });
-    onDone();
-    setBusy(null);
-  }
-
-  async function doRestore() {
     setRestoreAsk(false);
-    await run("restore", "Restored - back to not matched yet");
+    setBusy(null);
+    onDone();
   }
-
   return (
-    <div className="kf-ipanel__footer-strip">
-      <span className="kf-ipanel__footer-label">Not for recipes</span>
-      <div className="kf-ipanel__footer-actions">
-        <button
-          type="button"
-          className={`kf-btn kf-btn--soft kf-btn--sm${busy === "archive" ? " is-busy" : ""}`}
-          disabled={busy !== null || isLinked || isArchived}
-          onClick={() => run("archive", "Archived")}
-          title={isLinked ? "Send this item back to review first." : undefined}
-        >
-          Archive
-        </button>
-        <button
-          type="button"
-          className={`kf-btn kf-btn--soft kf-btn--sm${busy === "one-off" ? " is-busy" : ""}`}
-          disabled={busy !== null || isLinked || isOneOff}
-          onClick={() => run("one-off", "Marked one-off")}
-          title={isLinked ? "Send this item back to review first." : undefined}
-        >
-          Mark one-off
-        </button>
-        {showRestore ? (
-          <button
-            type="button"
-            className={`kf-btn kf-btn--soft kf-btn--sm${busy === "restore" ? " is-busy" : ""}`}
-            disabled={busy !== null || restoreAsk}
-            onClick={() => setRestoreAsk(true)}
-            title="Put this item back to not matched yet; it can be matched again."
-          >
-            Restore
-          </button>
-        ) : null}
-        {isLinked ? (
-          <span className="kf-ipanel__footer-note" role="note">
-            Linked to an ingredient. Send it back to review first.
-          </span>
-        ) : null}
-        {error ? (
-          <span className="kf-dpn__flash kf-dpn__flash--err" role="alert">
-            {error}
-          </span>
-        ) : null}
-      </div>
-      {restoreAsk ? (
-        <div className="kf-ipanel__footer-ask" role="alertdialog" aria-label="Restore?">
-          <p className="kf-ipanel__footer-ask-text">
-            This item goes back to not matched yet and can be matched again.
-          </p>
-          <div className="kf-ipanel__footer-ask-actions">
+    <div className="kf-ipanel__away" role="status">
+      <div className="kf-ipanel__away-body">{words}</div>
+      {showRestore ? (
+        <div className="kf-ipanel__away-actions">
+          {restoreAsk ? (
+            <>
+              <span className="kf-ipanel__row-hint">
+                This item goes back to not matched yet and can be matched again.
+              </span>
+              <button
+                type="button"
+                className={`kf-btn kf-btn--primary kf-btn--sm${busy === "restore" ? " is-busy" : ""}`}
+                disabled={busy !== null}
+                onClick={doRestore}
+              >
+                {busy === "restore" ? "Saving..." : "Restore"}
+              </button>
+              <button
+                type="button"
+                className="kf-btn kf-btn--line kf-btn--sm"
+                disabled={busy !== null}
+                onClick={() => setRestoreAsk(false)}
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
             <button
               type="button"
-              className={`kf-btn kf-btn--primary kf-btn--sm${busy === "restore" ? " is-busy" : ""}`}
+              className={`kf-btn kf-btn--line kf-btn--sm${busy === "restore" ? " is-busy" : ""}`}
               disabled={busy !== null}
-              onClick={doRestore}
+              onClick={() => setRestoreAsk(true)}
             >
-              {busy === "restore" ? "Saving..." : "Restore"}
+              Restore
             </button>
-            <button
-              type="button"
-              className="kf-btn kf-btn--line kf-btn--sm"
-              disabled={busy !== null}
-              onClick={() => setRestoreAsk(false)}
-            >
-              Cancel
-            </button>
-          </div>
+          )}
+        </div>
+      ) : null}
+      {error ? (
+        <div className="kf-dpn__flash kf-dpn__flash--err" role="alert">
+          {error}
         </div>
       ) : null}
     </div>
