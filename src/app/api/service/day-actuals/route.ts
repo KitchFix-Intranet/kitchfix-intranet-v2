@@ -29,6 +29,7 @@ import { clearReviewStateForDays } from "@/lib/sc/scReviewState";
 import { canWriteForAccount } from "@/lib/sc/access/canWriteForAccount";
 import { ActualCountValidationError, coerceActualCount } from "@/lib/sc/dayActuals/coerceActualCount";
 import { saveActuals, deleteDayActuals } from "@/lib/sc/dayActuals/saveActuals";
+import { isMarkedNotServed } from "@/lib/sc/dayActuals/notServedCheck";
 import { buildDayToken } from "@/lib/sc/dayActuals/dayToken";
 import { resolveDayState } from "@/lib/sc/calendar/dayState";
 import type { ViewerLite } from "@/lib/sc/calendar/types";
@@ -107,6 +108,12 @@ export async function POST(req: Request): Promise<Response> {
   const clash = await tokenMismatchResponse(sb, accountKey, serviceDate, dayToken, acceptClash);
   if (clash) return clash;
 
+  // Fix 4: capture pre-save shape so the "Marked not served" note
+  // fires only on the save that FLIPS a day to not-served. Needs
+  // the projections set + the current actuals.
+  const preShape = await loadNotServedShape(sb, accountKey, serviceDate);
+  const wasAlreadyNotServed = isMarkedNotServed(preShape);
+
   if (touched.length > 0) {
     try { await saveActuals(sb, accountKey, serviceDate, touched, email); }
     catch (e) {
@@ -119,7 +126,51 @@ export async function POST(req: Request): Promise<Response> {
   try { await clearReviewStateForDays(accountKey, [serviceDate]); }
   catch (err) { console.error("[day-actuals POST] clearReviewStateForDays failed:", err); }
 
+  // Fix 4: write the note only when (every projected line on this
+  // day is at 0 AFTER the save) AND (that was not already true
+  // before). Partial-zero shapes do not fire. A re-save of an
+  // already-not-served day does not fire. Log-and-continue.
+  if (touched.length > 0) {
+    try {
+      const postShape = await loadNotServedShape(sb, accountKey, serviceDate);
+      const isNowNotServed = isMarkedNotServed(postShape);
+      if (isNowNotServed && !wasAlreadyNotServed) {
+        await writeSystemNote(sb, accountKey, serviceDate, "Marked not served", email);
+      }
+    } catch (err) {
+      console.error("[day-actuals POST] system-note write failed:", err);
+    }
+  }
+
   return NextResponse.json(await buildOkResponse(sb, accountKey, serviceDate, touched.length));
+}
+
+async function loadNotServedShape(
+  sb: SupabaseClient,
+  accountKey: string,
+  serviceDate: string,
+): Promise<{ projectedServiceIds: Set<string>; actualCountByServiceId: Map<string, number> }> {
+  const [projQ, actQ] = await Promise.all([
+    sb.from("sc_daily_projections")
+      .select("service_id, projected_count")
+      .eq("account_key", accountKey)
+      .eq("service_date", serviceDate),
+    sb.from("sc_daily_actuals")
+      .select("service_id, actual_count")
+      .eq("account_key", accountKey)
+      .eq("service_date", serviceDate),
+  ]);
+  if (projQ.error) throw new Error(`sc_daily_projections: ${projQ.error.message}`);
+  if (actQ.error)  throw new Error(`sc_daily_actuals: ${actQ.error.message}`);
+  const projectedServiceIds = new Set<string>();
+  for (const r of (projQ.data ?? []) as Array<{ service_id: string; projected_count: number | null }>) {
+    if ((r.projected_count ?? 0) > 0) projectedServiceIds.add(String(r.service_id));
+  }
+  const actualCountByServiceId = new Map<string, number>();
+  for (const r of (actQ.data ?? []) as Array<{ service_id: string; actual_count: number | null }>) {
+    actualCountByServiceId.set(String(r.service_id), Number(r.actual_count ?? 0));
+  }
+  return { projectedServiceIds, actualCountByServiceId };
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -165,7 +216,37 @@ export async function DELETE(req: Request): Promise<Response> {
   try { await clearReviewStateForDays(accountKey, [serviceDate]); }
   catch (err) { console.error("[day-actuals DELETE] clearReviewStateForDays failed:", err); }
 
+  // Train 4: companion note on a successful "Back to projections".
+  // Log-and-continue on failure; the DELETE already landed.
+  try {
+    await writeSystemNote(sb, accountKey, serviceDate, "Cleared back to projections", email);
+  } catch (err) {
+    console.error("[day-actuals DELETE] system-note write failed:", err);
+  }
+
   return NextResponse.json(await buildOkResponse(sb, accountKey, serviceDate, 0));
+}
+
+// Insert one sc_day_note_entries row for a system-level event. The
+// author is the signed-in session email, matching v1's sc-reset-day
+// pattern; no "system" literal author so every entry carries the
+// person who did it. The source column is null (sc-26 convention:
+// null for authored or single-day audit notes, 'bulk' for batch).
+async function writeSystemNote(
+  sb: SupabaseClient,
+  accountKey: string,
+  serviceDate: string,
+  note: string,
+  author: string,
+): Promise<void> {
+  const { error } = await sb.from("sc_day_note_entries").insert({
+    account_key: accountKey,
+    service_date: serviceDate,
+    note,
+    author,
+    source: null,
+  });
+  if (error) throw new Error(error.message);
 }
 
 // ─────────────────────────────────────────────────────────────────

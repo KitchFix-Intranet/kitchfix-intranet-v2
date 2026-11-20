@@ -48,6 +48,7 @@ import { resolveDayState } from "./dayState";
 import { resolveWeekState } from "./weekState";
 import { addDaysIso, dowOf, makePeriodWindow, periodHoldingDate } from "./periodWindow";
 import { makeInScopeAdapter } from "./inScopeAdapter";
+import { effectiveUnitEndedBeforeSiteToday } from "./isAskedYet";
 import { resolveFinalizeReviewSpan } from "@/lib/sc/scWeekFinalize";
 import { sumBillablePretaxCents } from "@/lib/sc/billing/billableTotal";
 
@@ -278,6 +279,11 @@ export async function loadCalendar(input: LoadCalendarInput): Promise<CalendarVi
 
   const activeUnits = await resolveWeeklyUnits(accountKey, qboMap?.cadence ?? null, activeWindow.weeks.map((w) => w[0]), adapter);
 
+  // anyFinalizeRowEver: the finQ read already filters `status <>
+  // reverted` for this account, with no FY bound. Its row count is
+  // the exempt rule's input (train 4 fix 1).
+  const anyFinalizeRowEver = allFinRows.length > 0;
+
   const period = buildPeriodView({
     fiscalYear,
     periodNo: activePeriodRow.period_no,
@@ -294,6 +300,7 @@ export async function loadCalendar(input: LoadCalendarInput): Promise<CalendarVi
     isBilled: qboMap !== null,
     isCorpViewer: viewer.is_corp && !viewer.is_regional_director,
     unitEndsByWeekStart: activeUnits,
+    anyFinalizeRowEver,
   });
 
   // Year section: 13 cards. Same unit-resolution pass across the whole FY.
@@ -319,6 +326,7 @@ export async function loadCalendar(input: LoadCalendarInput): Promise<CalendarVi
       const unitEndIso = allUnits.get(weekStart) ?? addDaysIso(weekStart, 6);
       const sq = squareFor({
         iso, siteToday,
+        anyFinalizeRowEver,
         revenue: revenueByDate.get(iso) ?? [],
         serviceById,
         meta: metaByDate.get(iso) ?? null,
@@ -427,6 +435,7 @@ interface BuildPeriodInputs {
   isBilled: boolean;
   isCorpViewer: boolean;
   unitEndsByWeekStart: Map<string, string>;
+  anyFinalizeRowEver: boolean;
 }
 
 function buildPeriodView(x: BuildPeriodInputs): PeriodView {
@@ -436,6 +445,7 @@ function buildPeriodView(x: BuildPeriodInputs): PeriodView {
     const days: DayView[] = weekDates.map((iso) => buildDay({
       iso,
       siteToday: x.siteToday,
+      anyFinalizeRowEver: x.anyFinalizeRowEver,
       revenue: x.revenueByDate.get(iso) ?? [],
       serviceById: x.serviceById,
       meta: x.metaByDate.get(iso) ?? null,
@@ -449,7 +459,13 @@ function buildPeriodView(x: BuildPeriodInputs): PeriodView {
     const isSubmitted = !!finCoveringThisWeek;
     const isPushFailed = !!finCoveringThisWeek && (finCoveringThisWeek.row.status === "push_failed" || finCoveringThisWeek.row.push_gave_up_at !== null);
 
-    const unitEndedBeforeSiteToday = unitEndIso < x.siteToday;
+    // Fix 1: the exempt override. Three surfaces consult the same
+    // helper (calendar, sites board, week check).
+    const unitEndedBeforeSiteToday = effectiveUnitEndedBeforeSiteToday(
+      x.siteToday,
+      unitEndIso,
+      x.anyFinalizeRowEver,
+    );
 
     const isPeriodClosedForEveryDay = x.isPeriodClosed;
 
@@ -531,6 +547,7 @@ function buildPeriodView(x: BuildPeriodInputs): PeriodView {
 interface BuildDayInputs {
   iso: string;
   siteToday: string;
+  anyFinalizeRowEver: boolean;
   revenue: DailyRevenueLite[];
   serviceById: Map<string, ServiceLite>;
   meta: DayMetadataLite | null;
@@ -581,7 +598,11 @@ function buildDay(x: BuildDayInputs): DayView {
     }
   }
 
-  const unitEndedBeforeSiteToday = x.unitEndIso < x.siteToday;
+  const unitEndedBeforeSiteToday = effectiveUnitEndedBeforeSiteToday(
+    x.siteToday,
+    x.unitEndIso,
+    x.anyFinalizeRowEver,
+  );
 
   const state = resolveDayState({
     hasAnyActualAbove,
@@ -628,6 +649,7 @@ function homeGameFrom(meta: DayMetadataLite | null): HomeGameMark | null {
 interface SquareInputs {
   iso: string;
   siteToday: string;
+  anyFinalizeRowEver: boolean;
   revenue: DailyRevenueLite[];
   serviceById: Map<string, ServiceLite>;
   meta: DayMetadataLite | null;
@@ -640,6 +662,7 @@ function squareFor(x: SquareInputs): YearSquare {
   const d = buildDay({
     iso: x.iso,
     siteToday: x.siteToday,
+    anyFinalizeRowEver: x.anyFinalizeRowEver,
     revenue: x.revenue,
     serviceById: x.serviceById,
     meta: x.meta,

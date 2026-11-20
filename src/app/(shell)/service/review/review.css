@@ -9,9 +9,22 @@
    - Pinned foot clears the shell rail on desk and the phone tab bar.
 */
 
+/* File-local tokens for this lane only. Prefix --kf-sc-rv- so these
+ * never read as shared --sp- tokens. Scoped to :root because the
+ * pinned foot sits outside .kf-sc-rv-surface and needs the heights
+ * too.
+ */
 :root {
-  --kf-sc-rv-foot: 80px;         /* desk summary height */
-  --kf-sc-rv-foot-phone: 110px;  /* phone summary height, single row */
+  --kf-sc-rv-foot: 80px;              /* desk summary height */
+  --kf-sc-rv-foot-phone: 110px;       /* phone summary height, single row */
+  --kf-sc-rv-dl-cell-y: var(--sp-sp-1); /* the per-row vertical padding */
+  --kf-sc-rv-dl-p: 150px;             /* price column width */
+  --kf-sc-rv-dl-a: 118px;             /* before-tax column width */
+  --kf-sc-rv-dl-q: 72px;              /* served column width */
+  --kf-sc-rv-chk-gap: var(--sp-sp-1); /* small inline gap in chip rows */
+  --kf-sc-rv-pushfail-min: 260px;     /* push-fail body wrap target */
+  --kf-sc-rv-foot-btn-py: 10px;       /* foot primary button y padding */
+  --kf-sc-rv-foot-btn-px: 14px;       /* foot primary button x padding */
 }
 
 .kf-sc-rv-surface {
@@ -28,7 +41,7 @@
   margin: var(--sp-sp-1) 0 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--sp-sp-1);
   font-family: var(--sp-ui);
   color: var(--sp-navy);
   font-weight: 800;
@@ -60,7 +73,7 @@
 .kf-sc-rv-back {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--sp-sp-1);
   color: var(--sp-navy);
   font-family: var(--sp-ui);
   font-size: var(--sp-t-label);
@@ -79,6 +92,53 @@
   border: 1px solid var(--sp-good);
   border-radius: var(--sp-r-ctl);
   margin-bottom: var(--sp-sp-3);
+}
+
+/* Push-failed headline (train 4 carry-in 1). Sits between the
+ * "already submitted" banner and the days list. One block of copy
+ * and one filled button on wide screens; stacks on phones.
+ */
+.kf-sc-rv-pushfail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-sp-3);
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  background: var(--sp-block-bg);
+  color: var(--sp-ink);
+  border: 1px solid var(--sp-block-line);
+  border-radius: var(--sp-r-ctl);
+  margin-bottom: var(--sp-sp-3);
+}
+.kf-sc-rv-pushfail > svg {
+  color: var(--sp-block);
+  flex: 0 0 auto;
+}
+.kf-sc-rv-pushfail__body {
+  flex: 1 1 var(--kf-sc-rv-pushfail-min);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+}
+.kf-sc-rv-pushfail__body b {
+  font-family: var(--sp-ui);
+  font-weight: var(--sp-w-heavy);
+  color: var(--sp-block);
+}
+.kf-sc-rv-pushfail__body p {
+  margin: 0;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  color: var(--sp-body);
+}
+.kf-sc-rv-pushfail__ok {
+  color: var(--sp-good);
+  font-weight: var(--sp-w-bold);
+}
+.kf-sc-rv-pushfail__err {
+  color: var(--sp-block);
+  font-weight: var(--sp-w-bold);
 }
 
 .kf-sc-rv-days {
@@ -174,7 +234,7 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 1px;
-  padding: 6px 0;
+  padding: var(--kf-sc-rv-dl-cell-y) 0;
   border-bottom: 1px solid var(--sp-line-soft);
 }
 .kf-sc-rv-dl thead th.kf-sc-rv-dl__q,
@@ -185,12 +245,12 @@
   text-align: left;
   font-weight: 700;
   color: var(--sp-ink);
-  padding: 6px 0;
+  padding: var(--kf-sc-rv-dl-cell-y) 0;
 }
-.kf-sc-rv-dl td { padding: 6px 0; color: var(--sp-body); }
-.kf-sc-rv-dl__q { text-align: right; width: 72px; font-weight: 700; color: var(--sp-ink); }
-.kf-sc-rv-dl__p { text-align: right; width: 150px; color: var(--sp-muted); }
-.kf-sc-rv-dl__a { text-align: right; width: 118px; font-weight: 700; color: var(--sp-ink); }
+.kf-sc-rv-dl td { padding: var(--kf-sc-rv-dl-cell-y) 0; color: var(--sp-body); }
+.kf-sc-rv-dl__q { text-align: right; width: var(--kf-sc-rv-dl-q); font-weight: 700; color: var(--sp-ink); }
+.kf-sc-rv-dl__p { text-align: right; width: var(--kf-sc-rv-dl-p); color: var(--sp-muted); }
+.kf-sc-rv-dl__a { text-align: right; width: var(--kf-sc-rv-dl-a); font-weight: 700; color: var(--sp-ink); }
 .kf-sc-rv-dl__g th {
   padding-top: var(--sp-sp-2);
   text-align: left;
@@ -204,7 +264,7 @@
 
 .kf-sc-rv-card__note {
   margin: var(--sp-sp-2) 0 0;
-  padding: 6px 0;
+  padding: var(--kf-sc-rv-dl-cell-y) 0;
   font-size: var(--sp-t-label);
   color: var(--sp-muted);
 }
@@ -212,7 +272,7 @@
   color: var(--sp-warn);
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--sp-sp-1);
 }
 .kf-sc-rv-card__acts {
   margin-top: var(--sp-sp-3);
@@ -316,7 +376,10 @@
     flex: 0 0 auto;
     max-width: 50%;
   }
-  .kf-sc-rv-foot__acts .kf-btn--primary { min-height: 48px; padding: 10px 14px; }
+  .kf-sc-rv-foot__acts .kf-btn--primary {
+    min-height: var(--sp-floor-chef);
+    padding: var(--kf-sc-rv-foot-btn-py) var(--kf-sc-rv-foot-btn-px);
+  }
   .kf-sc-rv-blocker,
   .kf-sc-rv-err { max-width: 220px; }
 }
@@ -390,7 +453,7 @@
   letter-spacing: 1px;
 }
 .kf-sc-win__facts dd {
-  margin: 4px 0 0;
+  margin: var(--sp-sp-1) 0 0;
   font-family: var(--sp-ui);
   font-size: var(--sp-t-num);
   font-weight: 800;

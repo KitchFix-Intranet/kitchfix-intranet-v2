@@ -14,9 +14,10 @@ import { resolveViewer } from "@/lib/people/viewer";
 import { visibleSites, siteInfoFrom } from "@/lib/sc/calendar/accessList";
 import { slugToAccountKey } from "@/lib/sc/calendar/slug";
 import { loadCalendar } from "@/lib/sc/calendar/load";
+import { loadSitesBoard } from "@/lib/sc/sitesBoard/load";
 import type { AccountLite, ViewerLite } from "@/lib/sc/calendar/types";
 import { CalendarPage } from "@/components/service/CalendarPage";
-import { SiteList } from "@/components/service/SiteList";
+import { SitesBoard } from "@/components/service/sitesBoard/SitesBoard";
 import { NoAccess, NoRosterRow, TwentySeven } from "@/components/service/CalendarEmpty";
 import { IdentBand } from "@/components/ui/IdentBand";
 import { OwnerPreviewBanner } from "@/components/service/OwnerPreviewBanner";
@@ -27,7 +28,7 @@ import "./service.css";
 export default async function Page({
   searchParams,
 }: {
-  searchParams: Promise<{ site?: string | string[]; fy?: string | string[]; p?: string | string[]; as?: string | string[]; day?: string | string[]; moved?: string | string[] }>;
+  searchParams: Promise<{ site?: string | string[]; fy?: string | string[]; p?: string | string[]; as?: string | string[]; day?: string | string[]; moved?: string | string[]; region?: string | string[] }>;
 }) {
   const { email: ownerEmail } = await requireOwnerPage();
   const sp = await searchParams;
@@ -37,6 +38,8 @@ export default async function Page({
   const asWorkerId = pickOne(sp.as);
   const dayRaw = pickOne(sp.day);
   const movedRaw = pickOne(sp.moved);
+  const regionRaw = pickOne(sp.region);
+  const region: "all" | "East" | "West" = regionRaw === "East" ? "East" : regionRaw === "West" ? "West" : "all";
 
   const sb = serviceClient();
   const { viewer } = await resolveViewer(sb, ownerEmail, asWorkerId, /* isOwner */ true);
@@ -79,20 +82,38 @@ export default async function Page({
     );
   }
 
-  // No site: one-site viewer lands on it; many-site viewer gets the list.
+  // No site: one-site viewer lands on it; many-site viewer gets the
+  // Sites board (train 4) with big-league clubhouses in a sub-card.
   if (!site) {
     if (inScope.length === 1) {
       const only = inScope[0];
       const qs = asWorkerId ? `&as=${encodeURIComponent(asWorkerId)}` : "";
       redirect(`/service?site=${only.slug}${qs}`);
     }
+    // Read MLB accounts too, in-scope by the same three-path order.
+    const bigLeagueAccounts = await loadBigLeagueAccounts(sb);
+    const inScopeKeys = new Set(inScope.map((s) => s.accountKey));
+    const inScopeCalendarAccounts = calendarAccounts.filter((a) => inScopeKeys.has(a.team_key));
+    const inScopeBigLeague = visibleBigLeague(viewerLite, bigLeagueAccounts);
+
+    const board = await loadSitesBoard({
+      sb,
+      viewer: viewerLite,
+      calendarAccounts: inScopeCalendarAccounts,
+      bigLeagueAccounts: inScopeBigLeague,
+      region,
+    });
+
     const previewName = viewer.previewOf?.display_name ?? null;
     return (
-      <div className="kf-sc-surface">
-        {previewName ? <OwnerPreviewBanner name={previewName} exitHref="/service" /> : null}
-        <IdentBand eyebrow="Service Calendar" title="Your sites" />
-        <SiteList sites={inScope} basePath="/service" />
-      </div>
+      <>
+        {previewName ? (
+          <div className="kf-sc-surface">
+            <OwnerPreviewBanner name={previewName} exitHref="/service" />
+          </div>
+        ) : null}
+        <SitesBoard view={board} />
+      </>
     );
   }
 
@@ -208,4 +229,30 @@ async function loadCalendarAccounts(sb: ReturnType<typeof serviceClient>): Promi
   const haveActive = new Set((svcQ.data ?? []).map((r) => String((r as { account_key: string }).account_key)));
 
   return accounts.filter((a) => haveActive.has(a.team_key));
+}
+
+async function loadBigLeagueAccounts(sb: ReturnType<typeof serviceClient>): Promise<AccountLite[]> {
+  // Active accounts whose level = 'MLB'. One read, no service-active
+  // narrowing (big-league clubhouses are calendar-only and may not
+  // carry an active sc_services row).
+  const accQ = await sb
+    .from("accounts")
+    .select("team_key, name, region, level, timezone, active")
+    .eq("active", true)
+    .eq("level", "MLB")
+    .order("team_key");
+  if (accQ.error) throw new Error(`accounts (MLB): ${accQ.error.message}`);
+  return (accQ.data ?? []) as AccountLite[];
+}
+
+function visibleBigLeague(viewer: ViewerLite, bigLeague: readonly AccountLite[]): AccountLite[] {
+  // Three-path visibility matches visibleSites() for the main set.
+  if (viewer.is_regional_director) {
+    const r = viewer.region;
+    if (!r) return [];
+    return bigLeague.filter((a) => a.region === r);
+  }
+  if (viewer.is_corp) return bigLeague.slice();
+  if (viewer.is_salaried) return bigLeague.filter((a) => a.team_key === viewer.account_key);
+  return [];
 }

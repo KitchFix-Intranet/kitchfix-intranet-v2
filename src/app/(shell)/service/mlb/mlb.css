@@ -1,0 +1,286 @@
+/* Big-league calendar surface. Scoped to kf-sc-mlb-*.
+ *
+ * Tokens only. Five type sizes: --sp-t-label, --sp-t-body,
+ * --sp-t-h3, --sp-t-num and the shared band's --sp-t-h1.
+ * Controls honour --sp-floor-chef (48px).
+ *
+ * File-local tokens (prefix --kf-sc-mlb-*). The lane-prefix rule:
+ * --sp-* is shared; anything specific to this surface sits here.
+ */
+:root {
+  --kf-sc-mlb-sidebar: 320px;    /* home-stands sidebar width */
+  --kf-sc-mlb-cell-min: 108px;   /* month cell min height */
+  --kf-sc-mlb-agenda-col: 112px; /* phone agenda date column */
+  --kf-sc-mlb-stand-when: 136px; /* desk stands "when" column */
+  --kf-sc-mlb-stand-cell: var(--sp-sp-1);  /* per-row vertical padding */
+  --kf-sc-mlb-game-x: var(--sp-sp-1);      /* game chip horizontal padding */
+  --kf-sc-mlb-game-y: var(--sp-sp-1);      /* game chip vertical padding */
+}
+
+.kf-sc-mlb-notice {
+  display: flex;
+  gap: var(--sp-sp-3);
+  padding: var(--sp-sp-4) var(--sp-sp-5);
+  background: var(--sp-info-bg);
+  border: 1px solid var(--sp-sky-line);
+  border-radius: var(--sp-r-card);
+  color: var(--sp-ink);
+}
+.kf-sc-mlb-notice__icon {
+  display: inline-flex;
+  align-items: flex-start;
+  color: var(--sp-navy);
+}
+.kf-sc-mlb-notice__title {
+  font-family: var(--sp-ui);
+  font-weight: var(--sp-w-heavy);
+  font-size: var(--sp-t-body);
+  color: var(--sp-navy);
+}
+.kf-sc-mlb-notice__body {
+  margin-top: var(--sp-sp-1);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  color: var(--sp-body);
+}
+
+.kf-sc-mlb-cols {
+  display: grid;
+  gap: var(--sp-sp-4);
+  grid-template-columns: minmax(0, 1fr) var(--kf-sc-mlb-sidebar);
+}
+@media (max-width: 1100px) {
+  .kf-sc-mlb-cols { grid-template-columns: minmax(0, 1fr); }
+}
+
+.kf-sc-mlb-month,
+.kf-sc-mlb-stands {
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-card);
+  box-shadow: var(--sp-shadow);
+  overflow: hidden;
+}
+
+.kf-sc-mlb-month__head,
+.kf-sc-mlb-stands__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-sp-3);
+  padding: var(--sp-sp-4) var(--sp-sp-5);
+  border-bottom: 1px solid var(--sp-line-soft);
+}
+.kf-sc-mlb-month__head h3,
+.kf-sc-mlb-stands__head h3 {
+  margin: 0;
+  font-family: var(--sp-disp);
+  font-size: var(--sp-t-h3);
+  font-weight: var(--sp-w-heavy);
+  color: var(--sp-navy);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  line-height: var(--sp-lh-flat);
+}
+.kf-sc-mlb-month__meta,
+.kf-sc-mlb-stands__meta {
+  margin: var(--sp-sp-1) 0 0;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  color: var(--sp-muted);
+}
+
+.kf-sc-mlb-month__tools {
+  display: inline-flex;
+  gap: var(--sp-sp-2);
+}
+
+.kf-sc-mlb-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  border-top: 1px solid var(--sp-line-soft);
+}
+.kf-sc-mlb-grid__dow {
+  padding: var(--sp-sp-2);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  font-weight: var(--sp-w-bold);
+  color: var(--sp-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  background: var(--sp-sky-soft);
+  border-bottom: 1px solid var(--sp-line);
+}
+
+.kf-sc-mlb-cell {
+  min-height: var(--kf-sc-mlb-cell-min);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-1);
+  padding: var(--sp-sp-2);
+  border-right: 1px solid var(--sp-line-soft);
+  border-bottom: 1px solid var(--sp-line-soft);
+  background: var(--sp-card);
+}
+.kf-sc-mlb-cell:nth-child(7n + 1) { border-left: none; }
+.kf-sc-mlb-cell.is-out {
+  background: var(--sp-sky-soft);
+  color: var(--sp-muted);
+}
+.kf-sc-mlb-cell.is-today {
+  background: var(--sp-sky-tint);
+  outline: 2px solid var(--sp-navy);
+  outline-offset: -2px;
+}
+.kf-sc-mlb-cell__n {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  font-weight: var(--sp-w-bold);
+  color: var(--sp-muted);
+}
+.kf-sc-mlb-cell.is-today .kf-sc-mlb-cell__n {
+  color: var(--sp-navy);
+  font-weight: var(--sp-w-heavy);
+}
+.kf-sc-mlb-cell.is-out .kf-sc-mlb-cell__n {
+  font-weight: var(--sp-w-semi);
+}
+.kf-sc-mlb-cell__today {
+  margin-left: var(--sp-sp-1);
+  font-weight: var(--sp-w-heavy);
+}
+
+.kf-sc-mlb-game {
+  display: flex;
+  flex-direction: column;
+  line-height: var(--sp-lh-tight);
+  padding: var(--kf-sc-mlb-game-y) var(--kf-sc-mlb-game-x);
+  border-radius: var(--sp-r-xs);
+  min-width: 0;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+}
+.kf-sc-mlb-game b {
+  font-weight: var(--sp-w-heavy);
+  overflow-wrap: break-word;
+}
+.kf-sc-mlb-game span {
+  font-weight: var(--sp-w-regular);
+  overflow-wrap: break-word;
+}
+.kf-sc-mlb-game--home {
+  background: var(--sp-navy);
+  color: var(--sp-on-navy);
+}
+.kf-sc-mlb-game--away {
+  background: var(--sp-card);
+  color: var(--sp-body);
+  border: 1px solid var(--sp-line);
+}
+.kf-sc-mlb-game--exhibition {
+  background: var(--sp-sky-tint);
+  color: var(--sp-navy-deep);
+}
+
+/* Phone: hide the month grid and show the agenda in its place.
+ * The Home stands card stays visible on both widths.
+ */
+.kf-sc-mlb-agenda { display: none; }
+@media (max-width: 860px) {
+  .kf-sc-mlb-grid   { display: none; }
+  .kf-sc-mlb-agenda { display: block; }
+}
+
+.kf-sc-mlb-agenda__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.kf-sc-mlb-agenda__item {
+  display: grid;
+  grid-template-columns: var(--kf-sc-mlb-agenda-col) minmax(0, 1fr);
+  gap: var(--sp-sp-3);
+  padding: var(--sp-sp-3) var(--sp-sp-5);
+  border-top: 1px solid var(--sp-line-soft);
+}
+.kf-sc-mlb-agenda__item:first-child { border-top: none; }
+.kf-sc-mlb-agenda__when {
+  display: flex;
+  flex-direction: column;
+  line-height: var(--sp-lh-tight);
+  color: var(--sp-body);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+}
+.kf-sc-mlb-agenda__when b {
+  font-weight: var(--sp-w-bold);
+  color: var(--sp-ink);
+}
+.kf-sc-mlb-agenda__what {
+  display: flex;
+  flex-direction: column;
+  line-height: var(--sp-lh-tight);
+  min-width: 0;
+}
+.kf-sc-mlb-agenda__what b {
+  font-family: var(--sp-ui);
+  font-weight: var(--sp-w-heavy);
+  color: var(--sp-ink);
+  font-size: var(--sp-t-body);
+  overflow-wrap: break-word;
+}
+.kf-sc-mlb-agenda__what small {
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  color: var(--sp-muted);
+}
+.kf-sc-mlb-agenda__item.is-home {
+  box-shadow: inset 4px 0 0 var(--sp-navy);
+}
+.kf-sc-mlb-agenda__item.is-exhibition {
+  box-shadow: inset 4px 0 0 var(--sp-sky);
+}
+.kf-sc-mlb-agenda__item.is-away .kf-sc-mlb-agenda__what b { color: var(--sp-body); font-weight: var(--sp-w-bold); }
+.kf-sc-mlb-agenda__empty {
+  padding: var(--sp-sp-3) var(--sp-sp-5);
+}
+
+.kf-sc-mlb-stand {
+  padding: var(--sp-sp-3) var(--sp-sp-5);
+  border-top: 1px solid var(--sp-line-soft);
+}
+.kf-sc-mlb-stand:first-child { border-top: none; }
+.kf-sc-mlb-stand__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-sp-2);
+  flex-wrap: wrap;
+}
+.kf-sc-mlb-stand__head b {
+  font-family: var(--sp-ui);
+  font-weight: var(--sp-w-heavy);
+  color: var(--sp-ink);
+  font-size: var(--sp-t-body);
+}
+.kf-sc-mlb-stand__head small {
+  font-size: var(--sp-t-label);
+  color: var(--sp-muted);
+}
+.kf-sc-mlb-stand ul {
+  list-style: none;
+  margin: var(--sp-sp-2) 0 0;
+  padding: 0;
+}
+.kf-sc-mlb-stand li {
+  display: grid;
+  grid-template-columns: var(--kf-sc-mlb-stand-when) minmax(0, 1fr) auto;
+  gap: var(--sp-sp-2);
+  padding: var(--kf-sc-mlb-stand-cell) 0;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-body);
+  border-top: 1px solid var(--sp-line-soft);
+}
+.kf-sc-mlb-stand li:first-child { border-top: none; }
+.kf-sc-mlb-stand li span:first-child { color: var(--sp-body); }
+
+.kf-sc-muted { color: var(--sp-muted); font-family: var(--sp-ui); }
