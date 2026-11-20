@@ -11,7 +11,8 @@
     "match": "node --env-file=.env.local --import tsx scripts/match.ts",
     "test:sc": "node --import tsx --test 'src/lib/sc/**/__tests__/*.test.mjs' 'src/lib/sc/billing/*.test.mjs'",
     "test:kpi": "node --import tsx --test 'src/lib/kpi/__tests__/*.test.mjs'",
-    "test:invoices": "node --import tsx --test 'src/lib/invoices/__tests__/*.test.mjs'"
+    "test:invoices": "node --import tsx --test 'src/lib/invoices/__tests__/*.test.mjs'",
+    "test:mail": "node --import tsx --test 'src/lib/__tests__/*.test.mjs'"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
