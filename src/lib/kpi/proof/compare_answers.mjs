@@ -492,31 +492,41 @@ async function buildLaborPurchasingCases(todayISO) {
 // work_location_labels get their values sha256'd BEFORE save, so the
 // saved answers never hold the clear value but the comparison still
 // fires on a drift.
+// Keys whose values are hashed on both sides and compared as hashes.
+// Addresses, emails, file links, vendor names, merchants, storage
+// paths - the value is data we do not carry across either repo, but
+// the identity has to match for the proof to be honest.
+// Also includes the DB-sourced timestamp family: both sides read these
+// from the same database row, so the hash matches when the data
+// matches. If one side has a different value the hash diverges.
 const REDACT_KEYS_SUBSTR = [
   "email", "drive_url", "submitter",
   "vendor_name", "merchant", "storage_path",
   "payee", "work_location_label",
+  // DB-sourced timestamps (stored columns, not derived from `now`).
+  // Both sides read them from the same row; hash and compare.
+  "derived_at",
+  "last_derive_at",
+  "last_billcom_sync",
+  "last_rippling_sync",
+  "last_report_ingest_at",
 ];
 const REDACT_VALUE_PATTERNS = [
   /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/,
   /^https?:\/\/(drive\.google\.com|docs\.google\.com)\//i,
 ];
 
-// Train 2c: time-sensitive numeric fields - v1 and V2 compute these
-// from the moment each side reads the clock. Both sides are correct;
-// a few ms between calls is enough to tip an integer-hour or integer-
-// day reading across its boundary. Fingerprint the value before
-// comparison so the proof does not fire on wall-clock drift.
-// Not a dollar figure, not a name - a duration that is honestly
-// different every run.
-const TIME_SENSITIVE_KEYS = new Set([
+// Train 2c: left out of the comparison because v1 and V2 work these
+// out from the clock at call time. Both sides are correct; a few
+// hundred ms between calls can tip an integer-hour or integer-day
+// reading across its boundary. The two sides DIFFER by at most one
+// unit where they differ at all: report_age_hours is floored to 1h
+// (max drift ~a few hundred ms into an hour), oldest_age_days is
+// floored to 1d (max drift ~a few hundred ms into a day). Report
+// the actual diff distribution in the proof.
+const LEFT_OUT_KEYS = new Set([
   "report_age_hours",
   "oldest_age_days",
-  "last_billcom_sync",
-  "last_rippling_sync",
-  "last_derive_at",
-  "last_report_ingest_at",
-  "derived_at",
 ]);
 
 function redact(value) {
@@ -533,11 +543,12 @@ function walkAndRedact(node, onCount) {
     for (const [k, v] of Object.entries(node)) {
       const lowerK = k.toLowerCase();
       const keyFlags = REDACT_KEYS_SUBSTR.some(s => lowerK.includes(s));
-      if (TIME_SENSITIVE_KEYS.has(k) && v != null) {
-        // Replace the time-sensitive numeric or ISO-string value with
-        // a sentinel. Both sides collapse to the same marker; the
-        // field name survives for the saved JSON's audit trail.
-        out[k] = "[time_sensitive]";
+      if (LEFT_OUT_KEYS.has(k) && v != null) {
+        // Replace clock-derived numeric with a sentinel so the
+        // comparison does not fire on wall-clock drift. Field name
+        // survives for the audit trail. Diff distribution is reported
+        // separately after the full run.
+        out[k] = "[left_out:clock_derived]";
         onCount(k);
       } else if (keyFlags && typeof v === "string" && v.length) {
         out[k] = redact(v);
@@ -558,12 +569,13 @@ function fingerprint(obj) {
   return crypto.createHash("sha256").update(JSON.stringify(obj)).digest("hex");
 }
 
+// Train 2c: regional_directors_display IS compared. v1 derives it
+// from REGIONAL_DIRECTORS[region] in incidentSchema.js. V2 receives
+// `regionalDirectorEastDisplay` + `regionalDirectorWestDisplay` as
+// inputs; the proof passes the result of the same `rdoDisplayName`
+// helper v1 uses. Both sides therefore produce the same object. The
+// field is retained on the saved JSON and included in the diff.
 function stripRegionalDirectors(body) {
-  if (!body || typeof body !== "object") return body;
-  if ("regional_directors_display" in body) {
-    const { regional_directors_display, ...rest } = body;
-    return rest;
-  }
   return body;
 }
 
