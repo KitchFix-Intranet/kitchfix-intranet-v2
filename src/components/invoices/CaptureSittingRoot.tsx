@@ -117,10 +117,24 @@ export function CaptureSittingRoot({
   const [viewUrls, setViewUrls] = useState<Record<string, string>>({});
   const [usual, setUsual] = useState(initialUsual);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Ride 8.3: which coding-row amount input is focused. While
+  // focused the display is the raw number (easy to edit); on
+  // blur the display shows two decimals.
+  const [focusedLineIdx, setFocusedLineIdx] = useState<number | null>(null);
   const [errors, setErrors] = useState<CheckResult["errors"]>([]);
-  const [copyMatch, setCopyMatch] = useState<CopyMatchView | null>(null);
+  // Train 3 correction 5: a DB-origin copy refusal says a single
+  // sentence with no other site's details. It still routes through
+  // the same stop-block + the same two ways out (remove / it is
+  // a different invoice). Tagged locally; never crosses the API.
+  type StopMatch = CopyMatchView | { kind: "already_on_file"; message: string };
+  const [copyMatch, setCopyMatch] = useState<StopMatch | null>(null);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "offline" | "stopped">("idle");
   const [checking, setChecking] = useState(false);
+  // Train 3 §7: while the request is in flight the button reads
+  // "Checking" first and flips to "Sending" after a short delay
+  // (the client cannot know when the server moved from Ready to
+  // the mail call). sendingLabel resets with setChecking.
+  const [sendingLabel, setSendingLabel] = useState(false);
   const [zoomed, setZoomed] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [pageMenuOpen, setPageMenuOpen] = useState(false);
@@ -662,17 +676,15 @@ export function CaptureSittingRoot({
   const check = async () => {
     if (checking) return;
     setChecking(true);
+    setSendingLabel(false);
+    // After ~500 ms flip the label from "Checking" to "Sending"
+    // if the request is still in flight. The server has moved
+    // past the Ready check and is in the mail call by then. The
+    // sending_off / not_ready paths complete before this fires.
+    const labelTimer = window.setTimeout(() => setSendingLabel(true), 500);
     try {
-      // Train 2b fix 1 / 2.3: wait on the save itself.
-      //
-      // If the retry loop is still running, let it finish; if it
-      // gave up (saveState=stopped), do not run the check - the
-      // save line already carries the reason. If there is staged
-      // typing (user pressed Enter mid-flight), kick the queue
-      // and wait on it.
+      // Train 2b fix 1 / 2.3: wait on the save itself first.
       if (Object.keys(stagedRef.current).length > 0 && !inflightRef.current) {
-        // Nothing in flight but typing is queued: start the next
-        // save so the waiter has something to wait on.
         void flush();
       }
       const decision = await waitForCheckAction({
@@ -680,41 +692,96 @@ export function CaptureSittingRoot({
           inFlight: inflightRef.current,
           stagedKeys: Object.keys(stagedRef.current).length,
           stopped: saveStateRef.current === "stopped",
+          offline: saveStateRef.current === "offline",
         }),
         onSettled: (fn) => {
           saveSettledListenersRef.current.add(fn);
           return () => saveSettledListenersRef.current.delete(fn);
         },
       });
-      if (decision === "stop") {
-        // The save line already explains. Keep the button on
-        // "Checking" would be a lie - flip it back by falling
-        // through to the finally.
-        return;
-      }
+      if (decision === "stop") return;
 
-      const res = await fetch(`/api/invoices/drafts/${draftId}/check${asQ}`, { method: "POST" });
-      if (!res.ok) {
+      // Train 3 §5: one endpoint. /send returns the same
+      // ready/errors/copy_match/next_draft_id shape as /check
+      // when the switch is off or Ready fails; else delivers (or
+      // holds) the invoice and tells us.
+      const res = await fetch(`/api/invoices/drafts/${draftId}/send${asQ}`, { method: "POST" });
+      // Status-agnostic: both 200 and 409 carry a `kind` body.
+      type SendBody =
+        | { kind: "sending_off"; ready: boolean; errors: CheckResult["errors"]; copy_match: CopyMatchView | null; next_draft_id: string | null }
+        | { kind: "not_ready"; errors: CheckResult["errors"]; copy_match: CopyMatchView | null }
+        | { kind: "copy"; message: string }
+        | { kind: "delivered"; invoice_id: string; mode: "test" | "live"; next_draft_id: string | null }
+        | { kind: "held"; invoice_id: string; mode?: "test" | "live"; next_draft_id?: string | null; code?: string }
+        | { kind: "gave_up"; invoice_id: string; mode?: "test" | "live"; code?: string };
+      let body: SendBody | null = null;
+      try { body = await res.json() as SendBody; } catch { /* fall through */ }
+      if (!body) {
         setErrors([{ field: "files", message: "Could not run the check." }]);
         return;
       }
-      const result = (await res.json()) as CheckResult;
-      setErrors(result.errors);
-      setCopyMatch(result.copy_match ?? null);
-      if (result.ready) {
-        toast("Ready. Sending is switched on in the next update.", { tone: "good" });
-        if (result.next_draft_id) {
-          router.push(`/invoices?site=${siteSlug}&draft=${result.next_draft_id}${asQAmp}`);
+
+      // Unpack by kind.
+      if (body.kind === "sending_off") {
+        setErrors(body.errors);
+        setCopyMatch(body.copy_match);
+        if (body.ready) {
+          // Today's toast (unchanged).
+          toast("Ready. Sending is switched on in the next update.", { tone: "good" });
+          const to = body.next_draft_id
+            ? `/invoices?site=${siteSlug}&draft=${body.next_draft_id}${asQAmp}`
+            : `/invoices?site=${siteSlug}${asQAmp}`;
+          router.push(to);
         } else {
-          router.push(`/invoices?site=${siteSlug}${asQAmp}`);
+          const first = body.errors[0]?.field;
+          if (first) window.setTimeout(() => focusField(first), 0);
         }
-      } else {
-        // Move focus to the first field in error.
-        const first = result.errors[0]?.field;
+        return;
+      }
+      if (body.kind === "not_ready") {
+        setErrors(body.errors);
+        setCopyMatch(body.copy_match);
+        const first = body.errors[0]?.field;
         if (first) window.setTimeout(() => focusField(first), 0);
+        return;
+      }
+      if (body.kind === "copy") {
+        // Correction 5: no other site's details surface; one
+        // plain sentence and the two ways out.
+        setCopyMatch({ kind: "already_on_file", message: body.message });
+        setErrors([]);
+        return;
+      }
+      if (body.kind === "delivered") {
+        const text = body.mode === "test"
+          ? "Test send. It went to the test address, not to accounting."
+          : "Sent to accounting.";
+        toast(text, { tone: "good" });
+        const to = body.next_draft_id
+          ? `/invoices?site=${siteSlug}&draft=${body.next_draft_id}${asQAmp}`
+          : `/invoices?site=${siteSlug}${asQAmp}`;
+        router.push(to);
+        return;
+      }
+      if (body.kind === "held") {
+        toast("Saved. The email has not gone yet. We will keep trying.", { tone: "ink" });
+        const to = body.next_draft_id
+          ? `/invoices?site=${siteSlug}&draft=${body.next_draft_id}${asQAmp}`
+          : `/invoices?site=${siteSlug}${asQAmp}`;
+        router.push(to);
+        return;
+      }
+      // gave_up at send time is unlikely (first attempt); treat
+      // as held so the user still moves on.
+      if (body.kind === "gave_up") {
+        toast("Saved. The email could not be delivered. The office has been told.", { tone: "ink" });
+        router.push(`/invoices?site=${siteSlug}${asQAmp}`);
+        return;
       }
     } finally {
+      window.clearTimeout(labelTimer);
       setChecking(false);
+      setSendingLabel(false);
     }
   };
 
@@ -767,7 +834,10 @@ export function CaptureSittingRoot({
     window.setTimeout(() => void check(), 100);
   };
   const copyCreditFor = () => {
-    if (!copyMatch?.submission_id) return;
+    // Only reachable from a same_invoice stop with a submission_id
+    // (the button is hidden otherwise, including on
+    // already_on_file). Guard for the compiler.
+    if (!copyMatch || copyMatch.kind !== "same_invoice" || !copyMatch.submission_id) return;
     const ans = { ...draft.answers, is_credit_for: copyMatch.submission_id };
     stage("answers", ans);
     stage("type", "credit");
@@ -782,7 +852,7 @@ export function CaptureSittingRoot({
   // ─── Render ─────────────────────────────────────────────────────
   const saveLine =
     saveState === "saving" ? "Saving"
-    : saveState === "offline" ? "No signal. Your typing is kept on this device."
+    : saveState === "offline" ? "No signal. It will send when you are back online."
     : saveState === "stopped" ? "Not saved. Changes are kept on this device."
     : "Saved";
 
@@ -822,7 +892,7 @@ export function CaptureSittingRoot({
             <span className="kf-inv-sitting__phonehead__sub">
               Invoice {pager.position} of {pager.total} · {siteAccountKey}
             </span>
-            <h2 className="kf-inv-sitting__phonehead__title">
+            <h2 className="kf-inv-sitting__phonehead__title" title={vendorName ?? undefined}>
               {vendorName ?? (draft.type === "credit" ? "New credit" : "New invoice")}
             </h2>
           </div>
@@ -920,7 +990,10 @@ export function CaptureSittingRoot({
         {/* C3: page box */}
         <section className="kf-inv-sitting__page">
           <div className="kf-inv-sitting__page-tools">
-            <span className="kf-inv-sitting__page-tools__name">
+            <span
+              className="kf-inv-sitting__page-tools__name"
+              title={activeFile?.file_name ?? undefined}
+            >
               {activeFile?.file_name ?? "No file yet"}
               {files.length > 1 ? ` · Page ${activeIndex + 1} of ${files.length}` : ""}
             </span>
@@ -1155,6 +1228,12 @@ export function CaptureSittingRoot({
                 ref={invDateRef}
                 value={invDateLocal}
                 onChange={(e) => onInvDateChange(e.currentTarget.value)}
+                onBlur={(e) => {
+                  // Ride 8.3: reformat MM/DD/YYYY as soon as the
+                  // box is left, not only after a reload.
+                  const parsed = parseDateInput(e.currentTarget.value);
+                  if (parsed.iso) setInvDateLocal(toBoxDate(parsed.iso));
+                }}
                 inputMode="numeric"
                 placeholder="MM/DD/YYYY"
                 maxLength={10}
@@ -1188,7 +1267,7 @@ export function CaptureSittingRoot({
                 <div className="kf-inv-sitting__sixty__btns">
                   <button
                     type="button"
-                    className="kf-btn kf-btn--sm kf-btn--primary"
+                    className="kf-btn kf-btn--sm kf-btn--line"
                     onClick={confirm60Days}
                   >
                     Yes, that is right
@@ -1227,7 +1306,7 @@ export function CaptureSittingRoot({
                 disabled={isPreview}
               />
             </div>
-            {totalParsed != null ? <span className="kf-inv-sitting__hint">{fmtUsdExact(totalParsed)}</span> : null}
+            {/* Ride 8.3: no echo of the total under its box. */}
             {totalErr ? <span id="err-total" className="kf-inv-sitting__err">{totalErr.message}</span> : null}
           </div>
 
@@ -1295,7 +1374,17 @@ export function CaptureSittingRoot({
                     <input
                       aria-label={`Amount, line ${i + 1}`}
                       inputMode="decimal"
-                      value={Number.isFinite(line.amount) ? String(line.amount) : ""}
+                      value={
+                        focusedLineIdx === i
+                          ? (Number.isFinite(line.amount) ? String(line.amount) : "")
+                          : (line.amount > 0 ? line.amount.toFixed(2) : "")
+                      }
+                      onFocus={() => setFocusedLineIdx(i)}
+                      onBlur={() => {
+                        // Ride 8.3: fall back to the two-decimal
+                        // display via the focus state above.
+                        setFocusedLineIdx(null);
+                      }}
                       onChange={(e) => {
                         const amt = parseMoneyInput(e.currentTarget.value);
                         updateLine(i, { amount: amt ?? 0 });
@@ -1375,18 +1464,24 @@ export function CaptureSittingRoot({
               role="group"
               aria-label="Possible copy"
             >
-              <p className="kf-inv-sitting__copystop__title">
-                {copyMatch.kind === "same_invoice"
-                  ? "You already sent this one"
-                  : "You already have this one in your drafts"}
-              </p>
-              <p>
-                {copyMatch.vendor_name ?? "The same vendor"}
-                {copyMatch.invoice_number ? ` #${copyMatch.invoice_number}` : ""}
-                {copyMatch.kind === "same_invoice" && copyMatch.invoice_date
-                  ? ` on ${fmtDate(copyMatch.invoice_date, "short")}` : ""}
-                .
-              </p>
+              {copyMatch.kind === "already_on_file" ? (
+                <p>{copyMatch.message}</p>
+              ) : (
+                <>
+                  <p className="kf-inv-sitting__copystop__title">
+                    {copyMatch.kind === "same_invoice"
+                      ? "You already sent this one"
+                      : "You already have this one in your drafts"}
+                  </p>
+                  <p>
+                    {copyMatch.vendor_name ?? "The same vendor"}
+                    {copyMatch.invoice_number ? ` #${copyMatch.invoice_number}` : ""}
+                    {copyMatch.kind === "same_invoice" && copyMatch.invoice_date
+                      ? ` on ${fmtDate(copyMatch.invoice_date, "short")}` : ""}
+                    .
+                  </p>
+                </>
+              )}
               <div className="kf-inv-sitting__copystop__btns">
                 <button type="button" className="kf-btn kf-btn--line" onClick={copyRemove}>
                   Remove this one
@@ -1436,7 +1531,7 @@ export function CaptureSittingRoot({
               aria-live="polite"
               aria-describedby={previewDescId}
             >
-              {checking ? "Checking" : "Check and send"}
+              {checking ? (sendingLabel ? "Sending" : "Checking") : "Check and send"}
             </button>
             {/* Mini balance on phone, pinned above the keyboard so
                 "left to code" stays in view while typing. */}
@@ -1486,9 +1581,13 @@ export function CaptureSittingRoot({
           the on-screen keyboard. */}
       {copyMatch && isPhone ? (
         <Sheet
-          title={copyMatch.kind === "same_invoice"
-            ? "You already sent this one"
-            : "You already have this one in your drafts"}
+          title={
+            copyMatch.kind === "already_on_file"
+              ? "Already on file"
+              : copyMatch.kind === "same_invoice"
+                ? "You already sent this one"
+                : "You already have this one in your drafts"
+          }
           onClose={() => setCopyMatch(null)}
           variant="fullsheet"
           footer={
@@ -1507,13 +1606,17 @@ export function CaptureSittingRoot({
             </>
           }
         >
-          <p>
-            {copyMatch.vendor_name ?? "The same vendor"}
-            {copyMatch.invoice_number ? ` #${copyMatch.invoice_number}` : ""}
-            {copyMatch.kind === "same_invoice" && copyMatch.invoice_date
-              ? ` on ${fmtDate(copyMatch.invoice_date, "short")}` : ""}
-            .
-          </p>
+          {copyMatch.kind === "already_on_file" ? (
+            <p>{copyMatch.message}</p>
+          ) : (
+            <p>
+              {copyMatch.vendor_name ?? "The same vendor"}
+              {copyMatch.invoice_number ? ` #${copyMatch.invoice_number}` : ""}
+              {copyMatch.kind === "same_invoice" && copyMatch.invoice_date
+                ? ` on ${fmtDate(copyMatch.invoice_date, "short")}` : ""}
+              .
+            </p>
+          )}
         </Sheet>
       ) : null}
 

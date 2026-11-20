@@ -45,6 +45,29 @@ test("decideCheckAction: settled -> run", () => {
   );
 });
 
+// Ride 8.8: offline + staged -> stop.
+
+test("decideCheckAction: offline + staged -> stop", () => {
+  assert.equal(
+    decideCheckAction({ inFlight: false, stagedKeys: 2, stopped: false, offline: true }),
+    "stop",
+  );
+});
+
+test("decideCheckAction: offline + nothing staged -> run (server is current)", () => {
+  assert.equal(
+    decideCheckAction({ inFlight: false, stagedKeys: 0, stopped: false, offline: true }),
+    "run",
+  );
+});
+
+test("decideCheckAction: offline + staged + inFlight -> stop (stop beats wait)", () => {
+  assert.equal(
+    decideCheckAction({ inFlight: true, stagedKeys: 1, stopped: false, offline: true }),
+    "stop",
+  );
+});
+
 // ─── waitForCheckAction: small fake queue ─────────────────────────
 
 function makeQueue(initial) {

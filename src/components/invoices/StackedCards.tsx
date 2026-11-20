@@ -5,6 +5,7 @@
 import { fmtDate } from "@/lib/fmt";
 import { fmtUsdExact } from "@/lib/invoices/money";
 import type { ListRowView, SiteNavItem } from "@/lib/invoices/types";
+import { statusWordsFor } from "@/lib/invoices/statusWords";
 import { CardRowOpen, RowVendorButton } from "./RowOpen";
 
 export function StackedCards({
@@ -74,11 +75,15 @@ function Card({
     <CardRowOpen href={href} className={`kf-invoices-card ${row.status === "returned" ? "is-returned" : ""}`}>
       <div className="kf-invoices-card__head">
         <RowVendorButton invId={row.id} href={href} vendorName={row.vendorName} />
-        {row.status === "returned" ? (
-          <span className="kf-pill kf-pill--block">{fixWord}</span>
-        ) : (
-          <span className="kf-pill kf-pill--muted">With accounting</span>
-        )}
+        {(() => {
+          const w = statusWordsFor(row.status, row.v2Send, fixWord);
+          const toneClass = w.tone === "block" ? "kf-pill--block"
+            : w.tone === "warn" ? "kf-pill--warn"
+            : w.tone === "info" ? "kf-pill--info"
+            : w.tone === "good" ? "kf-pill--good"
+            : "kf-pill--muted";
+          return <span className={`kf-pill ${toneClass}`} title={w.sub ?? undefined}>{w.label}</span>;
+        })()}
       </div>
       <div className="kf-invoices-card__meta">
         <span className="kf-invoices-card__inv">{invLabel}</span>

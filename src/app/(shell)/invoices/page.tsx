@@ -33,6 +33,8 @@ import {
 import { buildDraftListView } from "@/lib/invoices/draftListView";
 import { loadLatestSent, loadReturnedForSite } from "@/lib/invoices/latestSent";
 import { loadActiveCodesForSite, loadUsualCodes } from "@/lib/invoices/glCodes";
+import { outboundMode } from "@/lib/invoices/outboundGate";
+import { loadRecentlySent } from "@/lib/invoices/recentlySent";
 import { CaptureLanding } from "@/components/invoices/CaptureLanding";
 import { WhichSiteChooser } from "@/components/invoices/WhichSiteChooser";
 import { CaptureSittingRoot } from "@/components/invoices/CaptureSittingRoot";
@@ -182,6 +184,11 @@ async function SittingSurface({ shared, draftId }: { shared: Shared; draftId: st
   if (draft.status === "discarded") {
     redirect(`/invoices?site=${slug}${asParam ? `&as=${encodeURIComponent(asParam)}` : ""}`);
   }
+  // Train 3 §7: a sent draft's old address goes to the invoice.
+  if (draft.status === "sent" && draft.submission_id) {
+    const asQ = asParam ? `?as=${encodeURIComponent(asParam)}` : "";
+    redirect(`/invoices/${draft.submission_id}${asQ}`);
+  }
 
   const [files, codes, vendorRow, fixedOrder] = await Promise.all([
     listFilesForDraft(sb, ownerEmail, draft.id),
@@ -243,6 +250,14 @@ async function LandingSurface({ shared }: { shared: Shared }) {
   const fixCount = needsFix.count ?? 0;
   const draftList = await buildDraftListView(sb, ownerEmail, drafts, activeCodesSet);
 
+  // Train 3 §7 "You are set" sent variant: only when switch is
+  // on AND there are no drafts. The "N ready" form (train 2b)
+  // stays when the switch is off, read inside CaptureLanding.
+  const switchMode = outboundMode();
+  const recentlySent = (switchMode !== "off" && draftList.length === 0)
+    ? await loadRecentlySent(sb, ownerEmail, accountKey, 12)
+    : [];
+
   return (
     <CaptureLanding
       scope={scope}
@@ -257,6 +272,7 @@ async function LandingSurface({ shared }: { shared: Shared }) {
       asParam={asParam}
       previewName={previewName}
       manySites={manySites}
+      recentlySent={recentlySent}
     />
   );
 }

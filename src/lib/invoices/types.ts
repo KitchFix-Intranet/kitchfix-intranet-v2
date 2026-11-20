@@ -48,6 +48,14 @@ export interface SiteNavItem {
 // first names in `people`. This shape NEVER reaches a client
 // component - the loader hands only the sanitised `ListRowView`
 // and `DetailRowView` across the server/client boundary.
+// Train 3: V2 send row joined onto list rows. One extra query
+// per page populates this. V1 invoices (no `invoice_sends` row)
+// stay as v2Send=null and read today's status words.
+export interface V2SendStatus {
+  mode: "test" | "live";
+  email_status: "held" | "sent" | "gave_up";
+}
+
 export interface ListRow {
   id: string;
   accountKey: string;
@@ -63,6 +71,7 @@ export interface ListRow {
   pageUrl: string | null;       // drive_urls[0] or null
   pageCount: number | null;
   status: ListStatus;
+  v2Send: V2SendStatus | null;
   // Newest rejection for returned rows. Absent otherwise.
   rejection: {
     rejectedAt: string;
@@ -90,6 +99,7 @@ export interface ListRowView {
   pageUrl: string | null;
   pageCount: number | null;
   status: ListStatus;
+  v2Send: V2SendStatus | null;
   rejection: {
     rejectedAt: string;
     rejectedByFirstName: string | null; // "the office" fallback applied at the component

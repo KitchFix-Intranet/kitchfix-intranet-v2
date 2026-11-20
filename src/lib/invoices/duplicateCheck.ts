@@ -115,9 +115,12 @@ export async function copyCheck(
   }
 
   // 2. Against this person's OTHER live drafts (not this one).
+  // Train 3 ride 8.1: a twin that has already answered "It is a
+  // different invoice" settles the pair. `answers` is included
+  // in the select so the loop can skip twins whose answer is set.
   const draftQ = await sb
     .from("invoice_drafts")
-    .select("id, vendor_id, invoice_number, invoice_date")
+    .select("id, vendor_id, invoice_number, invoice_date, answers")
     .eq("owner_email", ownerEmail)
     .eq("account_key", draft.account_key)
     .eq("vendor_id", draft.vendor_id)
@@ -126,8 +129,10 @@ export async function copyCheck(
     .neq("id", draft.id)
     .limit(50);
   if (!draftQ.error) {
-    for (const row of (draftQ.data ?? []) as Array<{ id: string; vendor_id: string; invoice_number: string | null; invoice_date: string | null }>) {
+    for (const row of (draftQ.data ?? []) as Array<{ id: string; vendor_id: string; invoice_number: string | null; invoice_date: string | null; answers: { is_different_invoice?: unknown } | null }>) {
       if (normalizeInvoiceNumber(row.invoice_number) === num) {
+        // Either side's answer settles the pair.
+        if (row.answers?.is_different_invoice === true) continue;
         const names = await loadVendorNames(sb, [row.vendor_id]);
         return {
           kind: "same_draft",

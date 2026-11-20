@@ -19,6 +19,7 @@
 import { fmtDate } from "@/lib/fmt";
 import { fmtUsdExact } from "@/lib/invoices/money";
 import type { ListRowView, SiteNavItem } from "@/lib/invoices/types";
+import { statusWordsFor } from "@/lib/invoices/statusWords";
 import { TableRowOpen, RowVendorButton } from "./RowOpen";
 
 export function InvoiceTable({
@@ -95,11 +96,19 @@ export function InvoiceTable({
                   {fmtUsdExact(r.totalAmount)}
                 </td>
                 <td className="kf-invoices-tcell kf-invoices-tcell--status">
-                  {r.status === "returned" ? (
-                    <span className="kf-pill kf-pill--block">{fixWord}</span>
-                  ) : (
-                    <span className="kf-pill kf-pill--muted">With accounting</span>
-                  )}
+                  {(() => {
+                    const w = statusWordsFor(r.status, r.v2Send, fixWord);
+                    const toneClass = w.tone === "block" ? "kf-pill--block"
+                      : w.tone === "warn" ? "kf-pill--warn"
+                      : w.tone === "info" ? "kf-pill--info"
+                      : w.tone === "good" ? "kf-pill--good"
+                      : "kf-pill--muted";
+                    return (
+                      <span className={`kf-pill ${toneClass}`} title={w.sub ?? undefined}>
+                        {w.label}
+                      </span>
+                    );
+                  })()}
                 </td>
               </TableRowOpen>
             );

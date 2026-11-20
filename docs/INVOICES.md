@@ -450,3 +450,231 @@ touch `layout.tsx` (correction 7).
 - `src/components/invoices/OwnerPreviewBanner.tsx` (F3 wording).
 - `src/components/invoices/useIsPhone.ts` + `useKeyboardOffset.ts` (new).
 - `src/components/invoices/capture.css` (band-free phone head, grid-980 landing, D4 sticky bar with --kb-offset, Sheet / Menu / Calendar, vendor picker, coding chip + rows + balance, copy-stop, errors list, etc.).
+
+## Train 3: sending
+
+Train 3 makes "Check and send" actually send. The capture surface
+is unchanged for the viewer when the switch is off; when the
+switch is `test` or `live` the button runs `/send`, the draft
+becomes an invoice via the database function
+`invoices_v2_commit_send`, one PDF is built, one email goes
+through the shared `src/lib/mail.ts` sender, one Slack post
+fires, and (if email failed) a cron job retries for up to 24
+hours. The SQL record is at
+`supabase/migrations/20261120191451_invoices_t3_sending_2026_11_20.sql`
+(applied on 2026-11-20; this file is the record and is never run
+by the app).
+
+### The switch
+
+`src/lib/invoices/outboundGate.ts` reads `INVOICES_V2_OUTBOUND`.
+Only the exact strings `test` and `live` leave the default `off`.
+In `off` the send route refuses with 409 `sending_off` and the
+retry route does nothing. In `test` new sends are stored as
+mode='test' and recipients collapse to `INVOICES_V2_TEST_TO`;
+Slack prefixes `[TEST]`. In `live` new sends are mode='live' and
+recipients come from `INVOICE_AP_TO_EMAIL` + cc the submitter +
+`INVOICES_V2_CC`.
+
+### Recipients + mayDeliver
+
+`src/lib/invoices/recipients.ts :: resolveRecipients(rowMode, env,
+submitterEmail)` is pure: the row's own mode decides, not the
+switch. A row stored as mode='test' can never resolve to the AP
+address, even under switch=live. Missing env returns a
+`missing_env:<NAME>` code; the caller holds the invoice with
+that code - never a fallback. No real address appears in this
+file, tests, fixtures or docs.
+
+`src/lib/invoices/mayDeliver.ts :: mayDeliver(rowMode,
+switchMode)` is pure. A test row delivers under test or live; a
+live row only under live; switch off blocks both.
+
+### The send route
+
+`POST /api/invoices/drafts/[id]/send` (`maxDuration = 60`). One
+endpoint, every outcome:
+
+| kind | status | what the UI does |
+|---|---|---|
+| `sending_off` | 200 (+ body carries check-route shape) | Today's "Ready. Sending is switched on in the next update." or the error list. |
+| `not_ready` | 409 | Error list + copy_match for the C9 stop. |
+| `copy` | 409 | One sentence: "This vendor, number, date and total are already on file." Two ways out: Remove / It is a different invoice. Correction 5 - no second read, no other site's details. |
+| `delivered` | 200 | Toast "Sent to accounting." (live) or "Test send. It went to the test address, not to accounting." (test). Route to next_draft_id or the landing. |
+| `held` | 200 | Toast "Saved. The email has not gone yet. We will keep trying." Same move on. |
+
+The button label flips "Check and send" -> "Checking" -> "Sending"
+(after a 500 ms delay) and keeps focus for the whole wait.
+
+### Commit + claim + deliver
+
+`src/lib/invoices/sendCommit.ts :: commitSend(sb, draftId,
+ownerEmail, mode)` wraps the RPC. The DB function is the only
+writer of `invoice_submissions` in this train and stores credit
+totals negative.
+
+`src/lib/invoices/claim.ts` holds the per-row claim rule
+(correction 1: supabase-js cannot run FOR UPDATE SKIP LOCKED and
+this train adds no DB function). Pure `canClaim(row, now)` is
+the "may I claim this row" rule; runtime `tryClaim` runs a
+conditional UPDATE … .select() and owns the row only when it
+returns. The send route claims before delivering (correction 2);
+the retry route claims per candidate id.
+
+`src/lib/invoices/deliverSend.ts` is the one deliver function,
+used by the send route and the retry route. Server-only. Walks
+mayDeliver -> load invoice + people row + build-or-reuse PDF
+(outbound_file_id + storage_path + `invoice_files`
+kind='outbound') -> resolveRecipients (held with the
+missing_env code if any is absent) -> buildSubject +
+buildEmailBody + sendSystemMail -> invoice_send_attempts row +
+invoice_sends transition + invoice_submissions.email_sent on
+success -> Slack post (§6 + correction 9: first attempt always
+posts; later attempts post again only on delivered or gave_up).
+
+### Retry
+
+`GET /api/invoices/send-retry` (`maxDuration = 60`), guarded by
+`isCronAuthorized`. `vercel.json` carries one line
+`{"path":"/api/invoices/send-retry","schedule":"*/10 * * * *"}`;
+the same route and schedule for every mode (the switch gates
+delivery inside). Pulls up to 5 candidate ids via
+`candidateIdsForRetry`; `tryClaim` per id; `deliverSend` in a
+try, `releaseClaim` in finally. Returns counts of claimed /
+delivered / held / gave_up.
+
+### Retry schedule
+
+`src/lib/invoices/retrySchedule.ts` is pure.
+`decideRetry(firstTriedAt, attemptsSoFar, now)` returns
+`{kind:"schedule", nextAttemptAt}` or `{kind:"gave_up"}`. First
+three failures wait 10 minutes; the fourth waits 30 minutes; the
+fifth and later wait an hour. The 24-hour cap is strictly greater-
+than the first-try time, so a next attempt at exactly t+24h is
+still a scheduled retry.
+
+### PDF
+
+`src/lib/invoices/buildOutboundPdf.ts` is server-only. Copies
+each original PDF's pages (rotated by the saved `rotation`),
+paints each JPEG / PNG image as a letter-sized page, attaches
+WebP + damaged PDFs on the output (bytes preserved), and
+appends a plain black-on-white coding page. `[TEST]` bold at the
+top in test mode (correction 8); accounting prints these.
+Filename: `<vendor>_<YYYYMMDD>_<number>.pdf`, or `TEST_` prefix
+in test mode. Stored at `outbound/<invoice_id>/<file_id>.pdf`.
+A retry reuses the stored file; the PDF is built once.
+
+### The subject accounting keys bills from
+
+`src/lib/invoices/emailSubject.ts :: buildSubject`. Shapes
+(correction 9 + prompt §6):
+ - invoice, live: `[KitchFix] | <site> | <vendor> | #<number> | $<total>`
+ - credit, live:  `[KitchFix] | CREDIT | <site> | <vendor> | #<number> | $<total>`
+ - test mode:     `[TEST] ` prefixed to either.
+The total is shown positive with two decimals and thousands
+commas regardless of the stored sign.
+
+### Slack
+
+`src/lib/invoices/slackPost.ts`. 3-second AbortController; never
+fails the send; missing webhook returns `"skipped"`. The caller
+composes the text; no dollar amount is ever posted. First
+attempt posts delivered or held:<code>; later attempts post again
+only on delivered or gave_up (correction 9).
+
+### What the person sees
+
+- Button: "Check and send" -> "Checking" -> "Sending" -> toast.
+- Delivered (live): "Sent to accounting."
+- Delivered (test): "Test send. It went to the test address, not to accounting."
+- Held: "Saved. The email has not gone yet. We will keep trying."
+- Switch off: today's "Ready..." toast, unchanged.
+- "You are set" sent variant: when there are no drafts left and
+  at least one invoice sent by this person at this site in the
+  last 12 h, the band / head reads "<N> sent" + "Nothing else
+  needs doing." Each row reads its own status word ("With
+  accounting" / "Test send" / "Sending" / "Not delivered"). The
+  "N ready" form stays for switch=off.
+- List + drawer: one extra query per page joins `invoice_sends`.
+  V2 rows read "Sending" (held), "Test send" (test + sent),
+  "With accounting" (live + sent), or "Not delivered" (gave_up)
+  with the sub-line "The office has been told." (correction 4:
+  a test row never reads "With accounting").
+- Drawer page: V2 invoices show a "See the page" button that
+  fetches `/api/invoices/sent/[id]/view` (correction 7) for a
+  60 s signed URL; no link in server HTML. V1 keeps its Drive
+  link.
+- A sent draft's old address (`/invoices?site=..&draft=<id>`)
+  redirects to `/invoices/<submission_id>`.
+
+### Riding with this PR (from the live walk of train 2b)
+
+ 1. Twin `is_different_invoice` settles the pair in
+    `duplicateCheck.ts`.
+ 2. "Yes, that is right" on the 60-day prompt becomes outlined
+    (`kf-btn--line`) - only one filled navy button in view.
+ 3. Date `onBlur` reformats to MM/DD/YYYY at once. The total is
+    not echoed under its box. Coding amount shows two decimals
+    on blur via a focused-row state.
+ 4. A draft row says "Copy to settle"; the suffix " left" is
+    dropped when copy is among the missing. `labelFor("copy")`
+    returns "Copy to settle".
+ 5. `WhichSiteChooser` row arrow is a `ChevronRight` from
+    lucide-react, not a typed `>`.
+ 6. The page is fitted to the width of its box
+    (`object-fit: contain` on the canvas and img).
+ 7. The coding-row grid at <= 400 px makes the code picker
+    `minmax(48px, 1fr)` and the amount column 100 px. The
+    phonehead vendor heading and the page-tools filename span
+    carry their full text in `title`.
+ 8. `decideCheckAction` gains an `offline` flag; `offline +
+    staged` returns "stop", the button flips back from "Checking"
+    and the save line says "No signal. It will send when you are
+    back online."
+
+### Files touched for train 3
+
+Inside the fence:
+- `src/lib/invoices/outboundGate.ts` (new), `recipients.ts` (new),
+  `mayDeliver.ts` (new), `sendCommit.ts` (new), `claim.ts` (new),
+  `deliverSend.ts` (new), `retrySchedule.ts` (new),
+  `slackPost.ts` (new), `codingPageData.ts` (new),
+  `buildOutboundPdf.ts` (new), `outboundFileName.ts` (new),
+  `emailSubject.ts` (new), `emailBody.ts` (new),
+  `submitterName.ts` (new), `recentlySent.ts` (new),
+  `statusWords.ts` (new), `saveWait.ts` (offline branch),
+  `duplicateCheck.ts` (twin settles pair), `draftListView.ts`
+  (Copy to settle), `load.ts` (v2Send join), `types.ts`
+  (V2SendStatus + v2Send on row types), `draftWrite.ts`
+  (insertOutboundFile).
+- `src/lib/invoices/__tests__/` - new tests for
+  outboundGate, recipients, mayDeliver, claim, retrySchedule,
+  codingPageData, outboundFileName, emailSubject, submitterName,
+  statusWords; extended saveWait + draftListView. 103 new tests
+  land across this train.
+- `src/app/api/invoices/drafts/[id]/send/route.ts` (new),
+  `src/app/api/invoices/send-retry/route.ts` (new),
+  `src/app/api/invoices/sent/[id]/view/route.ts` (new).
+- `src/app/(shell)/invoices/page.tsx` - sent-draft redirect +
+  You-are-set sent variant data.
+- `src/components/invoices/CaptureSittingRoot.tsx` - send flow,
+  button labels, copy-stop ride, date onBlur, total hint
+  removed, coding onBlur, title attrs, Yes-outlined.
+- `src/components/invoices/CaptureLanding.tsx` - sent variant
+  branch.
+- `src/components/invoices/DraftsWaitingList.tsx` - Copy-to-
+  settle status.
+- `src/components/invoices/WhichSiteChooser.tsx` - ChevronRight.
+- `src/components/invoices/InvoiceTable.tsx`,
+  `StackedCards.tsx`, `Drawer.tsx` - status words through the
+  shared helper + See-the-page button on V2 rows.
+- `src/components/invoices/capture.css` - canvas object-fit,
+  coding-row 400 px breakpoint.
+- `supabase/migrations/20261120191451_invoices_t3_sending_2026_11_20.sql`
+  - record file, verbatim.
+
+One approved exception to the fence:
+- `vercel.json` - exactly one entry added to `crons` for the
+  retry job. Nothing else in that file changed. Needs an
+  ownership entry (PM lane).

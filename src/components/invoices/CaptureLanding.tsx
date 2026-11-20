@@ -19,6 +19,7 @@ import { fmtDate, timeAgo } from "@/lib/fmt";
 import { fmtUsdExact } from "@/lib/invoices/money";
 import type { DraftListView, SiteNavItem, InvoiceScope } from "@/lib/invoices/types";
 import type { LatestSentRow, ReturnedRow } from "@/lib/invoices/latestSent";
+import type { RecentlySentRow } from "@/lib/invoices/recentlySent";
 import { DropZone } from "./DropZone";
 import { DraftsWaitingList } from "./DraftsWaitingList";
 import { OwnerPreviewBanner } from "./OwnerPreviewBanner";
@@ -36,6 +37,7 @@ export function CaptureLanding({
   asParam,
   previewName,
   manySites,
+  recentlySent,
 }: {
   scope: InvoiceScope;
   sites: readonly SiteNavItem[];
@@ -49,6 +51,7 @@ export function CaptureLanding({
   asParam: string | null;
   previewName: string | null;
   manySites: boolean;
+  recentlySent?: readonly RecentlySentRow[];
 }) {
   const asQ = asParam ? `?as=${encodeURIComponent(asParam)}` : "";
   const asQAmp = asParam ? `&as=${encodeURIComponent(asParam)}` : "";
@@ -59,6 +62,63 @@ export function CaptureLanding({
   // reads the selected site's key + name. Kept as props so a later
   // train can thread a site switch at the top if that lands.
   void sites; void manySites;
+
+  // Train 3 §7 sent variant: no drafts left + at least one
+  // invoice sent by this person at this site in the last 12
+  // hours. Each row reads its own status word ("With accounting",
+  // "Test send", "Sending") per correction 4.
+  const sentList = recentlySent ?? [];
+  if (drafts.length === 0 && sentList.length > 0) {
+    const n = sentList.length;
+    const statusWord = (r: RecentlySentRow): string => {
+      if (r.v2_email_status === "sent") return r.v2_mode === "test" ? "Test send" : "With accounting";
+      if (r.v2_email_status === "held") return "Sending";
+      return "Not delivered";
+    };
+    return (
+      <div className="kf-invoices-surface kf-inv-capture">
+        {previewName ? <OwnerPreviewBanner name={previewName} exitHref="/invoices" /> : null}
+        <div className="kf-only-desktop">
+          <IdentBand
+            eyebrow={`${siteAccountKey} · ${siteName}`}
+            title={`${n} sent`}
+            kick="Nothing else needs doing."
+          />
+        </div>
+        <div className="kf-inv-phonehead kf-only-phone">
+          <h2 className="kf-inv-phonehead__title">
+            {n} sent
+            <span className="kf-inv-phonehead__tick" aria-hidden />
+          </h2>
+          <p className="kf-inv-phonehead__kick">Nothing else needs doing.</p>
+        </div>
+
+        <ul className="kf-inv-youareset">
+          {sentList.map((r) => {
+            const label = r.invoice_number ? `#${r.invoice_number}` : "No number";
+            return (
+              <li key={r.invoice_id}>
+                <Link href={`/invoices/list?site=${siteSlug}&inv=${encodeURIComponent(r.invoice_id)}${asQAmp}`}>
+                  <strong>{r.vendor_name || "-"}</strong>
+                  <span>{r.kind === "credit" ? "Credit " : ""}{label} · {statusWord(r)}</span>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+
+        <div className="kf-inv-youareset__cta">
+          <AddMoreButton siteSlug={siteSlug} asParam={asParam} />
+          <Link
+            className="kf-btn kf-btn--line"
+            href={`/invoices/list?site=${siteSlug}${asQAmp}`}
+          >
+            See the list
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   // E branch (correction 6): has drafts and every one is ready.
   if (drafts.length > 0 && restCount === 0) {

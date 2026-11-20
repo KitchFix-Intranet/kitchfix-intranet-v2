@@ -16,7 +16,7 @@ test("labelFor: field names map to plain words", () => {
   assert.equal(labelFor("total_amount"), "Total");
   assert.equal(labelFor("gl_breakdown"), "Coding");
   assert.equal(labelFor("files"), "Page");
-  assert.equal(labelFor("copy"), "Copy");
+  assert.equal(labelFor("copy"), "Copy to settle");
   assert.equal(labelFor("anything-else"), "Something");
 });
 
@@ -86,7 +86,7 @@ test("runReadyCheck: same_invoice copy -> ready false + copy error", () => {
   assert.equal(r.ready, false);
   const copy = r.errors.find((e) => e.field === "copy");
   assert.ok(copy);
-  assert.equal(labelFor(copy.field), "Copy");
+  assert.equal(labelFor(copy.field), "Copy to settle");
 });
 
 test("runReadyCheck: same_draft copy -> ready false + copy error", () => {
@@ -133,5 +133,5 @@ test("toMissing with a copy error at the end: no overflow", () => {
     copyError: "same_invoice",
   });
   const missing = toMissing(r.errors);
-  assert.ok(missing.includes("Copy"));
+  assert.ok(missing.includes("Copy to settle"));
 });
