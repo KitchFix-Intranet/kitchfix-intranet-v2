@@ -516,6 +516,7 @@ function SuggestBody({
   });
   const [sending, setSending] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [sentConfirm, setSentConfirm] = useState(false);
 
   // Persist draft on change. Clear on successful send or Discard.
   useEffect(() => {
@@ -568,18 +569,25 @@ function SuggestBody({
         }),
       });
       if (res.ok) {
-        // Clear the draft, close, and tell the reader what happens next.
+        // Clear the draft, swap the panel body to a "sent"
+        // confirmation that carries a quiet link to "Your
+        // suggestions", and leave it open. The reader presses
+        // Close to dismiss, or follows the link.
         try {
           window.localStorage.removeItem(DRAFT_KEY_PREFIX + docId);
         } catch {
           // non-fatal
         }
+        setSending(false);
+        setSentConfirm(true);
+        // Also announce via the shared toaster so sighted readers
+        // who have the panel scrolled get a short read of the
+        // same message.
         toast(
           `Suggestion sent to ${facts.owner ?? "the owner"}. Nothing in the document changes until they publish.`,
         );
-        setSending(false);
-        onSent();
-        // Keep the reader where they were - no navigation needed.
+        // router.refresh so the end-of-document "Your suggestions"
+        // link shows up on the next render.
         router.refresh();
         return;
       }
@@ -607,6 +615,41 @@ function SuggestBody({
     () => secOptions.find((s) => s.anchor === draft.sectionAnchor)?.text ?? null,
     [draft.sectionAnchor, secOptions],
   );
+
+  // After a successful send, the panel body becomes a short
+  // "sent" confirmation with a quiet link to "Your suggestions"
+  // (the only entry point readers have to that page from this
+  // flow).
+  if (sentConfirm) {
+    return (
+      <div className="kf-lb-panel__body">
+        <p className="kf-lb-panel__kick">
+          <strong>Sent.</strong>
+        </p>
+        <p className="kf-lb-note">
+          Your suggestion is with {facts.owner ?? "the owner"}. Nothing in
+          the document changes until they publish.
+        </p>
+        <p className="kf-lb-panel__kick">
+          <a
+            className="kf-lb-sent-link"
+            href="/library/suggestions/mine"
+          >
+            See your suggestions
+          </a>
+        </p>
+        <div className="kf-lb-panel__foot">
+          <button
+            type="button"
+            className="kf-btn kf-btn--primary"
+            onClick={onSent}
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="kf-lb-panel__body">

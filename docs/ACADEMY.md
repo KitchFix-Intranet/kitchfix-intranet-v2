@@ -424,24 +424,108 @@ either column. The probe stores `<b>x</b>` + a script tag and
 confirms both come back escaped.
 
 **The owner's side** is `/library/suggestions` (requireOwnerPage).
-Open notes, newest first. Each row shows: the document number and
-title, the part (`section_title` or "The whole document" when
-`section_key` is null), the note, the reader's wording in a
-collapsed `<details>` when they gave one, the sender's email, and
-when it arrived. Two actions per row: Used and No change. Both
-set `handled_by`, `handled_at`, and `handled_outcome` and close
-the row; closed rows leave the list. The owner reaches the page
-via a quiet "Suggestions N waiting" snippet on the bookcase, shown
-only to owners and only when at least one note is open. The shell
-menu is untouched.
+Three lists on one page, each showing its own count:
 
-This page is the one place a sender's email address shows. It is
-never written into an address, a log line, or an error message.
+- **Open** - notes waiting to be read. Default list.
+- **Accepted - not changed yet** - notes the owner has said Yes
+  to but the document source has not been updated for yet.
+- **Closed** - done and declined notes, newest first. Each one
+  says which it is. Nothing ever just disappears.
 
-The two June rows have no `section_key`, no `section_title`, no
-`suggested_text` - they render cleanly ("The whole document", no
-reader wording block).
+The storage schema holds four screen-visible states inside the
+two columns the table already has:
+
+| Screen label                | `status`      | `handled_outcome` |
+|-----------------------------|---------------|-------------------|
+| Open                        | `open`        | null              |
+| Accepted - not changed yet  | `in_progress` | `used`            |
+| Done                        | `closed`      | `used`            |
+| Declined                    | `closed`      | `no_change`       |
+
+The stored values stay as they are (`used` + `no_change` are the
+only values the `chk_issue_outcome` constraint allows); only the
+screen words change. L4b adds one text column, `handled_note`,
+for the optional decline reason.
+
+The actions a note moves through:
+
+- **Accept** (filled button on an Open note) - moves to
+  Accepted - not changed yet. Keeps the owner who accepted and
+  when, until Mark as done closes it.
+- **Mark as done** (filled button on an Accepted note) - moves
+  to Closed as Done. The owner page says in one plain line that
+  accepting does not change the document yet: the change is
+  made in the document's source for now.
+- **Decline** - opens a step with an optional reason (plain
+  text, capped at 2000 characters, stored on `handled_note`)
+  and moves the note to Closed as Declined.
+- **Put back to Open** - on any Accepted or Closed note.
+  Clears `handled_by`, `handled_at`, `handled_outcome` and
+  `handled_note`.
+
+Every row carries three more controls: **Open the document
+here** (goes to `/library/<id>#<section>?from=/library/suggestions`
+so BackLink on the document page lands back here), **Reply**
+(a plain `mailto:` link to the sender with a subject naming the
+document and a body that quotes the note; nothing is sent by the
+server), and - where the reader wrote their own wording - a
+"Reader's wording" block that shows that text clearly apart from
+the note. A failed action is a designed state: the row stays
+where it is and the reader-written fields stay in view.
+
+All four actions go through one route:
+`POST /api/academy/library/suggestions/[id]/action` body
+`{ action, reason? }`. `requireOwnerApi` is the first thing the
+handler runs. The function `applyOwnerAction` in
+`src/lib/academy/suggestions.ts` refuses a move that does not
+make sense from the row's current state (409 `wrong_state`) and
+never trusts the request for who is acting - `handled_by` comes
+from the session email only.
+
+The **bookcase snippet** that shows the owner how many notes need
+their attention is counted as Open plus Accepted-not-changed-yet
+(`countActiveSuggestions`); Closed does not light the badge.
+
+The sender's email is the one place a reader's address is shown
+across both pages. It is never written into an address, a log
+line, or an error message.
+
+## Library: your suggestions
+
+`/library/suggestions/mine` is the reader's own list. Any signed-
+in person the gate lets into the Library sees only their own notes,
+newest first. The server decides whose notes these are from the
+signed-in session (`requireAppAccess` runs first, then
+`listMineForEmail` is called with the gate's email); no email or
+id is in the address or in the request. A person can never see
+anyone else's note or anyone's email on this page - the payload
+is scrubbed of `reporter_email` before it leaves the server, so
+not even the viewer's own address ends up in the markup.
+
+Each row shows: the document number and title, the part, what the
+reader wrote, and what happened: Open, Accepted, Done, or Declined
+with the reason if one was given. Read only. If a note is on a
+document the person can no longer read by L1's rule, the document
+number shows but the title is `null` and no link is drawn.
+
+Readers reach the page from two quiet places and nowhere else:
+
+- A **See your suggestions** link inside the send-confirmation
+  that opens in the Suggest panel after a successful submit
+  (the panel's body swaps to a short "sent" view with the
+  link; the reader presses Close to dismiss it).
+- A **Your suggestions** control in the end-of-document close,
+  rendered only when the server says the viewer has at least
+  one note (`hasOwnSuggestions`). A reader who has never sent a
+  note never sees it.
+
+The shell menu is untouched. Nothing on the shell level knows
+about `/library/suggestions/mine`.
+
+The two June rows and the one 2026-11-20 row have no
+`section_key`, no `section_title`, no `suggested_text` - they
+render cleanly ("The whole document", no reader wording block).
 
 The fuller office queue - reading the wording against the
 document, taking it into a draft, bulk-closing a day's stale
-notes - is a later train. L3 is small on purpose.
+notes - is a later train.

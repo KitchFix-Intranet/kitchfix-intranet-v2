@@ -1,13 +1,14 @@
 "use client";
 
 // The close at the end of the article: Suggest an edit, Share,
-// Back. The first two dispatch the same custom events the top-bar
-// toolbar dispatches, so DocControlsIsland handles both openers
-// without caring who sent the message. Back renders the same
-// BackLink as the top bar so wording is consistent.
+// Back - plus a quiet "Your suggestions" link when the viewer has
+// at least one note of their own. The first two dispatch the same
+// custom events the top-bar toolbar dispatches; Back renders the
+// same BackLink as the top bar so wording is consistent.
 
 import { useCallback } from "react";
-import { MessageSquarePlus, Share2 } from "lucide-react";
+import Link from "next/link";
+import { MessageSquarePlus, Share2, FileText } from "lucide-react";
 import { BackLink } from "./BackLink";
 import { DOC_TOOL_EVENT, type DocToolEventDetail } from "./docToolEvents";
 
@@ -15,10 +16,15 @@ export function DocEnd({
   docId,
   docTitle,
   ownerName,
+  showYourSuggestions,
 }: {
   docId: string;
   docTitle: string;
   ownerName: string | null;
+  // Server tells the client whether to show the quiet "Your
+  // suggestions" link; see `hasOwnSuggestions` in
+  // src/lib/academy/suggestions.ts. Never a browser read.
+  showYourSuggestions: boolean;
 }) {
   const dispatch = useCallback(
     (kind: "share" | "suggest") => {
@@ -62,6 +68,18 @@ export function DocEnd({
           <BackLink />
         </div>
       </div>
+      {showYourSuggestions ? (
+        <div className="kf-lb-end__your-row">
+          <Link
+            href="/library/suggestions/mine"
+            className="kf-btn kf-btn--ghost kf-lb-end__your"
+            prefetch={false}
+          >
+            <FileText size={14} strokeWidth={1.75} aria-hidden />
+            <span>Your suggestions</span>
+          </Link>
+        </div>
+      ) : null}
     </footer>
   );
 }

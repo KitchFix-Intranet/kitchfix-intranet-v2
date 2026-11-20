@@ -33,6 +33,7 @@ import { buildOutline, stripLeadingTitleH1, wireCrossDocLinks, injectSectionEndC
 import { DocNav } from "@/components/library/DocNav";
 import { DocControlsIsland } from "@/components/library/DocControlsIsland";
 import { DocEnd } from "@/components/library/DocEnd";
+import { hasOwnSuggestions } from "@/lib/academy/suggestions";
 import "@/components/library/library.css";
 
 export default async function Page({
@@ -83,6 +84,10 @@ export default async function Page({
   // text; we want the end-of-section controls to be added AFTER
   // that pass so the button HTML is not itself rewritten.
   const bodyWithSectionEnds = linkedHtml ? injectSectionEndControls(linkedHtml, outline) : linkedHtml;
+  // Server-side check used only to decide whether to show the
+  // quiet "Your suggestions" link at the end of the document. The
+  // viewer never sees anyone else's note from this signal.
+  const viewerHasNotes = await hasOwnSuggestions(email);
   const versionLabel = doc.version != null ? `v${doc.version}` : null;
   const classLabel = humanizeDocClass(doc.doc_class);
 
@@ -168,7 +173,12 @@ export default async function Page({
             dangerouslySetInnerHTML={{ __html: bodyWithSectionEnds }}
           />
         )}
-        <DocEnd docId={doc.id} docTitle={doc.title} ownerName={doc.owner} />
+        <DocEnd
+          docId={doc.id}
+          docTitle={doc.title}
+          ownerName={doc.owner}
+          showYourSuggestions={viewerHasNotes}
+        />
       </article>
 
       <aside className="kf-lb-doc__about" aria-label="About this document">

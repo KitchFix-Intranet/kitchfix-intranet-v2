@@ -1,6 +1,6 @@
 "use client";
 
-// BackLink - one control that says where it goes. Three shapes of
+// BackLink - one control that says where it goes. Four shapes of
 // "back":
 //
 //   library       -> the Library bookcase. Default.
@@ -10,13 +10,18 @@
 //   document      -> the previous document, when the viewer followed
 //                    an in-text link. Set when the URL carries
 //                    `?from=/library/<docId>`.
+//   suggestions   -> the owner's Suggestions page, when the viewer
+//                    clicked "Open the document here" on a note.
+//                    Set when the URL carries
+//                    `?from=/library/suggestions`.
 //
 // The address bar and browser Back AGREE: we push with
 // `router.push`, so the browser's own Back goes where this control
 // goes. On a cold-pasted link (no history entry we control), both
 // go to the Library.
 //
-// Nothing personal lives in the address: `from` is a /library path,
+// Nothing personal lives in the address: `from` is one of a handful
+// of library paths (`/library`, `/library/<id>`, `/library/suggestions`),
 // `q` is whatever the user typed in the search field.
 
 import Link from "next/link";
@@ -24,7 +29,7 @@ import { useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
-type Variant = "library" | "search" | "document";
+type Variant = "library" | "search" | "document" | "suggestions";
 
 type Props = {
   // Phone-friendly: a short label is used on narrow widths. The
@@ -40,6 +45,16 @@ export function BackLink({ longLabel, shortLabel }: Props) {
     const spStr = sp?.toString() ?? "";
     const q = sp?.get("q") ?? "";
     const from = sp?.get("from") ?? "";
+    // Exact match for the owner's Suggestions page. Matched BEFORE
+    // the generic /library/<id> branch so the shorter path wins.
+    if (from === "/library/suggestions") {
+      return {
+        variant: "suggestions" as Variant,
+        href: "/library/suggestions",
+        derivedLong: "Back to Suggestions",
+        derivedShort: "Back",
+      };
+    }
     const isDocPath = from.startsWith("/library/") && from.length > "/library/".length;
     if (isDocPath) {
       // Preserve the previous document's address verbatim.
