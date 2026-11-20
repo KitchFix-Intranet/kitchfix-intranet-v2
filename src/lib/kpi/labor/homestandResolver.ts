@@ -1,0 +1,614 @@
+// src/lib/labor/homestandResolver.js
+//
+// PR-1 of the homestand build. Derives ordered stands from the
+// sc_homestand_schedule table for the four MLB clubhouse accounts
+// in HOMESTAND_ACCOUNTS_FY2026; returns [] for every other account
+// so the client's homestand tab is ABSENT, not disabled. See the
+// constant's own comment for why the list is hardcoded rather than
+// derived from data (audit follow-up ruling 2026-08-21).
+//
+// One code path serves the four accounts. All four carry a stored
+// homestand_id. We derive stands from the raw GAME rows anyway and
+// expose the stored id as metadata only so a probe can verify the
+// derivation matches what the schedule loader wrote. Keying the URL
+// or budget on a stored id would reintroduce the exact split owner
+// ruling 2026-08-21 exists to eliminate.
+//
+// Stand counts are NOT uniform across accounts. Measured for FY2026:
+// CIN - OH 13, STL - MO 13, TXR - TX - H 12, TXR - TX - V 12. Anything
+// hardcoding 13 is wrong on two of the four active accounts. The
+// derivation runs on the actual GAME rows in the account's schedule;
+// no place downstream assumes a fixed count.
+//
+// Owner-approved attribution (forward-looking):
+//   window(H) = [ previous stand's last game day + 1 ... H's last game day ]
+//   Season-start edge: window_start = max(day-after-prev-season-last,
+//                                          daily-grain floor,
+//                                          H.game_start)
+//   Pre-floor stands (game_start < daily floor): budget AND actual
+//   land as null, not zero. Counting a budget with no attributable
+//   actual is what inflated the design-pass bank from [amount] to
+//   [amount]; we omit them explicitly here and in the bank rollup.
+//
+// Grouping rule (verified on CIN - OH: 13 stored -> 13 derived; the
+// same shape holds on STL - MO 13/13, TXR - TX - H 12/12, TXR - TX - V
+// 12/12):
+//   sort GAME rows by service_date, break when
+//     next.service_date - prev.service_date > 2
+//   which allows one off-day inside a stand (mid-series rest day).
+//   day_type = 'GAME' only. AWAY is schedule context, not a game.
+//
+// Budget attribution (the trap owner named):
+//   PERIOD LENGTH IS ALWAYS 28 DAYS, from the fiscal calendar. Never
+//   from what happens to be in labor_actuals. Per-day cents are the
+//   period amount divided by 28 with an LRM residual distribution
+//   over the first `residual` days of the period so
+//     sum(per-day budget across the fiscal year) ==
+//     sum(kpi_budgets for account, line_code) to the cent.
+//   H4 asserts this invariant.
+
+import { pagedSelect } from "@/lib/kpi/shared/pagedSelect";
+import type { FiscalYear } from "@/lib/kpi/shared/fiscalYear";
+
+const MS_PER_DAY = 86400000;
+const PERIOD_LENGTH_DAYS = 28;
+
+// The accounts that get a homestand tab this season. Owner ruling
+// 2026-08-21 (final), hardcoded and NOT derived from data. The name
+// carries FY2026 deliberately - this is a scope decision for this
+// season, revisited when 2027 schedules land.
+//
+// Why this is a constant list, not a `has schedule AND has hourly
+// labor` derivation:
+//   - CIN - KY and TBJ - NY have zero hourly labor - salaried staff
+//     only, verified against the P8 P&L. Both have a game schedule.
+//     A pure data gate would still exclude them today (labor count
+//     is zero), but the guardrail against a future season where they
+//     hire one hourly worker is a hardcoded list, not a threshold.
+//   - STL - FL and TBJ - FL are development complexes: 58% of their
+//     hourly labor falls on non-game days against 12% at CIN - OH,
+//     and they work 117 days against 57 game days. The homestand
+//     model assumes labor clusters around games; it does not hold
+//     there. A pure data gate would INCLUDE them (66 GAME rows +
+//     hundreds of labor rows + full 3100.1 budgets), rendering a
+//     view that misleads.
+//
+// Do not "fix" this into a derived rule. The next reader who thinks
+// this looks like a smell should read the audit trail on PR-2 first.
+export const HOMESTAND_ACCOUNTS_FY2026 = new Set([
+  "CIN - OH", "STL - MO", "TXR - TX - H", "TXR - TX - V",
+]);
+
+// Fiscal-year boundaries. Duplicated from deriveActuals.js (which
+// doesn't export them); trap-avoidance is that these are always 364
+// days = 13 * 28, never derived from data.
+//
+// Train 2c: no longer read by listHomestands - the caller now
+// threads `fy: FiscalYear` and the engine reads year/startISO/endISO
+// from that. The table stays here per the train 2c prompt direction
+// ("Leave the table as-is"); its remaining role is a human-readable
+// reference for the three fiscal years deriveActuals.js operates on.
+// No branch in this file calls FY_BOUNDARIES.get(...) anymore.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const FY_BOUNDARIES = new Map([
+  [2025, { start: "2024-12-30", end: "2025-12-28" }],
+  [2026, { start: "2025-12-29", end: "2026-12-27" }],
+  [2027, { start: "2026-12-28", end: "2027-12-26" }],
+]);
+
+const LINE_CODE = "3100.1";
+const LINE_CODE_SALARY = "3100.2";
+
+// ─── date helpers (UTC-anchored so DST cannot shift a boundary) ─────
+export function isoToDate(iso: any) { return new Date(`${iso}T00:00:00.000Z`); }
+export function dateToIso(d: any)   { return d.toISOString().slice(0, 10); }
+export function addDaysIso(iso: any, n: any) {
+  return dateToIso(new Date(isoToDate(iso).getTime() + n * MS_PER_DAY));
+}
+function daysBetween(a: any, b: any) {
+  return Math.round((isoToDate(b).getTime() - isoToDate(a).getTime()) / MS_PER_DAY);
+}
+
+// Returns 1..13 for a date in FY, or null.
+function periodOfDate(iso: any, fyStartIso: any) {
+  const d = daysBetween(fyStartIso, iso);
+  if (d < 0 || d >= 13 * PERIOD_LENGTH_DAYS) return null;
+  return Math.floor(d / PERIOD_LENGTH_DAYS) + 1;
+}
+
+// The Monday-anchored week that contains an ISO date, returned as an
+// ISO date for the Monday. Used for peak_games_in_week.
+function mondayIsoFor(iso: any) {
+  const d = isoToDate(iso);
+  const dow = d.getUTCDay();               // 0=Sun ... 1=Mon
+  const daysBackToMon = (dow + 6) % 7;
+  return dateToIso(new Date(d.getTime() - daysBackToMon * MS_PER_DAY));
+}
+
+// Train 2c: pagedSelect-backed read helper. Every caller sorts on a
+// unique key; see each call site's comment below.
+async function fetchAllRange(supa: any, table: any, cols: any, filters: any, orders: any[]) {
+  const q = await pagedSelect((from: number, to: number) => {
+    let qy: any = supa.from(table).select(cols);
+    for (const [k, v] of filters) qy = qy.eq(k, v);
+    for (const [col] of orders) qy = qy.order(col);
+    return qy.range(from, to);
+  });
+  if (q.error) throw new Error(`homestandResolver ${table}: ${q.error.message}`);
+  return q.data;
+}
+
+// ─── budget arithmetic (mille-cent accumulator) ─────────────────────
+// Fractional per-day cents: period_cents / 28. Accumulate in
+// mille-cents (integer x 1000) so 3 dp of precision survives the sum;
+// round to cents at the field boundary. Matches the owner-verified
+// scheme (HS 11 P8 3d + P9 11d = [amount] exact); LRM residual-to-
+// first-N-days gave [amount] (3c high) on the same window.
+//
+// H4 invariant: sum of per-day mille-cents over the entire FY equals
+// sum(period_cents_x1000). Trivially true because each period
+// contributes 28 * (period_cents * 1000 / 28) = period_cents * 1000.
+
+export function perDayMilleCents(periodCents: any) {
+  return Math.round(periodCents * 1000 / PERIOD_LENGTH_DAYS);
+}
+
+// Sum per-day mille-cents across [start, end] inclusive. Returns
+// integer mille-cents (cents x 1000). Divide by 1000 + round to cents
+// at the caller.
+function sumWindowMilleCents(budgetByPeriod: any, startIso: any, endIso: any, fyStartIso: any) {
+  let mille = 0;
+  for (let d = startIso; d <= endIso; d = addDaysIso(d, 1)) {
+    const p = periodOfDate(d, fyStartIso);
+    if (p == null) continue;
+    mille += perDayMilleCents(budgetByPeriod.get(p) || 0);
+  }
+  return mille;
+}
+
+// ─── grouping ───────────────────────────────────────────────────────
+// Group GAME rows into stands. Break when gap > 2 (one-day inside-stand
+// rest is preserved). Verified: on CIN - OH this reproduces the stored
+// 13 stands EXACTLY. Naive consecutive-day grouping gives 20 because
+// mid-series off days split stands in two.
+export function groupGamesIntoStands(gameRowsSorted: any) {
+  if (!gameRowsSorted?.length) return [];
+  const groups: any[] = [];
+  let cur = [gameRowsSorted[0]];
+  for (let i = 1; i < gameRowsSorted.length; i++) {
+    const prev = cur[cur.length - 1];
+    const g = gameRowsSorted[i];
+    const gap = daysBetween(prev.service_date, g.service_date);
+    if (gap > 2) { groups.push(cur); cur = [g]; }
+    else cur.push(g);
+  }
+  groups.push(cur);
+  return groups;
+}
+
+// Peak GAME days in any Mon-Sun week the stand overlaps. This is the
+// overtime driver - the 40-hour clock resets Monday.
+function peakGamesInWeek(stand: any) {
+  const byWeek = new Map<string, number>();
+  for (const g of stand) {
+    const wkMon = mondayIsoFor(g.service_date);
+    byWeek.set(wkMon, (byWeek.get(wkMon) || 0) + 1);
+  }
+  return byWeek.size ? Math.max(...byWeek.values()) : 0;
+}
+
+// day/night classification from the sc-15 / sc-16 day_night column.
+// Values in the DB: "day" | "night" (lowercase, spec-verified 100%
+// populated on GAME rows for all six accounts, 2026-08-21). Anything
+// else counts as neither so the sum invariant catches unexpected data.
+function classifyDN(v: any) {
+  const s = String(v || "").toLowerCase();
+  if (s === "night") return "night";
+  if (s === "day")   return "day";
+  return null;
+}
+
+/**
+ * List ordered homestands for an MLB account in a fiscal year.
+ *
+ * Returns [] for any account not in HOMESTAND_ACCOUNTS_FY2026 - see
+ * that constant's own comment for the reasoning behind the list.
+ * Returns [] if the fiscal year has no schedule rows or no budgets.
+ *
+ * Salary integration (PR #274, owner ruling 2026-08-21): when
+ * `opts.includeSalary` is true, folds 3100.2 salary budgets into
+ * stand.budget on the same per-day pro-rate basis 3100.1 uses.
+ * stand.budget_hourly and stand.budget_salary are always emitted as
+ * breakout fields so a probe can crosscheck the sum, and so hourly-
+ * only figures never move when the toggle flips. Owner failure mode
+ * this exists to prevent: actual folding in salary while budget
+ * stayed hourly-only would make every stand read over budget the
+ * instant the toggle flipped; both sides must move together.
+ *
+ * @param {SupabaseClient} supa
+ * @param {string} accountKey
+ * @param {FiscalYear} fy  the fiscal year object the caller is serving
+ * @param {{ includeSalary?: boolean }} [opts]
+ * @returns {Promise<Array>} ordered stands
+ */
+export async function listHomestands(supa: any, accountKey: any, fy: FiscalYear, opts: any = {}) {
+  const includeSalary = !!opts.includeSalary;
+  // Owner ruling 2026-08-21 (final): the homestand view is available
+  // on the four accounts in HOMESTAND_ACCOUNTS_FY2026 and nobody else
+  // for this season. See the constant's own comment for why this is a
+  // hardcoded list, not a data-derived gate.
+  if (!HOMESTAND_ACCOUNTS_FY2026.has(accountKey)) return [];
+  if (!fy) return [];
+  const fiscalYear = fy.year;
+
+  const budgetFetches = [
+    // Train 2c: sc_homestand_schedule row grain is
+    // (account_key, service_date); account_key fixed so service_date
+    // is unique.
+    fetchAllRange(
+      supa,
+      "sc_homestand_schedule",
+      "service_date, day_type, opponent, homestand_id, day_night, is_doubleheader, game_pk",
+      [["account_key", accountKey]],
+      [["service_date"]],
+    ),
+    // Train 2c: kpi_budgets PK is (account_key, line_code, fiscal_year,
+    // period_no); all three leading components are fixed by the .eq()
+    // filters so period_no alone is unique within the filter.
+    fetchAllRange(
+      supa,
+      "kpi_budgets",
+      "period_no, amount",
+      [["account_key", accountKey], ["line_code", LINE_CODE], ["fiscal_year", fiscalYear]],
+      [["period_no"]],
+    ),
+  ];
+  if (includeSalary) {
+    budgetFetches.push(fetchAllRange(
+      supa,
+      "kpi_budgets",
+      "period_no, amount",
+      [["account_key", accountKey], ["line_code", LINE_CODE_SALARY], ["fiscal_year", fiscalYear]],
+      [["period_no"]],
+    ));
+  }
+  const results = await Promise.all(budgetFetches);
+  const sched = results[0];
+  const budgets = results[1];
+  const salaryBudgets = includeSalary ? (results[2] || []) : [];
+
+  const games = sched
+    .filter((r: any) => r.day_type === "GAME"
+                 && r.service_date >= fy.startISO
+                 && r.service_date <= fy.endISO)
+    .sort((a: any, b: any) => a.service_date.localeCompare(b.service_date));
+  if (!games.length) return [];
+
+  const groups = groupGamesIntoStands(games);
+
+  const budgetByPeriod = new Map<number, number>();
+  for (const b of budgets) budgetByPeriod.set(Number(b.period_no), Math.round(Number(b.amount) * 100));
+  const salaryBudgetByPeriod = new Map<number, number>();
+  for (const b of salaryBudgets) salaryBudgetByPeriod.set(Number(b.period_no), Math.round(Number(b.amount) * 100));
+  const dailyFloorIso = await resolveDailyFloor(supa);
+
+  const out: any[] = [];
+  for (let i = 0; i < groups.length; i++) {
+    const stand = groups[i];
+    const game_start = stand[0].service_date;
+    const game_end   = stand[stand.length - 1].service_date;
+
+    // window_start:
+    //   Stands 2+ take the day after the previous stand's last game -
+    //   which naturally includes the prep day before the next opener.
+    //   The FIRST stand of the season (i === 0) has no predecessor, so
+    //   PR-1 originally set it to game_start. Owner ruling 2026-08-21
+    //   after PR #773 v3 surfaced the gap: that made HS 1 the only
+    //   stand in the season that did not own its prep day - the
+    //   season's first prep day (game_start - 1) fell into no stand
+    //   at all, and its share of the weekly total ([amount] on CIN - OH's
+    //   week 03/23-03/29) went unattributed in the pre-floor estimator.
+    //   Fix: HS 1's window starts at game_start - 1 (its prep day).
+    //   Every stand now owns exactly one prep day.
+    //
+    //   The result is then clamped up to the daily floor, so no
+    //   non-pre-floor stand ever owns days before the daily-grain
+    //   floor. Kevin's earlier audit 2026-08-21: PR-1 v1 only
+    //   clamped the FIRST stand, which meant HS 3 inherited a window
+    //   reaching three days behind the floor.
+    //
+    //   pre_floor stays a property of the STAND (game_end < floor),
+    //   not the window: HS 1 and HS 2 stay pre-floor because their
+    //   games completed before daily detail started, so no attributable
+    //   actual exists for them at all.
+    let windowStart;
+    if (i === 0) {
+      windowStart = addDaysIso(game_start, -1);
+    } else {
+      windowStart = addDaysIso(groups[i - 1][groups[i - 1].length - 1].service_date, 1);
+    }
+    // Clamp NON-PRE-FLOOR windows up to the daily floor so the range
+    // resolver stops refusing (was blanking the page for HS 3 through
+    // HS 13 - Kevin's audit 2026-08-21). Pre-floor stands keep their
+    // original window so start <= end stays coherent for display
+    // even though they never render an actual.
+    const preFloor = game_end < dailyFloorIso;
+    if (!preFloor && windowStart < dailyFloorIso) windowStart = dailyFloorIso;
+    const windowEnd = game_end;
+
+    const nightGames = stand.filter((g: any) => classifyDN(g.day_night) === "night").length;
+    const dayGames   = stand.filter((g: any) => classifyDN(g.day_night) === "day").length;
+    const opponents  = [...new Set(stand.map((g: any) => g.opponent).filter(Boolean))];
+
+    // Budget: sum per-day mille-cents across the window, round to
+    // cents at the field boundary. Absent on pre-floor stands per
+    // owner ruling 2026-08-21.
+    //
+    // Salary integration: when includeSalary is on, we additionally
+    // sum 3100.2 per-day mille-cents over the same window and store
+    // it as budget_salary. stand.budget is the SUM (hourly + salary
+    // when includeSalary; hourly-only otherwise). The breakout
+    // fields (budget_hourly, budget_salary) let a probe crosscheck
+    // that hourly-only figures never move when the toggle flips.
+    const hourlyBudgetCents = preFloor
+      ? null
+      : Math.round(sumWindowMilleCents(budgetByPeriod, windowStart, windowEnd, fy.startISO) / 1000);
+    const salaryBudgetCents = (preFloor || !includeSalary)
+      ? null
+      : Math.round(sumWindowMilleCents(salaryBudgetByPeriod, windowStart, windowEnd, fy.startISO) / 1000);
+    const totalBudgetCents = hourlyBudgetCents == null
+      ? null
+      : hourlyBudgetCents + (salaryBudgetCents || 0);
+
+    out.push({
+      // Stored id (metadata only - H3 verifies our derived groups
+      // match). URL keys on game_start, never on this.
+      homestand_id: stand[0].homestand_id || null,
+      game_start, game_end,
+      window_start: windowStart, window_end: windowEnd,
+      game_days: stand.length,
+      night_games: nightGames,
+      day_games:   dayGames,
+      peak_games_in_week: peakGamesInWeek(stand),
+      window_days: daysBetween(windowStart, windowEnd) + 1,
+      opponents,
+      budget: totalBudgetCents == null ? null : totalBudgetCents / 100,
+      budget_hourly: hourlyBudgetCents == null ? null : hourlyBudgetCents / 100,
+      budget_salary: salaryBudgetCents == null ? null : salaryBudgetCents / 100,
+      pre_floor: preFloor,
+      window_start_bounded_by: windowStart === dailyFloorIso
+        ? "daily_floor"
+        : (i === 0 ? "prep_day" : "prev_game_end_plus_1"),
+      index: i + 1,
+      of_total: groups.length,
+    });
+  }
+  return out;
+}
+
+// Reads the daily floor the same way the range resolver does: the
+// earliest week_start where week_source='sc_day_metadata'. Falls back
+// to the DOLLAR_COVERAGE_FLOOR constant if the read errors, matching
+// the route's pattern.
+//
+// Train 2c: exempt from pagedSelect via `.maybeSingle()` - one row
+// by definition.
+async function resolveDailyFloor(supa: any) {
+  const q = await supa
+    .from("labor_actuals_latest")
+    .select("week_start")
+    .eq("week_source", "sc_day_metadata")
+    .order("week_start", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (q.error || !q.data) {
+    const { DOLLAR_COVERAGE_FLOOR } = await import("@/lib/kpi/floors");
+    return DOLLAR_COVERAGE_FLOOR;
+  }
+  return q.data.week_start;
+}
+
+/**
+ * Find one stand by its game_start ISO (the URL key).
+ * @returns the stand object or null.
+ */
+export function findHomestandByGameStart(homestands: any, gameStartIso: any) {
+  if (!gameStartIso) return null;
+  return (homestands || []).find((h: any) => h.game_start === gameStartIso) || null;
+}
+
+/**
+ * Split actuals across a stand's window into GAME vs OFF, plus the
+ * one-day-before-open prep total. Returns null on a pre-floor stand
+ * (owner ruling 2026-08-21: absent, not zero).
+ *
+ * Accumulates in myriadths (amount * 10000) so 4dp precision from
+ * labor_actuals_daily.dollars_* survives the sum; rounds to cents at
+ * the output field boundary. Same discipline the daily-grain PR uses.
+ *
+ * @param {Array<{work_date, amount}>} actualsDaily
+ * @param {Object} stand
+ * @param {Set<string>} gameDates  ISO dates of every GAME in the stand
+ * @returns {Object|null}
+ */
+export function computeSplitWithGameDates(actualsDaily: any, stand: any, gameDates: any, todayIso: any) {
+  if (!stand || stand.pre_floor) return null;
+  const prepIso = addDaysIso(stand.game_start, -1);
+  let gameX10000 = 0, offX10000 = 0, prepX10000 = 0, todateX10000 = 0;
+  const offDays = new Set<string>();
+  for (const r of actualsDaily || []) {
+    if (r.work_date < stand.window_start || r.work_date > stand.window_end) continue;
+    const x = Math.round(Number(r.amount || 0) * 10000);
+    if (gameDates.has(r.work_date)) {
+      gameX10000 += x;
+    } else {
+      offX10000 += x;
+      offDays.add(r.work_date);
+      if (r.work_date === prepIso) prepX10000 += x;
+    }
+    // HS PR-A: stand-scoped spent_to_date lives on the split (which
+    // already walks these rows) instead of on homestand_estimated
+    // next to bank.spent_to_date (season-scoped) - two spent_to_date
+    // fields with different scopes is exactly the naming collision
+    // that produces a wrong number later. Walks the same rows the
+    // split already visits; the only new work is the up-to-today
+    // filter and the accumulator.
+    if (todayIso && r.work_date <= todayIso) {
+      todateX10000 += x;
+    }
+  }
+  const spent_to_date = todayIso
+    ? Math.round(todateX10000 / 100) / 100
+    : null;
+  return {
+    game_day_dollars: Math.round(gameX10000 / 100) / 100,
+    off_day_dollars:  Math.round(offX10000  / 100) / 100,
+    off_day_count:    offDays.size,
+    prep_day_dollars: Math.round(prepX10000 / 100) / 100,
+    spent_to_date,
+  };
+}
+
+/**
+ * HS PR-B (owner ruling 2026-08-24): fold per-stand `split` onto every
+ * non-pre-floor stand in the list so the season table can render
+ * Prep & off on each row. Pre-PR-B the split was computed only for
+ * the SELECTED stand, so the table column was `–` on every row - a
+ * value the payload could compute but did not.
+ *
+ * Owner ruling additionally: the selected-stand `homestand_split` on
+ * the top-level body reads from the same folded per-stand data now,
+ * not a parallel computation - one source of truth.
+ *
+ * Reads labor_actuals_daily once for the FY window; computes each
+ * stand's split via computeSplitWithGameDates. Pre-floor stands stay
+ * split-less (no per-day actuals to walk before the floor).
+ *
+ * @param {SupabaseClient} supa
+ * @param {string} accountKey
+ * @param {Array} homestands
+ * @param {Array<{service_date, day_type, day_night}>} schedRows
+ * @param {string} todayIso
+ */
+export async function foldPerStandSplits(supa: any, accountKey: any, homestands: any, schedRows: any, todayIso: any) {
+  if (!homestands || homestands.length === 0) return homestands;
+  const targets = homestands.filter((h: any) => !h.pre_floor);
+  if (targets.length === 0) return homestands;
+
+  const windowStart = targets.reduce((min: any, h: any) => h.window_start < min ? h.window_start : min, targets[0].window_start);
+  const windowEnd   = targets.reduce((max: any, h: any) => h.window_end   > max ? h.window_end   : max, targets[0].window_end);
+
+  // Train 2c: paged via pagedSelect. labor_actuals_daily row grain is
+  // (account_key, worker_id, work_date, line_code); account_key fixed
+  // so (work_date, worker_id, line_code) is unique.
+  const dQ = await pagedSelect((from: number, to: number) => supa
+    .from("labor_actuals_daily")
+    .select("account_key, work_date, amount, worker_id, line_code")
+    .eq("account_key", accountKey)
+    .gte("work_date", windowStart)
+    .lte("work_date", windowEnd)
+    .order("work_date")
+    .order("worker_id")
+    .order("line_code")
+    .range(from, to));
+  if (dQ.error) throw new Error(`foldPerStandSplits daily read (${accountKey}): ${dQ.error.message}`);
+  const dailyRows = dQ.data || [];
+
+  // GAME date sets per stand, keyed by game_start. Same shape the
+  // route already builds for the selected stand; folding across every
+  // stand here lets the season table read from one source.
+  const gameDatesByStand = new Map<string, Set<string>>();
+  for (const h of targets) {
+    const dates = new Set<string>(
+      (schedRows || [])
+        .filter((r: any) => r.day_type === "GAME" && r.service_date >= h.game_start && r.service_date <= h.game_end)
+        .map((r: any) => r.service_date)
+    );
+    gameDatesByStand.set(h.game_start, dates);
+  }
+
+  return homestands.map((h: any) => {
+    if (h.pre_floor) return h;
+    const split = computeSplitWithGameDates(
+      dailyRows, h, gameDatesByStand.get(h.game_start) || new Set(), todayIso,
+    );
+    return split ? { ...h, split } : h;
+  });
+}
+
+/**
+ * Season bank. Sums FINISHED stands (game_end < todayIso) that are
+ * NOT pre-floor. Owner ruling 2026-08-21: pre-floor stands have
+ * budget but no attributable actual - counting one without the other
+ * fakes a surplus (design-pass inflated [amount] to [amount]).
+ *
+ * Rounding boundary is PER STAND on both sides, matching the values
+ * an operator sees on the season rail. `h.budget` is already
+ * cent-rounded by the resolver (from the mille-cent per-day sum).
+ * Actual comes from actualsByStand's myriadth accumulator and is
+ * rounded to cents PER STAND before it enters the sum. This means
+ * the bank equals `sum(per-stand budget shown) - sum(per-stand
+ * actual shown)` exactly - an operator adding the nine stands on
+ * screen lands on the bank to the cent. Owner ruling 2026-08-21
+ * after PR-1 v1's mille-cent parallel accumulator drifted 2c.
+ *
+ * @param {Array} homestands
+ * @param {Map<string, number>} actualX10000ByGameStart  myriadths per stand
+ * @param {string} todayIso
+ */
+export function computeHomestandBank(homestands: any, actualX10000ByGameStart: any, todayIso: any) {
+  let budgetCents = 0;
+  let spentCents  = 0;
+  let remainingBudgetCents = 0;
+  let standsFinished = 0;
+  let standsRemaining = 0;
+  for (const h of homestands) {
+    if (h.pre_floor) continue;
+    if (h.game_end < todayIso) {
+      budgetCents += Math.round((h.budget || 0) * 100);              // per-stand rounded
+      const x10000 = actualX10000ByGameStart.get(h.game_start) || 0;
+      spentCents  += Math.round(x10000 / 100);                       // per-stand rounded
+      standsFinished++;
+    } else {
+      standsRemaining++;
+      remainingBudgetCents += Math.round((h.budget || 0) * 100);
+    }
+  }
+  const bankCents = budgetCents - spentCents;
+  const bankShareCents = standsRemaining > 0 ? Math.round(bankCents / standsRemaining) : 0;
+  // Owner ruling 2026-08-21: any figure the server computes must be
+  // read on the client, never re-derived. The season-to-date card's
+  // "9 finished / 2 remaining / [amount] budgeted" trio all comes
+  // from this return so the client cannot count pre-floor stands or
+  // count future stands as finished. Same discrimination the bank
+  // itself uses (pre_floor excluded, game_end < today = finished).
+  return {
+    budget_to_date:  budgetCents / 100,
+    spent_to_date:   spentCents  / 100,
+    bank:            bankCents   / 100,
+    stands_finished:  standsFinished,
+    stands_remaining: standsRemaining,
+    remaining_budget: remainingBudgetCents / 100,
+    bank_share:      bankShareCents / 100,
+  };
+}
+
+/**
+ * Roll up per-stand actual myriadths keyed by game_start. Bank uses this.
+ * Myriadths preserve 4dp precision from labor_actuals_daily.
+ */
+export function actualsByStand(homestands: any, actualsDailyFy: any) {
+  const out = new Map<string, number>();
+  const daily = actualsDailyFy || [];
+  for (const h of homestands) {
+    if (h.pre_floor) continue;
+    let x10000 = 0;
+    for (const r of daily) {
+      if (r.work_date >= h.window_start && r.work_date <= h.window_end) {
+        x10000 += Math.round(Number(r.amount || 0) * 10000);
+      }
+    }
+    out.set(h.game_start, x10000);
+  }
+  return out;
+}

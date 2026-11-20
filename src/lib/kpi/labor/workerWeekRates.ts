@@ -1,0 +1,264 @@
+// src/lib/labor/workerWeekRates.js
+//
+// Resolve a per-worker-per-fiscal-week HOURLY RATE from the stamp
+// Rippling writes on each pay segment. Used by the labor route to
+// feed WeekTable's rate column so the number is a read of the rate
+// in force on the shift, not a client-side division of dollars by
+// clipped hours.
+//
+// Why not divide. `labor_actuals.{hours_*}` is numeric(10,2), so
+// `segment_duration_hours` is the true duration clipped to 2 dp.
+// `estimated_amount` is `estimated_hourly_rate x true duration`,
+// unclipped. Dividing the clipped hours into the full-precision
+// dollars overshoots or undershoots the real rate by up to a cent
+// per segment and the drift compounds across a week. The segment
+// rate IS the rate - no reconstruction needed.
+//
+// Why not rippling_raw_compensations_latest. That table is current
+// state only. Two workers in the live corpus already carry a
+// compensation wage that is above the rate applied to their older
+// shifts, so a July week would render an August rate. The segment
+// rate is stamped on the shift and stays correct for the era it
+// describes.
+//
+// Why not overtime_multiplier. Null on `Holiday Double Rate`, per
+// rule D37 in deriveActuals.js. Any detector that keys on it misses
+// the holiday case that ruling exists to correct.
+//
+// Why key against labor_actuals' own week_start. The derive routes
+// each segment through `resolveWeek(account_key, segment_date)` which
+// uses sc_day_metadata when present and isoWeekBounds as fallback -
+// different accounts can carry different week_starts for the same
+// calendar date. If this helper computed its own week_start from
+// segment_date, the rate map's keys would miss labor_actuals rows
+// whenever the two conventions disagree. Using the actuals rows'
+// own (worker_id, week_start, week_end) ranges as the join target
+// guarantees the keys line up by construction.
+
+import { dedupePaySegments } from "./paySegmentDedupe";
+import { pagedSelect } from "@/lib/kpi/shared/pagedSelect";
+
+// Which earning-type labels count as the worker's REGULAR hourly rate.
+// `Regular` is the current post-cutover label; `Base Pay` is the
+// pre-cutover label still present on history (same semantic). Not a
+// bucket lookup through earning_type_map because the map's `regular`
+// bucket also captures a few variants we deliberately want to exclude
+// from the rate basis (holiday-rate relabels, premium pay).
+const REGULAR_ET_NAMES = new Set(["Regular", "Base Pay"]);
+
+function keyOf(workerId: any, weekStart: any) {
+  return `${workerId}|${weekStart}`;
+}
+
+/**
+ * Build a Map<"workerId|weekStart", rate> for every worker-week in
+ * `actualsRows` whose live regular segments resolve a rate. The
+ * (worker_id, week_start) keys match labor_actuals exactly, so
+ * WeekTable can look up `rates.get("workerId|w.week_start")`.
+ *
+ * Mid-week-raise rule (Kevin ruling 2026-10-06). 7 of 1,537 worker-
+ * weeks in the current corpus carry two distinct regular rates (a
+ * raise mid-week, dated to a Monday or elsewhere). The rate that
+ * covers the MOST regular hours in that week wins. Rendering the
+ * higher of the two would over-report; the lower would under-report;
+ * the time-weighted winner matches what the worker was paid for the
+ * bulk of the week. Comment the choice so a future reader does not
+ * swap it for a different tie-break.
+ *
+ * No rate resolves -> the key is absent. The client renders a dash.
+ * Never a computed fallback and never a constant.
+ */
+export async function loadWorkerWeekRates(supa: any, { actualsRows }: any) {
+  // Build the (worker_id -> [{week_start, week_end}]) lookup from
+  // actualsRows FIRST so the segment join can key by labor_actuals'
+  // own week_start convention.
+  const workerWeeks = new Map<string, any[]>();
+  for (const a of actualsRows || []) {
+    if (!a?.worker_id || !a.week_start) continue;
+    let list = workerWeeks.get(a.worker_id);
+    if (!list) { list = []; workerWeeks.set(a.worker_id, list); }
+    list.push({ week_start: a.week_start, week_end: a.week_end || a.week_start });
+  }
+  // Early exit when the board has no worker-weeks to resolve. This
+  // handles aggregate pseudo-views and empty-period ranges without
+  // reading pay_segments.
+  if (workerWeeks.size === 0) {
+    return { rates: new Map(), mixedRaiseWeeks: 0, workerWeeksCount: 0 };
+  }
+
+  // Compute the request's scope BEFORE fetching: which workers, and
+  // which date range. workerWeeks is built from actualsRows above, so
+  // these are already the exact rows this call needs.
+  const workerIds = [...workerWeeks.keys()];
+  let minDate: any = null, maxDate: any = null;
+  for (const list of workerWeeks.values()) {
+    for (const w of list) {
+      if (minDate === null || w.week_start < minDate) minDate = w.week_start;
+      if (maxDate === null || w.week_end   > maxDate) maxDate = w.week_end;
+    }
+  }
+
+  // Load presence + pay_segments + dedupe. One source of truth
+  // (dedupePaySegments) so this helper cannot drift from the derive.
+  //
+  // Train 2c: paged via pagedSelect. rippling_current_presence PK is
+  // (kind, rippling_id); kind is fixed by .eq("kind", "pay_segments")
+  // so rippling_id is unique within the filter.
+  const presenceSet = new Set<any>();
+  {
+    const q = await pagedSelect((from: number, to: number) => supa
+      .from("rippling_current_presence")
+      .select("rippling_id")
+      .eq("kind", "pay_segments")
+      .order("rippling_id")
+      .range(from, to));
+    if (q.error) throw new Error(`loadWorkerWeekRates presence: ${q.error.message}`);
+    for (const r of q.data || []) presenceSet.add(r.rippling_id);
+  }
+  // PERF 2026-10-16. Three-stage history:
+  //   #1291 (narrowed columns):  40 MB -> 3.8 MB  per call
+  //   #1301 (WHERE clause added): row count scoped to request
+  //   this PR (table swap):       let the index actually be used
+  //
+  // #1301 switched to rippling_raw_pay_segments_latest and added the
+  // worker + segment_date filters. The two moves were in tension: the
+  // _latest view is DISTINCT ON (rippling_id) ORDER BY rippling_id,
+  // fetched_at DESC, so the view dictates the scan order and no index
+  // on segment_date can be used. The filter had to be applied after a
+  // full scan of every row with its payload detoasted - production
+  // measured 4,421 ms on TBJ - FL after #1301.
+  //
+  // Kevin applied an expression index on the raw table 2026-10-16:
+  //   rippling_raw_pay_segments_role_segdate_idx
+  //   on ((payload -> 'owner_role' ->> 'id'),
+  //       (payload ->> 'segment_date'))
+  //
+  // Reading the raw table (not _latest) with these two filters as
+  // text comparisons produces a clean Index Scan with all predicates
+  // in Index Cond. Measured 353 ms on TBJ - FL (12x local speedup;
+  // production should be larger since the brief reports it was
+  // scan-bound, not transfer-bound). Rate maps byte-identical before
+  // and after - verified end-to-end on TBJ - FL, CIN - AZ and
+  // TXR - TX - H plus the all-accounts portfolio.
+  //
+  // DO NOT cast the segment_date predicate to ::date. The index
+  // expression is text; a date cast makes the index unusable and
+  // silently returns to the pre-change latency. Keep the .gte/.lte
+  // string comparisons here.
+  //
+  // dedupePaySegments stays - raw carries multiple rows per
+  // rippling_id (rippling_id re-issues per the 2026-08-19 hotfix
+  // contract, and the walk's own append-only ingest) and the helper
+  // is what collapses them. Verified: 6,443 distinct external_id in
+  // the raw table matches 6,443 in _latest; 0 external_ids missing;
+  // 0 cases where the newest system_updated_at row differs.
+  //
+  // The rehydrated `payload` shape below is deliberate -
+  // dedupePaySegments takes `{ rippling_id, payload }`. Keep the shape
+  // here rather than changing the helper's contract.
+  //
+  // `->>` yields text, so estimated_hourly_rate / segment_duration_hours
+  // arrive as strings. Both are already read through Number() downstream
+  // and system_updated_at was already compared as a string, so no
+  // downstream change is needed.
+  const RATE_SEG_COLS = [
+    "rippling_id",
+    "external_id:payload->>external_id",
+    "system_updated_at:payload->>system_updated_at",
+    "updated_at:payload->>updated_at",
+    "segment_date:payload->>segment_date",
+    "merged_earning_type_name:payload->>merged_earning_type_name",
+    "estimated_hourly_rate:payload->>estimated_hourly_rate",
+    "segment_duration_hours:payload->>segment_duration_hours",
+    "owner_role_id:payload->owner_role->>id",
+  ].join(",");
+
+  // Train 2c: paged via pagedSelect. rippling_id is NOT unique in
+  // rippling_raw_pay_segments (26,527 rows / 22,099 distinct
+  // rippling_id = 4,428 repeats verified 2026-11-20); the primary
+  // key is `id`. Sort on (rippling_id, id) so the chain is unique
+  // for page boundaries. dedupePaySegments collapses the repeats
+  // downstream; the paging rule only needs the sort to be unique.
+  const raw: any[] = [];
+  {
+    const q = await pagedSelect((from: number, to: number) => supa
+      .from("rippling_raw_pay_segments")
+      .select(RATE_SEG_COLS + ",id")
+      .in("payload->owner_role->>id", workerIds)
+      .gte("payload->>segment_date", minDate)
+      .lte("payload->>segment_date", maxDate)
+      .order("rippling_id")
+      .order("id")
+      .range(from, to));
+    if (q.error) throw new Error(`loadWorkerWeekRates raw: ${q.error.message}`);
+    for (const r of q.data || []) {
+      raw.push({
+        rippling_id: r.rippling_id,
+        payload: {
+          external_id: r.external_id,
+          system_updated_at: r.system_updated_at,
+          updated_at: r.updated_at,
+          segment_date: r.segment_date,
+          merged_earning_type_name: r.merged_earning_type_name,
+          estimated_hourly_rate: r.estimated_hourly_rate,
+          segment_duration_hours: r.segment_duration_hours,
+          owner_role: { id: r.owner_role_id },
+        },
+      });
+    }
+  }
+  const dedupe = dedupePaySegments(raw, presenceSet);
+  const segs = dedupe.segments;
+
+  // Group segments by (worker, week_start, rate) accumulating true-
+  // duration regular hours. For each segment, find the labor_actuals
+  // week whose [week_start, week_end] range contains segment_date for
+  // that worker - this is the join that keeps keys aligned with the
+  // actuals table even when sc_day_metadata hands the derive a non-
+  // Monday week_start.
+  // Shape: workerHoursByWeekAndRate.get("worker|week") = Map<rate, hrs>
+  const workerHoursByWeekAndRate = new Map<string, Map<number, number>>();
+  for (const s of segs) {
+    const p = s.payload || {};
+    const workerId = p.owner_role?.id;
+    if (!workerId) continue;
+    const weeks = workerWeeks.get(workerId);
+    if (!weeks) continue;
+    const et = p.merged_earning_type_name;
+    if (!REGULAR_ET_NAMES.has(et)) continue;
+    const segDate = p.segment_date;
+    if (!segDate) continue;
+    const bucket = weeks.find((w: any) => w.week_start <= segDate && segDate <= w.week_end);
+    if (!bucket) continue;
+    const rate = Number(p.estimated_hourly_rate);
+    if (!Number.isFinite(rate) || rate <= 0) continue;
+    const hrs = Number(p.segment_duration_hours);
+    if (!Number.isFinite(hrs) || hrs <= 0) continue;
+
+    const key = keyOf(workerId, bucket.week_start);
+    let perRate = workerHoursByWeekAndRate.get(key);
+    if (!perRate) {
+      perRate = new Map<number, number>();
+      workerHoursByWeekAndRate.set(key, perRate);
+    }
+    perRate.set(rate, (perRate.get(rate) || 0) + hrs);
+  }
+
+  const out = new Map<string, number>();
+  let mixedRaiseWeeks = 0;
+  for (const [key, perRate] of workerHoursByWeekAndRate) {
+    if (perRate.size > 1) mixedRaiseWeeks += 1;
+    let bestRate: any = null, bestHrs = -1;
+    for (const [rate, hrs] of perRate) {
+      if (hrs > bestHrs) { bestRate = rate; bestHrs = hrs; }
+    }
+    if (bestRate != null) out.set(key, Math.round(bestRate * 100) / 100);
+  }
+  return { rates: out, mixedRaiseWeeks, workerWeeksCount: workerHoursByWeekAndRate.size };
+}
+
+// Caller-side key helper so WeekTable + any other consumer don't
+// reinvent the keying rule.
+export function workerWeekRateKey(workerId: any, weekStart: any) {
+  return keyOf(workerId, weekStart);
+}

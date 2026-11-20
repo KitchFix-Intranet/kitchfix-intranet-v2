@@ -59,6 +59,28 @@ const WHOLE = [
   ["src/lib/purchasing/glRollup.js",            "src/lib/kpi/purchasing/glRollup.ts"],
   ["src/lib/purchasing/loaders.js",             "src/lib/kpi/purchasing/loaders.ts"],
   ["src/lib/rippling/paginate.js",              "src/lib/kpi/shared/paginate.ts"],
+  // Train 2c additions:
+  ["src/app/kpi/purchasing/lib/precedence.js",  "src/lib/kpi/purchasing/precedence.ts"],
+  ["src/lib/kpi/floors.js",                     "src/lib/kpi/floors.ts"],
+  ["src/lib/kpi/portfolioMembers.js",           "src/lib/kpi/portfolioMembers.ts"],
+  ["src/lib/labor/budgetProRate.js",            "src/lib/kpi/labor/budgetProRate.ts"],
+  ["src/lib/labor/dailyRangeBody.js",           "src/lib/kpi/labor/dailyRangeBody.ts"],
+  ["src/lib/labor/homestandResolver.js",        "src/lib/kpi/labor/homestandResolver.ts"],
+  ["src/lib/labor/labor-batr.js",               "src/lib/kpi/labor/labor-batr.ts"],
+  ["src/lib/labor/paySegmentDedupe.js",         "src/lib/kpi/labor/paySegmentDedupe.ts"],
+  ["src/lib/labor/preFloorEstimator.js",        "src/lib/kpi/labor/preFloorEstimator.ts"],
+  ["src/lib/labor/rangeResolver.js",            "src/lib/kpi/labor/rangeResolver.ts"],
+  ["src/lib/labor/salaryProRate.js",            "src/lib/kpi/labor/salaryProRate.ts"],
+  ["src/lib/labor/workerWeekRates.js",          "src/lib/kpi/labor/workerWeekRates.ts"],
+];
+
+// Train 2c: handler-to-entry mappings. v1's GET function body
+// against v2's entry function. Compared with the same type-stripping
+// pass; expected non-import diffs class as entry-shape, names,
+// feeGoals, wiring, log, year, clock, paging, or comment-amount.
+const MAPPED = [
+  { v1: "src/app/api/kpi/labor/route.js",      v1Name: "GET", v2: "src/lib/kpi/entry.ts", v2Name: "getLabor" },
+  { v1: "src/app/api/kpi/purchasing/route.js", v1Name: "GET", v2: "src/lib/kpi/entry.ts", v2Name: "getPurchasing" },
 ];
 
 // Partial ports: v1 file -> v2 file + list of top-level declaration
@@ -366,6 +388,39 @@ for (const p of PARTIALS) {
   results.push({ kind: "partial", v1: p.v1, v2: p.v2, perName });
 }
 
+// Train 2c: handler-to-entry MAPPED comparisons.
+for (const m of MAPPED) {
+  const v1Abs = path.join(V1_ROOT, m.v1);
+  const v2Abs = path.join(V2_ROOT, m.v2);
+  if (!fs.existsSync(v2Abs)) {
+    results.push({ kind: "mapped", v1: m.v1, v2: m.v2, missing: true });
+    continue;
+  }
+  const v1Src = fs.readFileSync(v1Abs, "utf8");
+  const v2Src = fs.readFileSync(v2Abs, "utf8");
+  const v2Stripped = stripTypes(v2Src, v2Abs);
+  const v1Decl = extractTopDecl(v1Src, v1Abs, m.v1Name);
+  const v2Decl = extractTopDecl(v2Stripped, v2Abs, m.v2Name);
+  if (!v1Decl || !v2Decl) {
+    results.push({ kind: "mapped", v1: m.v1, v2: m.v2, v1Name: m.v1Name, v2Name: m.v2Name, missing: !v1Decl ? "v1" : "v2" });
+    continue;
+  }
+  const v1Toks = tokenise(normaliseTrailingCommas(normaliseArrowParens(v1Decl)));
+  const v2Toks = tokenise(normaliseTrailingCommas(normaliseArrowParens(v2Decl)));
+  const d = diffTokens(v1Toks, v2Toks);
+  const c = classifyHunks(d.hunks);
+  results.push({
+    kind: "mapped", v1: m.v1, v2: m.v2, v1Name: m.v1Name, v2Name: m.v2Name,
+    v1Tokens: v1Toks.length,
+    v2Tokens: v2Toks.length,
+    diffHunks: d.hunks.length,
+    importHunks: c.importHunks.length,
+    otherHunks: c.otherHunks,
+    otherTokenCount: c.otherHunks.reduce((n, h) => n + h.dels.length + h.inss.length, 0),
+    importTokenCount: c.importHunks.reduce((n, h) => n + h.dels.length + h.inss.length, 0),
+  });
+}
+
 // Print the report.
 let totalV1 = 0, totalDiff = 0, totalImport = 0, totalOther = 0;
 console.log("SAME-CODE MEASURE");
@@ -410,6 +465,24 @@ for (const r of results.filter(x => x.kind === "partial")) {
     totalImport += n.importTokenCount;
     totalOther += n.otherTokenCount;
   }
+}
+
+console.log("");
+console.log("ENTRIES (handler-to-entry)");
+console.log("--------------------------");
+for (const r of results.filter(x => x.kind === "mapped")) {
+  if (r.missing === true) { console.log(`${r.v2}: MISSING`); continue; }
+  if (r.missing) { console.log(`${r.v2Name} in ${r.v2}: declaration missing in ${r.missing}`); continue; }
+  const mark = r.otherTokenCount === 0 ? "ok" : "**NON-IMPORT DIFF**";
+  console.log(`${r.v2Name} in ${r.v2}  <-  ${r.v1Name} in ${r.v1}`);
+  console.log(`  v1-tokens: ${r.v1Tokens}  v2-tokens: ${r.v2Tokens}  diff-hunks: ${r.diffHunks}  import-hunks: ${r.importHunks}  other-tokens: ${r.otherTokenCount} [${mark}]`);
+  if (r.otherHunks.length) {
+    for (const h of r.otherHunks.slice(0, 20)) console.log(formatHunk(h));
+    if (r.otherHunks.length > 20) console.log(`  ... (${r.otherHunks.length - 20} more hunks)`);
+  }
+  totalV1 += r.v1Tokens;
+  totalImport += r.importTokenCount;
+  totalOther += r.otherTokenCount;
 }
 
 console.log("");
