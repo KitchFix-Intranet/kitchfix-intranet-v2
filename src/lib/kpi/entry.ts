@@ -984,6 +984,7 @@ export async function getLabor({
         periods: d26RangePeriods,
         periodStatus: d26StatusMap,
         todayISO: today,
+        fy: fiscalYear,
         pnlMap: d26PnlMap,
         feedByParentPeriod: new Map<any, any>([
           ["3100", d26Feed3100],
@@ -1187,7 +1188,7 @@ export async function getLabor({
   const [revenueBasisSingle, weeklyBasisSingle, overviewBudgetsSingle, pnlResp, periodStatusResp]: any = await Promise.all([
     revenueBasisPromiseSingle,
     loadWeeklyRevenueBasis(supa, { members: [account], start, end, today, fy: fiscalYear }),
-    loadOverviewBudgets(supa, { members: [account] } as any),
+    loadOverviewBudgets(supa, { members: [account], fiscalYear: fiscalYear.year } as any),
     loadPnlActuals(supa, { members: [account], periods: rangePeriodsSingle, fiscalYear: fiscalYear.year } as any),
     loadPeriodStatus(supa, fiscalYear.year as any),
   ]);
@@ -1212,6 +1213,7 @@ export async function getLabor({
       periods: rangePeriodsSingle,
       periodStatus: periodStatusMapSingle,
       todayISO: today,
+      fy: fiscalYear,
       pnlMap: pnlMapSingle,
       feedByParentPeriod,
     } as any);

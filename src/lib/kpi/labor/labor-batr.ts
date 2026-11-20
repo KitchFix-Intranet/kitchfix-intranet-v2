@@ -89,6 +89,7 @@ export async function loadRangeRevenueBasis(supa: any, { members, periods, start
     periodStatus: inputs.periodStatus,
     accountFlags: inputs.accountFlags,
     todayISO: today,
+    fy,
     overviewBudgets: inputs.overviewBudgets,
     pnl: inputs.pnl,
     scByAcct: inputs.scByAcct,

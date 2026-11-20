@@ -502,6 +502,23 @@ const REDACT_VALUE_PATTERNS = [
   /^https?:\/\/(drive\.google\.com|docs\.google\.com)\//i,
 ];
 
+// Train 2c: time-sensitive numeric fields - v1 and V2 compute these
+// from the moment each side reads the clock. Both sides are correct;
+// a few ms between calls is enough to tip an integer-hour or integer-
+// day reading across its boundary. Fingerprint the value before
+// comparison so the proof does not fire on wall-clock drift.
+// Not a dollar figure, not a name - a duration that is honestly
+// different every run.
+const TIME_SENSITIVE_KEYS = new Set([
+  "report_age_hours",
+  "oldest_age_days",
+  "last_billcom_sync",
+  "last_rippling_sync",
+  "last_derive_at",
+  "last_report_ingest_at",
+  "derived_at",
+]);
+
 function redact(value) {
   if (typeof value !== "string") return value;
   const h = crypto.createHash("sha256").update(value).digest("hex").slice(0, 16);
@@ -516,7 +533,13 @@ function walkAndRedact(node, onCount) {
     for (const [k, v] of Object.entries(node)) {
       const lowerK = k.toLowerCase();
       const keyFlags = REDACT_KEYS_SUBSTR.some(s => lowerK.includes(s));
-      if (keyFlags && typeof v === "string" && v.length) {
+      if (TIME_SENSITIVE_KEYS.has(k) && v != null) {
+        // Replace the time-sensitive numeric or ISO-string value with
+        // a sentinel. Both sides collapse to the same marker; the
+        // field name survives for the saved JSON's audit trail.
+        out[k] = "[time_sensitive]";
+        onCount(k);
+      } else if (keyFlags && typeof v === "string" && v.length) {
         out[k] = redact(v);
         onCount(k);
       } else if (typeof v === "string" && REDACT_VALUE_PATTERNS.some(p => p.test(v))) {
