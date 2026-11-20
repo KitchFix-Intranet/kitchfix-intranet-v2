@@ -8,17 +8,29 @@ import { OwnerPreviewBanner } from "./OwnerPreviewBanner";
 import type { CalendarView } from "@/lib/sc/calendar/types";
 import { shortDollarsFromCents } from "@/lib/sc/calendar/billable";
 import { fmtDate } from "@/lib/fmt";
+import { buildReopenedNoticeLine } from "@/lib/sc/submit/reopenedNoticeLine";
 
 export function CalendarPage({
   view,
   basePath,
   asQuery,
   previewName,
+  reopenedIso,
+  reopenedEndIso,
+  reopenedIsPair,
 }: {
   view: CalendarView;
   basePath: string;
   asQuery: string;    // "" or "&as=<id>"
   previewName: string | null;
+  // Train 5: when the person has just reopened a week, the URL
+  // carries the server's resolved unit span — the first Monday
+  // (`reopenedIso`), the last Sunday (`reopenedEndIso`), and
+  // whether it is a pair (`reopenedIsPair`). The calendar's loaded
+  // weeks are NOT consulted for the copy; the server decides.
+  reopenedIso?: string | null;
+  reopenedEndIso?: string | null;
+  reopenedIsPair?: boolean;
 }) {
   // Precompute every href as a plain string here on the server, so
   // nothing that crosses into a `"use client"` child is a function.
@@ -76,6 +88,14 @@ export function CalendarPage({
         <h1>{band.title}</h1>
         {band.kick ? <p>{band.kick}</p> : null}
       </header>
+
+      {reopenedIso ? (
+        <ReopenedNotice
+          startIso={reopenedIso}
+          endIso={reopenedEndIso ?? reopenedIso}
+          isPair={!!reopenedIsPair}
+        />
+      ) : null}
 
       <PeriodStage
         period={view.period}
@@ -162,4 +182,26 @@ function earliestStillOpen(view: CalendarView) {
     if (w.state === "still_open") return w;
   }
   return null;
+}
+
+// Train 5: one calm line above the period stage when the person has
+// just come back from a successful reopen. Fix 5 (2026-11-20): the
+// span (startIso, endIso) and the "is this a pair" flag come from
+// the server's reopen response, carried through URL params. We do
+// NOT inspect the loaded weeks (an earlier pass did, and read
+// "pair" on any weekly reopen of week 2+).
+function ReopenedNotice({
+  startIso,
+  endIso,
+  isPair,
+}: {
+  startIso: string;
+  endIso: string;
+  isPair: boolean;
+}) {
+  return (
+    <p className="kf-sc-reopened-notice" role="status">
+      {buildReopenedNoticeLine({ startIso, endIso, isPair })}
+    </p>
+  );
 }

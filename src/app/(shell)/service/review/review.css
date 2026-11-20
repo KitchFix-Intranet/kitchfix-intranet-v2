@@ -25,12 +25,16 @@
   --kf-sc-rv-pushfail-min: 260px;     /* push-fail body wrap target */
   --kf-sc-rv-foot-btn-py: 10px;       /* foot primary button y padding */
   --kf-sc-rv-foot-btn-px: 14px;       /* foot primary button x padding */
+  --kf-sc-rv-surface-maxw: 920px;     /* page content cap */
+  --kf-sc-rv-err-maxw: 220px;         /* err/blocker wrap target */
+  --kf-sc-rv-win-maxw: 480px;         /* finish overlay card cap */
+  --kf-sc-rv-win-check: 72px;         /* finish check SVG + reason textarea min */
 }
 
 .kf-sc-rv-surface {
   padding: var(--sp-sp-4) var(--sp-sp-5)
            calc(var(--kf-sc-rv-foot) + var(--sp-sp-5));
-  max-width: 920px;
+  max-width: var(--kf-sc-rv-surface-maxw);
   margin: 0 auto;
 }
 
@@ -92,6 +96,77 @@
   border: 1px solid var(--sp-good);
   border-radius: var(--sp-r-ctl);
   margin-bottom: var(--sp-sp-3);
+}
+
+/* Train 5: reopen panel. Lives under the "Submitted and on
+ * record" banner on a submitted V2 week. Starts as one quiet
+ * button; opens in place with the reason textarea. No modal.
+ */
+.kf-sc-rv-reopen {
+  margin-bottom: var(--sp-sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sp-2);
+}
+.kf-sc-rv-reopen.is-open {
+  padding: var(--sp-sp-3) var(--sp-sp-4);
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line-field);
+  border-radius: var(--sp-r-ctl);
+}
+.kf-sc-rv-reopen__title {
+  margin: 0;
+  font-family: var(--sp-ui);
+  font-weight: var(--sp-w-heavy);
+  font-size: var(--sp-t-body);
+  color: var(--sp-ink);
+}
+.kf-sc-rv-reopen__label {
+  font-family: var(--sp-ui);
+  font-weight: var(--sp-w-bold);
+  font-size: var(--sp-t-label);
+  color: var(--sp-body);
+}
+.kf-sc-rv-reopen__input {
+  width: 100%;
+  min-height: var(--kf-sc-rv-win-check);
+  padding: var(--sp-sp-2) var(--sp-sp-3);
+  border: 1px solid var(--sp-line-field);
+  border-radius: var(--sp-r-ctl);
+  font: inherit;
+  color: var(--sp-ink);
+  background: var(--sp-card);
+  resize: vertical;
+}
+.kf-sc-rv-reopen__input:focus-visible { outline-offset: -3px; }
+.kf-sc-rv-reopen__hint {
+  margin: 0;
+  color: var(--sp-muted);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+}
+.kf-sc-rv-reopen__err {
+  margin: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-sp-2);
+  color: var(--sp-block);
+  font-family: var(--sp-ui);
+  /* Small 10 (train 5): the refusal line is the one thing the
+   * person must read. Body size, not label. */
+  font-size: var(--sp-t-body);
+  line-height: var(--sp-lh-snug);
+}
+/* Small 10 (train 5): keep the triangle icon from shrinking to a
+ * squashed shape at 360 px when the refusal text takes two lines. */
+.kf-sc-rv-reopen__err > svg {
+  flex: 0 0 auto;
+}
+.kf-sc-rv-reopen__acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-sp-2);
+  flex-wrap: wrap;
 }
 
 /* Push-failed headline (train 4 carry-in 1). Sits between the
@@ -381,7 +456,7 @@
     padding: var(--kf-sc-rv-foot-btn-py) var(--kf-sc-rv-foot-btn-px);
   }
   .kf-sc-rv-blocker,
-  .kf-sc-rv-err { max-width: 220px; }
+  .kf-sc-rv-err { max-width: var(--kf-sc-rv-err-maxw); }
 }
 
 @media (max-width: 440px) {
@@ -414,14 +489,14 @@
   color: var(--sp-on-navy);
   border-radius: var(--sp-r-card);
   padding: var(--sp-sp-6) var(--sp-sp-5);
-  max-width: 480px;
+  max-width: var(--kf-sc-rv-win-maxw);
   width: 100%;
   text-align: center;
   box-shadow: var(--sp-shadow-float);
 }
 .kf-sc-win__check {
-  width: 72px;
-  height: 72px;
+  width: var(--kf-sc-rv-win-check);
+  height: var(--kf-sc-rv-win-check);
   margin-bottom: var(--sp-sp-3);
 }
 .kf-sc-win__check circle { fill: none; stroke: var(--sp-good-on-navy); stroke-width: 4; }

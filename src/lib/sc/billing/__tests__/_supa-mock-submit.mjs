@@ -124,6 +124,17 @@ export function makeSupaMock(opts) {
         return await baseChain;
       }
 
+      // INSERT into any other table: delegate to the base mock
+      // (train 5 added this so the reopen tests can see
+      // sc_day_note_entries rows land through the orchestration).
+      if (state.op === "insert") {
+        let baseChain = base.from(table).insert(state.payload);
+        if (state.cols) baseChain = baseChain.select(state.cols);
+        if (state.single) return await baseChain.single();
+        if (state.maybeSingle) return await baseChain.maybeSingle();
+        return await baseChain;
+      }
+
       // UPDATE: respect all filters (including is_null / not_is_null)
       // and apply the patch to every row that matches, then return
       // the rows from the local store.

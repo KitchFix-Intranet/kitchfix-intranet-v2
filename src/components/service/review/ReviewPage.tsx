@@ -28,6 +28,7 @@ import { fmtCount } from "@/lib/fmt";
 import type { ReviewView, ReviewDay, ReviewLine, ReviewLookReason } from "@/lib/sc/submit/reviewLoader";
 import type { SubmitBlock } from "@/lib/sc/types";
 import { FinishOverlay } from "./FinishOverlay";
+import { ReopenPanel } from "./ReopenPanel";
 
 const SIGN = "$";
 
@@ -236,6 +237,15 @@ export function ReviewPage({ view, backHref, outboundBlock, canPushAgain }: Prop
             <Lock size={18} strokeWidth={1.5} aria-hidden />
             <span>Submitted and on record. Actuals are locked until the office reopens the week.</span>
           </section>
+        ) : null}
+
+        {view.isAlreadySubmitted && view.canReopen && view.submittedVia === "v2" ? (
+          <ReopenPanel
+            accountKey={view.site.accountKey}
+            slug={view.site.slug}
+            weekStart={view.weekStart}
+            isBiweeklyUnit={view.isBiweeklyUnit}
+          />
         ) : null}
 
         {view.pushGaveUp && view.submittedVia === "v2" ? (

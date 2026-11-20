@@ -234,7 +234,14 @@ function StandCard({ stand }: { stand: HomeStand }) {
 }
 
 function Notice({ view }: { view: MlbCalendarView }) {
-  // Notice copy: season-over, pre-season, empty (no 2027 yet), in-season.
+  // Season years are derived from the loaded span (train 5 carry-in).
+  // When the schedule is empty we cannot name "this" season, so the
+  // copy stays generic.
+  const thisYear = view.lastGameIso
+    ? Number(view.lastGameIso.slice(0, 4))
+    : (view.firstGameIso ? Number(view.firstGameIso.slice(0, 4)) : null);
+  const nextYear = thisYear != null ? thisYear + 1 : null;
+
   if (!view.firstGameIso) {
     return (
       <div className="kf-sc-mlb-notice">
@@ -244,7 +251,7 @@ function Notice({ view }: { view: MlbCalendarView }) {
         <div>
           <div className="kf-sc-mlb-notice__title">No schedule loaded yet</div>
           <div className="kf-sc-mlb-notice__body">
-            The {view.site.name} games will show here once the 2027 schedule is in.
+            The {view.site.name} games will show here once the next schedule is in.
           </div>
         </div>
       </div>
@@ -259,9 +266,9 @@ function Notice({ view }: { view: MlbCalendarView }) {
           <Calendar size={22} strokeWidth={1.5} />
         </span>
         <div>
-          <div className="kf-sc-mlb-notice__title">The 2026 season is done</div>
+          <div className="kf-sc-mlb-notice__title">The {thisYear} season is done</div>
           <div className="kf-sc-mlb-notice__body">
-            Last game was {last}. The 2027 schedule will show here once it is loaded.
+            Last game was {last}. The {nextYear} schedule will show here once it is loaded.
           </div>
         </div>
       </div>
@@ -283,17 +290,22 @@ function Notice({ view }: { view: MlbCalendarView }) {
 }
 
 function computeHeadline(view: MlbCalendarView): { title: string; kick: string } {
+  const thisYear = view.lastGameIso
+    ? Number(view.lastGameIso.slice(0, 4))
+    : (view.firstGameIso ? Number(view.firstGameIso.slice(0, 4)) : null);
+  const nextYear = thisYear != null ? thisYear + 1 : null;
+
   if (!view.firstGameIso) {
     return {
       title: "No schedule loaded yet",
-      kick: "The 2027 schedule will show here once it is loaded.",
+      kick: "The next schedule will show here once it is loaded.",
     };
   }
   if (view.seasonOver && view.lastGameIso) {
     const [, m, d] = view.lastGameIso.split("-").map(Number);
     return {
-      title: "The 2026 season is done",
-      kick: `Last game was ${MON_SHORT[m - 1]} ${d} · ${view.seasonHomeGames} home games this season`,
+      title: `The ${thisYear} season is done`,
+      kick: `Last game was ${MON_SHORT[m - 1]} ${d} · ${view.seasonHomeGames} home games this season${nextYear ? ` · ${nextYear} schedule not loaded yet` : ""}`,
     };
   }
   // Mid-season.
