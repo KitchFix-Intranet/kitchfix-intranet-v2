@@ -47,6 +47,8 @@ import { OwnerPreviewBanner } from "./OwnerPreviewBanner";
 import { Sheet } from "./Sheet";
 import { Menu } from "./Menu";
 import { Calendar as InvCalendar } from "./Calendar";
+import { useIsPhone } from "./useIsPhone";
+import { useKeyboardOffset } from "./useKeyboardOffset";
 
 const PdfPage = dynamic(() => import("./PdfPage").then((m) => m.PdfPage), { ssr: false });
 
@@ -103,6 +105,8 @@ export function CaptureSittingRoot({
   pager: Pager;
 }) {
   const router = useRouter();
+  const isPhone = useIsPhone();
+  const keyboardOffset = useKeyboardOffset();
   const [draft, setDraft] = useState<DraftView>(initialDraft);
   const [files, setFiles] = useState<FileView[]>(initialFiles);
   const [vendorName, setVendorName] = useState<string | null>(initialVendorName);
@@ -620,8 +624,39 @@ export function CaptureSittingRoot({
     <div className="kf-invoices-surface kf-inv-sitting-wrap">
       {previewName ? <OwnerPreviewBanner name={previewName} exitHref="/invoices" /> : null}
 
+      {/* D1: plain phone head carrying the vendor name as the
+          H2 heading and the pager under it. The desk C1 slim top
+          row renders at desk widths. */}
+      <div className="kf-inv-sitting__phonehead kf-only-phone">
+        <div className="kf-inv-sitting__phonehead__row">
+          <Link
+            className="kf-inv-sitting__phonehead__back"
+            href={`/invoices?site=${siteSlug}${asQAmp}`}
+            aria-label="Back to Capture"
+          >
+            <ChevronLeft size={20} aria-hidden />
+          </Link>
+          <div className="kf-inv-sitting__phonehead__labels">
+            <span className="kf-inv-sitting__phonehead__sub">
+              Invoice {pager.position} of {pager.total} · {siteAccountKey}
+            </span>
+            <h2 className="kf-inv-sitting__phonehead__title">
+              {vendorName ?? (draft.type === "credit" ? "New credit" : "New invoice")}
+            </h2>
+          </div>
+          <button
+            type="button"
+            className="kf-inv-sitting__phonehead__more"
+            aria-label="More for this invoice"
+            onClick={() => setMoreMenuOpen((v) => !v)}
+          >
+            <MoreHorizontal size={20} aria-hidden />
+          </button>
+        </div>
+      </div>
+
       {/* C1: slim top row (desk) + D1 phone head */}
-      <div className="kf-inv-sitting__nav">
+      <div className="kf-inv-sitting__nav kf-only-desktop">
         <div className="kf-inv-sitting__nav__left">
           <Link href={`/invoices?site=${siteSlug}${asQAmp}`} className="kf-btn kf-btn--sm kf-btn--line">
             <ChevronLeft size={16} aria-hidden /> Back
@@ -741,7 +776,8 @@ export function CaptureSittingRoot({
                 </>
               ) : null}
             </div>
-            {/* D5 phone page tools: Replace only + one-line reason */}
+            {/* D5 phone page tools: Replace only. The one-line
+                explanation lives just below. */}
             <div className="kf-inv-sitting__page-tools__actions kf-only-phone">
               {canSave ? (
                 <button
@@ -753,6 +789,15 @@ export function CaptureSittingRoot({
                 </button>
               ) : null}
             </div>
+          </div>
+          {/* D5 line, phone-only, only when there is a file to
+              replace. */}
+          <div className="kf-only-phone">
+            {activeFile ? (
+              <p className="kf-inv-sitting__hint">
+                To add, turn or remove pages, use a computer.
+              </p>
+            ) : null}
           </div>
 
           {files.length > 1 ? (
@@ -1110,8 +1155,10 @@ export function CaptureSittingRoot({
           {/* C8 lines note */}
           <p className="kf-inv-sitting__hint">Lines are read after it is sent.</p>
 
-          {/* C9 Duplicate stop block */}
-          {copyMatch ? (
+          {/* C9 / D6 Duplicate stop block. Phone wraps it in a
+              full-sheet so it clears the keyboard; desk renders
+              it inline. */}
+          {copyMatch && !isPhone ? (
             <aside
               className="kf-inv-sitting__copystop"
               role="group"
@@ -1162,8 +1209,13 @@ export function CaptureSittingRoot({
             </ul>
           ) : null}
 
-          {/* C11 Check and send + C13 save line */}
-          <div className="kf-inv-sitting__actions">
+          {/* C11 Check and send + C13 save line. On phone this bar
+              goes sticky + rises above the on-screen keyboard
+              (correction 7 / D4) via --kb-offset. */}
+          <div
+            className="kf-inv-sitting__actions"
+            style={isPhone ? ({ ["--kb-offset" as string]: `${keyboardOffset}px` }) as React.CSSProperties : undefined}
+          >
             <button
               ref={sendButtonRef}
               type="button"
@@ -1174,6 +1226,17 @@ export function CaptureSittingRoot({
             >
               {checking ? "Checking" : "Check and send"}
             </button>
+            {/* Mini balance on phone, pinned above the keyboard so
+                "left to code" stays in view while typing. */}
+            {isPhone && leftNow != null ? (
+              <span className={`kf-inv-sitting__actions__bal${leftNow === 0 ? " is-ok" : leftNow < 0 ? " is-over" : ""}`}>
+                {leftNow === 0
+                  ? "Adds up"
+                  : leftNow < 0
+                    ? `Over by ${fmtUsdExact(-leftNow)}`
+                    : `${fmtUsdExact(leftNow)} left`}
+              </span>
+            ) : null}
             <span className={`kf-inv-sitting__saveline${saveState === "stopped" ? " is-bad" : ""}`}>
               {saveLine}
             </span>
@@ -1205,6 +1268,41 @@ export function CaptureSittingRoot({
           onPick={(v) => void onVendorPicked(v)}
           onClose={() => setPickerOpen(false)}
         />
+      ) : null}
+
+      {/* D6 phone: copy stop as a full-width sheet so it clears
+          the on-screen keyboard. */}
+      {copyMatch && isPhone ? (
+        <Sheet
+          title={copyMatch.kind === "same_invoice"
+            ? "You already sent this one"
+            : "You already have this one in your drafts"}
+          onClose={() => setCopyMatch(null)}
+          variant="fullsheet"
+          footer={
+            <>
+              <button type="button" className="kf-btn kf-btn--line" onClick={copyRemove}>
+                Remove this one
+              </button>
+              <button type="button" className="kf-btn kf-btn--ghost" onClick={copyDifferent}>
+                It is a different invoice
+              </button>
+              {copyMatch.kind === "same_invoice" && copyMatch.submission_id ? (
+                <button type="button" className="kf-btn kf-btn--ghost" onClick={copyCreditFor}>
+                  It is the credit for that invoice
+                </button>
+              ) : null}
+            </>
+          }
+        >
+          <p>
+            {copyMatch.vendor_name ?? "The same vendor"}
+            {copyMatch.invoice_number ? ` #${copyMatch.invoice_number}` : ""}
+            {copyMatch.kind === "same_invoice" && copyMatch.invoice_date
+              ? ` on ${fmtDate(copyMatch.invoice_date, "short")}` : ""}
+            .
+          </p>
+        </Sheet>
       ) : null}
 
       {/* D2 phone page sheet */}

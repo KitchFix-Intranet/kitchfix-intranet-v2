@@ -814,6 +814,106 @@
 }
 .kf-inv-sitting__saveline.is-bad { color: var(--sp-block); }
 
+/* D4 phone: action bar pinned above the tab bar and safe-area
+   inset. --kb-offset is set from window.visualViewport by
+   useKeyboardOffset so the bar rises with the on-screen
+   keyboard. The bar reserves its own height on the scroll
+   container so content never slips behind it. */
+@media (max-width: 860px) {
+  .kf-inv-sitting__actions {
+    position: sticky;
+    bottom: calc(var(--sp-tabbar) + env(safe-area-inset-bottom, 0px) + var(--kb-offset, 0px));
+    z-index: var(--sp-z-notch);
+    background: var(--sp-card);
+    border-top: 1px solid var(--sp-line);
+    padding: var(--sp-sp-3) var(--sp-sp-4);
+    margin-top: var(--sp-sp-4);
+    box-shadow: 0 -4px 12px rgba(14, 42, 78, 0.06);
+  }
+  .kf-inv-sitting-wrap { padding-bottom: var(--sp-sp-5); }
+}
+.kf-inv-sitting__actions__bal {
+  font-size: var(--sp-t-label);
+  color: var(--sp-body);
+  font-variant-numeric: tabular-nums;
+}
+.kf-inv-sitting__actions__bal.is-ok { color: var(--sp-good); font-weight: var(--sp-w-semi); }
+.kf-inv-sitting__actions__bal.is-over { color: var(--sp-block); }
+
+/* D1 phone head */
+.kf-inv-sitting__phonehead {
+  padding: var(--sp-sp-3) var(--sp-sp-4) var(--sp-sp-1);
+}
+.kf-inv-sitting__phonehead__row {
+  display: grid;
+  grid-template-columns: var(--sp-floor-chef) minmax(0, 1fr) var(--sp-floor-chef);
+  gap: var(--sp-sp-3);
+  align-items: center;
+}
+.kf-inv-sitting__phonehead__back,
+.kf-inv-sitting__phonehead__more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--sp-floor-chef);
+  min-height: var(--sp-floor-chef);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-ctl);
+  background: var(--sp-card);
+  color: var(--sp-body);
+}
+.kf-inv-sitting__phonehead__back:hover,
+.kf-inv-sitting__phonehead__back:focus-visible,
+.kf-inv-sitting__phonehead__more:hover,
+.kf-inv-sitting__phonehead__more:focus-visible {
+  background: var(--sp-sky-tint);
+  color: var(--sp-navy);
+  border-color: var(--sp-navy-line);
+}
+.kf-inv-sitting__phonehead__labels {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+}
+.kf-inv-sitting__phonehead__sub {
+  color: var(--sp-muted);
+  font-size: var(--sp-t-label);
+}
+.kf-inv-sitting__phonehead__title {
+  margin: 0;
+  font-family: var(--sp-disp);
+  font-size: var(--sp-t-title);
+  color: var(--sp-navy);
+  text-transform: uppercase;
+  letter-spacing: 0.2px;
+  line-height: var(--sp-lh-flat);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* D2 phone page: hide the full canvas on phone - the peek
+   button opens the full-sheet. Keep the toolbar's filename and
+   the page pager visible, plus the phone-only "Replace the
+   file" button. Keep the no-file state visible so a page-less
+   draft still shows the add-a-file CTA. */
+@media (max-width: 860px) {
+  .kf-inv-sitting__canvas {
+    display: none;
+  }
+  .kf-inv-sitting__page {
+    min-height: 0;
+  }
+  .kf-inv-sitting__page-pager {
+    display: none;
+  }
+  /* No-file block stays visible on phone so the user can add
+     one even without the sheet. */
+  .kf-inv-sitting__nofile { display: flex; }
+}
+
 /* ─── Calendar (desk popover + phone sheet share this) ───────── */
 .kf-inv-cal {
   display: flex;
