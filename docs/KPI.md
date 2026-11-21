@@ -474,3 +474,137 @@ Classified by root cause:
 
 Per-case verdicts and per-field classifications live in
 `~/Downloads/KPI_V2_Handoff/proof_2b/direct_sums_all.json`.
+
+## Train 2d-1 - closed-range screen rules (2026-11-20)
+
+v1's closed-range KPI Overview page draws eleven blocks above the
+fold. Train 2d-1 moves the logic behind each block out of v1's
+React components into `src/lib/kpi/screen/**` as plain data-in /
+data-out TypeScript functions. No JSX, no hooks, no CSS, no clock
+read, no DB read. Nothing calls the new surface - this train only
+builds the measurements.
+
+Running / planned ranges are train 2d-2. Only closed single-period
+and the year are modelled here.
+
+### Function list
+
+| V2 path | Public functions | Shape returned |
+|---|---|---|
+| `src/lib/kpi/screen/formatting.ts` | re-exports `formatMoneyWhole` / `formatPct` / `fmtWeekRange` / `formatDayLabel` / `pctOf` / `gapDollarsCost` / `gapDollarsRevenue` / `gapDollarsMargin` / `gapPointsCost` / `gapPointsRevenue` / `gapPointsMargin` / `directionOfDelta`; adds `formatMMDD` / `formatHoursTwoDecimals` / `formatPersonCount` / `formatDaysCount` / `pluralWeeks` / `signedMagnitudeMoney` / `fmtHrs` / `fmtHrsRounded` | strings or `{ magnitude, direction }` |
+| `src/lib/kpi/screen/dashOrValue.ts` | `resolveDashState` / `dashOrValue` / `formatDashOrValue` | dash state word + display string |
+| `src/lib/kpi/screen/statusLine.ts` | `buildStatusLine` / `buildAwaiting` / `formatStatusLine` | `{ state, tone, state_copy, leading_dot, awaiting, horizon }` |
+| `src/lib/kpi/screen/settlingStrip.ts` | `buildSettlingStrip` / `formatSettlingStrip` | `{ render, period_no, purchases, labour }` |
+| `src/lib/kpi/screen/overdueNudge.ts` | `buildOverdueNudge` / `formatOverdueNudge` | `{ render, entries[] }` |
+| `src/lib/kpi/screen/cardsRow.ts` | `buildCardsRow` / `formatCardsRow` | three cards: `{ budget, adjusted, actual, pct_actual, pct_adjusted, pct_target, gap_dollars, gap_points, verdict, provisional }` |
+| `src/lib/kpi/screen/revenueLines.ts` | `buildRevenueLines` / `formatRevenueLines` | rows + total + pill |
+| `src/lib/kpi/screen/costLines.ts` | `buildCostLines` / `formatCostLines` | rows + total + pill (closed-range shape only) |
+| `src/lib/kpi/screen/alsoTracked.ts` | `buildAlsoTracked` / `formatAlsoTracked` | per-line { state, budget, actual, variance, tone } |
+| `src/lib/kpi/screen/pnlStatement.ts` | `buildPnlStatement` / `formatPnlStatement` | `{ summary_rows[], full_rows[] }`, each row with hatch flags + verdict |
+| `src/lib/kpi/screen/weekRail.ts` | `buildWeekRail` / `formatWeekRail` | `{ render, period_no, running_week_no, confirmed_count, total_count, tiles[] }` |
+| `src/lib/kpi/screen/weekFlag.ts` | `flagForV42State` | `{ state, label, cls, tooltip, glyph }` or null |
+| `src/lib/kpi/screen/weekTableModels.ts` | `buildMemberByWeekAndAcct` | `Map<week, Map<account, accumulator>>` |
+| `src/lib/kpi/screen/laborAggregate.ts` | `workerLabel` / `buildFilteredActuals` / `buildWeekAggregates` / `buildGrouped` / `buildWorkerRoster` / `buildGrand` / `buildWorkerRangeTotals` / `computeResolvedPreset` / `periodsInBoardWeeks` | plain JS objects (verbatim v1 shapes) |
+| `src/lib/kpi/screen/laborLedger.ts` | `buildLaborLedger` / `formatLaborLedger` | `{ render, header_summary, weeks[], grand }` |
+| `src/lib/kpi/screen/purchasingFold.ts` | `buildPurchasingFold` / `formatPurchasingFold` | `{ render, variant, transactions[], foot, week_bands[], show_vehicle }` |
+| `src/lib/kpi/screen/index.ts` | re-exports every builder + formatter | - |
+
+### Screen-time logic moved
+
+Every piece of per-component arithmetic that v1 did inside a
+`"use client"` React component and needs a value out of it. v1
+file + line range -> V2 function:
+
+| v1 file (closed branch) | v1 lines | What it works out | V2 function |
+|---|---|---|---|
+| `components/StatusLine.js` | 37-50 | awaiting-pill sentence from settle_iso | `buildStatusLine` + `formatStatusLine` |
+| `page.js` (closed branch) | 787-814 | `awaiting` object (fytd + r93 + settle+8) | `buildAwaiting` |
+| `components/SettlingStrip.js` | 32-42 | labour threshold (0.04 hrs, 1 person) + sentences | `buildSettlingStrip` + `formatSettlingStrip` |
+| `components/OverdueNudge.js` | 14-28 | per-period "N days ago" sentence | `buildOverdueNudge` + `formatOverdueNudge` |
+| `components/CardsRow.js` | 265-350 (CogsTooltip envelope) | plan + adjusted percent routing | `buildCardsRow` (adjusted_pct fallback to target_pct) |
+| `components/CardsRow.js` | 132-182 (VarianceFoot) | over/under + ahead/behind + above/below labels | `formatCardsRow.varianceInfo` |
+| `components/CardsRow.js` | 400-500 (RevenueCard reference) | fytd vs single-closed branch for revenue reference | `buildCardsRow` (range.kind gate) |
+| `components/CardsRow.js` | 546-620 (PercentLeadCard) | adjusted figure + percent + target percent beside | `buildCardsRow.cogs/gross_margin` |
+| `components/RevenueLines.js` | 46-85 (Row) | per-row budget/actual/pct, inactive filter | `buildRevenueLines` |
+| `components/RevenueLines.js` | 110-160 (RevenueLines) | revenue-line pill (Verified/Live/Planned OR composition) | `buildRevenueLines.pill` |
+| `components/CostLines.js` | 68-245 (CostRow) | adjusted, variance vs batr, credit rendering | `buildCostLines` |
+| `components/CostLines.js` | 258-337 (TotalRow) | sum scored rows; total variance = sum(actual_scored) - sum(adjusted) | `buildCostLines.total` |
+| `components/CostLines.js` | 631-680 (overCount, rowsWithSpend pill) | pill state picker | `buildCostLines.pill` |
+| `components/AlsoTracked.js` | 29-85 (Row) | bothNullish / noBudget state picker + variance tone | `buildAlsoTracked` |
+| `components/AlsoTracked.js` | 51-54 | closed-range empty phrase = "no spend" | `formatAlsoTracked` |
+| `components/PnlStatement.js` | 71-93 (VarCell) | signed-arrow variance + "on budget" at < $1 | `formatPnlStatement` + `signedMagnitudeMoney` |
+| `components/PnlStatement.js` | 112-217 (LineRow) | inactive row, credit row, hatch_target_pct / hatch_adjusted | `buildPnlStatement.buildLineRow` |
+| `components/PnlStatement.js` | 244-300 (default export) | summary/full split + totals | `buildPnlStatement` |
+| `components/WeekRail.js` | 51-75 (tileVariant, tileStateLabel) | in_progress/confirmed/forecast variant picker | `buildWeekRail.tileVariant` |
+| `components/WeekRail.js` | 94-135 (tile body) | invoice_landed rule + labor caveats + fmt | `buildWeekRail` tiles |
+| `components/LaborLedger.js` | 117-141 (headerSummary) | settled hours + dollars for the fold trigger | `buildLaborLedger.header_summary` |
+| `components/LaborLedger.js` | whole | per-week row with batr + unapproved + verdict | `buildLaborLedger.weeks` |
+| `components/PurchasingFold.js` | 119-172 (bucketOf, buildTransactions) | GL-code bucket + per-bill grouping (both variants) | `buildPurchasingFold.buildTransactions` |
+| `components/PurchasingFold.js` | 175-210 (weekStartOf / weekEndOf / weekState) | FY-anchored week assignment + settled/in-progress/ahead | `buildPurchasingFold` |
+| `components/PurchasingFold.js` | 213-260 (derived weekBands) | in-progress first, settled desc, ahead last | `buildPurchasingFold.week_bands` |
+| `components/DashOrValue.js` | 24-33 | dash-state picker | `resolveDashState` (MOVED whole) |
+
+### Moved whole (same-code) vs rewritten (data-only)
+
+- **Move whole (3 files, 619 lines of v1 source)** - every byte-for-
+  byte same. v2 adds `fy: FiscalYear` where v1 reads from its own
+  periods module. Twin tests exercise identical input -> identical
+  output.
+  - `weekTableModels.js` (106 lines) -> `screen/weekTableModels.ts`
+  - `weekFlag.js` (91 lines) -> `screen/weekFlag.ts`
+  - `aggregate.js` (422 lines) -> `screen/laborAggregate.ts`
+    (v2 passes `fy` into `periodOf`, `fiscalYearOf`, `currentPeriodNo`;
+    body unchanged)
+  - `DashOrValue.js` picker only (10 lines of logic) -> `resolveDashState`
+    in `screen/dashOrValue.ts`
+
+- **Rewrite (every other component)** - shape-matched models +
+  formatters:
+  - `StatusLine.js`, `SettlingStrip.js`, `OverdueNudge.js`,
+    `CardsRow.js`, `RevenueLines.js`, `CostLines.js` (closed branch
+    only), `AlsoTracked.js`, `PnlStatement.js`, `WeekRail.js`,
+    `LaborLedger.js`, `PurchasingFold.js`.
+
+### Labor_landed / purchasing_landed / unapproved_hours cross-site check
+
+v1 writes these fields in exactly one place on the server:
+`src/lib/kpi/overview/resolver.js:2400-2410` (grep-verified at the
+pin). Each field on `week_rail.weeks[]` reads:
+
+```js
+labor_landed: r2(Number(w.spent || 0))
+purchasing_landed: r2(Number(railPurchByWeek.get(w.week_start) || 0))
+unapproved_hours: Number(w.unapproved_hours || 0)
+```
+
+`w.spent` comes from `labor.board.weeks[*]` (labor-engine board);
+`railPurchByWeek` is a Map pre-built from `pnl-loader`'s per-week
+purchasing split. The LaborLedger inside the fold reads
+`labor.actuals[*].amount` and sums per week via
+`buildWeekAggregates`.
+
+**Same arithmetic? No, it is NOT the same expression.** The week-
+rail labor_landed reads the board's `spent` field; the fold's per-
+week dollars sum `actuals[*].amount`. Both feed off the same labor
+derive pipeline and on a fully-settled closed period they match
+within rounding; on in-progress weeks they can diverge (the board's
+spent may add hatched dollars for unpriced hours, and the Rippling
+labor table reads amount only).
+
+This PR holds each value ONCE in the week_rail model
+(`WeekRailTile.labor_landed`, `purchasing_landed`,
+`unapproved_hours`) and ONCE in the labor-ledger model
+(`LaborWeekRow.dollars`, `unapproved_hours`). Consumers wanting the
+rail value read the rail tile; consumers wanting the fold value
+read the week row. Two readers, two unambiguous sources - no third
+"derived display" field at the model layer.
+
+### Defects found but not fixed
+
+None. Every arithmetic shape observed in v1 reproduces in the
+model; one notable artefact (the labor ledger's week-row dollars
+can differ from the week_rail's labor_landed on in-progress weeks,
+by hatched unpriced hours) is a known-and-intentional v1 behaviour
+(see v1 LaborLedger.js:117-141 comment "settled dollars only")
+rather than a defect, and both figures are exposed in the model so
+the consumer picks the one the render wants.
