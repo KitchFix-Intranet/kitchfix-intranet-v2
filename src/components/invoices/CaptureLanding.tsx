@@ -38,6 +38,7 @@ export function CaptureLanding({
   previewName,
   manySites,
   recentlySent,
+  forceAdd,
 }: {
   scope: InvoiceScope;
   sites: readonly SiteNavItem[];
@@ -52,6 +53,12 @@ export function CaptureLanding({
   previewName: string | null;
   manySites: boolean;
   recentlySent?: readonly RecentlySentRow[];
+  // Fix 2.1: `?add=1` forces the normal landing (drop zone) even
+  // when the "You are set" / "N ready" branches would otherwise
+  // fire. The "Add more" button on both branches links here so a
+  // viewer can add another invoice after a send or when every
+  // draft is already ready.
+  forceAdd?: boolean;
 }) {
   const asQ = asParam ? `?as=${encodeURIComponent(asParam)}` : "";
   const asQAmp = asParam ? `&as=${encodeURIComponent(asParam)}` : "";
@@ -68,7 +75,7 @@ export function CaptureLanding({
   // hours. Each row reads its own status word ("With accounting",
   // "Test send", "Sending") per correction 4.
   const sentList = recentlySent ?? [];
-  if (drafts.length === 0 && sentList.length > 0) {
+  if (!forceAdd && drafts.length === 0 && sentList.length > 0) {
     const n = sentList.length;
     const statusWord = (r: RecentlySentRow): string => {
       if (r.v2_email_status === "sent") return r.v2_mode === "test" ? "Test send" : "With accounting";
@@ -121,7 +128,7 @@ export function CaptureLanding({
   }
 
   // E branch (correction 6): has drafts and every one is ready.
-  if (drafts.length > 0 && restCount === 0) {
+  if (!forceAdd && drafts.length > 0 && restCount === 0) {
     return (
       <div className="kf-invoices-surface kf-inv-capture">
         {previewName ? <OwnerPreviewBanner name={previewName} exitHref="/invoices" /> : null}
@@ -309,14 +316,16 @@ export function CaptureLanding({
   );
 }
 
-// Small inline "Add more" that loops back to the landing without a
-// server redirect round trip.
+// "Add more" takes the viewer back to the normal landing (drop
+// zone) for this site. `?add=1` forces the normal render even
+// when the "You are set" / "N ready" branches would otherwise
+// fire. Back works, the address bookmarks. Fix 2.1.
 function AddMoreButton({ siteSlug, asParam }: { siteSlug: string; asParam: string | null }) {
   const asQAmp = asParam ? `&as=${encodeURIComponent(asParam)}` : "";
   return (
     <Link
       className="kf-btn kf-btn--primary"
-      href={`/invoices?site=${siteSlug}${asQAmp}#add`}
+      href={`/invoices?site=${siteSlug}&add=1${asQAmp}`}
     >
       Add more
     </Link>

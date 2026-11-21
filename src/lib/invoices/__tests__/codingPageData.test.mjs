@@ -31,7 +31,9 @@ test("coding data for an invoice, live mode", () => {
   assert.equal(d.totalDisplay, "$1,234.56");
   assert.deepEqual(d.lines.map((l) => l.amountDisplay), ["$1,000.00", "$234.56"]);
   assert.equal(d.byline, "Jane D");
-  assert.equal(d.whenDisplay, "11/02/2026 18:05 UTC");
+  // Fix 2.5: Central time, 12h, with zone. 18:05 UTC on Nov 2
+  // 2026 (CST, UTC-6) renders as 12:05 PM CT.
+  assert.equal(d.whenDisplay, "11/02/2026 12:05 PM CT");
 });
 
 test("coding data for a credit: labels flip, total shows positive", () => {

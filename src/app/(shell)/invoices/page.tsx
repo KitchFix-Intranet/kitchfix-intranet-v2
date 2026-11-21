@@ -57,18 +57,23 @@ interface Shared {
   previewName: string | null;
   isPreview: boolean;
   siteName: string;
+  // Fix 2.1: when `?add=1` is set, LandingSurface tells
+  // CaptureLanding to render the normal landing (drop zone)
+  // even if the "You are set" / "N ready" branches would fire.
+  forceAdd: boolean;
 }
 
 export default async function Page({
   searchParams,
 }: {
-  searchParams: Promise<{ site?: string | string[]; draft?: string | string[]; as?: string | string[] }>;
+  searchParams: Promise<{ site?: string | string[]; draft?: string | string[]; as?: string | string[]; add?: string | string[] }>;
 }) {
   const { email } = await requireOwnerPage();
   const sp = await searchParams;
   const site = pickOne(sp.site);
   const draftId = pickOne(sp.draft);
   const as = pickOne(sp.as);
+  const forceAdd = pickOne(sp.add) === "1";
 
   const sb = serviceClient();
   const { viewer } = await resolveViewer(sb, email, as, true);
@@ -154,8 +159,30 @@ export default async function Page({
 
   const shared: Shared = {
     scope, nav, manySites: many, slug, accountKey, ownerEmail,
-    asParam, previewName, isPreview, siteName,
+    asParam, previewName, isPreview, siteName, forceAdd,
   };
+
+  // Fix 2.4: the sent-draft address check runs HERE, outside the
+  // Suspense boundary, so `redirect()` produces an HTTP-level
+  // redirect that every client (fetch, curl, browser) follows.
+  // Previously the check lived inside SittingSurface under
+  // <Suspense>, which turned it into a streamed RSC redirect that
+  // a bare fetch could not see.
+  if (draftId) {
+    const draftPeek = await sb
+      .from("invoice_drafts")
+      .select("status, submission_id, account_key")
+      .eq("owner_email", ownerEmail)
+      .eq("id", draftId)
+      .maybeSingle();
+    if (draftPeek.data
+        && draftPeek.data.account_key === accountKey
+        && draftPeek.data.status === "sent"
+        && draftPeek.data.submission_id) {
+      const asQ = asParam ? `?as=${encodeURIComponent(asParam)}` : "";
+      redirect(`/invoices/${draftPeek.data.submission_id}${asQ}`);
+    }
+  }
 
   // Train 2b fix-before-push #6 / F4: one Suspense boundary per
   // branch. Each branch's skeleton replaces what React is about
@@ -236,7 +263,7 @@ async function SittingSurface({ shared, draftId }: { shared: Shared; draftId: st
 
 async function LandingSurface({ shared }: { shared: Shared }) {
   const sb = serviceClient();
-  const { scope, nav, manySites, ownerEmail, accountKey, slug, asParam, siteName, previewName } = shared;
+  const { scope, nav, manySites, ownerEmail, accountKey, slug, asParam, siteName, previewName, forceAdd } = shared;
 
   const activeCodes = await loadActiveCodesForSite(sb, accountKey);
   const activeCodesSet = new Set(activeCodes.map((c) => c.code));
@@ -273,6 +300,7 @@ async function LandingSurface({ shared }: { shared: Shared }) {
       previewName={previewName}
       manySites={manySites}
       recentlySent={recentlySent}
+      forceAdd={forceAdd}
     />
   );
 }

@@ -130,11 +130,10 @@ export function CaptureSittingRoot({
   const [copyMatch, setCopyMatch] = useState<StopMatch | null>(null);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "offline" | "stopped">("idle");
   const [checking, setChecking] = useState(false);
-  // Train 3 §7: while the request is in flight the button reads
-  // "Checking" first and flips to "Sending" after a short delay
-  // (the client cannot know when the server moved from Ready to
-  // the mail call). sendingLabel resets with setChecking.
-  const [sendingLabel, setSendingLabel] = useState(false);
+  // Fix 2.2: the button reads "Checking" for the whole in-flight
+  // span. A timed flip to "Sending" was misleading - with the
+  // switch off the server never sends, yet the client said it
+  // did. The server's answer drives the toast + route.
   const [zoomed, setZoomed] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [pageMenuOpen, setPageMenuOpen] = useState(false);
@@ -676,12 +675,6 @@ export function CaptureSittingRoot({
   const check = async () => {
     if (checking) return;
     setChecking(true);
-    setSendingLabel(false);
-    // After ~500 ms flip the label from "Checking" to "Sending"
-    // if the request is still in flight. The server has moved
-    // past the Ready check and is in the mail call by then. The
-    // sending_off / not_ready paths complete before this fires.
-    const labelTimer = window.setTimeout(() => setSendingLabel(true), 500);
     try {
       // Train 2b fix 1 / 2.3: wait on the save itself first.
       if (Object.keys(stagedRef.current).length > 0 && !inflightRef.current) {
@@ -779,9 +772,7 @@ export function CaptureSittingRoot({
         return;
       }
     } finally {
-      window.clearTimeout(labelTimer);
       setChecking(false);
-      setSendingLabel(false);
     }
   };
 
@@ -1531,7 +1522,7 @@ export function CaptureSittingRoot({
               aria-live="polite"
               aria-describedby={previewDescId}
             >
-              {checking ? (sendingLabel ? "Sending" : "Checking") : "Check and send"}
+              {checking ? "Checking" : "Check and send"}
             </button>
             {/* Mini balance on phone, pinned above the keyboard so
                 "left to code" stays in view while typing. */}
