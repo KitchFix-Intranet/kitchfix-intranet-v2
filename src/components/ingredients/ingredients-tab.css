@@ -796,3 +796,143 @@
   .kf-ingp__filters { grid-template-columns: minmax(0, 1fr); }
   .kf-ingp__filters-label { display: none; }
 }
+
+/* ============================================================== *
+ * T7: train 7's additions. Keep every rule after every prior base *
+ * rule it would override (GOTCHAS 25); the kf-ingp__ rules above  *
+ * are the bases for everything below.                             *
+ * ============================================================== */
+
+/* ---------- Detail head: body + acts --------------------------- */
+/* T7 ruling 8 + item 1: the head reads name + eyebrow + one line
+ * of facts, with an Edit ingredient button on the right. The body
+ * is the flex grow; the acts column is fixed and never wraps.
+ */
+.kf-ingp__dhead {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-sp-3);
+}
+.kf-ingp__dhead-body { flex: 1 1 auto; min-width: 0; }
+.kf-ingp__dhead-acts { flex: 0 0 auto; }
+.kf-ingp__dhead-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--sp-sp-3);
+  font-size: var(--sp-t-table);
+  color: var(--sp-body);
+}
+.kf-ingp__dhead-meta b { color: var(--sp-ink); font-weight: 700; }
+
+/* ---------- Detail flows with the page (no second scroll) ------ */
+/* T7 ruling 5: one scroll on the page. The detail used to sit
+ * inside .kf-ingp__pane-scroll (the second scroller); the flows
+ * version removes the inner cap so everything from the strip down
+ * reads in one stack with the window. 1100 and below collapses
+ * to a single column via the existing pane rules.
+ */
+.kf-ingp__dflow { padding: 0; }
+
+/* ---------- Skip link above the list --------------------------- */
+/* T7 item 4: "A link before the list skips to the detail." The
+ * link lives off screen until it has focus, then lands over the
+ * list head. Styled on the shared skip-link token.
+ */
+.kf-ingp__list-skip {
+  position: absolute;
+  left: var(--sp-sp-3);
+  top: calc(-1 * var(--sp-sp-8));
+  z-index: var(--sp-z-skip, 100);
+  min-height: var(--sp-floor-corp);
+  padding: 0 var(--sp-sp-3);
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-r-sm);
+  color: var(--sp-link);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+  text-decoration: underline;
+}
+.kf-ingp__list-skip:focus { top: var(--sp-sp-2); }
+
+/* ---------- List: one tab stop, aria-activedescendant ---------- */
+/* T7 item 4 / F16: the list is ONE tab stop; the parent ul
+ * handles Up / Down / Home / End and the detail follows the
+ * selection. The rows are not tab-stops of their own.
+ */
+.kf-ingp__list { outline: none; list-style: none; margin: 0; padding: 0; }
+.kf-ingp__list:focus-visible {
+  outline: 2px solid var(--sp-navy);
+  outline-offset: -2px;
+  border-radius: var(--sp-r-card);
+}
+
+/* ---------- Row: inner button + full-width why cell ------------ */
+/* T7 item 5 / F35: the row has its own place for "why this needs
+ * attention" and the full-width line is never cut off. Search
+ * hits ("Has item number N") share the cell per call 20.
+ *
+ * Grid is three columns (name / price / usd) with the why cell
+ * running the full width below them.
+ */
+.kf-ingp__row {
+  position: relative;
+  display: block;
+  margin: 0;
+  padding: 0;
+}
+.kf-ingp__row-btn {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 2px var(--sp-sp-3);
+  align-items: center;
+  width: 100%;
+  min-height: var(--sp-floor-chef);
+  padding: var(--sp-sp-2) var(--sp-sp-3) var(--sp-sp-2) var(--sp-sp-4);
+  border: none;
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid var(--sp-line-soft);
+  background: transparent;
+  text-align: left;
+  font-family: var(--sp-ui);
+  color: var(--sp-ink);
+  cursor: pointer;
+}
+.kf-ingp__row-btn:hover { background: var(--sp-sky-soft); }
+.kf-ingp__row--sel .kf-ingp__row-btn {
+  background: var(--sp-sky-tint);
+  border-left-color: var(--sp-navy);
+}
+.kf-ingp__row-why {
+  grid-column: 1 / -1;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-sp-2);
+  padding-top: var(--sp-sp-1);
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+  color: var(--sp-warn);
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+.kf-ingp__row-why--block { color: var(--sp-block); }
+.kf-ingp__row-why--hit { color: var(--sp-link); font-weight: 600; }
+
+/* ---------- Grade as a word in the sub-line (ruling 6) --------- */
+.kf-word--premium { font-weight: 700; color: var(--sp-navy); }
+
+/* ---------- Muted / sr-only inline primitives ------------------ */
+.kf-muted { color: var(--sp-muted); }
+.kf-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

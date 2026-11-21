@@ -89,6 +89,15 @@ type LinkedItemRow = {
   pack_qty?: number | null;
   pack_size?: number | null;
   pack_uom?: string | null;
+  // T7 ruling 3: the one permitted loader change. The reference's
+  // linked-items row shows Pack (pack_text), Last bought (last_seen)
+  // and labels catch-weight items; the search box names "item
+  // number" and ingMatch() surfaces "Has item number N" so the
+  // column has to travel.
+  item_number: string | null;
+  last_seen: string | null;
+  catch_weight: boolean | null;
+  pack_text: string | null;
 };
 
 // M2: blendStats, medianOf, OUTLIER_RATIO + OUTLIER_MIN moved to
@@ -222,9 +231,16 @@ export const loadMasters = cache(async function loadMasters(mode: "recipe" | "re
   mark(timer, "world");
 
   // Confirmed vendor items (paginated at 1000 - PostgREST db-max-rows cap).
+  // T7 ruling 3: item_number, last_seen, catch_weight + pack_text are
+  // the only columns added. They feed the reference's linked-items
+  // row (Pack / Last bought / "catch weight" label), the search's
+  // "item number" promise + ingMatch()'s "Has item number N"
+  // sub-line. Nothing else widens; the cached loader's key, the
+  // ingredient fetch and the header facts are untouched.
+  const LINKED_SELECT_EXTRAS = "item_number,last_seen,catch_weight,pack_text";
   const LINKED_SELECT = measuresWorld
-    ? "id,vendor_id,ingredient_id,name,usd_12m,price_estimate,pack_override,grade,each_measure_qty,each_measure_uom,case_weight_lb,pack_qty,pack_size,pack_uom"
-    : "id,vendor_id,ingredient_id,name,usd_12m,price_estimate,pack_override,grade,each_measure_qty,each_measure_uom";
+    ? `id,vendor_id,ingredient_id,name,usd_12m,price_estimate,pack_override,grade,each_measure_qty,each_measure_uom,case_weight_lb,pack_qty,pack_size,pack_uom,${LINKED_SELECT_EXTRAS}`
+    : `id,vendor_id,ingredient_id,name,usd_12m,price_estimate,pack_override,grade,each_measure_qty,each_measure_uom,${LINKED_SELECT_EXTRAS}`;
   const linked: LinkedItemRow[] = [];
   const page = 1000;
   let from = 0;
@@ -534,11 +550,16 @@ export const loadMasters = cache(async function loadMasters(mode: "recipe" | "re
           // M2 §4B part 3 fix 4+9: carry pack shape + case weight on
           // the row so the Ingredients-tab PanelIngredientZone mount
           // can seed Measures-block suggestions and the expand's chip
-          // view switch can reprice per row via priceInUnit.
+          // view switch can re-price per row via priceInUnit.
           packQty: it.pack_qty != null ? Number(it.pack_qty) : null,
           packSize: it.pack_size != null ? Number(it.pack_size) : null,
           packUom: it.pack_uom ?? null,
           caseWeightLb: it.case_weight_lb != null ? Number(it.case_weight_lb) : null,
+          // T7 ruling 3: the four columns the loader widened for.
+          itemNumber: it.item_number ?? null,
+          lastSeen: it.last_seen ?? null,
+          catchWeight: it.catch_weight === true,
+          packText: it.pack_text ?? null,
         };
       })
       .sort((a, b) => b.usd12m - a.usd12m);

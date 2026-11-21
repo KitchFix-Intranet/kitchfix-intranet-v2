@@ -29,11 +29,27 @@ import { useDirtyEditor } from "./panel/dirty";
 import "./ingredient-allergens.css";
 
 export type AllergensHandle = { confirm: () => Promise<void> };
+// T7 ruling 1: the button's label depends on the pair (dirty,
+// reviewed). The route couples saving tags with marking checked, so
+// the UI holds ticks locally until one deliberate press. Three
+// kinds:
+//   "dirty-save"       - ticks differ from stored; button reads
+//                        "Save and mark as checked" and posts the
+//                        new array (route stamps reviewed_at too).
+//   "mark-checked"     - ticks match stored AND the ingredient has
+//                        never been checked; button reads "Mark as
+//                        checked" and posts the SAME array to let
+//                        the route stamp reviewed_at.
+//   "checked-noop"     - reviewed AND ticks match; no button;
+//                        the row reads "Checked" + its date.
+export type AllergensKind = "dirty-save" | "mark-checked" | "checked-noop";
 export type AllergensState = {
+  kind: AllergensKind;
   canConfirm: boolean;
   busy: boolean;
   savedAt: number | null;
   error: string | null;
+  reviewedAt: string | null;
 };
 
 type Props = {
@@ -80,7 +96,15 @@ export const IngredientAllergens = forwardRef<AllergensHandle, Props>(function I
     for (const a of selected) if (!savedSet.has(a)) return false;
     return true;
   }, [selected, savedSet]);
-  const canConfirm = unreviewed || !selectionMatchesSaved;
+  // T7 ruling 1: three kinds. canConfirm stays false only when the
+  // ingredient has been checked AND the ticks match what is stored;
+  // in that case the parent's row reads "Checked, DATE" without a
+  // button.
+  const kind: AllergensKind =
+    !selectionMatchesSaved ? "dirty-save"
+    : unreviewed ? "mark-checked"
+    : "checked-noop";
+  const canConfirm = kind !== "checked-noop";
   // T2 §3 + holding note: a changed tick-box grid is a changed editor.
   // The Discard ask resets the selection + confirm-none to what is
   // stored and the Confirm button goes quiet again.
@@ -150,8 +174,8 @@ export const IngredientAllergens = forwardRef<AllergensHandle, Props>(function I
   // Report state to the parent on every change. Guard against null
   // callback so the one call site that does not need it pays nothing.
   useEffect(() => {
-    onStateChange?.({ canConfirm, busy, savedAt, error });
-  }, [canConfirm, busy, savedAt, error, onStateChange]);
+    onStateChange?.({ kind, canConfirm, busy, savedAt, error, reviewedAt });
+  }, [kind, canConfirm, busy, savedAt, error, reviewedAt, onStateChange]);
 
   return (
     <div className="kf-allergens__grid" role="group" aria-label="Top 9 allergens">

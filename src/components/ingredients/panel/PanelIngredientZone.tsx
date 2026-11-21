@@ -251,10 +251,15 @@ export function PanelIngredientZone({
   // enablement + busy without owning the chip state.
   const allergenRef = useRef<AllergensHandle>(null);
   const [allergenCtl, setAllergenCtl] = useState<AllergensState>({
+    // T7 ruling 1: seeded from the stored state so the mount-time
+    // render picks the right button text. Reconciled on every
+    // onStateChange callback.
+    kind: ingredient.allergens_reviewed_at == null ? "mark-checked" : "checked-noop",
     canConfirm: ingredient.allergens_reviewed_at == null,
     busy: false,
     savedAt: null,
     error: null,
+    reviewedAt: ingredient.allergens_reviewed_at ?? null,
   });
   const onAllergenState = useCallback((s: AllergensState) => setAllergenCtl(s), []);
 
@@ -273,9 +278,12 @@ export function PanelIngredientZone({
   const isItemMode = item != null;
 
   if (isItemMode) {
+    // T7 ruling 4 + 8: Open ingredient is the third door. The link
+    // now carries edit=1 so the drawer opens on arrival; the host
+    // tab reads the key from the URL and mounts DetailPanel.
     const targetHref = ingredient.resale
-      ? `/stockpot/ingredients/retail?open=${encodeURIComponent(ingredient.id)}`
-      : `/stockpot/ingredients/ingredients?open=${encodeURIComponent(ingredient.id)}`;
+      ? `/stockpot/ingredients/retail?open=${encodeURIComponent(ingredient.id)}&edit=1`
+      : `/stockpot/ingredients/ingredients?open=${encodeURIComponent(ingredient.id)}&edit=1`;
     return (
       <section className="kf-ipanel__zone kf-ipanel__zone--ing" aria-label={`How it prices on ${ingredient.name}`}>
         <header className="kf-ipanel__zone-head">
@@ -288,9 +296,13 @@ export function PanelIngredientZone({
           </span>
         </header>
 
-        {/* Costed per - saves at once with train 2's Undo. */}
+        {/* Costed per - saves at once with train 2's Undo. T7 item 8:
+            "Priced per" on retail ingredients so the word reads in
+            the retail vocabulary without any other change. */}
         <div className="kf-ipanel__row kf-ipanel__row--split kf-ipanel__row--costed" ref={costedPerRef}>
-          <div className="kf-ipanel__row-label">Costed per</div>
+          <div className="kf-ipanel__row-label">
+            {ingredient.resale ? "Priced per" : "Costed per"}
+          </div>
           <BaseUnitControl
             row={{ id: ingredient.id, name: ingredient.name, baseUnit: ingredient.base_unit }}
             onSaved={onDone}
@@ -298,19 +310,22 @@ export function PanelIngredientZone({
           <div className="kf-ipanel__row-hint">How recipes count this ingredient.</div>
         </div>
 
-        {/* Measures block, in-place. Same component used by the full
-            ingredient panel. */}
-        <PanelMeasuresBlock
-          ingredient={ingredient}
-          measures={measuresForBlock}
-          suggestionCandidates={suggestionCandidates}
-          itemsReachBase={itemsReachBase}
-          openAddForUom={addForUom}
-          openAddPrefillQty={addPrefillQty}
-          openAddPickUnit={addPickUnit}
-          onAfterAdd={() => { setAddForUom(null); setAddPrefillQty(null); setAddPickUnit(false); }}
-          onDone={onDone}
-        />
+        {/* T7 item 8: measures are hidden on retail (retail prices
+            per the pack, no recipe conversions). The block stays
+            mounted for recipe ingredients only. */}
+        {ingredient.resale ? null : (
+          <PanelMeasuresBlock
+            ingredient={ingredient}
+            measures={measuresForBlock}
+            suggestionCandidates={suggestionCandidates}
+            itemsReachBase={itemsReachBase}
+            openAddForUom={addForUom}
+            openAddPrefillQty={addPrefillQty}
+            openAddPickUnit={addPickUnit}
+            onAfterAdd={() => { setAddForUom(null); setAddPrefillQty(null); setAddPickUnit(false); }}
+            onDone={onDone}
+          />
+        )}
 
         {/* Open ingredient link out. T6 ruling 3: the ?open= query key
             is read by the Ingredients + Retail tabs on load. Writing
@@ -506,7 +521,10 @@ export function PanelIngredientZone({
 
       {/* Row 3: Costed per --------------------------------------- */}
       <div className="kf-ipanel__row kf-ipanel__row--split kf-ipanel__row--costed" ref={costedPerRef}>
-        <div className="kf-ipanel__row-label">Costed per</div>
+        <div className="kf-ipanel__row-label">
+          {/* T7 item 8: "Priced per" on retail. */}
+          {ingredient.resale ? "Priced per" : "Costed per"}
+        </div>
         <BaseUnitControl
           row={{ id: ingredient.id, name: ingredient.name, baseUnit: ingredient.base_unit }}
           onSaved={onDone}
@@ -514,44 +532,44 @@ export function PanelIngredientZone({
         <div className="kf-ipanel__row-hint">How recipes count this ingredient.</div>
       </div>
 
-      {/* M2 §4B §2.3: Measures block, shown for every ingredient
-          whatever base_unit is. Replaces the N6 "One each is" row.
-          Writes through /api/review/set-ingredient-measures (RPC-
-          backed; one Save for the whole list). */}
-      <PanelMeasuresBlock
-        ingredient={ingredient}
-        measures={measuresForBlock}
-        suggestionCandidates={suggestionCandidates}
-        itemsReachBase={itemsReachBase}
-        openAddForUom={addForUom}
-        openAddPrefillQty={addPrefillQty}
-        openAddPickUnit={addPickUnit}
-        onAfterAdd={() => { setAddForUom(null); setAddPrefillQty(null); setAddPickUnit(false); }}
-        onDone={onDone}
-      />
+      {/* T7 item 8: on retail, measures / yield / "Recipes can use"
+          are hidden. Retail items are sold as-is; the recipe side
+          of these three rows does not apply. Allergens stay. */}
+      {ingredient.resale ? null : (
+        <>
+          {/* M2 §4B §2.3: Measures block, shown for every ingredient
+              whatever base_unit is. Writes through
+              /api/review/set-ingredient-measures (RPC-backed; one
+              Save for the whole list). */}
+          <PanelMeasuresBlock
+            ingredient={ingredient}
+            measures={measuresForBlock}
+            suggestionCandidates={suggestionCandidates}
+            itemsReachBase={itemsReachBase}
+            openAddForUom={addForUom}
+            openAddPrefillQty={addPrefillQty}
+            openAddPickUnit={addPickUnit}
+            onAfterAdd={() => { setAddForUom(null); setAddPrefillQty(null); setAddPickUnit(false); }}
+            onDone={onDone}
+          />
 
-      {/* M2 §4B §2.5: Yield row. Writes through
-          /api/review/set-ingredient-yield. Yield changes NO price
-          anywhere in M2 - stored and returned only. */}
-      <PanelYieldRow
-        ingredient={ingredient}
-        yieldPct={ingredient.yieldPct ?? null}
-        yieldSource={ingredient.yieldSource ?? null}
-        onDone={onDone}
-      />
+          {/* M2 §4B §2.5: Yield row. */}
+          <PanelYieldRow
+            ingredient={ingredient}
+            yieldPct={ingredient.yieldPct ?? null}
+            yieldSource={ingredient.yieldSource ?? null}
+            onDone={onDone}
+          />
 
-      {/* M2 §4B §2.6: "Recipes can use" chips. Clicking a dashed
-          chip opens the measures Add form prefilled for that uom.
-          itemUnits is derived from the suggestion candidates passed
-          down from DetailPanel - those carry each linked item's
-          pack uom so the reach starts from real data, not from
-          core five unconditionally. */}
-      <PanelChipsRow
-        ingredient={ingredient}
-        measures={measuresForBlock as Array<{ from_unit: string; qty: number; to_unit: string; source: "house_test" | "book" | "vendor_spec" | "estimate" | "pack" }>}
-        itemUnits={Array.from(new Set(suggestionCandidates.map((c) => (c.packUom ?? "").toUpperCase()).filter(Boolean)))}
-        onAddForUom={(u, pu) => { setAddForUom(u); setAddPrefillQty(null); setAddPickUnit(pu === true); }}
-      />
+          {/* M2 §4B §2.6: "Recipes can use" chips. */}
+          <PanelChipsRow
+            ingredient={ingredient}
+            measures={measuresForBlock as Array<{ from_unit: string; qty: number; to_unit: string; source: "house_test" | "book" | "vendor_spec" | "estimate" | "pack" }>}
+            itemUnits={Array.from(new Set(suggestionCandidates.map((c) => (c.packUom ?? "").toUpperCase()).filter(Boolean)))}
+            onAddForUom={(u, pu) => { setAddForUom(u); setAddPrefillQty(null); setAddPickUnit(pu === true); }}
+          />
+        </>
+      )}
 
       {/* Row 5: Allergens ---------------------------------------- */}
       <div className="kf-ipanel__row kf-ipanel__row--allergens">
@@ -570,14 +588,33 @@ export function PanelIngredientZone({
           />
         </div>
         <div className="kf-ipanel__row-action">
-          <button
-            type="button"
-            className={`kf-btn ${allergenCtl.canConfirm ? "kf-btn--primary" : "kf-btn--line"} kf-btn--sm${allergenCtl.busy ? " is-busy" : ""}`}
-            disabled={!allergenCtl.canConfirm || allergenCtl.busy}
-            onClick={() => allergenRef.current?.confirm()}
-          >
-            {allergenCtl.busy ? "Saving..." : "Confirm"}
-          </button>
+          {/* T7 ruling 1: the button says what it will do. Three
+              states: "Save and mark as checked" (dirty), "Mark as
+              checked" (reviewed-with-no-change is the no-op; the
+              unreviewed-match case lets the person record a check
+              without changing any tag), nothing (reviewed + match;
+              the line reads "Checked" with the date). */}
+          {allergenCtl.kind === "checked-noop" ? (
+            <span className="kf-ipanel__row-hint" aria-live="polite">
+              Checked
+              {allergenCtl.reviewedAt
+                ? ` · ${new Date(allergenCtl.reviewedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`
+                : ""}
+            </span>
+          ) : (
+            <button
+              type="button"
+              className={`kf-btn kf-btn--primary kf-btn--sm${allergenCtl.busy ? " is-busy" : ""}`}
+              disabled={allergenCtl.busy}
+              onClick={() => allergenRef.current?.confirm()}
+            >
+              {allergenCtl.busy
+                ? "Saving..."
+                : allergenCtl.kind === "dirty-save"
+                  ? "Save and mark as checked"
+                  : "Mark as checked"}
+            </button>
+          )}
           <SaveFlash savedAt={allergenCtl.savedAt} error={allergenCtl.error} />
         </div>
       </div>
