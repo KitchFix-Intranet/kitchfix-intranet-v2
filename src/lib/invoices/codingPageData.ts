@@ -65,17 +65,31 @@ function formatDateMDY(iso: string): string {
   return `${iso.slice(5, 7)}/${iso.slice(8, 10)}/${iso.slice(0, 4)}`;
 }
 
-function formatWhen(iso: string): string {
-  // ISO timestamp. Use UTC parts so output is stable and
-  // repo-public-friendly (no site-locale leak).
+export function formatWhen(iso: string): string {
+  // 2.5: Central time, 12-hour, with the zone word CT.
+  // Intl with timeZone "America/Chicago" handles daylight saving,
+  // so a winter evening at 8:34 PM CST (= 02:34 UTC the next day)
+  // and a summer evening at 8:34 PM CDT (= 01:34 UTC the next day)
+  // both read "11/20/2026 8:34 PM CT" on the coding page and in
+  // the email body.
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  const m = pad2(d.getUTCMonth() + 1);
-  const day = pad2(d.getUTCDate());
-  const y = d.getUTCFullYear();
-  const hh = pad2(d.getUTCHours());
-  const mm = pad2(d.getUTCMinutes());
-  return `${m}/${day}/${y} ${hh}:${mm} UTC`;
+  // Parts in the America/Chicago zone.
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "numeric", minute: "2-digit",
+    hour12: true,
+  }).formatToParts(d);
+  const get = (t: Intl.DateTimeFormatPartTypes): string =>
+    parts.find((p) => p.type === t)?.value ?? "";
+  const month = get("month");
+  const day = get("day");
+  const year = get("year");
+  const hour = get("hour");
+  const minute = get("minute");
+  const dayPeriod = get("dayPeriod").toUpperCase();
+  return `${month}/${day}/${year} ${hour}:${minute} ${dayPeriod} CT`;
 }
 
 function bylineOf(s: CodingPageSubmitter): string | null {

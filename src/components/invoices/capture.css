@@ -454,29 +454,32 @@
   background: var(--sp-ground);
   border-radius: var(--sp-r-ctl);
   min-height: 240px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   overflow: auto;
 }
+/* Fix 2.3: at fit, the page's width equals the box's inner
+   width; the box scrolls down for the rest of the page. The
+   old `width: auto` only ever scaled DOWN, which left narrow
+   intrinsic pages (e.g. a 734 px canvas in a 939 px box) with
+   grey bands either side and the box fitted to the image's
+   height. `width: 100%; height: auto` scales both up and down,
+   preserving the page's aspect ratio. */
 .kf-inv-sitting__canvas canvas,
 .kf-inv-sitting__canvas img {
   display: block;
-  max-width: 100%;
-  /* Ride 8.6: fit to the box width, never overflow horizontally
-     until zoom is on. */
-  width: auto;
+  width: 100%;
   height: auto;
-  object-fit: contain;
 }
 .kf-inv-sitting__canvas.is-zoom {
   min-height: 420px;
   overflow: auto;
 }
+/* Zoom: 100% is the intrinsic pixel size; scroll in both
+   axes. Untouched by the fit-to-width change. */
 .kf-inv-sitting__canvas.is-zoom canvas,
 .kf-inv-sitting__canvas.is-zoom img {
-  max-width: none;
   width: auto;
+  height: auto;
+  max-width: none;
 }
 .kf-inv-sitting__nofile {
   padding: var(--sp-sp-5);
