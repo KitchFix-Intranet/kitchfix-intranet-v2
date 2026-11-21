@@ -207,6 +207,23 @@ export function PanelMeasuresBlock({
   const { save: runSave, busy: saveBusy, savedAt: saveSavedAt, error: saveError } = useSaveWithRefresh();
   const [dryRunSentence, setDryRunSentence] = useState<string | null>(null);
   const dryRunTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // T6 round 4 item 1: the measure editor now follows the four-editor
+  // rules. firstTextFieldRef focuses the add row's qty input (with
+  // value selected) when the row opens. lastFieldRef remembers which
+  // field had focus so the local Keep editing returns there. An Esc
+  // inside the add row raises the LOCAL ask when something was typed
+  // (editorAskOpen); unhandled Esc still bubbles to DetailPanel,
+  // which raises the PANEL's ask for other dirty editors in the same
+  // scope. The two never show at once in practice: an Esc inside the
+  // add row stops propagation + preventDefault, so DetailPanel's
+  // document listener does not fire. A Prev / Next click never
+  // raises the local ask because the click is outside this form -
+  // the panel ask fires instead, and its Discard runs discardChanges
+  // which closes the add row.
+  const firstTextFieldRef = useRef<HTMLInputElement | null>(null);
+  const lastFieldRef = useRef<HTMLElement | null>(null);
+  const [editorAskOpen, setEditorAskOpen] = useState(false);
+  const prevAddOpenRef = useRef<boolean>(false);
 
   // External add-for-uom trigger from the chips row or attention.
   // From-unit is always EA (count-to-X is the common bridge; the user
@@ -255,11 +272,20 @@ export function PanelMeasuresBlock({
     setDraft((cur) => (idChanged || sameList(cur, priorStored) ? baseline : cur));
   }, [baseline, ingredient.id]);
 
-  const dirty = !sameList(draft, baseline);
+  // T6 round 4 item 1: the panel's dirty registry must also see
+  // typed work in the add row (qty or to-unit). Without this, typing
+  // "2.5" into the qty before committing lets Prev / Next step
+  // through without an ask - and in R3 the typed value was crossing
+  // items. R4's item-id remount discards it on step; this check
+  // makes sure the ask raises the moment typed work exists.
+  const addRowDirty =
+    addingFrom != null && (addQty.trim().length > 0 || addUom.length > 0);
+  const dirty = !sameList(draft, baseline) || addRowDirty;
   // T2 §3: the panel's Discard ask asks every dirty editor to reset
-  // to its baseline. discardChanges below snaps the draft back to
-  // the server-rendered measures.
-  useDirtyEditor(`measures-${ingredient.id}`, dirty && !saveBusy, () => setDraft(baseline));
+  // to its baseline. discardChanges (defined below) snaps the draft
+  // back AND closes an open add row - without closing it, a typed
+  // 2.5 would survive the Discard.
+  useDirtyEditor(`measures-${ingredient.id}`, dirty && !saveBusy, () => discardChanges());
 
   const candidateForRejection = useMemo<UiMeasure | null>(() => {
     if (!addingFrom) return null;
@@ -343,6 +369,52 @@ export function PanelMeasuresBlock({
     setDraft(baseline);
     cancelAdd();
     setDryRunSentence(null);
+    setEditorAskOpen(false);
+  }
+
+  // T6 round 4 item 1: autofocus the qty input (with value selected)
+  // the moment the add row opens. Only on the open transition so a
+  // from-unit change inside the row does not steal focus from a user
+  // who clicked that select on purpose.
+  useEffect(() => {
+    const addOpen = addingFrom != null;
+    const was = prevAddOpenRef.current;
+    prevAddOpenRef.current = addOpen;
+    if (!addOpen || was) return;
+    const el = firstTextFieldRef.current;
+    if (!el) return;
+    el.focus();
+    try {
+      el.select();
+    } catch {
+      /* number inputs on some browsers do not support select() */
+    }
+  }, [addingFrom]);
+
+  // T6 round 4 item 1: Esc + Cancel from the add row. If nothing was
+  // typed, close the row at once. If something was typed, raise the
+  // local ask (matching PackOverrideBlock / PriceOverrideBlock /
+  // CaseWeightBlock). Keep editing returns focus to the field the
+  // person was in.
+  function tryCloseAdd() {
+    if (saveBusy) return;
+    if (addRowDirty) {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) lastFieldRef.current = active;
+      setEditorAskOpen(true);
+      return;
+    }
+    cancelAdd();
+  }
+  function keepEditing() {
+    setEditorAskOpen(false);
+    window.setTimeout(() => {
+      lastFieldRef.current?.focus();
+    }, 0);
+  }
+  function discardAndCloseAdd() {
+    cancelAdd();
+    setEditorAskOpen(false);
   }
 
   // Dry-run: fetch "how many items would change" when the draft is
@@ -512,7 +584,16 @@ export function PanelMeasuresBlock({
         ) : null}
 
         {addingFrom != null ? (
-          <div className="kf-measures__add kf-measures__add--open">
+          <div
+            className="kf-measures__add kf-measures__add--open"
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                tryCloseAdd();
+              }
+            }}
+          >
             <span className="kf-measures__one">1</span>
             <select
               className="kf-ipanel__ctl kf-ipanel__ctl--uom"
@@ -528,6 +609,7 @@ export function PanelMeasuresBlock({
             </select>
             <span>=</span>
             <input
+              ref={firstTextFieldRef}
               type="number"
               className="kf-ipanel__ctl kf-ipanel__ctl--qty"
               value={addQty}
@@ -582,13 +664,39 @@ export function PanelMeasuresBlock({
             >
               Add
             </button>
-            <button type="button" className="kf-btn kf-btn--line" onClick={cancelAdd}>
+            <button type="button" className="kf-btn kf-btn--line" onClick={tryCloseAdd}>
               Cancel
             </button>
             {inlineRefusal || addError ? (
               <span className="kf-measures__refusal" role="alert">
                 {inlineRefusal ?? addError}
               </span>
+            ) : null}
+            {editorAskOpen ? (
+              <div
+                className="kf-ipanel__editor-ask"
+                role="alertdialog"
+                aria-label="Discard what you typed?"
+              >
+                <span className="kf-ipanel__editor-ask-text">
+                  Discard what you typed?
+                </span>
+                <button
+                  type="button"
+                  className="kf-btn kf-btn--primary kf-btn--sm"
+                  autoFocus
+                  onClick={keepEditing}
+                >
+                  Keep editing
+                </button>
+                <button
+                  type="button"
+                  className="kf-btn kf-btn--line kf-btn--sm"
+                  onClick={discardAndCloseAdd}
+                >
+                  Discard
+                </button>
+              </div>
             ) : null}
           </div>
         ) : null}

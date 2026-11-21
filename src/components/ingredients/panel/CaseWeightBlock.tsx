@@ -12,7 +12,7 @@
 // helper so the Save button stays "Saving..." until the refreshed
 // number has rendered; the success toast fires at that moment.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fmtUsd } from "@/lib/fmt";
 import { DIM_BY_UOM } from "@/lib/ingredients/pack";
 import { priceInUnit } from "@/lib/ingredients/measures";
@@ -152,14 +152,57 @@ export function CaseWeightBlock({
   })();
   const casePriceHint = liveCwHint;
 
+  // T6 round 2 item 1 + round 3 small 1-2: autofocus the weight
+  // input with its value selected; capture last-focused element
+  // before the ask opens so Keep editing returns there.
+  const inputRef = useRef<HTMLInputElement>(null);
+  const lastFieldRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (open) {
+      inputRef.current?.focus();
+      try { inputRef.current?.select(); } catch { /* noop */ }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  const [askOpen, setAskOpen] = useState(false);
+  function tryCloseRow() {
+    if (busy) return;
+    if (dirty) {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) lastFieldRef.current = active;
+      setAskOpen(true);
+      return;
+    }
+    setOpen(false);
+    setVal(storedCw != null ? String(storedCw) : "");
+  }
+  function keepEditing() {
+    setAskOpen(false);
+    window.setTimeout(() => { lastFieldRef.current?.focus(); }, 0);
+  }
+  function discardAndClose() {
+    setVal(storedCw != null ? String(storedCw) : "");
+    setAskOpen(false);
+    setOpen(false);
+  }
   return (
-    <div className="kf-ipanel__row kf-ipanel__row--case-weight">
+    <div
+      className="kf-ipanel__row kf-ipanel__row--case-weight"
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          tryCloseRow();
+        }
+      }}
+    >
       <label className="kf-ipanel__row-label" htmlFor={`cw-${item.id}`}>
         <span>Case weighs</span>
       </label>
       <div className="kf-ipanel__row-value">
         <div className="kf-ipanel__row-value-flex">
           <input
+            ref={inputRef}
             id={`cw-${item.id}`}
             type="number"
             inputMode="decimal"
@@ -177,10 +220,30 @@ export function CaseWeightBlock({
         </div>
         <div className="kf-ipanel__row-hint">
           {!valid
-            ? "caseWeightLb must be greater than 0 and at most 5000."
+            ? "Enter a weight in lb greater than 0."
             : hint}
           {casePriceHint ? ` · ${casePriceHint}` : ""}
         </div>
+        {askOpen ? (
+          <div className="kf-ipanel__editor-ask" role="alertdialog" aria-label="Discard what you typed?">
+            <span className="kf-ipanel__editor-ask-text">Discard what you typed?</span>
+            <button
+              type="button"
+              className="kf-btn kf-btn--primary kf-btn--sm"
+              autoFocus
+              onClick={keepEditing}
+            >
+              Keep editing
+            </button>
+            <button
+              type="button"
+              className="kf-btn kf-btn--line kf-btn--sm"
+              onClick={discardAndClose}
+            >
+              Discard
+            </button>
+          </div>
+        ) : null}
       </div>
       <div className="kf-ipanel__row-action">
         <button

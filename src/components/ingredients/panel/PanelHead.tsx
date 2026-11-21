@@ -1,21 +1,23 @@
 "use client";
 
-// N8 §3a: head. Red Barlow eyebrow + navy Barlow name (uppercase) +
-// status line ("Linked to {name}" as text + attention pill). Close
-// button is a 44x44 outlined square inside the head (to the right of
-// the name block).
+// T6 item 1: the head is the only pinned block. Red Barlow eyebrow +
+// navy Barlow name (uppercase, now at --sp-t-title not the retired
+// 26 px raw value), status line, step + Close.
 //
-// T8: the sticky wrapper moved up to DetailPanel (.kf-ipanel__pin
-// wraps head + strip so the four grey summary cells stay on screen).
-// Head is no longer sticky itself; its opaque background +
-// border-bottom stay. The T7 facts sub-line was removed as part of
-// the same change - the pinned strip replaces it.
+// T6 ruling 9: the name heading is the panel's focus target on
+// open. forwardRef now points at the h3, which carries tabIndex=-1
+// so a screen reader reads what opened and the first Tab lands on
+// the first real control. The Close button is reachable by Tab from
+// the heading forward.
+//
+// Prev / Next (item mode with a list of more than one) sit alongside
+// Close as icon buttons at the right of the head.
 
 import { forwardRef } from "react";
-import { X } from "lucide-react";
+import { ChevronUp, ChevronDown, X } from "lucide-react";
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 
-export const PanelHead = forwardRef<HTMLButtonElement, {
+export const PanelHead = forwardRef<HTMLHeadingElement, {
   labelId: string;
   kind: "item" | "ingredient";
   item: ReviewGroupItem | null;
@@ -23,12 +25,30 @@ export const PanelHead = forwardRef<HTMLButtonElement, {
   proposedName?: string | null;
   attentionCount: number;
   onClose: () => void;
+  // T6 item 8 + ruling 4: Prev/Next within the surface's own list.
+  // Null index or <= 1 list disables both.
+  stepIndex?: number | null;
+  stepTotal?: number | null;
+  onPrev?: () => void;
+  onNext?: () => void;
 }>(function PanelHead(
-  { labelId, kind, item, ingredient, proposedName, attentionCount, onClose },
-  closeRef,
+  { labelId, kind, item, ingredient, proposedName, attentionCount, onClose, stepIndex, stepTotal, onPrev, onNext },
+  nameRef,
 ) {
+  // T6 round 2 item 7: reference's vItemPanel reads
+  //   "<vendor> · item number <num>"
+  // or "<vendor> · no item number"; the "Vendor item" prefix is
+  // retired. The optional "N of M" counter rides at the tail.
   const eyebrow = kind === "item" && item
-    ? `Vendor item · ${item.vendor}${item.itemNumber ? ` · #${item.itemNumber}` : ""}`
+    ? `${item.vendor}${
+        item.itemNumber
+          ? ` · item number ${item.itemNumber}`
+          : " · no item number"
+      }${
+        stepIndex != null && stepTotal != null && stepTotal > 1
+          ? ` · ${stepIndex + 1} of ${stepTotal}`
+          : ""
+      }`
     : "Ingredient";
   const name = kind === "item" && item
     ? item.displayName
@@ -37,17 +57,8 @@ export const PanelHead = forwardRef<HTMLButtonElement, {
       : proposedName ?? "New ingredient";
   const linkedName = kind === "item" && ingredient ? ingredient.name : null;
   const notLinked = kind === "item" && !ingredient;
-  // §1c: "1 thing needs attention" / "2 things need attention".
   const attentionWord = attentionCount === 1 ? "thing needs" : "things need";
 
-  // N8 round 4 fix 2: the pill tells the truth. "All clear" renders
-  // ONLY when all three hold: zero attention rows, item is linked,
-  // and packState !== "check". Attention rows -> count pill.
-  // No ingredient -> no pill (the status line already says "Not
-  // linked yet"). packState === "check" with zero attention rows
-  // -> "Pack needs review" (warn). deriveAttention and the attention
-  // block are not consulted or changed by this - we key off the two
-  // observable facts the head carries (count + item.packState).
   const packNeedsReview = kind === "item" && item?.packState === "check";
   let pill: React.ReactNode = null;
   if (attentionCount > 0) {
@@ -61,16 +72,7 @@ export const PanelHead = forwardRef<HTMLButtonElement, {
   } else if (kind === "item" && ingredient) {
     pill = <span className="kf-pill kf-pill--good">All clear</span>;
   }
-  // kind === "item" && !ingredient -> no pill (status line carries
-  // "Not linked yet"); kind === "ingredient" -> head has no status
-  // line at all, no pill.
 
-  // T4 R2 §3: the state name comes from `item.state`, which the
-  // server computed via getVendorItemState. That reads the old and
-  // new shapes the same way, so an old-shape one-off (status still
-  // 'archived') reads "One-off" here, matching what the list beside
-  // the panel says. Nothing in this component branches on
-  // `item.status` / `item.isFood` / `item.link_reason` directly.
   const state = kind === "item" ? item?.state : null;
   const statusPill =
     state === "archived"
@@ -84,19 +86,25 @@ export const PanelHead = forwardRef<HTMLButtonElement, {
             : state === "retail"
               ? "Retail"
               : null;
-  // Intake-flagged not-food (is_food=false) gets the plain "Not food"
-  // pill too - but the state helper already returns "not_food" for
-  // those rows, so the statusPill above covers it. showNotFoodPill
-  // stays for the foodReason sub-line, which only has meaning when
-  // intake was the classifier.
   const showNotFoodPill =
     kind === "item" && state === "not_food" && item?.isFood === false;
+
+  const many = stepIndex != null && stepTotal != null && stepTotal > 1;
+  const atStart = many && stepIndex === 0;
+  const atEnd = many && stepTotal != null && stepIndex === stepTotal - 1;
 
   return (
     <div className="kf-ipanel__head">
       <div className="kf-ipanel__head-body">
         <div className="kf-ipanel__eyebrow">{eyebrow}</div>
-        <h3 id={labelId} className="kf-ipanel__name">{name}</h3>
+        <h3
+          id={labelId}
+          className="kf-ipanel__name"
+          ref={nameRef}
+          tabIndex={-1}
+        >
+          {name}
+        </h3>
         {kind === "item" ? (
           <div className="kf-ipanel__status">
             {linkedName ? (
@@ -122,15 +130,41 @@ export const PanelHead = forwardRef<HTMLButtonElement, {
           </div>
         ) : null}
       </div>
-      <button
-        ref={closeRef}
-        type="button"
-        className="kf-ipanel__close"
-        onClick={onClose}
-        aria-label="Close"
-      >
-        <X size={20} strokeWidth={1.5} aria-hidden />
-      </button>
+      <div className="kf-ipanel__head-nav">
+        {many ? (
+          <>
+            {/* T6 round 2 item 8: Previous is drawn disabled on the
+                first item (not hidden) so the step buttons do not
+                move under the pointer; same for Next on the last. */}
+            <button
+              type="button"
+              className="kf-ipanel__close"
+              onClick={() => onPrev?.()}
+              disabled={atStart || !onPrev}
+              aria-label="Previous item"
+            >
+              <ChevronUp size={20} strokeWidth={1.5} aria-hidden />
+            </button>
+            <button
+              type="button"
+              className="kf-ipanel__close"
+              onClick={() => onNext?.()}
+              disabled={atEnd || !onNext}
+              aria-label="Next item"
+            >
+              <ChevronDown size={20} strokeWidth={1.5} aria-hidden />
+            </button>
+          </>
+        ) : null}
+        <button
+          type="button"
+          className="kf-ipanel__close"
+          onClick={onClose}
+          aria-label="Close"
+        >
+          <X size={20} strokeWidth={1.5} aria-hidden />
+        </button>
+      </div>
     </div>
   );
 });

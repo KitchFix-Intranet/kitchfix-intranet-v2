@@ -1160,13 +1160,18 @@
   color: var(--sp-navy);
   font-family: var(--sp-disp);
   font-weight: 800;
-  font-size: var(--sp-t-h3);
+  /* T6 ruling 11: Recent decisions matches the reference's vLedger().
+   * The heading is a body-sized bold label (16 px), not a display
+   * head (was 20 px). Matches .kf-pane__head's shape and keeps the
+   * whole Review queue screen at <=5 sizes (12, 13, 14.5, 24, 28). */
+  font-size: var(--sp-t-body);
   margin: 0;
 }
-.kf-review__ledger-head span { color: var(--sp-muted); font-size: var(--sp-t-micro); }
+.kf-review__ledger-head span { color: var(--sp-muted); font-size: var(--sp-t-label); }
 .kf-review__ledger-empty {
   color: var(--sp-muted);
-  font-size: var(--sp-t-body);
+  /* T6 ruling 11: ledger empty copy follows the ledger body token. */
+  font-size: var(--sp-t-label);
   margin: 0;
 }
 .kf-review__ledger-list {
@@ -1210,12 +1215,23 @@
 .kf-review__ledger-kind--undo { background: var(--sp-warn-bg); color: var(--sp-warn); }
 .kf-review__ledger-text {
   font-family: var(--sp-ui);
-  font-size: var(--sp-t-body);
+  /* T6 ruling 11: ledger row text matches the reference's
+   * .kf-ledger__what - 14.5 px table token, with the <small> detail
+   * dropping to 13 px label. The unstyled <small> elements in
+   * ReviewLedger.tsx inherit from this rule's size by default; the
+   * nested selector below gives them the smaller size they ought to
+   * have carried all along. */
+  font-size: var(--sp-t-table);
   color: var(--sp-ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+}
+.kf-review__ledger-text small {
+  font-size: var(--sp-t-label);
+  color: var(--sp-muted);
+  margin-left: var(--sp-sp-1);
 }
 .kf-review__ledger-meta {
   display: inline-flex;

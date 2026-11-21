@@ -177,18 +177,22 @@ export function ReviewFilter({
         <span className="kf-review__search-count" aria-live="polite">
           {!anyFilterActive ? (
             <>
-              <strong>{fmtCount(groups.length)}</strong> groups · <strong>{fmtUsd(totals.groupedUsd)}</strong>
+              {/* T6 ruling 11: the count line reads the same number as
+                  the @topbar header (totals.groups), which includes the
+                  not-food card when it has items. ReviewFilter's groups
+                  prop is the regular groups only; totals.groups is the
+                  authoritative number from the one cached loader. */}
+              <strong>{fmtCount(totals.groups)}</strong> groups · <strong>{fmtUsd(totals.groupedUsd)}</strong>
               {/* Train 5a / ruling 5: the retired IdentBand carried a
                   "Flagged not food" fact (the matcher's ai-notfood
-                  pile). It moves here, once, as plain text. Train 5b
-                  gives those items a card and train 8 a switch. */}
+                  pile). It moves here, once, as plain text. */}
               {totals.notFood > 0 ? (
                 <> · <strong>{fmtCount(totals.notFood)}</strong> flagged not food</>
               ) : null}
             </>
           ) : (
             <>
-              <strong>{fmtCount(filtered.length)}</strong> of {fmtCount(groups.length)} groups ·{" "}
+              <strong>{fmtCount(filtered.length)}</strong> of {fmtCount(totals.groups)} groups ·{" "}
               <strong>{fmtUsd(matchedUsd)}</strong> matching
             </>
           )}

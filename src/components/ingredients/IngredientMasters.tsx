@@ -693,17 +693,21 @@ export const loadMasters = cache(async function loadMasters(mode: "recipe" | "re
   };
 });
 
-export async function IngredientMasters({ mode = "recipe" }: { mode?: "recipe" | "resale" } = {}) {
-  // Train 5a: the band is gone from this tab. The headline facts
-  // (ingredients, linked items, plus need-attention when > 0) now
-  // ride in the top bar via the tab's @topbar slot page, which calls
-  // `loadMasters(mode)` from this same module. Linked spend moves
-  // out of the header; Overview still carries food-dollars-linked.
+export async function IngredientMasters({
+  mode = "recipe",
+  openId = null,
+}: {
+  mode?: "recipe" | "resale";
+  // T6 ruling 3: read-only ?open=<id> handshake. When set, the
+  // filter's initial selection scrolls to that id. Unknown / retired
+  // ids pass through as null (the page opens at default).
+  openId?: string | null;
+} = {}) {
   const { rows, mode: m } = await loadMasters(mode);
   return (
     <div className="kf-ing">
       <Tabs active={m === "resale" ? "retail" : "ingredients"} />
-      <IngredientMastersFilter rows={rows} mode={m} />
+      <IngredientMastersFilter rows={rows} mode={m} initialOpenId={openId} />
     </div>
   );
 }

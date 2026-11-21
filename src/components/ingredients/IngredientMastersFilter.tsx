@@ -250,9 +250,16 @@ function stripDerivedSub(_row: MasterRow, _active: LensStats): string | null {
 export function IngredientMastersFilter({
   rows,
   mode = "recipe",
+  initialOpenId = null,
 }: {
   rows: MasterRow[];
   mode?: "recipe" | "resale";
+  // T6 ruling 3: ?open=<ingredient id> handshake. When the id is on
+  // the loaded rows we seed the selection; the detail pane opens on
+  // mount and the row is scrolled into view by the existing
+  // selection effect. Unknown / retired id falls through to the
+  // default (no selection).
+  initialOpenId?: string | null;
 }) {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortMode>("spend");
@@ -260,8 +267,19 @@ export function IngredientMastersFilter({
   const [onlyFlagged, setOnlyFlagged] = useState(false);
   const [onlyUnreviewed, setOnlyUnreviewed] = useState(false);
   const [onlyEmpty, setOnlyEmpty] = useState(false);
-  const [selId, setSelId] = useState<string | null>(null);
-  const [paneOpen, setPaneOpen] = useState(false);
+  // T6 ruling 3: seed the selection from the URL on first mount when
+  // the id matches a loaded row. useState initializer runs once, so
+  // this only fires at mount and never fights a subsequent user
+  // selection.
+  const [selId, setSelId] = useState<string | null>(() => {
+    if (initialOpenId && rows.some((r) => r.id === initialOpenId)) {
+      return initialOpenId;
+    }
+    return null;
+  });
+  const [paneOpen, setPaneOpen] = useState<boolean>(() =>
+    initialOpenId != null && rows.some((r) => r.id === initialOpenId),
+  );
   const [openItemId, setOpenItemId] = useState<string | null>(null);
   // Train 5a / F22: "/" focus and Esc clear live inside the shared
   // Search component now; this file keeps no input ref or hotkey.
@@ -615,8 +633,24 @@ export function IngredientMastersFilter({
         </section>
       </div>
 
+      {/* T6 item 8 + round 2 item 2: Prev/Next within the open
+          ingredient's linked items; focus returns to the row's name
+          button when the panel closes. */}
       {openItemId ? (
-        <ItemPanelById itemId={openItemId} onClose={() => setOpenItemId(null)} />
+        <ItemPanelById
+          itemId={openItemId}
+          onClose={() => setOpenItemId(null)}
+          neighborIds={selected ? selected.linkedItems.map((li) => li.id) : null}
+          onStep={(nextId) => setOpenItemId(nextId)}
+          onFocusReturn={(lastId) => {
+            const el = document.querySelector<HTMLElement>(`[data-item-id="${lastId}"]`);
+            if (el) {
+              el.focus();
+              return;
+            }
+            document.querySelector<HTMLElement>(".kf-ingp__item-name")?.focus();
+          }}
+        />
       ) : null}
     </div>
   );
@@ -1397,6 +1431,7 @@ function LinkedItems({
                 <button
                   type="button"
                   className="kf-ingp__item-name"
+                  data-item-id={li.id}
                   onClick={() => onOpenItem(li.id)}
                 >
                   {li.name}

@@ -173,3 +173,168 @@ export function fmtUsdCents(n: number): string {
     maximumFractionDigits: 2,
   })}`;
 }
+
+// T6 round 2 item 8c: the editor's save-decision logic lives here as
+// a pure function the PackOverrideBlock AND the proof import. Previously
+// the proof carried a "pure mirror" copy that passed when the editor
+// itself was wrong. Now there is one source.
+//
+// Branching per T6 ruling 1 (see the save-table in the memo):
+//   catch weight             -> [set-pack-override]
+//   pack dirty, price = default -> [set-pack-override]
+//   pack pristine, price shortcut -> [set-price-override, auto reason]
+//   pack pristine, price typed    -> [set-price-override, note or default]
+//   pack dirty, price dirty    -> [set-pack-override, set-price-override]
+//
+// The function is pure (no routes, no network). It emits the POST
+// sequence as plain objects the editor + the proof both consume.
+
+export type PackSaveState = {
+  // facts the editor compares against
+  itemId: string;
+  // current editor state
+  catchWeight: boolean;
+  catchWeightChanged: boolean;
+  packPristine: boolean;
+  qty: number;
+  size: number;
+  uom: string;
+  perLb: number;
+  billedUnit: string;
+  note: string;
+  // price field: current value + default + source hint if from a
+  // shortcut or matched-to-the-cent against a file price
+  caseFieldVal: number | null;
+  defaultCaseVal: number | null;
+  caseFieldSrcLabel: "catalog" | "billed" | "avg" | "typed" | null;
+};
+
+export type PackSavePost =
+  | {
+      route: "/api/review/set-pack-override";
+      body: {
+        itemId: string;
+        catchWeight: boolean;
+        perLb?: number;
+        qty?: number;
+        size?: number;
+        uom?: string;
+        billedUnit: string | null;
+        note: string | null;
+      };
+    }
+  | {
+      route: "/api/review/set-price-override";
+      body: {
+        itemId: string;
+        perBase: number;
+        baseUom: "LB" | "FLOZ" | "EA";
+        reason: string;
+      };
+    };
+
+export function moneyEqualToCent(a: number | null, b: number | null): boolean {
+  if (a == null || b == null) return a === b;
+  return Math.round(a * 100) === Math.round(b * 100);
+}
+
+export function priceReasonFor(
+  srcLabel: PackSaveState["caseFieldSrcLabel"],
+  caseVal: number,
+  note: string,
+): string {
+  const n = note.trim();
+  if (srcLabel === "typed" || srcLabel === null) {
+    return n.length > 0 ? n : "Price typed in the pack editor";
+  }
+  const auto = `Costed from ${srcLabel} case price $${caseVal.toFixed(2)} instead of the default`;
+  return n.length > 0 ? `${auto}. ${n}` : auto;
+}
+
+export function decidePackSave(state: PackSaveState): PackSavePost[] {
+  const caseFieldChanged = !moneyEqualToCent(state.caseFieldVal, state.defaultCaseVal);
+  const packDirty =
+    !state.catchWeight && (!state.packPristine || state.catchWeightChanged);
+  const note = state.note.trim();
+  const billed = state.billedUnit.trim();
+
+  // Branch 1: catch weight.
+  if (state.catchWeight) {
+    return [
+      {
+        route: "/api/review/set-pack-override",
+        body: {
+          itemId: state.itemId,
+          catchWeight: true,
+          perLb: state.perLb,
+          billedUnit: billed || null,
+          note: note || null,
+        },
+      },
+    ];
+  }
+
+  function priceBody(): PackSavePost | null {
+    if (state.caseFieldVal == null) return null;
+    const b = uomToBase(state.uom);
+    if (!b) return null;
+    const total = state.qty * state.size * b.factor;
+    if (!(total > 0)) return null;
+    return {
+      route: "/api/review/set-price-override",
+      body: {
+        itemId: state.itemId,
+        perBase: state.caseFieldVal / total,
+        baseUom: b.base,
+        reason: priceReasonFor(state.caseFieldSrcLabel, state.caseFieldVal, note),
+      },
+    };
+  }
+
+  // Branch 2: price only.
+  if (!packDirty && caseFieldChanged) {
+    const price = priceBody();
+    return price ? [price] : [];
+  }
+
+  // Branch 3 + 4: pack only.
+  if (packDirty && !caseFieldChanged) {
+    return [
+      {
+        route: "/api/review/set-pack-override",
+        body: {
+          itemId: state.itemId,
+          catchWeight: false,
+          qty: state.qty,
+          size: state.size,
+          uom: state.uom,
+          billedUnit: billed || null,
+          note: note || null,
+        },
+      },
+    ];
+  }
+
+  // Branch 5: pack and price.
+  if (packDirty && caseFieldChanged) {
+    const price = priceBody();
+    if (!price) return [];
+    return [
+      {
+        route: "/api/review/set-pack-override",
+        body: {
+          itemId: state.itemId,
+          catchWeight: false,
+          qty: state.qty,
+          size: state.size,
+          uom: state.uom,
+          billedUnit: billed || null,
+          note: note || null,
+        },
+      },
+      price,
+    ];
+  }
+
+  return [];
+}

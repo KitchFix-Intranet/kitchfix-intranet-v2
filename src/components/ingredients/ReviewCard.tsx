@@ -154,6 +154,10 @@ export function ReviewCard({
   const [panelOpen, setPanelOpen] = useState<DetailPanelOpen>(null);
   const ingredientRow = group.ingredient;
   const router = useRouter();
+  // T6 round 2 item 2: remember the id the panel is opened on so
+  // focus can return to that row's name button on close. Updated
+  // on Prev/Next steps too.
+  const openerIdRef = useRef<string | null>(null);
   const [leaving, setLeaving] = useState<{ ids: Set<string>; allLeaving: boolean } | null>(null);
 
   function startLeaveAnimation(itemIds: string[]) {
@@ -319,7 +323,11 @@ export function ReviewCard({
                     <button
                       type="button"
                       className="kf-rvc__row-btn"
-                      onClick={() => setPanelOpen({ kind: "item", itemId: it.id })}
+                      data-item-id={it.id}
+                      onClick={() => {
+                        openerIdRef.current = it.id;
+                        setPanelOpen({ kind: "item", itemId: it.id });
+                      }}
                       title={`Open details for ${it.displayName}`}
                     >
                       {it.displayName}
@@ -439,17 +447,58 @@ export function ReviewCard({
         onLeaveStart={startLeaveAnimation}
       />
 
-      {panelOpen ? (
-        <DetailPanel
-          open={panelOpen}
-          onClose={() => setPanelOpen(null)}
-          ingredient={ingredientRow}
-          items={group.items}
-          parents={ingredients}
-          proposedName={group.proposedName}
-          proposedParent={group.proposedParent}
-        />
-      ) : null}
+      {panelOpen ? (() => {
+        const stepIds = group.items.map((i) => i.id);
+        const stepIndex =
+          panelOpen.kind === "item" ? stepIds.indexOf(panelOpen.itemId) : -1;
+        const stepTo = (nextId: string) => {
+          openerIdRef.current = nextId;
+          setPanelOpen({ kind: "item", itemId: nextId });
+        };
+        const step = stepIndex >= 0
+          ? {
+              index: stepIndex,
+              total: stepIds.length,
+              onPrev: stepIndex > 0 ? () => stepTo(stepIds[stepIndex - 1]) : undefined,
+              onNext:
+                stepIndex < stepIds.length - 1
+                  ? () => stepTo(stepIds[stepIndex + 1])
+                  : undefined,
+            }
+          : null;
+        return (
+          <DetailPanel
+            open={panelOpen}
+            onClose={() => setPanelOpen(null)}
+            ingredient={ingredientRow}
+            items={group.items}
+            parents={ingredients}
+            proposedName={group.proposedName}
+            proposedParent={group.proposedParent}
+            stepIndex={step?.index ?? null}
+            stepTotal={step?.total ?? null}
+            onPrev={step?.onPrev}
+            onNext={step?.onNext}
+            onFocusReturn={() => {
+              // T6 round 2 item 2: focus returns to the row button
+              // for the last-opened item. If the row has left the
+              // group (post-save cleanup, Next past the end), fall
+              // back to the first row's button, never the page body.
+              const id = openerIdRef.current;
+              const scope = document.querySelector<HTMLElement>(
+                `[data-item-id="${id}"]`,
+              );
+              if (scope) {
+                scope.focus();
+                return;
+              }
+              document
+                .querySelector<HTMLElement>(".kf-rvc__row-btn")
+                ?.focus();
+            }}
+          />
+        );
+      })() : null}
     </article>
   );
 }

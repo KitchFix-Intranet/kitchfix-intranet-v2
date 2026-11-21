@@ -16,13 +16,16 @@
 // price part is omitted. Provenance (set by hand / from catalog / ...)
 // goes on the row's muted micro sub-line beneath the summary.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtDate, fmtPackNumber, fmtPackNumbersInText, fmtUsd } from "@/lib/fmt";
 import { DIM_BY_UOM } from "@/lib/ingredients/pack";
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 import { ItemGradeBlock } from "./ItemGradeBlock";
 import { PackOverrideBlock } from "./PackOverrideBlock";
 import { PriceOverrideBlock } from "./PriceOverrideBlock";
+import { postJson, saveErrorSentence, undoViaEvent } from "./common";
 import { itemConfidenceWord, itemFacts } from "./itemFacts";
 // M2 §4B §2.7: ItemEachMeasureBlock is no longer mounted. The item-
 // side override is now CaseWeightBlock (case_weight_lb); the "One
@@ -144,18 +147,39 @@ export function PanelItemZone({
   ingredient,
   packHint,
   onDone,
+  showStatusActions = false,
 }: {
   item: ReviewGroupItem;
   ingredient: ReviewCardIngredient | null;
   packHint: PackHint | null;
   onDone: () => void;
+  showStatusActions?: boolean;
 }) {
   const [packOpen, setPackOpen] = useState(false);
   const [priceOpen, setPriceOpen] = useState(false);
+  // T6 round 2 item 2: after a save, focus returns to the row's
+  // Edit button. Each editor row owns a ref to its toggle button
+  // and focuses it once the editor closes.
+  const packEditRef = useRef<HTMLButtonElement>(null);
+  const priceEditRef = useRef<HTMLButtonElement>(null);
+  const [packJustClosed, setPackJustClosed] = useState(false);
+  const [priceJustClosed, setPriceJustClosed] = useState(false);
 
   useEffect(() => {
     if (packHint) setPackOpen(true);
   }, [packHint?.nonce]);
+  useEffect(() => {
+    if (!packOpen && packJustClosed) {
+      packEditRef.current?.focus();
+      setPackJustClosed(false);
+    }
+  }, [packOpen, packJustClosed]);
+  useEffect(() => {
+    if (!priceOpen && priceJustClosed) {
+      priceEditRef.current?.focus();
+      setPriceJustClosed(false);
+    }
+  }, [priceOpen, priceJustClosed]);
 
   const parsed = parsePackNormalized(item.packNormalized ?? item.pack ?? null);
   const isCheck = item.packState === "check";
@@ -266,6 +290,7 @@ export function PanelItemZone({
         </div>
         <div className="kf-ipanel__row-action">
           <button
+            ref={packEditRef}
             type="button"
             className="kf-ipanel__row-toggle"
             onClick={() => setPackOpen((v) => !v)}
@@ -280,8 +305,8 @@ export function PanelItemZone({
               item={item}
               ingredient={ingredient}
               hint={packHint}
-              onDone={() => { onDone(); setPackOpen(false); }}
-              onCancel={() => setPackOpen(false)}
+              onDone={() => { onDone(); setPackJustClosed(true); setPackOpen(false); }}
+              onCancel={() => { setPackJustClosed(true); setPackOpen(false); }}
               measures={ingredient?.measures as Parameters<typeof PackOverrideBlock>[0]["measures"]}
             />
           </div>
@@ -349,9 +374,13 @@ export function PanelItemZone({
         <div className="kf-ipanel__row-action" />
       </div>
 
-      {/* Row 4: Price override ---------------------------------- */}
+      {/* Row 4: Price by hand ----------------------------------
+          T6 round 2 item 7: words follow the reference's handRow
+          on vItemPanel. "Not set" + "For when the invoice price
+          is wrong and you know the right one." Button reads "Edit"
+          when a hand-set price exists, else "Set a price". */}
       <div className="kf-ipanel__row">
-        <div className="kf-ipanel__row-label">Price override</div>
+        <div className="kf-ipanel__row-label">Price by hand</div>
         <div className="kf-ipanel__row-value">
           {item.priceManualOverride && item.perBase != null && item.perBaseUom ? (
             <div className="kf-ipanel__pack-summary">
@@ -361,18 +390,26 @@ export function PanelItemZone({
             </div>
           ) : (
             <div className="kf-ipanel__pack-summary">
-              None. Use only when the pack is right and the number is not.
+              Not set.{" "}
+              <span className="kf-ipanel__row-hint" style={{ display: "inline" }}>
+                For when the invoice price is wrong and you know the right one.
+              </span>
             </div>
           )}
         </div>
         <div className="kf-ipanel__row-action">
           <button
+            ref={priceEditRef}
             type="button"
             className="kf-ipanel__row-toggle"
             onClick={() => setPriceOpen((v) => !v)}
             aria-expanded={priceOpen}
           >
-            {priceOpen ? "Close" : "Override"}
+            {priceOpen
+              ? "Close"
+              : item.priceManualOverride
+                ? "Edit"
+                : "Set a price"}
           </button>
         </div>
         {priceOpen ? (
@@ -380,12 +417,94 @@ export function PanelItemZone({
             <PriceOverrideBlock
               item={item}
               ingredient={ingredient}
-              onDone={() => { onDone(); setPriceOpen(false); }}
-              onCancel={() => setPriceOpen(false)}
+              onDone={() => { onDone(); setPriceJustClosed(true); setPriceOpen(false); }}
+              onCancel={() => { setPriceJustClosed(true); setPriceOpen(false); }}
             />
           </div>
         ) : null}
       </div>
+
+      {/* T6 ruling 1: Put this item away row. Vendor items only (the
+          showStatusActions flag). Only renders when the item is NOT
+          already put away - the away bar under the head carries the
+          Restore button for that state. Two routes stay unchanged:
+          /api/vendor-items/[id]/status with action=archive or
+          action=one-off. Undo rides in the toast per train 4. */}
+      {showStatusActions && !isAway(item) ? (
+        <PutAwayRow item={item} onDone={onDone} />
+      ) : null}
     </section>
+  );
+}
+
+// T6 ruling 1: isAway mirrors the server-side helper so this view
+// can decide what to render without a re-fetch. Matches the states
+// getVendorItemState emits.
+function isAway(item: ReviewGroupItem): boolean {
+  const s = item.state ?? "";
+  return s === "archived" || s === "one_off" || s === "not_food" || s === "duplicate";
+}
+
+function PutAwayRow({ item, onDone }: { item: ReviewGroupItem; onDone: () => void }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState<null | "archive" | "one-off">(null);
+  const [error, setError] = useState<string | null>(null);
+  const isLinked = (item.linkStatus ?? "") === "confirmed";
+
+  async function run(action: "archive" | "one-off", successCopy: string) {
+    if (busy) return;
+    setBusy(action);
+    setError(null);
+    const r = await postJson(`/api/vendor-items/${item.id}/status`, { action });
+    if (!r.ok) {
+      setError(saveErrorSentence(r) ?? "Nothing was saved.");
+      setBusy(null);
+      return;
+    }
+    const d = (r.data ?? {}) as { event_id?: string | null };
+    toast(successCopy, {
+      undo: d.event_id ? undoViaEvent(router, d.event_id) : undefined,
+    });
+    onDone();
+    setBusy(null);
+  }
+
+  return (
+    <div className="kf-ipanel__row kf-ipanel__row--putaway">
+      <div className="kf-ipanel__row-label">Put this item away</div>
+      <div className="kf-ipanel__row-value">
+        <div className="kf-ipanel__putaway-actions">
+          <button
+            type="button"
+            className={`kf-btn kf-btn--soft kf-btn--sm${busy === "archive" ? " is-busy" : ""}`}
+            disabled={busy !== null || isLinked}
+            onClick={() => run("archive", "Archived")}
+            title={isLinked ? "Send this item back to review first." : undefined}
+          >
+            {busy === "archive" ? "Saving..." : "Archive"}
+          </button>
+          <button
+            type="button"
+            className={`kf-btn kf-btn--soft kf-btn--sm${busy === "one-off" ? " is-busy" : ""}`}
+            disabled={busy !== null || isLinked}
+            onClick={() => run("one-off", "Marked one-off")}
+            title={isLinked ? "Send this item back to review first." : undefined}
+          >
+            {busy === "one-off" ? "Saving..." : "Mark one-off"}
+          </button>
+        </div>
+        {isLinked ? (
+          <div className="kf-ipanel__row-hint" role="note">
+            Linked to an ingredient. Send it back to review first.
+          </div>
+        ) : null}
+        {error ? (
+          <div className="kf-dpn__flash kf-dpn__flash--err" role="alert">
+            {error}
+          </div>
+        ) : null}
+      </div>
+      <div className="kf-ipanel__row-action" />
+    </div>
   );
 }

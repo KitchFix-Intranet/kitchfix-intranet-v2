@@ -7,7 +7,7 @@
 //
 // Lifted verbatim from DetailPanel.tsx in N7 commit 0.
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { WEIGHT_UOMS, VOLUME_UOMS, uomLabel } from "@/lib/ingredients/pack";
 import type { ReviewCardIngredient, ReviewGroupItem } from "../itemTypes";
 import { SaveFlash } from "./SaveFlash";
@@ -87,12 +87,55 @@ export function PriceOverrideBlock({
     });
   }
 
+  // T6 round 2 item 1 + round 3 small 1-2: autofocus first field
+  // with its value selected; capture last-focused field before the
+  // ask opens so Keep editing returns focus there.
+  const priceRef = useRef<HTMLInputElement>(null);
+  const lastFieldRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    priceRef.current?.focus();
+    try { priceRef.current?.select(); } catch { /* noop */ }
+  }, []);
+  const [askOpen, setAskOpen] = useState(false);
+  function tryClose() {
+    if (busy) return;
+    if (dirty) {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) lastFieldRef.current = active;
+      setAskOpen(true);
+      return;
+    }
+    if (onCancel) onCancel();
+  }
+  function keepEditing() {
+    setAskOpen(false);
+    window.setTimeout(() => { lastFieldRef.current?.focus(); }, 0);
+  }
+  function discardAndClose() {
+    resetDrafts();
+    setAskOpen(false);
+    if (onCancel) onCancel();
+  }
+
   return (
-    <div className="kf-ipanel__editor" aria-label="Price override editor">
+    <form
+      className="kf-ipanel__editor"
+      aria-label="Price by hand editor"
+      noValidate
+      onSubmit={(e) => { e.preventDefault(); save(); }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          tryClose();
+        }
+      }}
+    >
       <div className="kf-ipanel__editor-grid kf-ipanel__editor-grid--2">
         <label className="kf-ipanel__editor-field">
-          $ per unit
+          Price per unit
           <input
+            ref={priceRef}
             type="number"
             inputMode="decimal"
             step="0.0001"
@@ -128,7 +171,7 @@ export function PriceOverrideBlock({
       </div>
 
       <label className="kf-ipanel__editor-field">
-        Reason (required)
+        Why <small>so the next person knows</small>
         <input
           type="text"
           className="kf-ipanel__ctl"
@@ -139,29 +182,46 @@ export function PriceOverrideBlock({
         />
       </label>
 
+      {askOpen ? (
+        <div className="kf-ipanel__editor-ask" role="alertdialog" aria-label="Discard what you typed?">
+          <span className="kf-ipanel__editor-ask-text">Discard what you typed?</span>
+          <button
+            type="button"
+            className="kf-btn kf-btn--primary kf-btn--sm"
+            autoFocus
+            onClick={keepEditing}
+          >
+            Keep editing
+          </button>
+          <button
+            type="button"
+            className="kf-btn kf-btn--line kf-btn--sm"
+            onClick={discardAndClose}
+          >
+            Discard
+          </button>
+        </div>
+      ) : null}
+
       <div className="kf-ipanel__editor-actions">
         <button
           type="button"
           className="kf-btn kf-btn--ghost kf-btn--sm"
           disabled={busy}
-          onClick={() => {
-            if (dirty) resetDrafts();
-            if (onCancel) onCancel();
-          }}
+          onClick={tryClose}
         >
           Cancel
         </button>
         <button
-          type="button"
+          type="submit"
           className={`kf-btn kf-btn--primary kf-btn--sm${busy ? " is-busy" : ""}`}
           disabled={busy || !readyToSave}
-          onClick={save}
         >
           {busy ? "Saving..." : "Save price"}
         </button>
         <SaveFlash savedAt={savedAt} error={error} />
       </div>
-    </div>
+    </form>
   );
 }
 

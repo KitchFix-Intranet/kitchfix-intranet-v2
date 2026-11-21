@@ -65,7 +65,10 @@
   color: var(--sp-navy);
   font-family: var(--sp-disp);
   font-weight: 800;
-  font-size: var(--sp-t-h3);
+  /* T6 ruling 7: collapsed to --sp-t-body so the panel + the
+   * Review-queue screen keep to five sizes (12 / 13 / 14.5 / 16 /
+   * 24). Was --sp-t-h3 (20 px). */
+  font-size: var(--sp-t-body);
   line-height: 1.1;
   letter-spacing: .2px;
   margin: var(--sp-sp-1) 0 var(--sp-sp-3);
@@ -109,7 +112,9 @@
 }
 .kf-drawer__block h4 {
   color: var(--sp-navy);
-  font-size: var(--sp-t-item);
+  /* T6 ruling 7: collapsed to --sp-t-body so the panel keeps to the
+   * five sizes (12 / 13 / 14.5 / 16 / 24). Was --sp-t-item (18 px). */
+  font-size: var(--sp-t-body);
   margin-bottom: var(--sp-sp-2);
 }
 .kf-drawer__block-head {
@@ -308,17 +313,40 @@
   font-size: var(--sp-t-label);
   letter-spacing: 2px;
   text-transform: uppercase;
-  color: var(--sp-red-deep);
+  /* T6 round 2 item 7: not red. Red is reserved for a wrong cost or
+   * a failure; the vendor + item-number line is just context. Was
+   * --sp-red-deep. */
+  color: var(--sp-body);
 }
 .kf-ipanel__name {
   margin: 0;
   font-family: var(--sp-disp);
   font-weight: 800;
-  font-size: 26px;
+  /* T6 ruling 7: moves off the raw 26 px to the title token (24).
+   * The panel now draws at the same five sizes as the reference:
+   * 12 (micro), 13 (label), 14.5 (table), 16 (body), 24 (title). */
+  font-size: var(--sp-t-title);
   line-height: 1;
   letter-spacing: .2px;
   text-transform: uppercase;
   color: var(--sp-navy);
+  /* T6 ruling 9: programmatic focus target. tabIndex=-1 keeps it
+   * out of the Tab order; the browser's visible focus ring still
+   * applies. No visible ring unless :focus-visible. */
+  outline: none;
+}
+.kf-ipanel__name:focus-visible {
+  outline: 2px solid var(--sp-navy);
+  outline-offset: 4px;
+  border-radius: var(--sp-r-sm);
+}
+/* T6 item 1: Prev/Next + Close live in one flex row on the right of
+ * the head so the "1 of 12" counter + the step icons share space
+ * with Close. */
+.kf-ipanel__head-nav {
+  display: inline-flex;
+  gap: var(--sp-sp-2);
+  flex-shrink: 0;
 }
 .kf-ipanel__status {
   display: flex;
@@ -396,7 +424,10 @@
 }
 .kf-ipanel__strip-value {
   font-family: var(--sp-disp);
-  font-size: var(--sp-t-num);
+  /* T6 ruling 7: collapsed to --sp-t-title (24) so the panel draws
+   * at the reference's five sizes (12 / 13 / 14.5 / 16 / 24). Was
+   * --sp-t-num (28 px). */
+  font-size: var(--sp-t-title);
   font-weight: 800;
   line-height: 1;
   color: var(--sp-ink);
@@ -453,7 +484,10 @@
   letter-spacing: 1.2px;
 }
 .kf-ipanel__pin .kf-ipanel__strip-value {
-  font-size: var(--sp-t-h3);
+  /* T6 ruling 7: collapsed to --sp-t-body so the panel + the
+   * Review-queue screen keep to five sizes (12 / 13 / 14.5 / 16 /
+   * 24). Was --sp-t-h3 (20 px). */
+  font-size: var(--sp-t-body);
 }
 .kf-ipanel__pin .kf-ipanel__strip-value-unit {
   font-size: var(--sp-t-label);
@@ -568,7 +602,10 @@
 .kf-ipanel__zone-head-title {
   font-family: var(--sp-disp);
   font-weight: 800;
-  font-size: var(--sp-t-h3);
+  /* T6 ruling 7: collapsed to --sp-t-body so the panel + the
+   * Review-queue screen keep to five sizes (12 / 13 / 14.5 / 16 /
+   * 24). Was --sp-t-h3 (20 px). */
+  font-size: var(--sp-t-body);
   line-height: 1;
   text-transform: uppercase;
   color: var(--sp-navy);
@@ -881,7 +918,10 @@
 .kf-ipanel__editor-band-value {
   font-family: var(--sp-disp);
   font-weight: 800;
-  font-size: var(--sp-t-num);
+  /* T6 ruling 7: collapsed to --sp-t-title (24) so the panel draws
+   * at the reference's five sizes (12 / 13 / 14.5 / 16 / 24). Was
+   * --sp-t-num (28 px). */
+  font-size: var(--sp-t-title);
   line-height: 1;
   color: var(--sp-navy);
   flex-shrink: 0;
@@ -1109,7 +1149,11 @@
   }
   .kf-ipanel__pin .kf-ipanel__strip-cell:first-child { padding-left: var(--sp-sp-3); }
   .kf-ipanel__pin .kf-ipanel__strip-cell:last-child { padding-right: var(--sp-sp-3); }
-  .kf-ipanel__pin .kf-ipanel__strip-value { font-size: var(--sp-t-item); }
+  /* T6 ruling 7: the pinned strip shrink lands on the body token
+   * so the narrow strip stays at one of the panel's five sizes.
+   * The base rule is now --sp-t-title (24); this narrow override
+   * stays smaller (16 body). */
+  .kf-ipanel__pin .kf-ipanel__strip-value { font-size: var(--sp-t-body); }
   .kf-ipanel__row,
   .kf-ipanel__row--split {
     grid-template-columns: 1fr;
@@ -1545,4 +1589,82 @@
   gap: var(--sp-sp-2);
   justify-content: flex-end;
   flex-wrap: wrap;
+}
+
+/* --- T6 item 5: pack editor shortcut primitives ---
+ * The reference's "Prices on file:" row renders a kicker word plus
+ * a set of link-styled buttons that fill the Price-on-the-invoice
+ * input with a stored source value. `.kf-known` is the row; `.kf-word`
+ * is the kicker; `.kf-rowlink` is the button. `.kf-ipanel__editor-why`
+ * is the muted sentence beside a disabled Save. */
+.kf-known {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--sp-sp-2);
+  align-items: baseline;
+  padding: 0 var(--sp-sp-1);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  color: var(--sp-body);
+}
+.kf-word {
+  font-weight: 700;
+  color: var(--sp-muted);
+  text-transform: uppercase;
+  font-size: var(--sp-t-micro);
+  letter-spacing: 1.2px;
+}
+.kf-drawer .kf-ipanel__editor .kf-rowlink {
+  background: none;
+  border: 0;
+  color: var(--sp-link);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  font-weight: 700;
+  padding: var(--sp-sp-1) var(--sp-sp-2);
+  border-radius: var(--sp-r-sm);
+  cursor: pointer;
+  min-height: 44px;
+  position: relative;
+}
+.kf-drawer .kf-ipanel__editor .kf-rowlink:hover:not([disabled]) {
+  background: var(--sp-sky-tint);
+}
+.kf-drawer .kf-ipanel__editor .kf-rowlink:focus-visible {
+  outline: 2px solid var(--sp-navy);
+  outline-offset: 2px;
+}
+.kf-drawer .kf-ipanel__editor .kf-rowlink:disabled {
+  color: var(--sp-muted);
+  cursor: not-allowed;
+}
+.kf-ipanel__editor-why {
+  color: var(--sp-body);
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-label);
+  font-style: italic;
+  margin-right: auto;
+}
+
+/* T6 round 2 item 1: per-editor Discard ask. One sentence + Keep
+ * editing / Discard. Inline bar inside the editor so each editor
+ * asks about its own typed work and closes its own row - the
+ * panel-level ask still fires when the panel itself is closed
+ * (Esc from outside the editor, Close button, backdrop click). */
+.kf-ipanel__editor-ask {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-sp-2);
+  padding: var(--sp-sp-3);
+  background: var(--sp-warn-bg);
+  border: 1px solid var(--sp-warn-strong);
+  border-radius: var(--sp-r-sm);
+  color: var(--sp-ink);
+}
+.kf-ipanel__editor-ask-text {
+  flex: 1 1 220px;
+  font-family: var(--sp-ui);
+  font-size: var(--sp-t-table);
+  font-weight: 700;
 }
