@@ -40,7 +40,7 @@ export function labelFor(field: string): string {
     case "total_amount": return "Total";
     case "gl_breakdown": return "Coding";
     case "files": return "Page";
-    case "copy": return "Copy";
+    case "copy": return "Copy to settle";
     default: return "Something";
   }
 }

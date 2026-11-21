@@ -9,6 +9,7 @@
 // in-flight draft for that site.
 
 import Link from "next/link";
+import { ChevronRight } from "lucide-react";
 import { IdentBand } from "@/components/ui/IdentBand";
 import { OwnerPreviewBanner } from "./OwnerPreviewBanner";
 import type { SiteNavItem, InvoiceScope } from "@/lib/invoices/types";
@@ -72,7 +73,7 @@ export function WhichSiteChooser({
                     {n} {n === 1 ? "draft" : "drafts"}
                   </span>
                 ) : null}
-                <span className="kf-inv-capture__sites__chev" aria-hidden>&gt;</span>
+                <ChevronRight className="kf-inv-capture__sites__chev" size={18} aria-hidden />
               </Link>
             </li>
           );

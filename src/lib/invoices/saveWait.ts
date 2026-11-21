@@ -16,18 +16,25 @@ export interface CheckDecisionState {
   inFlight: boolean;
   stagedKeys: number;
   stopped: boolean;
+  // Train 3 ride 8.8: the browser went offline. The save loop
+  // is holding a dirty patch and cannot flush it; a check now
+  // would race against the stale server state. Offline + staged
+  // -> stop and show the no-signal save line.
+  offline?: boolean;
 }
 
 export type CheckDecision = "run" | "stop" | "wait";
 
 // Pure. Given the save loop's current state, what should check()
 // do right now?
-//   - "stop":  the save loop gave up. Do not run the check; the
-//              save line already says why.
+//   - "stop":  the save loop gave up OR the browser is offline
+//              with unsaved typing. The save line already says
+//              why; the button flips back from "Checking".
 //   - "wait":  there is work in progress or queued. Wait for it.
 //   - "run":   the queue is settled. Safe to call /check.
 export function decideCheckAction(s: CheckDecisionState): CheckDecision {
   if (s.stopped) return "stop";
+  if (s.offline && s.stagedKeys > 0) return "stop";
   if (s.inFlight || s.stagedKeys > 0) return "wait";
   return "run";
 }
