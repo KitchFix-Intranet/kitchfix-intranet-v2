@@ -695,11 +695,9 @@ export function IngredientMastersFilter({
             </span>
           </div>
 
-          <div className="kf-ingp__list-colhead">
-            <span>Ingredient</span>
-            <span>Price</span>
-            <span>12 mo</span>
-          </div>
+          {/* T7 R3 item 1: the column header row is gone. The row's
+              two-column grid (name | price above 12 months) is
+              self-labelling; vIngRow()/`.kf-row` has no colhead. */}
 
           {/* T7 item 4 / F16: the list is ONE tab stop. Up / Down /
               Home / End move the selection AND the detail follows;
@@ -898,7 +896,9 @@ function IngredientRow({
   onSelect: () => void;
   registerRef: (el: HTMLButtonElement | null) => void;
 }) {
-  const priceSub = rowPriceSub(row);
+  // T7 R3 item 1: the quiet spread sub-line is retired from the
+  // row. The red "why" line covers the case that matters.
+  void rowPriceSub;
   const badges = row.issues
     .map((k) => ({ kind: k, label: ISSUE_BADGE[k] }))
     .filter((b): b is { kind: MasterIssue; label: string } => !!b.label);
@@ -961,20 +961,17 @@ function IngredientRow({
           </span>
         </div>
         <div className="kf-ingp__row-price">
-          <span className="kf-ingp__row-price-main">
-            {row.avgPerBase != null ? (
-              <>
-                <b>{fmtUsd(row.avgPerBase)}</b> / {uomOrUnit(row.baseUom)}
-              </>
-            ) : (
-              <>- / {(row.baseUnit || "unit").toLowerCase()}</>
-            )}
-          </span>
-          {priceSub ? (
-            <span className={`kf-ingp__row-price-sub${priceSub.warn ? " kf-ingp__row-price-sub--warn" : ""}`}>
-              {priceSub.text}
-            </span>
-          ) : null}
+          {/* T7 R3 item 1: price on its own line. The old
+              row-price-sub (the quiet spread like "2.3x spread") is
+              removed from the markup; the attention line (row-why)
+              carries the red one via rankedIssues. */}
+          {row.avgPerBase != null ? (
+            <>
+              <b>{fmtUsd(row.avgPerBase)}</b> / {uomOrUnit(row.baseUom)}
+            </>
+          ) : (
+            <>- / {(row.baseUnit || "unit").toLowerCase()}</>
+          )}
         </div>
         <div className="kf-ingp__row-usd" aria-label={`12-month spend ${usdText}`}>
           {usdText}
@@ -1266,8 +1263,34 @@ function DetailView({
           clipped, with a 44 px click target. */}
       <div className="kf-ipanel__strip kf-ingp__dzone-strip">
         <div className="kf-ipanel__strip-cell">
-          <span className="kf-ipanel__strip-label">
-            {effectiveLens === "blended" ? "Price" : effectiveLens === "standard" ? "Standard price" : "Premium price"}
+          {/* T7 R3 item 3: label + lens on one in-flow row so the
+              tile row sits at about 98 px instead of the old 154.
+              The wrapper span is the grid cell's first child; its
+              `margin-left: auto` on the lens pulls the menu to
+              the right of the label's row without an absolute
+              position (which overlapped the price in the earlier
+              test). The item panel's kf-ipanel__strip is not
+              touched (scoped through kf-ingp__dzone-strip only). */}
+          <span className="kf-ingp__dzone-strip-head">
+            <span className="kf-ipanel__strip-label">
+              {effectiveLens === "blended" ? "Price" : effectiveLens === "standard" ? "Standard price" : "Premium price"}
+            </span>
+            {showLens ? (
+              <label className="kf-ingp__lens">
+                <select
+                  value={effectiveLens}
+                  onChange={(e) => {
+                    const v = e.target.value as "blended" | "standard" | "premium";
+                    pushDetail({ lens: v === "blended" ? null : v });
+                  }}
+                  aria-label="Price lens"
+                >
+                  <option value="blended">Blended</option>
+                  <option value="standard">Standard</option>
+                  <option value="premium">Premium</option>
+                </select>
+              </label>
+            ) : null}
           </span>
           <span className="kf-ipanel__strip-value kf-ipanel__strip-value--accent">
             {stripPrice != null ? fmtUsd(stripPrice) : "-"}{" "}
@@ -1279,22 +1302,6 @@ function DetailView({
               : "no priced items"}
             {derivedForStrip ? ` · ${derivedForStrip}` : ""}
           </span>
-          {showLens ? (
-            <label className="kf-ingp__lens">
-              <select
-                value={effectiveLens}
-                onChange={(e) => {
-                  const v = e.target.value as "blended" | "standard" | "premium";
-                  pushDetail({ lens: v === "blended" ? null : v });
-                }}
-                aria-label="Price lens"
-              >
-                <option value="blended">Blended</option>
-                <option value="standard">Standard</option>
-                <option value="premium">Premium</option>
-              </select>
-            </label>
-          ) : null}
         </div>
         <div className="kf-ipanel__strip-cell">
           <span className="kf-ipanel__strip-label">Spread</span>

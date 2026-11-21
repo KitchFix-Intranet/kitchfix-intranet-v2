@@ -534,7 +534,11 @@ export function PanelIngredientZone({
           row={{ id: ingredient.id, name: ingredient.name, baseUnit: ingredient.base_unit }}
           onSaved={onDone}
         />
-        <div className="kf-ipanel__row-hint">How recipes count this ingredient.</div>
+        {/* T7 R3 item 5: on retail, the hint under Priced per is
+            empty here too (same rule as line 313). */}
+        {ingredient.resale ? null : (
+          <div className="kf-ipanel__row-hint">How recipes count this ingredient.</div>
+        )}
       </div>
 
       {/* T7 item 8: on retail, measures / yield / "Recipes can use"

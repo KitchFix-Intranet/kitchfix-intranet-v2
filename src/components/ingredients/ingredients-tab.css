@@ -1106,3 +1106,149 @@
   min-height: auto;
   background: transparent;
 }
+
+/* ============================================================== *
+ * T7 R3: measured-fix layout.                                    *
+ * Every rule here is AFTER the rule it overrides (GOTCHAS 25);   *
+ * any added weight is noted beside the selector.                 *
+ * ============================================================== */
+
+/* ---------- Row shape: two columns, no colhead ---------- */
+/* T7 R3 item 1: the three-column grid on .kf-ingp__row-btn
+ * (name | 116 | 56) squeezed the name to 91 px inside a 320 px
+ * list. The ported shape is two columns: name on the left over
+ * two rows, price top-right, 12-month dollars bottom-right. The
+ * why cell still spans the full width below everything.
+ *
+ * This rule beats the earlier .kf-ingp__row-btn block
+ * (ingredients-tab.css:702): same selector, LATER in the file
+ * (source order wins when specificity ties).
+ */
+.kf-ingp__row-btn {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  column-gap: var(--sp-sp-3);
+  row-gap: 2px;
+}
+.kf-ingp__row-btn > .kf-ingp__row-name {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  min-width: 0;
+}
+.kf-ingp__row-btn > .kf-ingp__row-price {
+  grid-column: 2;
+  grid-row: 1;
+  display: block;
+  text-align: right;
+  white-space: nowrap;
+  font-weight: 800;
+  font-size: var(--sp-t-table);
+}
+.kf-ingp__row-btn > .kf-ingp__row-price b { font-weight: 800; }
+.kf-ingp__row-btn > .kf-ingp__row-usd {
+  grid-column: 2;
+  grid-row: 2;
+  text-align: right;
+  /* T7 R3 item 1: the 12-month dollars read as the sub-line of the
+   * price cell: label size, body colour, no bold - exactly as
+   * .kf-row__spend in part C has them. */
+  font-size: var(--sp-t-label);
+  font-weight: 400;
+  color: var(--sp-body);
+}
+.kf-ingp__row-btn > .kf-ingp__row-why {
+  grid-column: 1 / -1;
+  grid-row: auto;
+}
+
+/* The row's sub-line wraps instead of ellipsing: a name is text,
+ * not a cell with a cap. Beats the earlier ellipsis block
+ * (.kf-ingp__row-sub at ingredients-tab.css:206): LATER + same
+ * specificity.
+ */
+.kf-ingp__row-sub {
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+}
+
+/* ---------- Detail head: name + Edit on one row ---------- */
+/* T7 R2 left .kf-ingp__dhead's later block saying `display: flex`
+ * while the earlier block at line 295 said `flex-direction: column`.
+ * The column direction never reset, so the button landed under the
+ * facts. Measured: 183 -> 127 px tall after this one line.
+ *
+ * Beats the earlier `.kf-ingp__dhead { flex-direction: column; }`
+ * rule (ingredients-tab.css:295): same selector, LATER in the file.
+ */
+.kf-ingp__dhead { flex-direction: row; align-items: flex-start; }
+@media (max-width: 860px) {
+  /* Below the breakpoint the button wraps under the name. Same
+   * selector as above, with a media wrapper that adds no
+   * specificity but comes after. */
+  .kf-ingp__dhead { flex-direction: column; }
+}
+
+/* ---------- Price tile: lens on the Price label's line ---------- */
+/* T7 R3 item 3: the lens select used to render under "N priced"
+ * (a row of its own); the strip cell was 154 px tall. The JSX
+ * now wraps the label + the lens in a kf-ingp__dzone-strip-head
+ * row inside the Price cell; this rule lays that row out as
+ * flex with the lens floated right by margin-left: auto.
+ *
+ * Scoping class .kf-ingp__dzone-strip is Ingredients-tab-only;
+ * the item panel's .kf-ipanel__strip is not touched (ruling PR70).
+ */
+.kf-ingp__dzone-strip-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--sp-sp-3);
+  width: 100%;
+}
+.kf-ingp__dzone-strip-head .kf-ingp__lens {
+  margin-left: auto;
+}
+
+/* ---------- Linked items: colgroup widths + no-wrap head ------- */
+/* T7 R3 item 4: LINKED_COLS from the reference. The table's
+ * flexible column is Item; everything else is a share or a pin
+ * (96 px for Send back). Header cells never wrap; a one-line-name
+ * row sits at the 64 px floor via min-height on the row's cells.
+ * The item name gains a 44 px hit area with no extra height
+ * between it and its sub-line.
+ *
+ * All of these selectors are LATER in the file than the earlier
+ * .kf-ingp__items rules (lines ~550+); same specificity.
+ */
+.kf-ingp__items th {
+  white-space: nowrap;
+}
+.kf-ingp__items td {
+  /* The old rule used min-height, but <td> does not honour
+   * min-height - it honours the row (<tr>) when its content fits.
+   * Pin the row via the cell's padding + line-height instead; the
+   * one-line name gives about 64 px here. */
+  padding: var(--sp-sp-2) var(--sp-sp-3);
+  vertical-align: middle;
+}
+.kf-ingp__items .kf-ingp__item-name {
+  /* T7 R3 item 4: the item name reads as the row's main line,
+   * with the sub-line directly under it (no gap). Keep the 44 px
+   * hit area via the ::before extension (T7 R2); here the min-
+   * height is dropped to 0 inside this cell so the line-height
+   * runs to its text, not to 44 px of chrome. The hit area still
+   * extends past the text.
+   */
+  min-height: 0;
+  padding: 0;
+}
+.kf-ingp__items .kf-ingp__item-name::before {
+  /* Scoped version of the hit area extension so the padding stays
+   * at 0 while the touch target remains 44 px. */
+  inset: calc((var(--sp-floor-corp) - 1em * 1.25) / -2) calc(var(--sp-sp-1) * -1);
+}
+.kf-ingp__items .kf-ingp__item-sub {
+  margin-top: 0;
+}
