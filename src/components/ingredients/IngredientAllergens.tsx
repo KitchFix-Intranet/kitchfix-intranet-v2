@@ -216,7 +216,12 @@ export function allergenStatus(
   reviewedAt: string | null,
 ): { label: string; tone: "warn" | "good" } {
   const list = allergens ?? [];
-  if (reviewedAt == null) return { label: "not reviewed", tone: "warn" };
-  if (list.length === 0) return { label: "no Top 9 allergens", tone: "good" };
-  return { label: "confirmed", tone: "good" };
+  // T7 R2 item 8: words match the page's register. The drawer +
+  // the tab now say "Checked" / "Not checked" (not "confirmed" /
+  // "not reviewed") so the button, the chip and the row's status
+  // line read in one vocabulary. "No Top 9 allergens" stays as
+  // its own tone because it is the positive-fact phrasing.
+  if (reviewedAt == null) return { label: "Not checked", tone: "warn" };
+  if (list.length === 0) return { label: "No Top 9 allergens", tone: "good" };
+  return { label: "Checked", tone: "good" };
 }

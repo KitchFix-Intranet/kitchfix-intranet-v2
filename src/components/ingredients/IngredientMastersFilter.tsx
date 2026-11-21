@@ -47,6 +47,8 @@ import {
 } from "@/lib/ingredients/measures";
 import { SPREAD_RATIO_MAX } from "@/lib/ingredients/blend";
 import { postJson, saveErrorSentence } from "./panel/common";
+import { packInUseText } from "./panel/packHelpers";
+import { fmtPackNumbersInText } from "@/lib/fmt";
 import { useSaveWithRefresh } from "./panel/useSaveWithRefresh";
 import type { ReviewCardIngredient } from "./itemTypes";
 import "./ingredients-tab.css";
@@ -422,30 +424,59 @@ export function IngredientMastersFilter({
     el?.scrollIntoView({ block: "nearest" });
   }, [selId]);
 
-  // T7 ruling 4: a click pushes (new history); arrow keys replace (the
-  // list is navigated by holding Up / Down and shouldn't load a stack
-  // of entries). Opening the editor from this method (the Edit button
-  // calls openEditor below) also pushes.
+  // T7 ruling 4 + R2 item 7: a click pushes (new history); arrow
+  // keys replace. Opening the drawer or the item panel pushes;
+  // CLOSING either replaces, so Back lands on the previous
+  // selection rather than reopening the panel the user just closed.
+  // Opening either also drops the other key in the same patch so
+  // the two are never both in the address.
   function selectRow(id: string, mode: "push" | "replace" = "push") {
     push({ open: id }, mode);
   }
   function openEditor() {
-    // Opening the drawer never shows together with the item panel; if
-    // one was open, close it in the same patch (ruling 4).
     push({ edit: "1", drawer: null });
   }
   function closeEditor() {
-    push({ edit: null });
+    push({ edit: null }, "replace");
   }
   function openItemPanel(id: string) {
     push({ drawer: id, edit: null });
   }
   function closeItemPanel() {
-    push({ drawer: null });
+    push({ drawer: null }, "replace");
   }
   function stepItemPanel(nextId: string) {
     push({ drawer: nextId }, "replace");
   }
+
+  // T7 R2 item 7: scrub invalid state in the address so a copied
+  // link is clean. An unknown / retired `open` drops to no
+  // selection; when `open` is invalid, `edit` and `drawer` also
+  // drop (they only make sense on a selected ingredient). When
+  // BOTH `edit` and `drawer` are set, the ingredient drawer wins
+  // and `drawer` drops (ruling: edit beats drawer). Dropped keys
+  // leave the address via a replace so Back is unaffected.
+  useEffect(() => {
+    const patch: Record<string, string | null> = {};
+    let dirty = false;
+    if (urlOpen && urlOpen !== selId) {
+      // The id a link carried did not resolve against the loaded
+      // rows; drop it + the two dependent keys.
+      patch.open = null;
+      dirty = true;
+      if (urlEdit) { patch.edit = null; }
+      if (urlDrawer) { patch.drawer = null; }
+    }
+    if (!selId) {
+      if (urlEdit) { patch.edit = null; dirty = true; }
+      if (urlDrawer) { patch.drawer = null; dirty = true; }
+    } else if (urlEdit && urlDrawer) {
+      patch.drawer = null;
+      dirty = true;
+    }
+    if (dirty) push(patch, "replace");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlOpen, selId, urlEdit, urlDrawer]);
 
   // Parent options for the Category row's "pick existing" select
   // inside PanelIngredientZone (same shape the drawer provided).
@@ -499,41 +530,31 @@ export function IngredientMastersFilter({
     return loadParentsFromStore(selectedId);
   }, [selectedId]);
 
-  // T7 ruling 2: Send back acts at once + offers Undo. Undo re-links
-  // the item to the same ingredient through /api/review/confirm; the
-  // parity proof (scripts/t7_send_back_parity_proof.mjs) showed
-  // every person-visible field survives the round trip. The Undo is
-  // keyed on the selected ingredient (ruling 2): when the user
-  // picks another ingredient, the toast vanishes.
-  const sendBackToastIdRef = useRef<symbol | null>(null);
-  useEffect(() => {
-    // A new selection: the previous toast's Undo is for the old
-    // ingredient, so drop it (ruling: "it is gone when another
-    // ingredient is selected"). Toaster does not expose "dismiss by
-    // id" today; the toast is 10 s so a new click simply lives
-    // past it. We mark the generation here so a late Undo click
-    // is a no-op.
-    sendBackToastIdRef.current = Symbol("sendBackGen");
-  }, [selectedId]);
-  async function onSendBackWithUndo(itemId: string, itemName: string) {
-    if (!selectedId) return;
-    const generation = sendBackToastIdRef.current;
+  // T7 R2 item 2: Send back + Undo.
+  // - One press, one post: the row's SendBackCell owns busy state
+  //   and disables its own button while onSendBack is in flight.
+  // - A failed Send back says so in the row (train 2's three
+  //   sentences) and fires no toast (PR78: a failure that has a
+  //   place in the page fires no toast). The button comes back.
+  // - Undo works for as long as its toast is shown, wherever the
+  //   person is. The toast captures the item and the ingredient
+  //   at the moment of the click (closure); the previous
+  //   generation check is gone - the toaster already dismisses
+  //   its own undo handle when the toast closes.
+  async function onSendBack(
+    itemId: string,
+    itemName: string,
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    if (!selectedId) return { ok: false, error: "Nothing was saved." };
     const ingredientAtClickId = selectedId;
     const r = await postJson("/api/review/undo", { itemId });
     if (!r.ok) {
-      toast(saveErrorSentence(r) ?? "Nothing was saved.", { tone: "block" });
-      return;
+      return { ok: false, error: saveErrorSentence(r) ?? "Nothing was saved." };
     }
     router.refresh();
     toast(`Sent ${itemName} back`, {
       tone: "good",
       undo: async () => {
-        if (sendBackToastIdRef.current !== generation) {
-          // The ingredient under the panel changed; the Undo was
-          // for the previous one. Ruling 2: it goes with the
-          // selection.
-          return;
-        }
         const u = await postJson("/api/review/confirm", {
           ingredientId: ingredientAtClickId,
           itemIds: [itemId],
@@ -542,29 +563,47 @@ export function IngredientMastersFilter({
         router.refresh();
       },
     });
+    return { ok: true };
   }
 
   return (
     <div className={`kf-ingp__workspace${paneOpen ? " kf-ingp__workspace--detail-open" : ""}`}>
-      {/* --- Toolbar -------------------------------------------- */}
+      {/* --- Toolbar (T7 R2 item 3 - ported from part C's
+          .kf-toolbar): one row of search + Sort + count, the next
+          of category chips alongside Show-only switches. */}
       <div className="kf-ingp__tools">
-        {/* T7 ruling 4: Search is debounced; commit after 250 ms of
-            quiet, replace the current history entry so Back still
-            leaves the tab in one press. */}
-        <Search
-          kind="debounced"
-          initial={urlQ}
-          onCommit={(v) => push({ q: v.trim() || null }, "replace")}
-          placeholder={
-            mode === "resale"
-              ? "Filter retail by name, linked vendor or SKU"
-              : "Filter by name, parent, category, linked vendor or SKU"
-          }
-          label="Filter ingredients"
-        />
-
-        <div className="kf-ingp__filters">
-          <span className="kf-ingp__filters-label">Category</span>
+        <div className="kf-ingp__tools-row">
+          <Search
+            kind="debounced"
+            initial={urlQ}
+            onCommit={(v) => push({ q: v.trim() || null }, "replace")}
+            placeholder={
+              mode === "resale"
+                ? "Filter retail by name, linked vendor or SKU"
+                : "Filter by name, parent, category, linked vendor or SKU"
+            }
+            label="Filter ingredients"
+          />
+          <SortMenu
+            value={sort}
+            options={MASTERS_SORT_OPTIONS}
+            onChange={(v) => push({ sort: v === "spend" ? null : v }, "replace")}
+          />
+          {anyFilterActive ? (
+            <span className="kf-ingp__tools-count" role="status">
+              <b>{fmtCount(filtered.length)}</b> of <b>{fmtCount(rows.length)}</b>{" "}
+              {mode === "resale" ? "retail " : ""}
+              {rows.length === 1 ? "ingredient" : "ingredients"}
+            </span>
+          ) : (
+            <span className="kf-ingp__tools-count" role="status">
+              <b>{fmtCount(rows.length)}</b>{" "}
+              {mode === "resale" ? "retail " : ""}
+              {rows.length === 1 ? "ingredient" : "ingredients"}
+            </span>
+          )}
+        </div>
+        <div className="kf-ingp__tools-row kf-ingp__tools-row--chips">
           <div className="kf-chip-row" role="radiogroup" aria-label="Category filter">
             <button
               type="button"
@@ -592,9 +631,9 @@ export function IngredientMastersFilter({
               );
             })}
           </div>
-
-          <span className="kf-ingp__filters-label">Show only</span>
-          <div className="kf-chip-row" role="radiogroup" aria-label="Attention filter">
+          {/* T7 R2 item 8: these three are independent switches, not
+              radio buttons. role="group" (not radiogroup). */}
+          <div className="kf-chip-row" role="group" aria-label="Show only">
             <button
               type="button"
               aria-pressed={onlyFlagged}
@@ -609,7 +648,7 @@ export function IngredientMastersFilter({
               aria-pressed={onlyUnreviewed}
               className={`kf-chip${onlyUnreviewed ? " kf-chip--on" : ""}`}
               onClick={() => push({ alg: onlyUnreviewed ? null : "1" }, "replace")}
-              title="Ingredients whose Top 9 allergens have not been reviewed"
+              title="Ingredients whose Top 9 allergens have not been checked"
             >
               Allergens to check <span>{fmtCount(unreviewedCount)}</span>
             </button>
@@ -637,33 +676,23 @@ export function IngredientMastersFilter({
 
       {/* --- Panes --------------------------------------------- */}
       <div className={`kf-ingp__panes${paneOpen ? " kf-ingp__panes--detail-open" : ""}`}>
-        {/* List pane */}
+        {/* List pane - T7 R2 item 3: a slim head carries the spend
+            total; Sort + the count moved to the toolbar above
+            (per vIngToolbar()). The list below has a column
+            header row of its own. */}
         <section className="kf-ingp__pane kf-ingp__pane--list" aria-label="Ingredient list">
           <div className="kf-ingp__list-head">
-            <div className="kf-ingp__list-head-title">
-              <h3>Ingredients</h3>
-              <span className="kf-ingp__list-head-sub">
-                {anyFilterActive ? (
-                  <>
-                    <b>{fmtCount(filtered.length)}</b> of <b>{fmtCount(rows.length)}</b> shown
-                    {" · "}
-                    <b>{fmtMoney(matchedUsd)}</b> a year
-                  </>
-                ) : (
-                  <>
-                    <b>{fmtCount(rows.length)}</b> shown · <b>{fmtMoney(totalUsd)}</b> a year
-                  </>
-                )}
-              </span>
-            </div>
-            {/* Train 5a / F23: shared SortMenu, same words as every
-                tab. T7 ruling 4: sort replaces (no click-stack for
-                picking a column). */}
-            <SortMenu
-              value={sort}
-              options={MASTERS_SORT_OPTIONS}
-              onChange={(v) => push({ sort: v === "spend" ? null : v }, "replace")}
-            />
+            <span className="kf-ingp__list-head-sub">
+              {anyFilterActive ? (
+                <>
+                  <b>{fmtMoney(matchedUsd)}</b> a year
+                </>
+              ) : (
+                <>
+                  <b>{fmtMoney(totalUsd)}</b> a year
+                </>
+              )}
+            </span>
           </div>
 
           <div className="kf-ingp__list-colhead">
@@ -779,7 +808,7 @@ export function IngredientMastersFilter({
                   onLoadParents={loadParents}
                   onOpenItem={(id) => openItemPanel(id)}
                   onOpenEditor={openEditor}
-                  onSendBackWithUndo={onSendBackWithUndo}
+                  onSendBack={onSendBack}
                 />
               </div>
             </>
@@ -810,6 +839,18 @@ export function IngredientMastersFilter({
               .querySelector<HTMLElement>("[data-ing-editor-btn]")
               ?.focus();
           }}
+          // T7 R2 item 1: the drawer offers Send all back for a
+          // linked ingredient; MasterSendAllBackButton inside
+          // PanelClosedRows carries the ask + the batch post. The
+          // review card's pencil leaves this prop unset.
+          sendAllBack={
+            selected.linkedItems.length > 0
+              ? {
+                  masterName: selected.name,
+                  itemIds: selected.linkedItems.map((li) => li.id),
+                }
+              : undefined
+          }
         />
       ) : null}
 
@@ -993,7 +1034,7 @@ function DetailView({
   onLoadParents: _onLoadParents,
   onOpenItem,
   onOpenEditor,
-  onSendBackWithUndo,
+  onSendBack,
 }: {
   row: MasterRow;
   ingredient: ReviewCardIngredient;
@@ -1006,7 +1047,13 @@ function DetailView({
   onLoadParents: () => Promise<ReviewCardIngredient[]>;
   onOpenItem: (id: string) => void;
   onOpenEditor: () => void;
-  onSendBackWithUndo: (itemId: string, itemName: string) => void;
+  // T7 R2 item 2: Send back returns its outcome so the row can
+  // decide what to show (a toast with Undo on success; an inline
+  // sentence on failure).
+  onSendBack: (
+    itemId: string,
+    itemName: string,
+  ) => Promise<{ ok: true } | { ok: false; error: string }>;
 }) {
   // N12 §2c.1: vendor count = distinct vendor names in linkedItems.
   const vendorCount = useMemo(() => {
@@ -1331,7 +1378,7 @@ function DetailView({
             viewUom={viewUom}
             viewUnitLabel={uom}
             repricedItems={repricedLinkedItems}
-            onSendBackWithUndo={onSendBackWithUndo}
+            onSendBack={onSendBack}
           />
         )}
       </div>
@@ -1665,14 +1712,17 @@ function LinkedItems({
   viewUom,
   viewUnitLabel,
   repricedItems,
-  onSendBackWithUndo,
+  onSendBack,
 }: {
   row: MasterRow;
   onOpenItem: (id: string) => void;
   viewUom: string;
   viewUnitLabel: string;
   repricedItems: Array<MasterLinkedItem & { viewPrice: number | null }>;
-  onSendBackWithUndo: (itemId: string, itemName: string) => void;
+  onSendBack: (
+    itemId: string,
+    itemName: string,
+  ) => Promise<{ ok: true } | { ok: false; error: string }>;
 }) {
   // N12 §R1 echo: lowest / highest tag among items IN THE BLEND
   // (priced in the ingredient's dimension through M2's priceInUnit).
@@ -1737,7 +1787,9 @@ function LinkedItems({
                 <span className="kf-ingp__item-sub">
                   {li.vendor}
                   {li.itemNumber ? ` · item number ${li.itemNumber}` : " · no item number"}
-                  {li.catchWeight ? " · catch weight" : ""}
+                  {/* T7 R2 item 6: "catch weight" lives on the Pack
+                      cell (the fact the price actually uses) and
+                      is not repeated here. */}
                   {/* T7 ruling 6: Grade is a word in the sub-line,
                       only when non-standard. */}
                   {li.grade === "premium" ? (
@@ -1776,7 +1828,31 @@ function LinkedItems({
                 </span>
               </td>
               <td>
-                {li.packText ? li.packText : <span className="kf-muted">pack not read</span>}
+                {/* T7 R2 item 6: show the pack the PRICE uses, not
+                    the pack as written. packInUseText reads
+                    packQty / packSize / packUom first (those are
+                    the columns a hand-set pack_override writes to),
+                    then falls back to the raw packText, then to
+                    "Pack not read". Same precedence the item
+                    panel's Pack fact applies via itemFacts.pack. */}
+                {(() => {
+                  const p = packInUseText({
+                    packQty: li.packQty,
+                    packSize: li.packSize,
+                    packUom: li.packUom,
+                    packText: li.packText,
+                    catchWeight: li.catchWeight,
+                  });
+                  if (!p.known) return <span className="kf-muted">{p.text}</span>;
+                  return (
+                    <>
+                      {fmtPackNumbersInText(p.text)}
+                      {p.catchWeight ? (
+                        <span className="kf-ingp__item-sub"> catch weight</span>
+                      ) : null}
+                    </>
+                  );
+                })()}
               </td>
               <td className="kf-ingp__items-num">
                 <div className="kf-ingp__items-price">
@@ -1801,20 +1877,94 @@ function LinkedItems({
                 {li.lastSeen ? fmtLastBought(li.lastSeen) : <span className="kf-muted">never</span>}
               </td>
               <td className="kf-ingp__items-num">
-                <button
-                  type="button"
-                  className="kf-rowlink"
-                  onClick={() => onSendBackWithUndo(li.id, li.name)}
-                  aria-label={`Send ${li.name} back to the queue`}
-                >
-                  Send back
-                </button>
+                <SendBackCell
+                  itemId={li.id}
+                  itemName={li.name}
+                  onSendBack={onSendBack}
+                  repricedItems={repricedItems}
+                />
               </td>
             </tr>
           );
         })}
       </tbody>
     </table>
+  );
+}
+
+// T7 R2 item 2: Send back is one row-cell with its own busy +
+// error state. The button is off while the POST is out; a failed
+// Send back says so beside the button (train 2's three sentences;
+// no toast - PR78 says a failure with a place in the page fires
+// no toast). On success, focus moves to the next row's item name,
+// or to the linked-items heading when the row that just left was
+// the last one in the table.
+function SendBackCell({
+  itemId,
+  itemName,
+  onSendBack,
+  repricedItems,
+}: {
+  itemId: string;
+  itemName: string;
+  onSendBack: (
+    itemId: string,
+    itemName: string,
+  ) => Promise<{ ok: true } | { ok: false; error: string }>;
+  repricedItems: Array<MasterLinkedItem & { viewPrice: number | null }>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function doSend() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    // Pick the focus target BEFORE the row disappears. The next
+    // row's item name, else the previous row's, else the table's
+    // heading.
+    const idx = repricedItems.findIndex((li) => li.id === itemId);
+    const next = repricedItems[idx + 1] ?? repricedItems[idx - 1] ?? null;
+    const res = await onSendBack(itemId, itemName);
+    if (!res.ok) {
+      setError(res.error);
+      setBusy(false);
+      return;
+    }
+    // Success: the parent's router.refresh will take this row out
+    // of the DOM. Move focus on the next frame so the target still
+    // exists; fall back to the section heading.
+    requestAnimationFrame(() => {
+      if (next) {
+        const el = document.querySelector<HTMLElement>(
+          `[data-item-id="${next.id}"]`,
+        );
+        if (el) { el.focus(); return; }
+      }
+      const head = document.querySelector<HTMLElement>(
+        ".kf-ingp__dzone--section-head h3",
+      );
+      head?.focus();
+    });
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        className="kf-rowlink"
+        onClick={doSend}
+        disabled={busy}
+        aria-label={`Send ${itemName} back to the queue`}
+      >
+        {busy ? "Sending..." : "Send back"}
+      </button>
+      {error ? (
+        <span className="kf-ingp__row-error" role="alert">
+          {error}
+        </span>
+      ) : null}
+    </>
   );
 }
 

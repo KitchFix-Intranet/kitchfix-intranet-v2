@@ -1021,6 +1021,15 @@
 .kf-rvc__panel-note b { font-weight: 800; }
 .kf-rvc__panel-note--warn { background: var(--sp-warn-bg); color: var(--sp-ink); }
 .kf-rvc__panel-note--warn svg { color: var(--sp-warn); }
+/* T7 R2 item 8: panel-note--info is used in ReviewActions.tsx for
+ * the quiet-context note (e.g. "What happens next") that reads the
+ * same as .kf-rvc__panel-note's base but with a sky tone to say
+ * "this is a heads-up, not a warning." Base already paints a sky
+ * background via --sp-sky-bg; the modifier only re-states that so a
+ * future reader can see the tone in the class name without hunting
+ * for the base rule. */
+.kf-rvc__panel-note--info { background: var(--sp-sky-bg); color: var(--sp-ink); }
+.kf-rvc__panel-note--info svg { color: var(--sp-navy); }
 
 /* Picked-ingredient card for Relink's commit state (frame G). */
 .kf-rvc__panel-picked {

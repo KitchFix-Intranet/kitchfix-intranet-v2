@@ -52,7 +52,11 @@ export function PanelYieldRow({
   );
 
   const echo = (() => {
-    if (n == null) return "Nothing is lost in prep";
+    // T7 R2 item 8: a blank is not a fact. When yield is unset the
+    // row reads "Yield not set" (prompt item 5). The 100 % case
+    // still reads "Nothing is lost in prep" because that IS the
+    // fact: the price-to-recipe mapping is one-to-one.
+    if (n == null) return "Yield not set";
     if (n >= 100) return "Nothing is lost in prep";
     return `1 lb bought gives ${(n / 100).toFixed(2)} lb prepped`;
   })();

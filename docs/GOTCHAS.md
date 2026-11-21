@@ -537,3 +537,30 @@ Four things to know about `src/lib/mail.ts :: sendSystemMail`:
    key export tool prints and Vercel stores). The sender does
    `raw.replace(/\\n/g, "\n")` before signing. A key stored with
    real newlines also works because the replace is a no-op.
+
+## 27. Back drops typed work in a drawer, because the alternative was confirm()
+
+Train 7's address model closes an open panel or drawer BEFORE
+it peels back a selection: `edit=1` and `drawer=<id>` are push
+keys whose normal browser-Back drops them in one step. That
+keeps the keyboard loop clean (Esc or Back always leaves the
+panel on-screen first, like a reasonable modal).
+
+The price is that Back with typed work in the drawer unmounts
+the drawer and drops the typed value, without a word. We
+considered a `confirm()`-style dialog on `popstate` and ruled
+against it: browser confirms are modal, they cannot be made
+WAI-ARIA accessible on every browser, they carry the browser's
+own "the website may have unsaved changes" vocabulary, and the
+whole lane is on one vocabulary (train 2's three sentences).
+The ask would also fire out of place when a copied link or a
+cron-opened share lands on the tab.
+
+So: typed work in the drawer is NOT safe against Back. Esc, the
+Close button and a click outside raise the panel's own Discard
+ask, as train 6 shipped; Back does not. Document this where a
+reader of the drawer code will look. If a future train wants the
+ask on Back too, the implementation path is a non-browser
+dialog on `beforeunload` + intercepting a React router event
+BEFORE the URL changes (which Next 15's app router does not
+expose on client navigation today).

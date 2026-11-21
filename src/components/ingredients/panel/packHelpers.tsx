@@ -128,6 +128,41 @@ export const BILLED_UNIT_GROUPS: { label: string; options: string[] }[] = [
   { label: "Priced per container - price divided by pack", options: ["case", "bag", "box", "pack", "jar", "can", "other"] },
 ];
 
+// T7 R2 item 6: the pack a person reads is the pack the PRICE
+// uses, not the pack as written. The server writes a hand-set
+// pack_override into pack_qty / pack_size / pack_uom directly, so
+// those three fields always reflect the current state (override
+// first, parsed second). The function below reads them, builds
+// the same "{qty}/{size} {uom}" / "{size} {uom}" string the item
+// panel's Pack fact uses, and falls back to the raw pack_text,
+// then to a "pack not read" sentinel.
+//
+// This is the SAME precedence the item panel applies (through
+// itemFacts.pack reading item.packNormalized ?? item.pack): one
+// helper, two call sites, no drift.
+export function packInUseText(args: {
+  packQty: number | null;
+  packSize: number | null;
+  packUom: string | null;
+  packText: string | null;
+  catchWeight?: boolean;
+}): { text: string; known: boolean; catchWeight: boolean } {
+  const { packQty, packSize, packUom, packText } = args;
+  const catchWeight = args.catchWeight === true;
+  if (packQty != null && packSize != null && packUom) {
+    const q = Number(packQty);
+    const s = Number(packSize);
+    if (Number.isFinite(q) && Number.isFinite(s) && q > 0 && s > 0) {
+      const text = q === 1 ? `${s} ${packUom}` : `${q}/${s} ${packUom}`;
+      return { text, known: true, catchWeight };
+    }
+  }
+  if (packText && packText.trim().length > 0) {
+    return { text: packText.trim(), known: true, catchWeight };
+  }
+  return { text: "Pack not read", known: false, catchWeight };
+}
+
 // Parse the server's packNormalized ("50 LB" or "6/1 LB") back into
 // qty/size/uom so the "Read as" row can show the total conversion.
 export function parsePackNormalized(

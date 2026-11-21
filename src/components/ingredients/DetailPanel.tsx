@@ -74,6 +74,7 @@ export function DetailPanel({
   onPrev,
   onNext,
   onFocusReturn,
+  sendAllBack,
 }: {
   open: Exclude<DetailPanelOpen, null>;
   onClose: () => void;
@@ -109,6 +110,11 @@ export function DetailPanel({
   // the row the user last stepped to). Fired AFTER the exit
   // animation runs so the panel has released the focus trap.
   onFocusReturn?: () => void;
+  // T7 R2 item 1: the ingredient drawer opened from the Ingredients
+  // / Retail tabs offers Send all back for an ingredient with linked
+  // items. The review card's pencil leaves this unset (confirm has
+  // not happened yet; nothing to send back).
+  sendAllBack?: { masterName: string; itemIds: string[] };
 }) {
   const router = useRouter();
   const labelId = useId();
@@ -397,6 +403,7 @@ export function DetailPanel({
               onLoadParents={onLoadParents}
               onDone={onDone}
               mode="ingredient"
+              sendAllBack={sendAllBack}
             />
           </>
         )}
