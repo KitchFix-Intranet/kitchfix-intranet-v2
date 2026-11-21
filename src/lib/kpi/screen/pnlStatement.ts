@@ -144,11 +144,23 @@ function buildLineRow(
     inactive,
     reported,
     credit,
+    // Verdict mirrors v1 PnlStatement.VarCell exactly (PnlStatement.js
+    // lines 77-93 at pin c3c1b902).  v1's VarCell colours EVERY row
+    // whose (actual, ref) are both non-null, including credit rows -
+    // the `good = axis === "rev" ? up : !up` sign is applied straight
+    // from `actual - ref`.  Earlier v2 behaviour excluded credits from
+    // the verdict (`reported && !credit`); the projector carried a
+    // compensating fallback that computed side from `variance_arrow`
+    // when `verdict === "none"`.  Per Kevin's 2026-11-20 ruling (train
+    // 2d-1 PR #94 bounce, item 1), the model must carry v1's side so
+    // the projector formats / places only.  Gate stays on `reported`
+    // because v1 does not render a VarCell at all when either side is
+    // null, but the credit gate is removed.
     verdict: rowVerdict(
       opts.axis,
       variance_dollars,
       inactive,
-      reported && !credit,
+      reported,
     ),
   };
 }

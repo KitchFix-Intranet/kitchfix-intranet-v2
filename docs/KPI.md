@@ -599,12 +599,122 @@ rail value read the rail tile; consumers wanting the fold value
 read the week row. Two readers, two unambiguous sources - no third
 "derived display" field at the model layer.
 
+### Model contract (per function)
+
+Kevin ruling 2026-11-20 (train 2d-1 PR #94 bounce, item 4).  Each
+screen model exposes two layers: a **contract** (numbers + state
+words that V2 screens read) and **proof-only passthroughs** (v1
+display strings carried for the DOM-vs-model compare and nothing
+else).  V2 screens format their own strings from the contract
+numbers; the proof-only fields let the 92-case strict compare run
+without re-capturing.
+
+The convention: any field whose name ends in `_display` is proof-
+only; any `*_label` / `*_arrow` field inherited from v1 wording is
+proof-only; everything else is contract.
+
+**cardsRow (`buildCardsRow` / `formatCardsRow`)**
+- Contract: per-card `budget`, `adjusted`, `actual`, `pct_actual`,
+  `pct_adjusted`, `pct_target`, `gap_dollars`, `gap_points`,
+  `verdict`, `provisional`, `pill_side`, `hero_side`,
+  `footer_suppressed`, `revenue_absent`.
+- Proof-only: every `*_display`, `pill_label`, `variance_label`,
+  `variance_arrow`, `variance_direction` - v1 text carried for the
+  proof only; V2 screens format their own.
+
+**revenueLines (`buildRevenueLines` / `formatRevenueLines`)**
+- Contract: per-row `line_code`, `label`, `budget`, `actual`,
+  `pct_of_revenue`, `tone`, plus the total shape and `pill.state`.
+- Proof-only: every `*_display`, `pill_text` - v1 text for the
+  proof only.
+
+**costLines (`buildCostLines` / `formatCostLines`)**
+- Contract: per-row `line_code`, `label`, `adjusted`, `target_pct`,
+  `actual`, `actual_pct`, `variance_dollars`, `variance_pct`,
+  `credit`, `flags`, `verdict`; total shape mirrors per-row
+  including `verdict`; `pill.state`, `pill.over_count`,
+  `pill.row_count`, `has_target`.
+- Proof-only: every `*_display`, `pill_text`, `pill_tone` - v1
+  text / class name for the proof only.
+
+**alsoTracked (`buildAlsoTracked` / `formatAlsoTracked`)**
+- Contract: per-row `line_code`, `label`, `budget`, `actual`,
+  `variance`, `state`, `tone`.
+- Proof-only: every `*_display`, `empty_phrase` - v1 text.
+
+**pnlStatement (`buildPnlStatement` / `formatPnlStatement`)**
+- Contract: `render`, `include_salary`, per-row `variant`,
+  `line_code`, `label`, `section`, `axis`, `budget`, `target_pct`,
+  `adjusted`, `actual`, `actual_pct`, `variance_dollars`,
+  `ref_field`, every `hatch_*`, `indent`, `inactive`, `reported`,
+  `credit`, `verdict` (both `summary_rows` and `full_rows`).
+- Proof-only: every `*_display`, `variance_arrow`,
+  `not_reported` - v1 text / row-caption carried for the proof.
+
+**statusLine (`buildStatusLine` / `formatStatusLine`)**
+- Contract: `state`, `tone`, `leading_dot`, `awaiting` (object
+  shape), `horizon`.
+- Proof-only: `state_copy`, `awaiting_copy` - v1 sentence text.
+
+**settlingStrip, overdueNudge, weekRail, laborLedger, purchasingFold**
+- Same convention: numeric aggregates + state enums are contract;
+  every formatted sentence / `*_display` is proof-only.
+
+**weekFlag (`flagForV42State`)**
+- Contract: `state`, `cls`.
+- Proof-only: `label`, `tooltip`, `glyph` - v1 copy / CSS classes.
+
+**dashOrValue (`resolveDashState` / `dashOrValue`)**
+- Contract: dash-state word.
+- Proof-only: `formatDashOrValue` output string.
+
 ### Defects found but not fixed
 
-None. Every arithmetic shape observed in v1 reproduces in the
-model; one notable artefact (the labor ledger's week-row dollars
-can differ from the week_rail's labor_landed on in-progress weeks,
-by hatched unpriced hours) is a known-and-intentional v1 behaviour
-(see v1 LaborLedger.js:117-141 comment "settled dollars only")
-rather than a defect, and both figures are exposed in the model so
+None at the engine-arithmetic layer.  The labor ledger's week-row
+dollars can differ from the week_rail's labor_landed on in-progress
+weeks by hatched unpriced hours - that is a known-and-intentional
+v1 behaviour (see v1 LaborLedger.js:117-141 comment "settled
+dollars only") rather than a defect, and both figures are exposed
+in the model so the consumer picks the one the render wants.
+
+**Defects believed, not fixed (reproduce v1 exactly).**  Kevin
+ruling 2026-11-20 (train 2d-1 PR #94 bounce, item 1): the model
+must carry v1's side on the two patterns below.  Do not decide
+whether v1 is right; reproduce it and list both here.
+
+1. **PnL VarCell colours credit rows (PnlStatement.js:77-93 at pin
+   c3c1b902).**  v1 renders the P&L variance cell for every row
+   whose (actual, ref) are both non-null, including net-credit cost
+   rows (e.g. a 3100.2 salary sub-row that lands as a credit, a
+   tracked line 5002.5 Equipment with actual less than budget).
+   Tone is driven purely by `actual - ref` + axis
+   (`good = axis === "rev" ? up : !up`), without excluding credits.
+   A credit row on a cost axis with `actual < ref` reads green
+   (good) even though "green" more conventionally means "under
+   spend" rather than "credit landed."  Model reproduces exactly;
+   see `pnlStatement.ts` `rowVerdict()` and the inline comment
+   above the `verdict:` field in `buildLineRow`.  Captured by the
+   screen-models test "credit row (actual < 0, cost axis) ->
+   verdict matches v1 VarCell."
+
+2. **CostLines %rev greens the cell on null adjusted (CostLines.js
+   line 212 at pin c3c1b902).**  v1 renders `kpi-ov-good` when
+   `over` is false and the row is not suppressed.  `over` is
+   `varianceVsBatr > 0`; when adjusted (batr) is null (e.g. a line
+   with a target percent but no dollar reference), `varianceVsBatr`
+   is null and `over` evaluates false - so v1 still paints the
+   cell green regardless of what the actual value is.  Model
+   reproduces exactly; see `costLines.ts` `buildCostLines` row loop
+   and the inline comment above the row's `verdict` block.  Captured
+   by the screen-models test "row with target_pct but null adjusted
+   -> verdict 'good' (v1 CostRow:212)."
+
+### Historical defects note
+
+Every arithmetic shape observed in v1 reproduces in the model; one
+notable artefact (the labor ledger's week-row dollars can differ
+from the week_rail's labor_landed on in-progress weeks, by hatched
+unpriced hours) is a known-and-intentional v1 behaviour (see v1
+LaborLedger.js:117-141 comment "settled dollars only") rather than
+a defect, and both figures are exposed in the model so
 the consumer picks the one the render wants.

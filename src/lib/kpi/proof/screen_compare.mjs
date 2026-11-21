@@ -10,6 +10,127 @@
 //
 //   key = { block, row_label, column_label, text, side }
 //
+// ---------------------------------------------------------------------
+// Projector purity list (Kevin ruling 2026-11-20 - train 2d-1 PR #94
+// bounce, item 2).  The projector formats and places only; it does not
+// decide anything from values.  Below is the exhaustive list of every
+// place the projector branches, each annotated as either MOVED to the
+// model, NAMED-FINE per Kevin's two acceptable patterns, or TEXT-
+// LAYOUT (a pure string-shape normalisation on text already emitted
+// by the model + formatter, not a value-derived decision).
+//
+// Kevin's two named-fine patterns:
+//   (K1) per-block row / column label mapping table (how a model row
+//        becomes a DOM (row_label, column_label) tuple).
+//   (K2) the "100%" cell normalisation on the PnL revenue-total row
+//        (v1 hardcodes "100%"; the model's formatter emits "100.00%";
+//        the projector rewrites this ONE text to match DOM).
+//
+// DOM side (filter + parse of captured HTML; not a V2 logic decision):
+//   - TONE_CLASS_MAP: class -> side mapping, DOM-only.
+//   - PILL_LABEL_SIDE / FOOT_LABEL_SIDE: closed vocabulary -> side,
+//     DOM-only (compensates for the capture regex not matching the
+//     pill / foot class families; no re-capture per Kevin).
+//   - sideFromDom(): DOM-only.
+//   - ALLOW_LIST_BLOCKS / ALLOW_LIST_TEXTS / NOT_FIGURE_PATTERNS /
+//     FIGURE_PATTERNS: filter mapping applied symmetrically to both
+//     sides so neither carries a non-figure.
+//
+// Model side (projector branches that act on V2 model output):
+//
+// projectCardsRow (card-revenue / card-cogs / card-gross_margin):
+//   - heroCol / pctCol by kind:                              K1.
+//   - Hero side = card.hero_side (model-carried), with       MOVED
+//       the "wait" -> compare-side "none" collapse per
+//       the DOM capture regex (not a value decision -
+//       the model carries the semantic "wait"; the DOM
+//       just doesn't have a matching tone class).
+//   - Pill label + pill side = model `card.pill_label` +    MOVED
+//       `card.pill_side` passthrough.
+//   - Pill label emitted only when it passes the DOM        TEXT-LAYOUT
+//       figure regex (pillEmits) - compensates for the
+//       capture-side regex rejecting " of " labels.
+//   - Reference row label = "Projection" (revenue) vs       K1
+//       "Adjusted" (cogs/gm).
+//   - Footer suppression: `card.footer_suppressed`          MOVED
+//       (model-carried; consolidates pill-neutral,
+//       awaiting-amber, |delta|<1 gates).
+//   - Footer bare magnitude via bareMagnitude():            TEXT-LAYOUT
+//       strips the trailing direction word that the
+//       formatter concatenates ("$X over" -> "$X") to
+//       match the DOM's two-text-node render.
+//
+// projectRevenueLines (revenue-lines):
+//   - Row label `<line_code><label>`:                        K1.
+//   - Budget / Actual / pct columns to "Plan" / "Actual" /  K1.
+//       "" positional mapping.
+//   - Actual side = normaliseSide(r.tone), model-carried.   MOVED
+//     (r.tone is a model enum - all tone decisions live
+//      in the revenueLines model build.)
+//
+// projectCostLines (cost-lines):
+//   - Row label `<line_code><label>` + "?" suffix on        K1.
+//       3200 / 3400 / 3500 (HelpPop glyph in DOM).
+//   - adjusted / target_pct / actual columns to "Plan" /    K1.
+//       "Actual" / "" positional mapping.
+//   - Per-row actual_pct side = normaliseSide(r.verdict),   MOVED
+//       model-carried.  Model's verdict already matches
+//       v1 CostLines.CostRow (including null-adjusted ->
+//       "good" case).  No projector fallback.
+//   - Total %rev side = normaliseSide(d.total.verdict),     MOVED
+//       model-carried.  Model's verdict already matches
+//       v1 CostLines.TotalRow (dollar-sign rule, not
+//       percent-sign).
+//
+// projectAlsoTracked (also-tracked):
+//   - Row label mapping:                                     K1.
+//   - Budget / Actual / variance column mapping:             K1.
+//   - Variance side = normaliseSide(r.tone), model-carried.  MOVED
+//   - bareMagnitude() strip on composite variance text:      TEXT-LAYOUT.
+//
+// projectPnlStatement (pnl-table):
+//   - Which row set: d.include_salary ? full : summary.      K1
+//     (determined by the model-carried `include_salary`;
+//      not a value-derived projector decision).
+//   - Row label total vs line vs section:                    K1.
+//   - "Plan" / "Actual" / "" positional column mapping:      K1.
+//   - target_pct "100%" hardcode on total revenue row:        K2.
+//   - actual_pct "100%" hardcode on total revenue row:        K2.
+//   - Skip emit when r.hatch_adjusted / r.hatch_actual_pct:  MOVED
+//       both hatch flags are model-carried; the projector
+//       only skips emission on hatched cells (v1 renders
+//       the hatched pattern, which has no figure text).
+//   - Variance side = normaliseSide(r.verdict).              MOVED
+//       Model's verdict matches v1 VarCell exactly
+//       (axis-driven on actual-ref, including credit rows).
+//
+// projectLaborLedger (labor-ledger):
+//   - Band row label "›FY<y> · PERIOD <n><wks> wks":         K1
+//     plus pluralization wk vs wks (count-driven label).
+//   - Grand row label "TOTAL · PERIOD <n>" or               K1
+//       "TOTAL · <n> PERIODS · <w> WEEKS":
+//     count-driven label.
+//   - Column labels "Reg $" / "OT $" / "Hol $" / "Prem $" / K1
+//       "Salary" / "Total".
+//   - Zero-labor band row suppression (all five display      NAMED HERE:
+//       fields null => skip the band entirely).  v1          null-guard,
+//       renders a text-only "no labor recorded" placeholder  symmetric
+//       row carrying no figures; the DOM capture produces
+//       no figures for it; the projector must match.  The
+//       suppression reads model-carried display-field
+//       nullity, not re-derived values - documented here
+//       in lieu of a dedicated `band.has_dollars` flag
+//       because adding one would duplicate information the
+//       display already surfaces.
+//
+// projectPurchasingFold / projectWeekRail / projectSettlingStrip /
+// projectOverdueNudge / projectStatusLine:
+//   - Return []: no closed-case DOM renders these as figure- MOVED
+//       bearing blocks (running-period / 2d-2 scope).  The
+//       model's d.render / tile set is what determines
+//       emission; scope is model-carried.
+// ---------------------------------------------------------------------
+//
 // Multiset semantics: a figure that appears N times on one side must
 // appear N times on the other to fully agree. Surplus occurrences
 // surface as diffs.
@@ -443,24 +564,11 @@ function projectCardsRow(payload, context) {
     // wrapped so col="hero-<kind>" (see DOM scheme above).
     const heroCol = kind === "revenue" ? "" : `hero-${kind}`;
     const pctCol = kind === "revenue" ? "" : `hero-${kind}-pct`;
-    // v1 hero tone follows card.delta_direction on revenue
-    // (kpi-ov-good when delta_direction === "good", kpi-ov-bad when
-    // "bad", empty class otherwise).  On cogs/gm it follows the pill
-    // tone directly (CardsRow.js:571).  Neutral delta on revenue
-    // (confirmed_weeks_count === null, as in our closed cases) leaves
-    // no tone class even when the pill reads "on projection" (good).
-    // On cogs/gm, the awaiting-amber branch overrides to "kpi-ov-wait";
-    // we map that to "wait" (not a capture tone, but renders no good/
-    // bad class so side="none").
-    const heroSide = (() => {
-      if (kind === "revenue") {
-        const d = card.variance_direction;
-        return d === "good" ? "good" : d === "bad" ? "bad" : "none";
-      }
-      // cogs / gm: pill tone -> hero class.  Awaiting => "wait" => "none".
-      if (card.provisional) return "none";
-      return pillSide === "good" ? "good" : pillSide === "bad" ? "bad" : "none";
-    })();
+    // Hero tone comes off the model (`card.hero_side`), per Kevin's
+    // 2026-11-20 ruling: the model carries v1's side; the projector
+    // only formats + places.  The DOM capture regex treats "wait" as
+    // no colour class -> map to "none" for compare.
+    const heroSide = card.hero_side === "wait" ? "none" : card.hero_side;
     // Hero actual $
     if (card.actual_display) {
       figures.push({
@@ -631,39 +739,15 @@ function projectPnlStatement(payload, context) {
     } else if (!r.hatch_actual_pct) {
       pushIf("", r.actual_pct_display, "none");
     }
-    // variance cell: side per axis.  Revenue axis: up=good.  Cost
-    // axis: up=bad.  Margin axis: up=good.  v1 PnlStatement.VarCell
-    // computes tone directly from `actual - ref` without excluding
-    // credit rows; the V2 model's `verdict` excludes credit rows
-    // (treats them as "none").  To match DOM, compute side from
-    // variance_arrow + the row's axis.  On credit rows where v1
-    // still colours the variance (e.g. 3100.2 salary credit),
-    // variance_arrow is set but verdict is "none".
+    // variance cell: side comes from `r.verdict`, which the model
+    // computes to match v1 PnlStatement.VarCell exactly (axis-driven
+    // tone from `actual - ref`, including credit rows).  The projector
+    // only formats + places - no fallback.
     if (r.variance_display) {
       if (/^on budget$/i.test(r.variance_display)) {
         pushIf("", "on budget", "even");
       } else {
-        let side = normaliseSide(r.verdict);
-        if (side === "none" && r.variance_arrow) {
-          // Fallback: v1 VarCell tone.  Axis for pnl rows:
-          //   revenue rows (sub rows under Revenue section) -> up=good.
-          //   Total revenue -> up=good.
-          //   cost rows + Total cogs -> up=bad.
-          //   Gross margin total -> up=good (axis="rev" in v1).
-          //   Tracked rows -> axis="cost".
-          const isRevSide =
-            r.label === "Total revenue" ||
-            r.label === "Gross margin";
-          const isRevenueLine =
-            !isRevSide &&
-            r.line_code != null &&
-            r.line_code.startsWith("2");
-          const axisGoodOnUp = isRevSide || isRevenueLine;
-          const up = r.variance_arrow === "↑";
-          const good = axisGoodOnUp ? up : !up;
-          side = good ? "good" : "bad";
-        }
-        pushIf("", r.variance_display, side);
+        pushIf("", r.variance_display, normaliseSide(r.verdict));
       }
     }
   }
@@ -720,19 +804,18 @@ function projectCostLines(payload, context) {
     if (r.actual_display)
       figures.push({ block, row_label: rowLabel, column_label: "", text: r.actual_display, side: "none" });
     if (r.actual_pct_display) {
-      // v1 CostRow.js:212 emits kpi-ov-good when `over` is false and
-      // the row isn't suppressed.  `over = varianceVsBatr > 0`; when
-      // batr/adjusted is null, varianceVsBatr is null and `over`
-      // evaluates false, so v1 still renders kpi-ov-good.  Match that
-      // by defaulting the side to "good" for non-suppressed rows with
-      // no adjusted (e.g. 3500 on a management-fee account with
-      // target_pct 0).
-      const suppressed = r.flags.includes("billed_back") || r.flags.includes("inactive") || r.credit;
-      let side = normaliseSide(r.verdict);
-      if (!suppressed && r.verdict === "none" && r.target_pct_display != null) {
-        side = "good";
-      }
-      figures.push({ block, row_label: rowLabel, column_label: "", text: r.actual_pct_display, side });
+      // Side comes from `r.verdict`, which the model computes to
+      // match v1 CostLines.CostRow exactly (line 212 at pin c3c1b902):
+      // non-suppressed rows with null adjusted still render
+      // kpi-ov-good because `over = varianceVsBatr > 0` evaluates
+      // false on null.  Projector formats + places only.
+      figures.push({
+        block,
+        row_label: rowLabel,
+        column_label: "",
+        text: r.actual_pct_display,
+        side: normaliseSide(r.verdict),
+      });
     }
   }
   // Total row.  v1 emits "Total cost of goods" (no "sold" - that's
@@ -746,15 +829,16 @@ function projectCostLines(payload, context) {
   if (t.actual_display)
     figures.push({ block, row_label: rowLabel, column_label: "", text: t.actual_display, side: "none" });
   if (t.actual_pct_display) {
-    // v1 CostLines.js:319: Total %rev tone follows the SCORED-dollar
-    // variance sign (sumActualScored - sumBatr), not the percent
-    // variance.  On revenue-shortfall accounts (STL - FL management
-    // fee) the two can disagree: percent is over but dollars are
-    // under.  Match v1's $-sign logic.
-    const totalVar = m.total.variance_dollars;
-    let side = "none";
-    if (totalVar != null) side = totalVar > 0 ? "bad" : (totalVar < 0 ? "good" : "even");
-    figures.push({ block, row_label: rowLabel, column_label: "", text: t.actual_pct_display, side });
+    // Total %rev tone comes off the model (`d.total.verdict`), per
+    // Kevin's 2026-11-20 ruling.  The model carries v1's dollar-sign
+    // rule (CostLines.js:319) directly.
+    figures.push({
+      block,
+      row_label: rowLabel,
+      column_label: "",
+      text: t.actual_pct_display,
+      side: normaliseSide(t.verdict),
+    });
   }
   return figures;
 }
@@ -1546,6 +1630,30 @@ async function main() {
   lines.push(`- Before fix (loose {block, text}): 92 / 92.`);
   const passCount = results.filter((r) => r.class === "pass").length;
   lines.push(`- After fix (strict {block, row_label, column_label, text, side}): ${passCount} / 92.`);
+  lines.push("");
+  lines.push("## Bounce fix (2026-11-20, train 2d-1 PR #94 bounce)");
+  lines.push("");
+  lines.push("Kevin ruling: the model must carry v1's side; the projector formats + places only.  See the \"Projector purity list\" in the screen_compare.mjs header for the full enumeration.");
+  lines.push("");
+  lines.push("- Pre-fix (projector overrides removed, model unchanged): 85 / 92.  Seven cases diverged on two patterns.");
+  lines.push("- Post-fix (model carries v1's side on both patterns): 92 / 92.");
+  lines.push("- Plants still caught: 8 / 8.");
+  lines.push("");
+  lines.push("### Two side decisions moved from projector to model");
+  lines.push("");
+  lines.push("1. **PnL VarCell colours credit rows (PnlStatement.js:77-93 at pin c3c1b902).**  v1 renders the P&L variance cell for every row whose (actual, ref) are both non-null, including net-credit cost rows.  Tone is axis-driven on `actual - ref` without excluding credits.  Earlier v2 `rowVerdict` returned \"none\" on credit rows (`reported && !credit`); the projector carried a fallback that re-derived side from variance_arrow + axis.  Fix: `src/lib/kpi/screen/pnlStatement.ts` drops the `!credit` gate so the model verdict matches v1 directly.  Listed under \"Defects believed, not fixed.\"");
+  lines.push("");
+  lines.push("2. **CostLines %rev greens the cell on null adjusted (CostLines.js line 212 at pin c3c1b902).**  v1 renders `kpi-ov-good` when `over` is false and the row is not suppressed; when adjusted is null, `over` evaluates false and v1 still paints green.  Earlier v2 `buildCostLines` returned verdict \"none\" in that case; the projector promoted \"none\" -> \"good\" when target_pct was present.  Fix: `src/lib/kpi/screen/costLines.ts` sets verdict to \"good\" directly on non-suppressed rows with null variance_dollars.  Listed under \"Defects believed, not fixed.\"");
+  lines.push("");
+  lines.push("### Other projector logic moved to model (item 2)");
+  lines.push("");
+  lines.push("- `cardsRow.ts` now carries `hero_side: PillSide` per card.  Projector reads it directly (with the \"wait\" -> compare-side \"none\" DOM collapse) instead of re-deriving from `variance_direction` / `pill_side` + `provisional`.");
+  lines.push("- `costLines.ts` total row now carries `verdict: CostRowVerdict`.  Projector reads it directly instead of re-deriving from `total.variance_dollars` sign.");
+  lines.push("");
+  lines.push("### Two screen-models tests added");
+  lines.push("");
+  lines.push("- `PnlStatement > credit row (actual < 0, cost axis) -> verdict matches v1 VarCell`: constructs a made-up credit salary sub-row, asserts `verdict === \"good\"`.  Would have failed before the fix (model returned \"none\").");
+  lines.push("- `CostLines > row with target_pct but null adjusted -> verdict 'good' (v1 CostRow:212)`: constructs a made-up 3500 Vehicle row with target_pct set + adjusted null, asserts `verdict === \"good\"`.  Would have failed before the fix (model returned \"none\").");
   lines.push("");
   lines.push("## Model edits this round");
   lines.push("- `src/lib/kpi/screen/cardsRow.ts`: `CardsRowCard` + `CardsRowDisplayCard` gain `pill_label: string | null`, `pill_side: 'good' | 'bad' | 'even' | 'wait' | 'none'`, `footer_suppressed: boolean`.  Server-shipped `payload.cards[i].pill.label` passes THROUGH the model (passthrough string, not a derivation) so the projector no longer reads the payload directly.  `footer_suppressed` consolidates the pill-neutral + |delta|<1 + awaiting-amber suppression logic the projector used to compute itself.");

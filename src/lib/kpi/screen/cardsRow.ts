@@ -91,6 +91,18 @@ export type CardsRowCard = {
   //     not-yet-verified cogs/gm card (same return-null path).
   //   - true when |gap_dollars| < 1 ("on target", no footer).
   footer_suppressed: boolean;
+  // Hero actual tone, carried on the model per Kevin's 2026-11-20
+  // ruling (train 2d-1 PR #94 bounce, item 2).  Mirrors v1 CardsRow:
+  //   REVENUE (RevenueCard, closed-range scope - `confirmed_weeks_count`
+  //   is null on closed; running branch is 2d-2): hero tone = mapped
+  //   `card.delta_direction` ("good" / "bad" / "" => "none").
+  //   COGS / GM (PercentLeadCard): hero tone = "wait" when the amber
+  //   provisional branch is on (closed-but-not-yet-verified); else
+  //   mapped `card.pill.tone`.
+  // DOM capture regex treats "wait" as no colour class -> side "none"
+  // on the capture.  The model carries the semantic word; the
+  // projector maps "wait" -> "none" for compare against the capture.
+  hero_side: PillSide;
 };
 
 export type CardsRowModel = {
@@ -130,6 +142,7 @@ function emptyCard(): CardsRowCard {
     pill_label: null,
     pill_side: "none",
     footer_suppressed: true,
+    hero_side: "none",
   };
 }
 
@@ -172,6 +185,13 @@ export function buildCardsRow(payload: any): CardsRowModel {
   // v1 variance footer uses card.delta_dollars (signed) for revenue.
   const revDelta = toNum(revRaw?.delta_dollars);
   const revPillSide = pillSideFromTone(revRaw?.pill?.tone, false);
+  // v1 RevenueCard hero tone: closed-range scope only (train 2d-1).
+  // v1 line 438-440: card.delta_direction === "good" -> good, "bad"
+  // -> bad, else no tone class (= "none").  The running branch
+  // (confirmed_weeks_count != null) is explicitly 2d-2 scope.
+  const revDeltaDir = revRaw?.delta_direction;
+  const revHeroSide: PillSide =
+    revDeltaDir === "good" ? "good" : revDeltaDir === "bad" ? "bad" : "none";
   const revenue: CardsRowCard = {
     budget: revReference,
     adjusted: null,                        // revenue has no adjusted
@@ -191,6 +211,7 @@ export function buildCardsRow(payload: any): CardsRowModel {
       revDelta == null ||
       !Number.isFinite(revDelta) ||
       Math.abs(revDelta) < 1,
+    hero_side: revHeroSide,
   };
 
   // COGS. actual = hero_actual; adjusted = budget_at_this_revenue;
@@ -213,6 +234,17 @@ export function buildCardsRow(payload: any): CardsRowModel {
       ? cogsPctActual - cogsPctAdjusted
       : null;
   const cogsPillSide = pillSideFromTone(cogsRaw?.pill?.tone, awaiting);
+  // v1 PercentLeadCard hero tone (line 568-573): `awaiting` -> "wait";
+  // else `card.pill?.tone === "good"` -> good, "bad" -> bad, else no
+  // class (= "none").  The capture regex treats "wait" as no colour -
+  // the projector maps hero_side "wait" -> compare side "none".
+  const cogsHeroSide: PillSide = awaiting
+    ? "wait"
+    : cogsRaw?.pill?.tone === "good"
+      ? "good"
+      : cogsRaw?.pill?.tone === "bad"
+        ? "bad"
+        : "none";
   const cogs: CardsRowCard = {
     budget: cogsBudgetFull,
     adjusted: cogsAdjusted,
@@ -232,6 +264,7 @@ export function buildCardsRow(payload: any): CardsRowModel {
       cogsGapDollars == null ||
       !Number.isFinite(cogsGapDollars) ||
       Math.abs(cogsGapDollars) < 1,
+    hero_side: cogsHeroSide,
   };
 
   // GROSS MARGIN. Same compute shape as COGS.
@@ -252,6 +285,14 @@ export function buildCardsRow(payload: any): CardsRowModel {
       ? gmPctActual - gmPctAdjusted
       : null;
   const gmPillSide = pillSideFromTone(gmRaw?.pill?.tone, awaiting);
+  // Same v1 PercentLeadCard hero-tone rule as cogs.
+  const gmHeroSide: PillSide = awaiting
+    ? "wait"
+    : gmRaw?.pill?.tone === "good"
+      ? "good"
+      : gmRaw?.pill?.tone === "bad"
+        ? "bad"
+        : "none";
   const gross_margin: CardsRowCard = {
     budget: gmBudgetFull,
     adjusted: gmAdjusted,
@@ -271,6 +312,7 @@ export function buildCardsRow(payload: any): CardsRowModel {
       gmGapDollars == null ||
       !Number.isFinite(gmGapDollars) ||
       Math.abs(gmGapDollars) < 1,
+    hero_side: gmHeroSide,
   };
 
   // statement_totals is reachable for consumers that want to render
@@ -309,6 +351,8 @@ export type CardsRowDisplayCard = {
   pill_label: string | null;
   pill_side: PillSide;
   footer_suppressed: boolean;
+  // Hero actual tone passthrough (Item 2 fix 2026-11-20).
+  hero_side: PillSide;
 };
 
 export type CardsRowDisplay = {
@@ -337,6 +381,7 @@ function emptyDisplay(): CardsRowDisplayCard {
     pill_label: null,
     pill_side: "none",
     footer_suppressed: true,
+    hero_side: "none",
   };
 }
 
@@ -414,6 +459,7 @@ function formatCard(
     pill_label: c.pill_label,
     pill_side: c.pill_side,
     footer_suppressed: c.footer_suppressed,
+    hero_side: c.hero_side,
   };
 }
 

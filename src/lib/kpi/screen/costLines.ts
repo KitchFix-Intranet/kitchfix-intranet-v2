@@ -83,6 +83,13 @@ export type CostLinesModel = {
     target_pct: number | null;        // = cogsCard.adjusted_pct_of_revenue
     variance_dollars: number | null;  // actual_scored - adjusted
     variance_pct: number | null;      // actual_pct - target_pct
+    // Total %rev cell tone, carried on the model per Kevin's
+    // 2026-11-20 ruling (train 2d-1 PR #94 bounce, item 2).  Mirrors
+    // v1 CostLines.TotalRow (line 319): tone follows the SCORED-dollar
+    // variance sign (`over = totalVarianceVsBatr > 0`), NOT the
+    // percent variance.  Gated by `has_target` on v1; off-target
+    // totals render no tone class (= "none").
+    verdict: CostRowVerdict;
   };
   pill: { state: CostLinesPillState; over_count: number; row_count: number };
 };
@@ -116,6 +123,7 @@ export function buildCostLines(payload: any): CostLinesModel {
         target_pct: null,
         variance_dollars: null,
         variance_pct: null,
+        verdict: "none",
       },
       pill: { state: "none_spent", over_count: 0, row_count: 0 },
     };
@@ -138,6 +146,7 @@ export function buildCostLines(payload: any): CostLinesModel {
         target_pct: null,
         variance_dollars: null,
         variance_pct: null,
+        verdict: "none",
       },
       pill: { state: "none_spent", over_count: 0, row_count: 0 },
     };
@@ -182,10 +191,28 @@ export function buildCostLines(payload: any): CostLinesModel {
     const credit = actual != null && actual < 0;
     const suppress = isSuppressed(flags) || !hasTarget || credit;
 
+    // Verdict mirrors v1 CostLines.CostRow exactly (CostLines.js lines
+    // 101-105 + 212 at pin c3c1b902).  v1's `over` collapses:
+    //   const over = varianceVsBatr != null && varianceVsBatr > 0
+    // and the cell renders `kpi-ov-bad` when over else `kpi-ov-good`,
+    // gated by `suppressVerdict = isBilledBack || isInactive ||
+    // !hasTarget || isCredit`.  Critically: when adjusted (batr) is
+    // null, varianceVsBatr is null, `over` is false, and v1 renders
+    // kpi-ov-good.  Earlier v2 verdict returned "none" in that case;
+    // the projector carried a compensating fallback that promoted
+    // "none" -> "good" when target_pct was present.  Per Kevin's
+    // 2026-11-20 ruling (train 2d-1 PR #94 bounce, item 1), the model
+    // must carry v1's side so the projector formats / places only.
     let verdict: CostRowVerdict = "none";
-    if (!suppress && varDollars != null) {
-      if (Math.abs(varDollars) < 1) verdict = "even";
-      else verdict = varDollars > 0 ? "bad" : "good";
+    if (!suppress) {
+      if (varDollars == null) {
+        // v1 `over` is false -> kpi-ov-good.
+        verdict = "good";
+      } else if (Math.abs(varDollars) < 1) {
+        verdict = "even";
+      } else {
+        verdict = varDollars > 0 ? "bad" : "good";
+      }
     }
 
     if (actual != null) {
@@ -243,6 +270,24 @@ export function buildCostLines(payload: any): CostLinesModel {
   else if (rowsWithSpend > 0) pillState = "all_under";
   else pillState = "none_spent";
 
+  // Total %rev tone (v1 CostLines.TotalRow line 319): follows the
+  // SCORED-dollar variance sign.  Gated by hasTarget (if the account
+  // has no target, the total %rev cell renders no tone class).  On
+  // revenue-shortfall accounts the dollar and percent variances can
+  // disagree in sign; v1 uses the dollar sign.
+  let totalVerdict: CostRowVerdict = "none";
+  if (hasTarget) {
+    if (totalVarDollars == null) {
+      totalVerdict = "none";
+    } else if (totalVarDollars > 0) {
+      totalVerdict = "bad";
+    } else if (totalVarDollars < 0) {
+      totalVerdict = "good";
+    } else {
+      totalVerdict = "even";
+    }
+  }
+
   return {
     render: true,
     has_target: hasTarget,
@@ -255,6 +300,7 @@ export function buildCostLines(payload: any): CostLinesModel {
       target_pct: totalTargetPct,
       variance_dollars: totalVarDollars,
       variance_pct: totalVarPct,
+      verdict: totalVerdict,
     },
     pill: { state: pillState, over_count: overCount, row_count: cogsRows.length },
   };
@@ -287,6 +333,10 @@ export type CostLinesDisplay = {
     target_pct_display: string | null;
     variance_dollars_display: string | null;
     variance_pct_display: string | null;
+    // Total %rev verdict passthrough (Item 2 fix 2026-11-20).  The
+    // projector reads this instead of re-deriving from the dollar
+    // variance sign.
+    verdict: CostRowVerdict;
   };
   pill_text: string;
   pill_tone: "good" | "bad" | "neutral";
@@ -349,6 +399,7 @@ export function formatCostLines(m: CostLinesModel): CostLinesDisplay {
         target_pct_display: null,
         variance_dollars_display: null,
         variance_pct_display: null,
+        verdict: "none",
       },
       pill_text: "nothing spent yet",
       pill_tone: "neutral",
@@ -389,6 +440,7 @@ export function formatCostLines(m: CostLinesModel): CostLinesDisplay {
           ? gapPointsCost(m.total.variance_pct)
           : null
         : null,
+      verdict: m.total.verdict,
     },
     pill_text: pillText,
     pill_tone: pillTone,

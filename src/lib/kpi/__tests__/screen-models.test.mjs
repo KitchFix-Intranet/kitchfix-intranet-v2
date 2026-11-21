@@ -372,6 +372,37 @@ describe("CostLines", () => {
     const d = formatCostLines(m);
     assert.equal(d.rows[0].adjusted_display, "not active");
   });
+
+  // Test B (Kevin ruling 2026-11-20 - train 2d-1 PR #94 bounce,
+  // item 1(b) + item 3).  v1 CostLines.CostRow (line 212 at pin
+  // c3c1b902) renders `kpi-ov-good` on the actual_pct cell when the
+  // row is not suppressed and `over = varianceVsBatr > 0` evaluates
+  // false.  When adjusted (batr) is null, varianceVsBatr is null and
+  // `over` is false, so v1 still renders green.  Earlier v2 model
+  // returned verdict "none" in that case; the projector carried a
+  // compensating fallback.  Model must carry v1's side so the
+  // projector formats only.  Invented account with target_pct set +
+  // adjusted missing exercises the fix.
+  it("row with target_pct but null adjusted -> verdict 'good' (v1 CostRow:212)", () => {
+    const m = buildCostLines({
+      period_state: "verified",
+      has_target: true,
+      range: { kind: "single_closed", period_no: 11 },
+      cards: [{ key: "cogs", pct_of_revenue: 42, adjusted_pct_of_revenue: 40 }],
+      statement_rows: [
+        // target_pct present (so target column renders), adjusted
+        // null (so varianceVsBatr is null), actual tiny positive.
+        // v1's `over = null > 0` is false -> kpi-ov-good.
+        { section: "cogs", line_code: "3500", label: "Vehicle",
+          budget_at_this_revenue: null, actual: 7, actual_pct: 0.01,
+          target_pct: 0, flags: [] },
+      ],
+    });
+    assert.equal(m.rows.length, 1);
+    assert.equal(m.rows[0].adjusted, null);
+    assert.equal(m.rows[0].variance_dollars, null);
+    assert.equal(m.rows[0].verdict, "good");
+  });
 });
 
 // ─── AlsoTracked ──────────────────────────────────────────────────
@@ -488,6 +519,57 @@ describe("PnlStatement", () => {
     const inactive = d.full_rows.find((r) => r.line_code === "2400.2");
     assert.equal(inactive.inactive, true);
     assert.equal(inactive.budget_display, null);
+  });
+
+  // Test A (Kevin ruling 2026-11-20 - train 2d-1 PR #94 bounce,
+  // item 1(a) + item 3).  v1 PnlStatement.VarCell (lines 77-93 at
+  // pin c3c1b902) colours EVERY row whose (actual, ref) are both
+  // non-null, including credit rows (actual < 0 on cost axis).  The
+  // tone is `good = axis === "rev" ? up : !up` where `up = d > 0`
+  // and `d = actual - ref`.  Earlier v2 model excluded credit rows
+  // from the verdict (`reported && !credit`); the projector carried
+  // a compensating fallback that re-derived side from variance_arrow
+  // + axis.  Model must carry v1's side so the projector formats
+  // only.  Invented account with a credit on 3100.2 salary sub-row
+  // exercises the fix.
+  it("credit row (actual < 0, cost axis) -> verdict matches v1 VarCell", () => {
+    // Credit salary row: actual -$300 (credit), budget_to_date $200.
+    // Salary ref_field = "budget".  d = -300 - 200 = -500 (up=false).
+    // cost axis: good = !up = true -> verdict "good".
+    const m = buildPnlStatement({
+      period_state: "verified",
+      range: { kind: "single_closed", period_no: 7 },
+      filters: { include_salary: true, account: "TEST" },
+      cards: [
+        { key: "revenue", hero_actual: 1000 },
+        { key: "cogs", hero_actual: 100 },
+        { key: "gross_margin", hero_actual: 900 },
+      ],
+      statement_totals: {
+        revenue: { budget_to_date: 1000, actual: 1000 },
+        cogs: { budget_to_date: 500, budget_at_this_revenue: 500, actual: 100 },
+        gross_margin: { budget_to_date: 500, margin_at_this_revenue: 500, actual: 900 },
+      },
+      statement_rows: [
+        { section: "revenue", line_code: "2400.1", label: "Meals",
+          budget_to_date: 1000, actual: 1000, reported: true, flags: [] },
+        { section: "cogs", line_code: "3100", label: "Labor wages",
+          budget_to_date: 500, target_pct: 50, budget_at_this_revenue: 500,
+          actual: 100, actual_pct: 10, reported: true, flags: [] },
+        { section: "cogs", line_code: "3100.2", label: "Salary wages",
+          parent_line_code: "3100",
+          budget_to_date: 200, target_pct: 20, budget_at_this_revenue: null,
+          actual: -300, reported: true, flags: ["not_applicable_target_pct"] },
+      ],
+    });
+    const sal = m.full_rows.find((r) => r.line_code === "3100.2");
+    assert.equal(sal.credit, true);
+    assert.equal(sal.axis, "cost");
+    assert.equal(sal.ref_field, "budget");
+    assert.equal(sal.variance_dollars, -500);
+    // v1 VarCell: cost axis + down => good.  Earlier v2 returned
+    // "none" here; the fix drops the !credit gate on reported.
+    assert.equal(sal.verdict, "good");
   });
 
   it("variance 'on budget' at < $1", () => {
