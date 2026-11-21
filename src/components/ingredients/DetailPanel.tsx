@@ -118,52 +118,28 @@ export function DetailPanel({
   // opened and the first Tab lands on the first real control.
   const headNameRef = useRef<HTMLHeadingElement>(null);
   const [closing, setClosing] = useState(false);
-  // Pack-hint from PanelAttention's "Fix the pack" button; threaded
-  // into PanelItemZone which forces the Pack and price row open.
-  const [packHint, setPackHint] = useState<PackHint | null>(null);
-  // M2 §4B part 3 fix 6: shared bus from PanelAttention's buttons to
-  // PanelIngredientZone's measures block. "Add a measure" sets an
-  // open-with-uom + prefill bump; "Change Costed per" bumps a nonce
-  // that PanelIngredientZone watches to scroll + focus the control.
-  // Polish round 2 fix 1: `pickUnit` means "limit the to-unit options
-  // to this uom's dim and leave the choice blank" - the needs_measure
-  // path. sizes_differ ships qty + uom (pickUnit=false), so its unit
-  // sticks. Chips also ship uom only; see onAddMeasure below for the
-  // qty-null -> pickUnit inference.
-  const [measureOpen, setMeasureOpen] = useState<{ uom: string; qty: number | null; pickUnit: boolean; nonce: number } | null>(null);
-  const [costedPerFocusNonce, setCostedPerFocusNonce] = useState(0);
 
-  // T6 round 3 item 1: every piece of state the panel carries for
-  // THE CURRENT item must reset when the item changes under the
-  // panel (Prev / Next, external id swap). Two moves together:
-  //
-  //  1. Every item-scoped child component (PanelAttention,
-  //     PanelItemZone and its editors, the unmatched-ingredient
-  //     zone) renders inside an item-keyed boundary below. React
-  //     unmounts + remounts on an id change, so any state held in
-  //     those children starts fresh. A new state slot added later
-  //     is safe without anyone remembering to reset it.
-  //
-  //  2. State that lives HERE in DetailPanel because it crosses
-  //     those children (packHint from Attention -> PanelItemZone,
-  //     measureOpen / costedPerFocusNonce from Attention ->
-  //     PanelIngredientZone) resets on item.id change via the
-  //     effect below.
-  //
-  // Nothing item-scoped sits outside the key below: scanned every
-  // state slot in this file plus every editor; the list is in the
-  // PR comment.
+  // T6 round 4 item 1: EVERYTHING the panel draws below the head for
+  // an item - PanelStrip, the AwayBar, PanelAttention, PanelItemZone,
+  // PanelIngredientZone (which holds the measure editor), the four
+  // folds in PanelClosedRows - now lives inside ItemPanelBody, which
+  // the render below mounts with `key={item.id}`. React unmounts the
+  // body on a step to another item and remounts it fresh, so no piece
+  // of local state in any descendant survives a step. State THAT USED
+  // TO LIVE HERE because it crossed those children (packHint from
+  // Attention -> PanelItemZone, measureOpen + costedPerFocusNonce
+  // from Attention -> PanelIngredientZone) moved into ItemPanelBody
+  // so the same remount discards it. Nothing panel-level needs a
+  // currentItemId reset effect any more; the only two slots
+  // DetailPanel still owns (discardAskOpen + pendingStep) are reset
+  // explicitly by every path that closes the ask (Keep editing,
+  // Discard, close()) and by the useEffect below as belt-and-braces
+  // for an external item-id swap mid-ask (ItemPanelById re-key).
   const currentItemId = open.kind === "item" ? open.itemId : null;
   useEffect(() => {
-    setPackHint(null);
-    setMeasureOpen(null);
-    setCostedPerFocusNonce(0);
-    // The panel-level discard ask also references the item under
-    // the panel at the time it opened. On a step through the ask,
-    // the Discard handler clears it before firing the step; the
-    // reset here is belt-and-suspenders for any external id swap.
     setDiscardAskOpen(false);
     setPendingStep(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentItemId]);
 
   // T4 §2a: when the caller passed parentOptions explicitly, use it;
@@ -199,6 +175,12 @@ export function DetailPanel({
   const [discardAskOpen, setDiscardAskOpen] = useState(false);
   const [pendingStep, setPendingStep] = useState<(() => void) | null>(null);
   const keepEditingRef = useRef<HTMLButtonElement>(null);
+  // T6 round 4 small 1: remember the field the person was in when
+  // the panel-level ask opened, so Keep editing returns focus there
+  // (matching the four editors' own Keep-editing behaviour). Captured
+  // in tryClose + stepWithAsk; refocused on a micro-task after the
+  // ask closes so the ask's buttons have unmounted first.
+  const panelAskLastFocusRef = useRef<HTMLElement | null>(null);
 
   const close = () => {
     if (closing) return;
@@ -223,8 +205,17 @@ export function DetailPanel({
     }, EXIT_MS);
   };
 
+  // T6 round 4 small 1: capture the field focus lives on just BEFORE
+  // the ask opens, so Keep editing can hand focus back.
+  const captureAskLastFocus = () => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement) panelAskLastFocusRef.current = active;
+    else panelAskLastFocusRef.current = null;
+  };
+
   const tryClose = () => {
     if (anyDirty(PANEL_SCOPE)) {
+      captureAskLastFocus();
       setPendingStep(null);
       setDiscardAskOpen(true);
       return;
@@ -238,6 +229,7 @@ export function DetailPanel({
     if (!step) return undefined;
     return () => {
       if (anyDirty(PANEL_SCOPE)) {
+        captureAskLastFocus();
         setPendingStep(() => step);
         setDiscardAskOpen(true);
         return;
@@ -349,103 +341,65 @@ export function DetailPanel({
           />
         </div>
 
-        {/* T6 item 2: when an item is put away, one bar under the head
-            says which + offers Restore (where train 4 allows it) or
-            "Open that item" for a duplicate. Shown on every surface
-            (not just Vendor items); replaces the retired footer. */}
-        {open.kind === "item" && item && itemIsAway(item) ? (
-          <AwayBar item={item} onDone={onDone} />
-        ) : null}
-
+        {/* T6 round 4 item 1: everything below the head for an item
+            renders inside ItemPanelBody, mounted with `key={item.id}`.
+            A step to a sibling item unmounts the body + mounts a
+            fresh one, so no local state in ANY descendant - the
+            strip, the attention list, the pack/price/case-weight
+            editors, the ingredient zone's measure editor and the
+            four folds - crosses the step. State that used to live in
+            THIS component because it bridged Attention to zone 2
+            (packHint, measureOpen, costedPerFocusNonce) moved into
+            ItemPanelBody so the same remount discards it. Nothing
+            item-scoped sits in DetailPanel any more; see the PR
+            comment for the slot-by-slot list. */}
         {open.kind === "item" && item ? (
-          <PanelStrip item={item} ingredient={ingredient} />
-        ) : null}
-
-        {/* T6 round 3 item 1: everything item-scoped renders inside
-            this fragment with a key on the item's id. React
-            unmounts + remounts the subtree on an id change so
-            nothing typed, no editor-open flag, no partial-save
-            state and no "Saved" flash crosses from one item to the
-            next. The ingredient zone is NOT keyed here because its
-            editor state keys on the ingredient (ingredient mode
-            only) and in item mode it only renders Costed per /
-            Measures / Open ingredient - all directly bound to the
-            ingredient's current values. */}
-        {open.kind === "item" && item ? (
-          <div key={item.id} className="kf-ipanel__itemscope">
-            {!itemIsAway(item) ? (
-              <PanelAttention
-                item={item}
-                ingredient={ingredient}
-                onFixPack={(uom) => setPackHint({ uom, nonce: Date.now() })}
-                onAddMeasure={(uom, qty) => setMeasureOpen({ uom, qty: qty ?? null, pickUnit: qty == null, nonce: Date.now() })}
-                onChangeCostedPer={() => setCostedPerFocusNonce((n) => n + 1)}
-                siblingPacks={items.map((i) => ({
-                  id: i.id,
-                  packQty: i.packQty ?? null,
-                  packSize: i.packSize ?? null,
-                  packUom: i.packUom ?? null,
-                  usd12m: i.usd12m,
-                }))}
-                blendPerBase={blendPerBase}
-              />
-            ) : null}
-
-            {!itemIsAway(item) ? (
-              <PanelItemZone
-                item={item}
-                ingredient={ingredient}
-                packHint={packHint}
-                onDone={onDone}
-                showStatusActions={showStatusActions}
-              />
-            ) : null}
-          </div>
-        ) : null}
-
-        {/* T6 round 2 item 4: zone 2 only renders when the item is
-            not away. Ingredient mode (no item) still renders the
-            full editor. For an unmatched item (ingredient is null),
-            PanelIngredientZonePending speaks the reference's words
-            (item 6). */}
-        {open.kind === "item" && item && itemIsAway(item) ? null : ingredient ? (
-          <PanelIngredientZone
-            ingredient={ingredient}
+          <ItemPanelBody
+            key={item.id}
             item={item}
+            ingredient={ingredient}
+            items={items}
+            parents={parents}
             parentOptions={parentOptions}
-            onDone={onDone}
-            measureOpen={measureOpen}
-            costedPerFocusNonce={costedPerFocusNonce}
-            suggestionCandidates={items
-              .filter((i) => i.packQty != null && i.packSize != null && i.packUom != null)
-              .map((i) => ({
-                id: i.id,
-                packQty: i.packQty ?? null,
-                packSize: i.packSize ?? null,
-                packUom: i.packUom ?? null,
-                usd12m: i.usd12m,
-              }))}
-            itemsReachBase={items.every((i) => (i.statusKind ?? "in_blend") !== "needs_measure")}
-          />
-        ) : (
-          <PanelIngredientZonePending
-            item={open.kind === "item" ? item : null}
+            onLoadParents={onLoadParents}
             proposedName={proposedName ?? null}
             proposedParent={proposedParent ?? null}
+            onDone={onDone}
+            showStatusActions={showStatusActions}
+            blendPerBase={blendPerBase}
           />
-        )}
+        ) : (
+          /* Ingredient-mode open: no item identity to key on. The
+             ingredient zone and the two closed rows (retail + merge)
+             bind their state to the ingredient prop as before. */
+          <>
+            {ingredient ? (
+              <PanelIngredientZone
+                ingredient={ingredient}
+                item={null}
+                parentOptions={parentOptions}
+                onDone={onDone}
+                suggestionCandidates={[]}
+                itemsReachBase={true}
+              />
+            ) : (
+              <PanelIngredientZonePending
+                item={null}
+                proposedName={proposedName ?? null}
+                proposedParent={proposedParent ?? null}
+              />
+            )}
 
-        <PanelClosedRows
-          item={item}
-          ingredient={ingredient}
-          parents={parents}
-          onLoadParents={onLoadParents}
-          onDone={onDone}
-          // T6 round 2 item 5: on an item-mode open the closed rows
-          // show only the four folds; Mark-as-retail + Merge stay on
-          // the ingredient panel.
-          mode={open.kind === "item" ? "item" : "ingredient"}
-        />
+            <PanelClosedRows
+              item={null}
+              ingredient={ingredient}
+              parents={parents}
+              onLoadParents={onLoadParents}
+              onDone={onDone}
+              mode="ingredient"
+            />
+          </>
+        )}
 
         {/* T6 ruling 2: the footer is removed entirely. Archive and
             Mark one-off ride at the end of zone 1 as a "Put this
@@ -468,7 +422,17 @@ export function DetailPanel({
                   ref={keepEditingRef}
                   type="button"
                   className="kf-btn kf-btn--primary kf-btn--sm"
-                  onClick={() => { setDiscardAskOpen(false); setPendingStep(null); }}
+                  onClick={() => {
+                    setDiscardAskOpen(false);
+                    setPendingStep(null);
+                    // T6 round 4 small 1: return focus to the field
+                    // the person was in when the ask opened. Micro-
+                    // task so this ask's buttons have unmounted by
+                    // the time we focus.
+                    window.setTimeout(() => {
+                      panelAskLastFocusRef.current?.focus();
+                    }, 0);
+                  }}
                 >
                   Keep editing
                 </button>
@@ -514,6 +478,131 @@ export function DetailPanel({
 function itemIsAway(item: ReviewGroupItem): boolean {
   const s = item.state ?? "";
   return s === "archived" || s === "one_off" || s === "not_food" || s === "duplicate";
+}
+
+// T6 round 4 item 1: everything below the panel head for an item.
+// Owns the three pieces of state that bridge PanelAttention ->
+// PanelItemZone (packHint) and PanelAttention -> PanelIngredientZone
+// (measureOpen + costedPerFocusNonce). DetailPanel mounts
+// `<ItemPanelBody key={item.id}>` so a Prev / Next step remounts the
+// WHOLE body: state held here, state held in each editor, draft
+// lists in the measures block, open / ask / savedAt flags - all of
+// them reset without any per-slot reset code. Measure editor state
+// is covered too because PanelIngredientZone (and the measures block
+// inside it) now lives inside this body.
+function ItemPanelBody({
+  item,
+  ingredient,
+  items,
+  parents,
+  parentOptions,
+  onLoadParents,
+  proposedName,
+  proposedParent,
+  onDone,
+  showStatusActions,
+  blendPerBase,
+}: {
+  item: ReviewGroupItem;
+  ingredient: ReviewCardIngredient | null;
+  items: ReviewGroupItem[];
+  parents: ReviewCardIngredient[];
+  parentOptions: string[];
+  onLoadParents?: () => Promise<ReviewCardIngredient[]>;
+  proposedName: string | null;
+  proposedParent: string | null;
+  onDone: () => void;
+  showStatusActions: boolean;
+  blendPerBase: number | null;
+}) {
+  // Pack-hint from PanelAttention's "Fix the pack" button; threaded
+  // into PanelItemZone which forces the Pack and price row open.
+  const [packHint, setPackHint] = useState<PackHint | null>(null);
+  // M2 §4B part 3 fix 6: Attention -> measures block bus. "Add a
+  // measure" sets an open-with-uom + prefill bump; "Change Costed
+  // per" bumps a nonce that PanelIngredientZone watches to scroll +
+  // focus the control. pickUnit mirrors the needs_measure path.
+  const [measureOpen, setMeasureOpen] = useState<{ uom: string; qty: number | null; pickUnit: boolean; nonce: number } | null>(null);
+  const [costedPerFocusNonce, setCostedPerFocusNonce] = useState(0);
+
+  const away = itemIsAway(item);
+
+  return (
+    <>
+      {away ? <AwayBar item={item} onDone={onDone} /> : null}
+
+      <PanelStrip item={item} ingredient={ingredient} />
+
+      {!away ? (
+        <PanelAttention
+          item={item}
+          ingredient={ingredient}
+          onFixPack={(uom) => setPackHint({ uom, nonce: Date.now() })}
+          onAddMeasure={(uom, qty) => setMeasureOpen({ uom, qty: qty ?? null, pickUnit: qty == null, nonce: Date.now() })}
+          onChangeCostedPer={() => setCostedPerFocusNonce((n) => n + 1)}
+          siblingPacks={items.map((i) => ({
+            id: i.id,
+            packQty: i.packQty ?? null,
+            packSize: i.packSize ?? null,
+            packUom: i.packUom ?? null,
+            usd12m: i.usd12m,
+          }))}
+          blendPerBase={blendPerBase}
+        />
+      ) : null}
+
+      {!away ? (
+        <PanelItemZone
+          item={item}
+          ingredient={ingredient}
+          packHint={packHint}
+          onDone={onDone}
+          showStatusActions={showStatusActions}
+        />
+      ) : null}
+
+      {/* T6 round 2 item 4: zone 2 only renders when the item is
+          not away. For an unmatched item (ingredient is null),
+          PanelIngredientZonePending speaks the reference's words
+          (item 6). T6 round 4 item 1: the zone now lives inside
+          ItemPanelBody so its measure editor remounts on a step. */}
+      {away ? null : ingredient ? (
+        <PanelIngredientZone
+          ingredient={ingredient}
+          item={item}
+          parentOptions={parentOptions}
+          onDone={onDone}
+          measureOpen={measureOpen}
+          costedPerFocusNonce={costedPerFocusNonce}
+          suggestionCandidates={items
+            .filter((i) => i.packQty != null && i.packSize != null && i.packUom != null)
+            .map((i) => ({
+              id: i.id,
+              packQty: i.packQty ?? null,
+              packSize: i.packSize ?? null,
+              packUom: i.packUom ?? null,
+              usd12m: i.usd12m,
+            }))}
+          itemsReachBase={items.every((i) => (i.statusKind ?? "in_blend") !== "needs_measure")}
+        />
+      ) : (
+        <PanelIngredientZonePending
+          item={item}
+          proposedName={proposedName}
+          proposedParent={proposedParent}
+        />
+      )}
+
+      <PanelClosedRows
+        item={item}
+        ingredient={ingredient}
+        parents={parents}
+        onLoadParents={onLoadParents}
+        onDone={onDone}
+        mode="item"
+      />
+    </>
+  );
 }
 
 function AwayBar({ item, onDone }: { item: ReviewGroupItem; onDone: () => void }) {
