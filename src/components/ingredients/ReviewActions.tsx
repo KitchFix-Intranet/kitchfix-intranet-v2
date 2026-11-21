@@ -16,7 +16,11 @@ import {
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtUsd, fmtUsdLong } from "@/lib/fmt";
 import {
-  SUPER_CATEGORIES, categoryForParent, inferBaseUnit, type SuperCategory,
+  SUPER_CATEGORIES,
+  CATEGORY_BY_PARENT,
+  categoryForParent,
+  inferBaseUnit,
+  type SuperCategory,
 } from "@/lib/ingredients/categories";
 import { uomLabel } from "@/lib/ingredients/pack";
 import { canonicalIngredientName } from "@/lib/ingredients/nameNorm";
@@ -236,13 +240,39 @@ export function ReviewActions({
   // into the next plain Create.
   const [createIntent, setCreateIntent] = useState<"confirm" | "retail">("confirm");
 
-  // Parents available for the sub dropdown: distinct parents from the
-  // active ingredients list. Deduped + sorted.
+  // Parents available for the sub dropdown.
+  // T7 item 9: the New ingredient panel's sub-category list follows
+  // the chosen super-category - the same shape the drawer's
+  // Category row already uses (via CATEGORY_BY_PARENT). When the
+  // user has not picked a category yet, every parent is offered so
+  // the drawer stays usable before the category is set. Any parent
+  // the ingredients list carries that is not yet mapped in
+  // CATEGORY_BY_PARENT stays visible so a legacy custom sub-
+  // category does not disappear on its own card. Changing the
+  // super-category clears a sub that no longer belongs to it.
   const parentOptions = useMemo(() => {
     const set = new Set<string>();
     for (const i of ingredients) if (i.parent && i.parent.trim().length > 0) set.add(i.parent);
-    return Array.from(set).sort();
-  }, [ingredients]);
+    const all = Array.from(set).sort();
+    if (!newSuper) return all;
+    return all.filter((p) => {
+      const mapped = CATEGORY_BY_PARENT[p];
+      if (mapped === newSuper) return true;
+      if (mapped) return false;
+      return true;
+    });
+  }, [ingredients, newSuper]);
+  // T7 item 9: when the user flips super-category, clear a sub that
+  // no longer belongs to it. Unmapped (custom) subs survive. One
+  // small useEffect - the picker's value is a controlled select so
+  // leaving a stale string shows as a blank option.
+  useEffect(() => {
+    if (!newSuper) return;
+    if (!subPick) return;
+    const mapped = CATEGORY_BY_PARENT[subPick];
+    if (mapped && mapped !== newSuper) setSubPick("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newSuper]);
 
   const noneChecked = checkedCount === 0;
   const effectiveSub =

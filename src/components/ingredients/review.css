@@ -165,7 +165,10 @@
 .kf-rvc__totals strong {
   font-family: var(--sp-disp);
   font-weight: 800;
-  font-size: var(--sp-t-num);
+  /* T7 item 10b / ruling 7: 28 -> 24 so the Review queue screen
+   * draws at most five sizes (12, 13, 14.5, 16, 24), matching
+   * the reference's desk floor. */
+  font-size: var(--sp-t-title);
   line-height: 1;
   color: var(--sp-ink);
   font-variant-numeric: tabular-nums;
@@ -843,7 +846,11 @@
   color: var(--sp-navy);
   font-family: var(--sp-disp);
   font-weight: 800;
-  font-size: var(--sp-t-h3);
+  /* T7 item 10b / ruling 7: 20 -> 16 so the Review queue screen
+   * keeps to five sizes (12, 13, 14.5, 16, 24). The panel heading
+   * reads as a strong body line, matching the reference's vLedger()
+   * heading shape. */
+  font-size: var(--sp-t-body);
   line-height: 1;
   text-transform: uppercase;
 }
@@ -1014,6 +1021,15 @@
 .kf-rvc__panel-note b { font-weight: 800; }
 .kf-rvc__panel-note--warn { background: var(--sp-warn-bg); color: var(--sp-ink); }
 .kf-rvc__panel-note--warn svg { color: var(--sp-warn); }
+/* T7 R2 item 8: panel-note--info is used in ReviewActions.tsx for
+ * the quiet-context note (e.g. "What happens next") that reads the
+ * same as .kf-rvc__panel-note's base but with a sky tone to say
+ * "this is a heads-up, not a warning." Base already paints a sky
+ * background via --sp-sky-bg; the modifier only re-states that so a
+ * future reader can see the tone in the class name without hunting
+ * for the base rule. */
+.kf-rvc__panel-note--info { background: var(--sp-sky-bg); color: var(--sp-ink); }
+.kf-rvc__panel-note--info svg { color: var(--sp-navy); }
 
 /* Picked-ingredient card for Relink's commit state (frame G). */
 .kf-rvc__panel-picked {

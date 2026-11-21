@@ -1319,6 +1319,13 @@
  * (closed state) and anywhere else a bordered button would be too
  * heavy for a quiet entry. */
 .kf-ipanel__link {
+  /* T7 item 10a: the "This case is a different size" trigger
+   * lives in the quiet-link register (text with an underline), but
+   * its tap target needs to meet the 44 px floor as train 5a did
+   * for its chips. A ::before pseudo-element extends the hit box
+   * without changing the text's height, so the row still reads as
+   * one line but the click target is the whole 44 px band. */
+  position: relative;
   appearance: none;
   background: transparent;
   border: 0;
@@ -1332,8 +1339,14 @@
   text-underline-offset: 2px;
   cursor: pointer;
 }
+.kf-ipanel__link::before {
+  content: "";
+  position: absolute;
+  inset: calc((44px - 1em * 1.5) / -2) calc(var(--sp-sp-1) * -1);
+}
 .kf-ipanel__link:hover { color: var(--sp-navy); }
 .kf-ipanel__link:disabled { color: var(--sp-muted); cursor: not-allowed; }
+.kf-ipanel__link:disabled::before { pointer-events: none; }
 
 /* Math echo span inside "How we got there". Monospace feel without
  * switching families; muted ink with slight contrast on the numbers. */

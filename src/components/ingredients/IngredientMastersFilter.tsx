@@ -21,7 +21,7 @@
 // fact labels in IngredientMasters.tsx are a separate ask.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
   Check,
@@ -31,6 +31,7 @@ import { SortMenu, type SortKey } from "./SortMenu";
 import { toast } from "@/components/ui/Toaster";
 import { fmtCount, fmtUsd, fmtUsdLong } from "@/lib/fmt";
 import { ItemPanelById } from "./ItemPanelById";
+import { DetailPanel } from "./DetailPanel";
 import { loadParents as loadParentsFromStore } from "./parentsStore";
 import { SUPER_CATEGORIES } from "@/lib/ingredients/categories";
 import { canonicalFromBaseUnit, uomLabel } from "@/lib/ingredients/pack";
@@ -45,11 +46,9 @@ import {
   type Measure,
 } from "@/lib/ingredients/measures";
 import { SPREAD_RATIO_MAX } from "@/lib/ingredients/blend";
-import { RowSendBackButton } from "./RowSendBackButton";
-import { RowGradeToggle } from "./RowGradeToggle";
-import { PanelIngredientZone } from "./panel/PanelIngredientZone";
-import { PanelClosedRows } from "./panel/PanelClosedRows";
 import { postJson, saveErrorSentence } from "./panel/common";
+import { packInUseText } from "./panel/packHelpers";
+import { fmtPackNumbersInText } from "@/lib/fmt";
 import { useSaveWithRefresh } from "./panel/useSaveWithRefresh";
 import type { ReviewCardIngredient } from "./itemTypes";
 import "./ingredients-tab.css";
@@ -96,6 +95,14 @@ export type MasterLinkedItem = {
   packSize: number | null;
   packUom: string | null;
   caseWeightLb: number | null;
+  // T7 ruling 3: the four columns the loader widened for. itemNumber
+  // feeds the search ("Has item number ...") and the Pack column of
+  // the linked-items table; lastSeen feeds Last bought; catchWeight
+  // labels the sub-line; packText is the pack-as-written echo.
+  itemNumber: string | null;
+  lastSeen: string | null;
+  catchWeight: boolean;
+  packText: string | null;
 };
 
 export type MasterRow = {
@@ -169,24 +176,41 @@ function uomOrUnit(uom: string | null): string {
   return uom ? uomLabel(uom) : "unit";
 }
 
+// T7 item 5: "A blank is never shown as a fact." The three readers
+// below name every empty value in words a person can read, as the
+// reference's allergenWords() and reachWords() have them.
+function allergenWords(row: MasterRow): string {
+  if (row.allergensReviewedAt == null) return "not checked";
+  if (!row.allergens || row.allergens.length === 0) return "none";
+  return row.allergens.join(", ");
+}
+
+function reachWords(row: MasterRow): string {
+  const base = canonicalFromBaseUnit(row.baseUnit);
+  if (!base) return "any unit";
+  const reachable = Array.from(
+    reachableUnits([base], { measures: row.measures as Measure[] }),
+  );
+  if (reachable.length === 0) return `only ${uomLabel(base)}`;
+  const order: readonly string[] = ["LB", "OZ", "EA", "FLOZ", "GAL"];
+  const picked = order.filter((u) => reachable.includes(u));
+  if (picked.length === 0) return `only ${uomLabel(base)}`;
+  return picked.map((u) => uomLabel(u)).join(", ");
+}
+
 // N12 round 2 fix 14: $0.00 reads as noise next to the pane head's
 // "- a year"; prefer "$0". fmtUsd stays untouched for other callers.
 function fmtMoney(n: number): string {
   return n === 0 ? "$0" : fmtUsd(n);
 }
 
-function matches(row: MasterRow, needle: string): boolean {
-  if (!needle) return true;
-  const n = needle.toLowerCase();
-  if (row.name.toLowerCase().includes(n)) return true;
-  if (row.parent && row.parent.toLowerCase().includes(n)) return true;
-  if (row.category && row.category.toLowerCase().includes(n)) return true;
-  for (const li of row.linkedItems) {
-    if (li.name.toLowerCase().includes(n)) return true;
-    if (li.vendor.toLowerCase().includes(n)) return true;
-  }
-  return false;
-}
+// T7 ruling 3 + item 5: matchField + matches live in matchField.ts so
+// scripts/ can import them under tsx without pulling CSS. The pure
+// function returns which field hit; the boolean wrapper is for the
+// filter step.
+import { matchField, matches, type MasterMatch } from "./matchField";
+export { matchField };
+export type { MasterMatch };
 
 // N12 §R1: price-sub precedence on the row. First match wins.
 // T6 §1: the warn branch of the spread sub-line names the same
@@ -250,41 +274,64 @@ function stripDerivedSub(_row: MasterRow, _active: LensStats): string | null {
 export function IngredientMastersFilter({
   rows,
   mode = "recipe",
-  initialOpenId = null,
+  initialOpenId: _initialOpenId = null,
 }: {
   rows: MasterRow[];
   mode?: "recipe" | "resale";
-  // T6 ruling 3: ?open=<ingredient id> handshake. When the id is on
-  // the loaded rows we seed the selection; the detail pane opens on
-  // mount and the row is scrolled into view by the existing
-  // selection effect. Unknown / retired id falls through to the
-  // default (no selection).
+  // T7 ruling 4 retires the server-seeded initialOpenId: the whole
+  // address (open, drawer, edit, q, sort, cat, attn, alg, empty,
+  // lens, unit) now feeds through useSearchParams, so a reload, a
+  // Back and a Forward each return the same screen without a prop.
   initialOpenId?: string | null;
 }) {
-  const [query, setQuery] = useState("");
-  const [sort, setSort] = useState<SortMode>("spend");
-  const [superCat, setSuperCat] = useState<string | "all">("all");
-  const [onlyFlagged, setOnlyFlagged] = useState(false);
-  const [onlyUnreviewed, setOnlyUnreviewed] = useState(false);
-  const [onlyEmpty, setOnlyEmpty] = useState(false);
-  // T6 ruling 3: seed the selection from the URL on first mount when
-  // the id matches a loaded row. useState initializer runs once, so
-  // this only fires at mount and never fights a subsequent user
-  // selection.
-  const [selId, setSelId] = useState<string | null>(() => {
-    if (initialOpenId && rows.some((r) => r.id === initialOpenId)) {
-      return initialOpenId;
-    }
-    return null;
-  });
-  const [paneOpen, setPaneOpen] = useState<boolean>(() =>
-    initialOpenId != null && rows.some((r) => r.id === initialOpenId),
-  );
-  const [openItemId, setOpenItemId] = useState<string | null>(null);
-  // Train 5a / F22: "/" focus and Esc clear live inside the shared
-  // Search component now; this file keeps no input ref or hotkey.
+  const router = useRouter();
+  const params = useSearchParams();
 
-  const trimmed = query.trim();
+  // T7 ruling 4: patch one or more address keys at once. push is the
+  // default (clicks add history); replace is for arrow keys / typing
+  // / the filter chips / Prev-Next steps / lens + unit. An absent key
+  // defaults, so a plain /stockpot/ingredients is a bare URL.
+  const push = useCallback(
+    (patch: Record<string, string | null>, mode: "push" | "replace" = "push") => {
+      const next = new URLSearchParams(params.toString());
+      for (const [k, v] of Object.entries(patch)) {
+        if (v == null || v === "") next.delete(k);
+        else next.set(k, v);
+      }
+      const qs = next.toString();
+      const href = qs ? `?${qs}` : "?";
+      if (mode === "replace") router.replace(href);
+      else router.push(href);
+    },
+    [params, router],
+  );
+
+  // --- read every key out of the URL (the only source of truth) ---
+  const urlOpen = params.get("open");
+  const urlDrawer = params.get("drawer");
+  const urlEdit = params.get("edit") === "1";
+  const urlQ = params.get("q") ?? "";
+  const urlSortRaw = params.get("sort");
+  const sort: SortMode =
+    urlSortRaw === "name" || urlSortRaw === "items" || urlSortRaw === "spread"
+      ? urlSortRaw
+      : "spend";
+  const urlCatRaw = params.get("cat");
+  const superCat: string = urlCatRaw && SUPER_CATEGORIES.includes(urlCatRaw as (typeof SUPER_CATEGORIES)[number]) ? urlCatRaw : "all";
+  const onlyFlagged = params.get("attn") === "1";
+  const onlyUnreviewed = params.get("alg") === "1";
+  const onlyEmpty = params.get("empty") === "1";
+
+  // Validate `open` against the loaded rows: an unknown / retired id
+  // drops to no-selection, as ruling 4 says.
+  const selId = urlOpen && rows.some((r) => r.id === urlOpen) ? urlOpen : null;
+  const paneOpen = selId != null;
+  const openItemId = urlDrawer;
+
+  // The search input is the only key that holds a local draft: the
+  // Search component debounces its commit by 250 ms and the URL only
+  // moves after the wait. Mirroring Vendor items.
+  const trimmed = urlQ.trim();
   const filtered = useMemo(() => {
     let out = rows;
     if (trimmed) out = out.filter((r) => matches(r, trimmed));
@@ -363,17 +410,9 @@ export function IngredientMastersFilter({
   const anyFilterActive =
     trimmed.length > 0 || superCat !== "all" || onlyFlagged || onlyUnreviewed || onlyEmpty;
 
-  // T3 R2-2: releaseSticky is gone. The hold is a separate state
-  // cleared by the filter-change effect above. Filter / sort handlers
-  // need no extra call; selId stays. clearAll resets filters and
-  // focuses the search - the effect's filterKey change clears the
-  // hold.
+  // T7 ruling 4: clearAll wipes every filter + search in one patch.
   function clearAll() {
-    setQuery("");
-    setSuperCat("all");
-    setOnlyFlagged(false);
-    setOnlyUnreviewed(false);
-    setOnlyEmpty(false);
+    push({ q: null, cat: null, attn: null, alg: null, empty: null }, "replace");
   }
 
   // When the user picks a row that lives in the filtered set, scroll
@@ -385,10 +424,59 @@ export function IngredientMastersFilter({
     el?.scrollIntoView({ block: "nearest" });
   }, [selId]);
 
-  function onSelectRow(id: string) {
-    setSelId(id);
-    setPaneOpen(true);
+  // T7 ruling 4 + R2 item 7: a click pushes (new history); arrow
+  // keys replace. Opening the drawer or the item panel pushes;
+  // CLOSING either replaces, so Back lands on the previous
+  // selection rather than reopening the panel the user just closed.
+  // Opening either also drops the other key in the same patch so
+  // the two are never both in the address.
+  function selectRow(id: string, mode: "push" | "replace" = "push") {
+    push({ open: id }, mode);
   }
+  function openEditor() {
+    push({ edit: "1", drawer: null });
+  }
+  function closeEditor() {
+    push({ edit: null }, "replace");
+  }
+  function openItemPanel(id: string) {
+    push({ drawer: id, edit: null });
+  }
+  function closeItemPanel() {
+    push({ drawer: null }, "replace");
+  }
+  function stepItemPanel(nextId: string) {
+    push({ drawer: nextId }, "replace");
+  }
+
+  // T7 R2 item 7: scrub invalid state in the address so a copied
+  // link is clean. An unknown / retired `open` drops to no
+  // selection; when `open` is invalid, `edit` and `drawer` also
+  // drop (they only make sense on a selected ingredient). When
+  // BOTH `edit` and `drawer` are set, the ingredient drawer wins
+  // and `drawer` drops (ruling: edit beats drawer). Dropped keys
+  // leave the address via a replace so Back is unaffected.
+  useEffect(() => {
+    const patch: Record<string, string | null> = {};
+    let dirty = false;
+    if (urlOpen && urlOpen !== selId) {
+      // The id a link carried did not resolve against the loaded
+      // rows; drop it + the two dependent keys.
+      patch.open = null;
+      dirty = true;
+      if (urlEdit) { patch.edit = null; }
+      if (urlDrawer) { patch.drawer = null; }
+    }
+    if (!selId) {
+      if (urlEdit) { patch.edit = null; dirty = true; }
+      if (urlDrawer) { patch.drawer = null; dirty = true; }
+    } else if (urlEdit && urlDrawer) {
+      patch.drawer = null;
+      dirty = true;
+    }
+    if (dirty) push(patch, "replace");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlOpen, selId, urlEdit, urlDrawer]);
 
   // Parent options for the Category row's "pick existing" select
   // inside PanelIngredientZone (same shape the drawer provided).
@@ -442,34 +530,87 @@ export function IngredientMastersFilter({
     return loadParentsFromStore(selectedId);
   }, [selectedId]);
 
+  // T7 R2 item 2: Send back + Undo.
+  // - One press, one post: the row's SendBackCell owns busy state
+  //   and disables its own button while onSendBack is in flight.
+  // - A failed Send back says so in the row (train 2's three
+  //   sentences) and fires no toast (PR78: a failure that has a
+  //   place in the page fires no toast). The button comes back.
+  // - Undo works for as long as its toast is shown, wherever the
+  //   person is. The toast captures the item and the ingredient
+  //   at the moment of the click (closure); the previous
+  //   generation check is gone - the toaster already dismisses
+  //   its own undo handle when the toast closes.
+  async function onSendBack(
+    itemId: string,
+    itemName: string,
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    if (!selectedId) return { ok: false, error: "Nothing was saved." };
+    const ingredientAtClickId = selectedId;
+    const r = await postJson("/api/review/undo", { itemId });
+    if (!r.ok) {
+      return { ok: false, error: saveErrorSentence(r) ?? "Nothing was saved." };
+    }
+    router.refresh();
+    toast(`Sent ${itemName} back`, {
+      tone: "good",
+      undo: async () => {
+        const u = await postJson("/api/review/confirm", {
+          ingredientId: ingredientAtClickId,
+          itemIds: [itemId],
+        });
+        if (!u.ok) throw new Error(saveErrorSentence(u) ?? "Nothing was saved.");
+        router.refresh();
+      },
+    });
+    return { ok: true };
+  }
+
   return (
     <div className={`kf-ingp__workspace${paneOpen ? " kf-ingp__workspace--detail-open" : ""}`}>
-      {/* --- Toolbar -------------------------------------------- */}
+      {/* --- Toolbar (T7 R2 item 3 - ported from part C's
+          .kf-toolbar): one row of search + Sort + count, the next
+          of category chips alongside Show-only switches. */}
       <div className="kf-ingp__tools">
-        {/* Train 5a / F22: shared Search. "/" focuses, Esc clears,
-            filters as you type. Placeholder names what this tab
-            actually searches. */}
-        <Search
-          kind="controlled"
-          value={query}
-          onChange={(v) => setQuery(v)}
-          placeholder={
-            mode === "resale"
-              ? "Filter retail by name, linked vendor or SKU"
-              : "Filter by name, parent, category, linked vendor or SKU"
-          }
-          label="Filter ingredients"
-        />
-
-        <div className="kf-ingp__filters">
-          <span className="kf-ingp__filters-label">Category</span>
+        <div className="kf-ingp__tools-row">
+          <Search
+            kind="debounced"
+            initial={urlQ}
+            onCommit={(v) => push({ q: v.trim() || null }, "replace")}
+            placeholder={
+              mode === "resale"
+                ? "Filter retail by name, linked vendor or SKU"
+                : "Filter by name, parent, category, linked vendor or SKU"
+            }
+            label="Filter ingredients"
+          />
+          <SortMenu
+            value={sort}
+            options={MASTERS_SORT_OPTIONS}
+            onChange={(v) => push({ sort: v === "spend" ? null : v }, "replace")}
+          />
+          {anyFilterActive ? (
+            <span className="kf-ingp__tools-count" role="status">
+              <b>{fmtCount(filtered.length)}</b> of <b>{fmtCount(rows.length)}</b>{" "}
+              {mode === "resale" ? "retail " : ""}
+              {rows.length === 1 ? "ingredient" : "ingredients"}
+            </span>
+          ) : (
+            <span className="kf-ingp__tools-count" role="status">
+              <b>{fmtCount(rows.length)}</b>{" "}
+              {mode === "resale" ? "retail " : ""}
+              {rows.length === 1 ? "ingredient" : "ingredients"}
+            </span>
+          )}
+        </div>
+        <div className="kf-ingp__tools-row kf-ingp__tools-row--chips">
           <div className="kf-chip-row" role="radiogroup" aria-label="Category filter">
             <button
               type="button"
               role="radio"
               aria-checked={superCat === "all"}
               className={`kf-chip${superCat === "all" ? " kf-chip--on" : ""}`}
-              onClick={() => { setSuperCat("all") }}
+              onClick={() => push({ cat: null }, "replace")}
             >
               All <span>{fmtCount(rows.length)}</span>
             </button>
@@ -483,21 +624,21 @@ export function IngredientMastersFilter({
                   role="radio"
                   aria-checked={superCat === cat}
                   className={`kf-chip${superCat === cat ? " kf-chip--on" : ""}`}
-                  onClick={() => { setSuperCat(cat) }}
+                  onClick={() => push({ cat }, "replace")}
                 >
                   {cat} <span>{fmtCount(n)}</span>
                 </button>
               );
             })}
           </div>
-
-          <span className="kf-ingp__filters-label">Show only</span>
-          <div className="kf-chip-row" role="radiogroup" aria-label="Attention filter">
+          {/* T7 R2 item 8: these three are independent switches, not
+              radio buttons. role="group" (not radiogroup). */}
+          <div className="kf-chip-row" role="group" aria-label="Show only">
             <button
               type="button"
               aria-pressed={onlyFlagged}
               className={`kf-chip kf-chip--warn${onlyFlagged ? " kf-chip--on" : ""}`}
-              onClick={() => { setOnlyFlagged((v) => !v) }}
+              onClick={() => push({ attn: onlyFlagged ? null : "1" }, "replace")}
               title="Ingredients with a spread, coverage, unit or outlier issue"
             >
               Needs attention <span>{fmtCount(needsCount)}</span>
@@ -506,8 +647,8 @@ export function IngredientMastersFilter({
               type="button"
               aria-pressed={onlyUnreviewed}
               className={`kf-chip${onlyUnreviewed ? " kf-chip--on" : ""}`}
-              onClick={() => { setOnlyUnreviewed((v) => !v) }}
-              title="Ingredients whose Top 9 allergens have not been reviewed"
+              onClick={() => push({ alg: onlyUnreviewed ? null : "1" }, "replace")}
+              title="Ingredients whose Top 9 allergens have not been checked"
             >
               Allergens to check <span>{fmtCount(unreviewedCount)}</span>
             </button>
@@ -515,7 +656,7 @@ export function IngredientMastersFilter({
               type="button"
               aria-pressed={onlyEmpty}
               className={`kf-chip${onlyEmpty ? " kf-chip--on" : ""}`}
-              onClick={() => { setOnlyEmpty((v) => !v) }}
+              onClick={() => push({ empty: onlyEmpty ? null : "1" }, "replace")}
               title="Ingredients with no live vendor items (candidates to retire)"
             >
               No items <span>{fmtCount(emptyCount)}</span>
@@ -535,39 +676,46 @@ export function IngredientMastersFilter({
 
       {/* --- Panes --------------------------------------------- */}
       <div className={`kf-ingp__panes${paneOpen ? " kf-ingp__panes--detail-open" : ""}`}>
-        {/* List pane */}
+        {/* List pane - T7 R2 item 3: a slim head carries the spend
+            total; Sort + the count moved to the toolbar above
+            (per vIngToolbar()). The list below has a column
+            header row of its own. */}
         <section className="kf-ingp__pane kf-ingp__pane--list" aria-label="Ingredient list">
           <div className="kf-ingp__list-head">
-            <div className="kf-ingp__list-head-title">
-              <h3>Ingredients</h3>
-              <span className="kf-ingp__list-head-sub">
-                {anyFilterActive ? (
-                  <>
-                    <b>{fmtCount(filtered.length)}</b> of <b>{fmtCount(rows.length)}</b> shown
-                    {" · "}
-                    <b>{fmtMoney(matchedUsd)}</b> a year
-                  </>
-                ) : (
-                  <>
-                    <b>{fmtCount(rows.length)}</b> shown · <b>{fmtMoney(totalUsd)}</b> a year
-                  </>
-                )}
-              </span>
-            </div>
-            {/* Train 5a / F23: shared SortMenu, same words as every tab. */}
-            <SortMenu
-              value={sort}
-              options={MASTERS_SORT_OPTIONS}
-              onChange={(v) => setSort(v)}
-            />
+            <span className="kf-ingp__list-head-sub">
+              {anyFilterActive ? (
+                <>
+                  <b>{fmtMoney(matchedUsd)}</b> a year
+                </>
+              ) : (
+                <>
+                  <b>{fmtMoney(totalUsd)}</b> a year
+                </>
+              )}
+            </span>
           </div>
 
-          <div className="kf-ingp__list-colhead">
-            <span>Ingredient</span>
-            <span>Price</span>
-            <span>12 mo</span>
-          </div>
+          {/* T7 R3 item 1: the column header row is gone. The row's
+              two-column grid (name | price above 12 months) is
+              self-labelling; vIngRow()/`.kf-row` has no colhead. */}
 
+          {/* T7 item 4 / F16: the list is ONE tab stop. Up / Down /
+              Home / End move the selection AND the detail follows;
+              typing in the search does not steal the arrows because
+              they are handled on the list, not the document. A skip
+              link above the list lets Tab jump past it into the
+              detail pane in reading order. */}
+          <a
+            href={selId ? `#detail-${selId}` : "#detail"}
+            className="kf-ingp__list-skip"
+            onClick={(e) => {
+              e.preventDefault();
+              const target = document.querySelector<HTMLElement>(".kf-ingp__dhead-acts button");
+              target?.focus();
+            }}
+          >
+            Skip to detail
+          </a>
           <div className="kf-ingp__pane-scroll">
             {filtered.length === 0 ? (
               <div className="kf-ingp__list-empty">
@@ -582,50 +730,83 @@ export function IngredientMastersFilter({
                 </button>
               </div>
             ) : (
-              <ul className="kf-ingp__list">
+              <ul
+                className="kf-ingp__list"
+                role="listbox"
+                tabIndex={0}
+                aria-label="Ingredients. Use the arrow keys."
+                aria-activedescendant={selected ? `opt-${selected.id}` : undefined}
+                onKeyDown={(e) => {
+                  if (filtered.length === 0) return;
+                  const idx = Math.max(0, filtered.findIndex((r) => r.id === selected?.id));
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    const nextRow = filtered[Math.min(filtered.length - 1, idx + 1)];
+                    if (nextRow) selectRow(nextRow.id, "replace");
+                  } else if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    const prevRow = filtered[Math.max(0, idx - 1)];
+                    if (prevRow) selectRow(prevRow.id, "replace");
+                  } else if (e.key === "Home") {
+                    e.preventDefault();
+                    if (filtered[0]) selectRow(filtered[0].id, "replace");
+                  } else if (e.key === "End") {
+                    e.preventDefault();
+                    const lastRow = filtered[filtered.length - 1];
+                    if (lastRow) selectRow(lastRow.id, "replace");
+                  } else if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    if (selected) openEditor();
+                  }
+                }}
+              >
                 {filtered.map((row) => (
-                  <li key={row.id}>
-                    <IngredientRow
-                      row={row}
-                      selected={selected?.id === row.id}
-                      onSelect={() => onSelectRow(row.id)}
-                      registerRef={(el) => {
-                        if (el) rowRefs.current.set(row.id, el);
-                        else rowRefs.current.delete(row.id);
-                      }}
-                    />
-                  </li>
+                  <IngredientRow
+                    key={row.id}
+                    row={row}
+                    selected={selected?.id === row.id}
+                    match={matchField(row, trimmed)}
+                    onSelect={() => selectRow(row.id)}
+                    registerRef={(el) => {
+                      if (el) rowRefs.current.set(row.id, el);
+                      else rowRefs.current.delete(row.id);
+                    }}
+                  />
                 ))}
               </ul>
             )}
           </div>
         </section>
 
-        {/* Detail pane */}
-        <section className="kf-ingp__pane kf-ingp__pane--detail" aria-label="Ingredient detail">
+        {/* Detail pane. T7 ruling 5 + 8: the page has one scroll;
+            the detail flows with the page (no `kf-ingp__pane-scroll`
+            inner wrapper), and every editor lives in the drawer the
+            Edit button opens. Below 1100 the layout stacks and the
+            back link reads "All ingredients". */}
+        <section
+          id={selected ? `detail-${selected.id}` : "detail"}
+          className="kf-ingp__pane kf-ingp__pane--detail"
+          aria-label="Ingredient detail"
+        >
           {selected && selectedIngredient ? (
             <>
               <button
                 type="button"
                 className="kf-ingp__dback"
-                onClick={() => setPaneOpen(false)}
+                onClick={() => push({ open: null })}
               >
                 ‹ All ingredients
               </button>
-              <div className="kf-ingp__pane-scroll" key={selected.id}>
+              <div className="kf-ingp__dflow" key={selected.id}>
                 <DetailView
                   row={selected}
                   ingredient={selectedIngredient}
                   parentOptions={parentOptions}
-                  // T4 §3: DetailView's descendants (PanelIngredientZone,
-                  // PanelClosedRows) now route their saves through
-                  // useSaveWithRefresh, which fires router.refresh()
-                  // inside a transition and keeps the control busy
-                  // until the refresh has rendered. Nothing left for
-                  // the parent to do on onDone.
                   onDone={() => {}}
                   onLoadParents={loadParents}
-                  onOpenItem={(id) => setOpenItemId(id)}
+                  onOpenItem={(id) => openItemPanel(id)}
+                  onOpenEditor={openEditor}
+                  onSendBack={onSendBack}
                 />
               </div>
             </>
@@ -633,15 +814,54 @@ export function IngredientMastersFilter({
         </section>
       </div>
 
+      {/* T7 ruling 8: the ingredient drawer. One component, three
+          doors: Edit ingredient on this tab, the pencil on a review
+          card, and the item panel's Open ingredient link. Keyed on
+          the ingredient id so a step to another ingredient can
+          never leak one's typed state into another (GOTCHAS 26). */}
+      {urlEdit && selected && selectedIngredient ? (
+        <DetailPanel
+          key={selected.id}
+          open={{ kind: "ingredient" }}
+          onClose={closeEditor}
+          ingredient={selectedIngredient}
+          items={[]}
+          parents={[]}
+          parentOptions={parentOptions}
+          onLoadParents={loadParents}
+          onInvalidate={() => router.refresh()}
+          onFocusReturn={() => {
+            // Return focus to the Edit ingredient button that opened
+            // the drawer, so the keyboard loop closes cleanly.
+            document
+              .querySelector<HTMLElement>("[data-ing-editor-btn]")
+              ?.focus();
+          }}
+          // T7 R2 item 1: the drawer offers Send all back for a
+          // linked ingredient; MasterSendAllBackButton inside
+          // PanelClosedRows carries the ask + the batch post. The
+          // review card's pencil leaves this prop unset.
+          sendAllBack={
+            selected.linkedItems.length > 0
+              ? {
+                  masterName: selected.name,
+                  itemIds: selected.linkedItems.map((li) => li.id),
+                }
+              : undefined
+          }
+        />
+      ) : null}
+
       {/* T6 item 8 + round 2 item 2: Prev/Next within the open
           ingredient's linked items; focus returns to the row's name
-          button when the panel closes. */}
+          button when the panel closes. T7 ruling 4: step writes the
+          `drawer` key with replace; close drops it. */}
       {openItemId ? (
         <ItemPanelById
           itemId={openItemId}
-          onClose={() => setOpenItemId(null)}
+          onClose={closeItemPanel}
           neighborIds={selected ? selected.linkedItems.map((li) => li.id) : null}
-          onStep={(nextId) => setOpenItemId(nextId)}
+          onStep={stepItemPanel}
           onFocusReturn={(lastId) => {
             const el = document.querySelector<HTMLElement>(`[data-item-id="${lastId}"]`);
             if (el) {
@@ -663,50 +883,88 @@ export function IngredientMastersFilter({
 function IngredientRow({
   row,
   selected,
+  match,
   onSelect,
   registerRef,
 }: {
   row: MasterRow;
   selected: boolean;
+  // T7 ruling 3 + item 5: when the search matched an item (not the
+  // ingredient's own name), the row says which, as ingMatch() has
+  // it ("Has item number 12345" / "Has item: Olive Oil, 3 L").
+  match: MasterMatch;
   onSelect: () => void;
   registerRef: (el: HTMLButtonElement | null) => void;
 }) {
-  const priceSub = rowPriceSub(row);
+  // T7 R3 item 1: the quiet spread sub-line is retired from the
+  // row. The red "why" line covers the case that matters.
+  void rowPriceSub;
   const badges = row.issues
     .map((k) => ({ kind: k, label: ISSUE_BADGE[k] }))
     .filter((b): b is { kind: MasterIssue; label: string } => !!b.label);
 
-  const priceMain = row.avgPerBase != null
-    ? `${fmtUsd(row.avgPerBase)} / ${uomOrUnit(row.baseUom)}`
-    : `- / ${(row.baseUnit || "unit").toLowerCase()}`;
-
   const usdText = row.linkedCount > 0 ? fmtUsd(row.usd12m) : "-";
 
+  // T7 item 5 / E: a row says why in full. The reason a row needs
+  // attention has its own place and is never cut off. Pick the
+  // first issue (the most actionable per the issue order the server
+  // emits). Band + outlier read as "block" tone (red); everything
+  // else is "warn" (amber).
+  const topIssue = row.issues[0] ?? null;
+  const whyText = topIssue ? issueLineFor(row, topIssue) : null;
+  const moreCount = Math.max(0, row.issues.length - 1);
+  const whyTone: "warn" | "block" | null =
+    topIssue === "band" || topIssue === "outlier" ? "block" : topIssue ? "warn" : null;
+
+  // T7 ruling 3 + item 5 / call 20: "A search hit says why." If the
+  // search matched an item or a vendor (not the ingredient's own
+  // name / parent / category), tell the person which, and the item
+  // number when available.
+  const searchHitText =
+    match.kind === "hit" && match.field === "itemNumber" && match.item?.itemNumber
+      ? `Has item number ${match.item.itemNumber}`
+      : match.kind === "hit" && match.field === "item" && match.item
+        ? `Has item: ${match.item.name}`
+        : match.kind === "hit" && match.field === "vendor" && match.item
+          ? `Has vendor ${match.item.vendor}`
+          : null;
+
   return (
-    <button
-      ref={registerRef}
-      type="button"
+    <li
       className={`kf-ingp__row${row.issues.length > 0 ? " kf-ingp__row--att" : ""}${selected ? " kf-ingp__row--sel" : ""}`}
-      aria-current={selected ? "true" : undefined}
-      onClick={onSelect}
+      role="option"
+      id={`opt-${row.id}`}
+      aria-selected={selected}
     >
-      <div className="kf-ingp__row-name">
-        <span className="kf-ingp__row-name-main">{row.name}</span>
-        <span className="kf-ingp__row-sub">
-          <span>
-            {row.parent ?? (row.category ? row.category : "No category")}
-            {row.linkedCount > 0
-              ? ` · ${fmtCount(row.linkedCount)} item${row.linkedCount === 1 ? "" : "s"}`
-              : ""}
+      <button
+        ref={registerRef}
+        type="button"
+        className="kf-ingp__row-btn"
+        // T7 item 4: the list is one tab stop. Rows are NOT focusable
+        // on Tab; click + the parent's arrow handler do the work.
+        tabIndex={-1}
+        onClick={onSelect}
+      >
+        <div className="kf-ingp__row-name">
+          <span className="kf-ingp__row-name-main">{row.name}</span>
+          <span className="kf-ingp__row-sub">
+            <span>
+              {row.parent ?? (row.category ? row.category : "No category")}
+              {row.linkedCount > 0
+                ? ` · ${fmtCount(row.linkedCount)} item${row.linkedCount === 1 ? "" : "s"}`
+                : ""}
+            </span>
+            {row.resale ? <span className="kf-ingp__row-retail">Retail</span> : null}
+            {badges.map((b) => (
+              <span key={b.kind} className="kf-ingp__row-badge">{b.label}</span>
+            ))}
           </span>
-          {row.resale ? <span className="kf-ingp__row-retail">Retail</span> : null}
-          {badges.map((b) => (
-            <span key={b.kind} className="kf-ingp__row-badge">{b.label}</span>
-          ))}
-        </span>
-      </div>
-      <div className="kf-ingp__row-price">
-        <span className="kf-ingp__row-price-main">
+        </div>
+        <div className="kf-ingp__row-price">
+          {/* T7 R3 item 1: price on its own line. The old
+              row-price-sub (the quiet spread like "2.3x spread") is
+              removed from the markup; the attention line (row-why)
+              carries the red one via rankedIssues. */}
           {row.avgPerBase != null ? (
             <>
               <b>{fmtUsd(row.avgPerBase)}</b> / {uomOrUnit(row.baseUom)}
@@ -714,18 +972,51 @@ function IngredientRow({
           ) : (
             <>- / {(row.baseUnit || "unit").toLowerCase()}</>
           )}
-        </span>
-        {priceSub ? (
-          <span className={`kf-ingp__row-price-sub${priceSub.warn ? " kf-ingp__row-price-sub--warn" : ""}`}>
-            {priceSub.text}
+        </div>
+        <div className="kf-ingp__row-usd" aria-label={`12-month spend ${usdText}`}>
+          {usdText}
+        </div>
+        {/* T7 item 5: full-width "why" cell. Never cut off; ellipsis
+            is banned here. Search hits are on a line of their own
+            when present and win over the attention line. */}
+        {searchHitText ? (
+          <span className="kf-ingp__row-why kf-ingp__row-why--hit">
+            {searchHitText}
+          </span>
+        ) : whyText ? (
+          <span className={`kf-ingp__row-why${whyTone === "block" ? " kf-ingp__row-why--block" : ""}`}>
+            {whyText}
+            {moreCount > 0 ? `, and ${moreCount} more` : ""}
           </span>
         ) : null}
-      </div>
-      <div className="kf-ingp__row-usd" aria-label={`12-month spend ${usdText}`}>
-        {usdText}
-      </div>
-    </button>
+      </button>
+    </li>
   );
+}
+
+// T7 item 5 + reference issueLine(). Readable copy per issue kind,
+// so the row and the attention block tell the same story.
+function issueLineFor(row: MasterRow, k: MasterIssue): string {
+  const u = uomOrUnit(row.baseUom);
+  const n = row.linkedItems.filter((li) => li.statusKind === k as unknown as string).length;
+  if (k === "band") return `The price looks wrong for ${u}`;
+  if (k === "needs_measure") {
+    const c = row.linkedItems.filter((li) => li.statusKind === "needs_measure").length;
+    return `${fmtCount(Math.max(c, 1))} item${c === 1 ? " needs" : "s need"} a measure`;
+  }
+  if (k === "sizes_differ") return "The items are different sizes";
+  if (k === "outlier") {
+    const c = row.linkedItems.filter((li) => li.outlier).length;
+    return `${fmtCount(Math.max(c, 1))} item${c === 1 ? " is" : "s are"} priced far from the rest`;
+  }
+  if (k === "coverage") {
+    const un = Math.max(1, row.linkedCount - row.pricedCount);
+    return `${fmtCount(un)} of ${fmtCount(row.linkedCount)} item${row.linkedCount === 1 ? " has" : "s have"} no price`;
+  }
+  if (k === "spread") return `Prices are ${(row.spreadRatio ?? 0).toFixed(1)}x apart`;
+  if (k === "empty") return "No linked items";
+  void n;
+  return String(k);
 }
 
 // -------------------------------------------------------------------
@@ -734,18 +1025,32 @@ function IngredientRow({
 
 function DetailView({
   row,
-  ingredient,
-  parentOptions,
-  onDone,
-  onLoadParents,
+  ingredient: _ingredient,
+  parentOptions: _parentOptions,
+  onDone: _onDone,
+  onLoadParents: _onLoadParents,
   onOpenItem,
+  onOpenEditor,
+  onSendBack,
 }: {
   row: MasterRow;
   ingredient: ReviewCardIngredient;
+  // T7 ruling 8: the detail no longer mounts the editor zone, so the
+  // parentOptions / onDone / onLoadParents props that the in-page
+  // mount used are now unused here. The drawer (DetailPanel in
+  // ingredient mode) takes them from the same source.
   parentOptions: string[];
   onDone: () => void;
   onLoadParents: () => Promise<ReviewCardIngredient[]>;
   onOpenItem: (id: string) => void;
+  onOpenEditor: () => void;
+  // T7 R2 item 2: Send back returns its outcome so the row can
+  // decide what to show (a toast with Undo on success; an inline
+  // sentence on failure).
+  onSendBack: (
+    itemId: string,
+    itemName: string,
+  ) => Promise<{ ok: true } | { ok: false; error: string }>;
 }) {
   // N12 §2c.1: vendor count = distinct vendor names in linkedItems.
   const vendorCount = useMemo(() => {
@@ -754,27 +1059,46 @@ function DetailView({
     return set.size;
   }, [row.linkedItems]);
 
-  const [lens, setLens] = useState<"blended" | "standard" | "premium">("blended");
+  // T7 ruling 4: lens + unit live in the URL as replace keys so a
+  // reload / shared link lands on the same view. Lens / unit the
+  // current ingredient does not have falls back to its default.
+  const detailParams = useSearchParams();
+  const detailRouter = useRouter();
+  function pushDetail(patch: Record<string, string | null>) {
+    const next = new URLSearchParams(detailParams.toString());
+    for (const [k, v] of Object.entries(patch)) {
+      if (v == null || v === "") next.delete(k);
+      else next.set(k, v);
+    }
+    const qs = next.toString();
+    detailRouter.replace(qs ? `?${qs}` : "?");
+  }
   const populatedLenses = (["standard", "premium"] as const).filter(
     (k) => row.statsByLens[k].linkedCount > 0
   );
   const showLens = populatedLenses.length >= 2;
+  const urlLens = detailParams.get("lens");
+  const lens: "blended" | "standard" | "premium" =
+    urlLens === "standard" || urlLens === "premium" ? urlLens : "blended";
   const effectiveLens: "blended" | "standard" | "premium" = showLens ? lens : "blended";
   const active = row.statsByLens[effectiveLens];
 
   // M2 §4B part 3 fix 9 + polish fix 3: chip view switch. Chips are
   // the five intent units (lb, oz, each, fl oz, gal) in that order;
   // only those reachable from the ingredient's base unit (built-in
-  // same-dim + measures-bridged) render. No #10 can / g / kg / ct /
-  // dozen / pc. State resets per row.id (expand remount).
+  // same-dim + measures-bridged) render. T7 ruling 4: viewUom lives
+  // in the URL as `unit`. A unit the selected ingredient does not
+  // reach falls back to its base_unit canonical form.
   const baseCanonical = canonicalFromBaseUnit(row.baseUnit);
-  const [viewUom, setViewUom] = useState<string>(baseCanonical ?? "LB");
   const reachList = useMemo<string[]>(() => {
     if (!baseCanonical) return [];
     const set = reachableUnits([baseCanonical], { measures: row.measures as Measure[] });
     const order: readonly string[] = ["LB", "OZ", "EA", "FLOZ", "GAL"];
     return order.filter((u) => set.has(u));
   }, [baseCanonical, row.measures]);
+  const urlUnit = detailParams.get("unit");
+  const viewUom =
+    urlUnit && reachList.includes(urlUnit) ? urlUnit : (baseCanonical ?? "LB");
 
   const uom = viewUom && viewUom !== baseCanonical ? uomLabel(viewUom) : uomOrUnit(row.baseUom);
 
@@ -858,20 +1182,53 @@ function DetailView({
 
   return (
     <>
-      {/* Head */}
+      {/* Head - T7 ruling 8 (three doors, one drawer) + item 1: the
+          page is for reading. The eyebrow / name / one line of
+          facts live here; the Edit ingredient button opens the
+          drawer (one component, three doors - the pencil on a
+          review card and Open ingredient in the item panel are
+          the other two). */}
       <div className="kf-ingp__dhead">
-        <span className={`kf-ingp__dhead-eyebrow${(!row.category || !row.parent) ? " kf-ingp__dhead-eyebrow--warn" : ""}`}>
-          {row.category || "Needs category"}
-          {row.parent ? ` · ${row.parent}` : ""}
-        </span>
-        <h2>{row.name}</h2>
-        <div className="kf-ingp__dhead-meta">
-          <span>
-            <b>{fmtCount(row.linkedCount)}</b> vendor item{row.linkedCount === 1 ? "" : "s"}
-            {" · "}
-            <b>{fmtCount(vendorCount)}</b> vendor{vendorCount === 1 ? "" : "s"}
+        <div className="kf-ingp__dhead-body">
+          <span className={`kf-ingp__dhead-eyebrow${(!row.category || !row.parent) ? " kf-ingp__dhead-eyebrow--warn" : ""}`}>
+            {row.category || "Needs category"}
+            {row.parent ? ` · ${row.parent}` : ""}
+            {row.resale ? " · Retail" : ""}
           </span>
-          {row.resale ? <span className="kf-ingp__row-retail">Retail</span> : null}
+          <h2>{row.name}</h2>
+          <div className="kf-ingp__dhead-meta">
+            {/* T7 item 1: one summary line of the ingredient's own
+                facts, as vIngDetail() has it. Costed per / Priced
+                per (retail), yield (recipe only), allergens and
+                Recipes can use. Allergens read as words only; the
+                drawer edits them (ruling 1). */}
+            <span>
+              {row.resale ? "Priced per" : "Costed per"} <b>{uomOrUnit(row.baseUom)}</b>
+            </span>
+            {row.resale ? null : (
+              <span>
+                Yield <b>{row.yieldPct != null ? `${row.yieldPct}%` : "not set"}</b>
+              </span>
+            )}
+            <span>
+              Allergens <b>{allergenWords(row)}</b>
+            </span>
+            {row.resale ? null : (
+              <span>
+                Recipes can use <b>{reachWords(row)}</b>
+              </span>
+            )}
+          </div>
+        </div>
+        <div className="kf-ingp__dhead-acts">
+          <button
+            type="button"
+            className="kf-btn kf-btn--line kf-btn--sm"
+            onClick={onOpenEditor}
+            data-ing-editor-btn
+          >
+            Edit ingredient
+          </button>
         </div>
       </div>
 
@@ -888,7 +1245,7 @@ function DetailView({
                 key={u}
                 type="button"
                 className={`kf-chip${isActive ? " kf-chip--solid" : " kf-chip--line"}`}
-                onClick={() => setViewUom(u)}
+                onClick={() => pushDetail({ unit: u === baseCanonical ? null : u })}
                 aria-pressed={isActive}
               >
                 {/* Polish fix 3: chip label is the plain unit ("lb"),
@@ -906,8 +1263,34 @@ function DetailView({
           clipped, with a 44 px click target. */}
       <div className="kf-ipanel__strip kf-ingp__dzone-strip">
         <div className="kf-ipanel__strip-cell">
-          <span className="kf-ipanel__strip-label">
-            {effectiveLens === "blended" ? "Price" : effectiveLens === "standard" ? "Standard price" : "Premium price"}
+          {/* T7 R3 item 3: label + lens on one in-flow row so the
+              tile row sits at about 98 px instead of the old 154.
+              The wrapper span is the grid cell's first child; its
+              `margin-left: auto` on the lens pulls the menu to
+              the right of the label's row without an absolute
+              position (which overlapped the price in the earlier
+              test). The item panel's kf-ipanel__strip is not
+              touched (scoped through kf-ingp__dzone-strip only). */}
+          <span className="kf-ingp__dzone-strip-head">
+            <span className="kf-ipanel__strip-label">
+              {effectiveLens === "blended" ? "Price" : effectiveLens === "standard" ? "Standard price" : "Premium price"}
+            </span>
+            {showLens ? (
+              <label className="kf-ingp__lens">
+                <select
+                  value={effectiveLens}
+                  onChange={(e) => {
+                    const v = e.target.value as "blended" | "standard" | "premium";
+                    pushDetail({ lens: v === "blended" ? null : v });
+                  }}
+                  aria-label="Price lens"
+                >
+                  <option value="blended">Blended</option>
+                  <option value="standard">Standard</option>
+                  <option value="premium">Premium</option>
+                </select>
+              </label>
+            ) : null}
           </span>
           <span className="kf-ipanel__strip-value kf-ipanel__strip-value--accent">
             {stripPrice != null ? fmtUsd(stripPrice) : "-"}{" "}
@@ -919,22 +1302,6 @@ function DetailView({
               : "no priced items"}
             {derivedForStrip ? ` · ${derivedForStrip}` : ""}
           </span>
-          {showLens ? (
-            <label className="kf-ingp__lens">
-              <select
-                value={effectiveLens}
-                onChange={(e) => {
-                  const v = e.target.value as "blended" | "standard" | "premium";
-                  setLens(v);
-                }}
-                aria-label="Price lens"
-              >
-                <option value="blended">Blended</option>
-                <option value="standard">Standard</option>
-                <option value="premium">Premium</option>
-              </select>
-            </label>
-          ) : null}
         </div>
         <div className="kf-ipanel__strip-cell">
           <span className="kf-ipanel__strip-label">Spread</span>
@@ -980,31 +1347,24 @@ function DetailView({
 
       {/* Attention */}
       <div className="kf-ingp__dzone--attn-wrap">
-        <IngredientAttention row={row} onDone={onDone} />
+        <IngredientAttention row={row} onDone={_onDone} />
       </div>
 
-      {/* Ingredient zone (Name / Category / Costed per / One each is / Allergens) */}
-      <div className="kf-ingp__dzone">
-        <PanelIngredientZone
-          key={row.id}
-          ingredient={ingredient}
-          item={null}
-          parentOptions={parentOptions}
-          onDone={onDone}
-          suggestionCandidates={row.linkedItems
-            .filter((li) => li.packQty != null && li.packSize != null && li.packUom != null)
-            .map((li) => ({
-              id: li.id,
-              packQty: li.packQty ?? null,
-              packSize: li.packSize ?? null,
-              packUom: li.packUom ?? null,
-              usd12m: li.usd12m,
-            }))}
-          itemsReachBase={row.linkedItems.every((li) => li.statusKind !== "needs_measure")}
-        />
-      </div>
+      {/* T7 ruling 8: the Ingredient zone (Name / Category / Costed
+          per / Measures / Yield / Recipes can use / Allergens) and
+          the four folds (Retail / Merge / Send all back / Change
+          history) lived in the page until train 6. They moved
+          entirely into the ingredient drawer; a click on Edit
+          ingredient above opens it. Nothing editable is drawn here
+          any more. The page is for reading; the drawer is for
+          editing. */}
 
-      {/* Linked items */}
+      {/* Linked items - T7 item 6: the only table, LINKED_HEAD's
+          order: Item / Pack / Price / 12 months / Last bought /
+          Send back. Grade is a word in the row sub-line (ruling 6);
+          Send back acts at once with Undo (ruling 2). The table is
+          not inside a second scroller; it flows with the page
+          (ruling 5). */}
       <div className="kf-ingp__dzone kf-ingp__dzone--section">
         <div className="kf-ingp__dzone--section-head">
           <h3>Linked items · {fmtCount(row.linkedCount)}</h3>
@@ -1025,24 +1385,9 @@ function DetailView({
             viewUom={viewUom}
             viewUnitLabel={uom}
             repricedItems={repricedLinkedItems}
+            onSendBack={onSendBack}
           />
         )}
-      </div>
-
-      {/* Closed rows */}
-      <div className="kf-ingp__dzone kf-ingp__dzone--closed">
-        <PanelClosedRows
-          key={row.id}
-          item={null}
-          ingredient={ingredient}
-          parents={[]}
-          onLoadParents={onLoadParents}
-          sendAllBack={{
-            masterName: row.name,
-            itemIds: row.linkedItems.map((li) => li.id),
-          }}
-          onDone={onDone}
-        />
       </div>
     </>
   );
@@ -1374,12 +1719,17 @@ function LinkedItems({
   viewUom,
   viewUnitLabel,
   repricedItems,
+  onSendBack,
 }: {
   row: MasterRow;
   onOpenItem: (id: string) => void;
   viewUom: string;
   viewUnitLabel: string;
   repricedItems: Array<MasterLinkedItem & { viewPrice: number | null }>;
+  onSendBack: (
+    itemId: string,
+    itemName: string,
+  ) => Promise<{ ok: true } | { ok: false; error: string }>;
 }) {
   // N12 §R1 echo: lowest / highest tag among items IN THE BLEND
   // (priced in the ingredient's dimension through M2's priceInUnit).
@@ -1406,20 +1756,25 @@ function LinkedItems({
 
   return (
     <table className="kf-ingp__items">
+      {/* T7 item 6 / LINKED_COLS: Item flexes; Pack, Price, 12
+          months, Last bought get fixed widths; action is a narrow
+          column with an sr-only label. */}
       <colgroup>
         <col />
-        <col style={{ width: "150px" }} />
-        <col style={{ width: "112px" }} />
-        <col style={{ width: "76px" }} />
-        <col style={{ width: "104px" }} />
+        <col style={{ width: "19%" }} />
+        <col style={{ width: "15%" }} />
+        <col style={{ width: "12%" }} />
+        <col style={{ width: "13%" }} />
+        <col style={{ width: "96px" }} />
       </colgroup>
       <thead>
         <tr>
           <th>Item</th>
-          <th>Grade</th>
+          <th>Pack</th>
           <th className="kf-ingp__items-num">Price</th>
-          <th className="kf-ingp__items-num">12 mo</th>
-          <th aria-label="Actions" />
+          <th className="kf-ingp__items-num">12 months</th>
+          <th>Last bought</th>
+          <th><span className="kf-sr">Send back</span></th>
         </tr>
       </thead>
       <tbody>
@@ -1438,12 +1793,20 @@ function LinkedItems({
                 </button>
                 <span className="kf-ingp__item-sub">
                   {li.vendor}
+                  {li.itemNumber ? ` · item number ${li.itemNumber}` : " · no item number"}
+                  {/* T7 R2 item 6: "catch weight" lives on the Pack
+                      cell (the fact the price actually uses) and
+                      is not repeated here. */}
+                  {/* T7 ruling 6: Grade is a word in the sub-line,
+                      only when non-standard. */}
+                  {li.grade === "premium" ? (
+                    <>
+                      {" · "}
+                      <span className="kf-word--premium">Premium</span>
+                    </>
+                  ) : null}
                   {/* T3 §4: every row left out of the blend names why
-                      on the same sub-line, in the same style. Before
-                      this fix only needs_measure and outlier rows got
-                      a reason - sizes_differ rows read "0 of 6 priced
-                      - / each" above six rows showing prices with no
-                      explanation. */}
+                      on the same sub-line, in the same style. */}
                   {li.statusKind === "sizes_differ" ? (
                     <>
                       {" · "}
@@ -1472,7 +1835,31 @@ function LinkedItems({
                 </span>
               </td>
               <td>
-                <RowGradeToggle itemId={li.id} grade={li.grade} />
+                {/* T7 R2 item 6: show the pack the PRICE uses, not
+                    the pack as written. packInUseText reads
+                    packQty / packSize / packUom first (those are
+                    the columns a hand-set pack_override writes to),
+                    then falls back to the raw packText, then to
+                    "Pack not read". Same precedence the item
+                    panel's Pack fact applies via itemFacts.pack. */}
+                {(() => {
+                  const p = packInUseText({
+                    packQty: li.packQty,
+                    packSize: li.packSize,
+                    packUom: li.packUom,
+                    packText: li.packText,
+                    catchWeight: li.catchWeight,
+                  });
+                  if (!p.known) return <span className="kf-muted">{p.text}</span>;
+                  return (
+                    <>
+                      {fmtPackNumbersInText(p.text)}
+                      {p.catchWeight ? (
+                        <span className="kf-ingp__item-sub"> catch weight</span>
+                      ) : null}
+                    </>
+                  );
+                })()}
               </td>
               <td className="kf-ingp__items-num">
                 <div className="kf-ingp__items-price">
@@ -1491,8 +1878,18 @@ function LinkedItems({
               <td className="kf-ingp__items-num">
                 <b>{fmtUsdLong(li.usd12m)}</b>
               </td>
+              <td>
+                {/* T7 item 5 / E: "A blank is never shown as a
+                    fact." No last_seen reads "never" in words. */}
+                {li.lastSeen ? fmtLastBought(li.lastSeen) : <span className="kf-muted">never</span>}
+              </td>
               <td className="kf-ingp__items-num">
-                <RowSendBackButton itemId={li.id} itemName={li.name} />
+                <SendBackCell
+                  itemId={li.id}
+                  itemName={li.name}
+                  onSendBack={onSendBack}
+                  repricedItems={repricedItems}
+                />
               </td>
             </tr>
           );
@@ -1500,4 +1897,98 @@ function LinkedItems({
       </tbody>
     </table>
   );
+}
+
+// T7 R2 item 2: Send back is one row-cell with its own busy +
+// error state. The button is off while the POST is out; a failed
+// Send back says so beside the button (train 2's three sentences;
+// no toast - PR78 says a failure with a place in the page fires
+// no toast). On success, focus moves to the next row's item name,
+// or to the linked-items heading when the row that just left was
+// the last one in the table.
+function SendBackCell({
+  itemId,
+  itemName,
+  onSendBack,
+  repricedItems,
+}: {
+  itemId: string;
+  itemName: string;
+  onSendBack: (
+    itemId: string,
+    itemName: string,
+  ) => Promise<{ ok: true } | { ok: false; error: string }>;
+  repricedItems: Array<MasterLinkedItem & { viewPrice: number | null }>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function doSend() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    // Pick the focus target BEFORE the row disappears. The next
+    // row's item name, else the previous row's, else the table's
+    // heading.
+    const idx = repricedItems.findIndex((li) => li.id === itemId);
+    const next = repricedItems[idx + 1] ?? repricedItems[idx - 1] ?? null;
+    const res = await onSendBack(itemId, itemName);
+    if (!res.ok) {
+      setError(res.error);
+      setBusy(false);
+      return;
+    }
+    // Success: the parent's router.refresh will take this row out
+    // of the DOM. Move focus on the next frame so the target still
+    // exists; fall back to the section heading.
+    requestAnimationFrame(() => {
+      if (next) {
+        const el = document.querySelector<HTMLElement>(
+          `[data-item-id="${next.id}"]`,
+        );
+        if (el) { el.focus(); return; }
+      }
+      const head = document.querySelector<HTMLElement>(
+        ".kf-ingp__dzone--section-head h3",
+      );
+      head?.focus();
+    });
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        className="kf-rowlink"
+        onClick={doSend}
+        disabled={busy}
+        aria-label={`Send ${itemName} back to the queue`}
+      >
+        {busy ? "Sending..." : "Send back"}
+      </button>
+      {error ? (
+        <span className="kf-ingp__row-error" role="alert">
+          {error}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+// T7 item 6 / Last bought: a short "N days ago" / "Nov 2026" / etc
+// phrasing. fmtDate from lib/fmt handles the ISO parse; we do not
+// invent a vocabulary here. "today" vs "N days ago" vs "mon YYYY"
+// stays consistent with the rest of the Ingredients screens.
+function fmtLastBought(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "-";
+  const ms = Date.now() - d.getTime();
+  const days = Math.floor(ms / 86_400_000);
+  if (days < 1) return "today";
+  if (days < 7) return `${days} day${days === 1 ? "" : "s"} ago`;
+  if (days < 30) {
+    const w = Math.floor(days / 7);
+    return `${w} week${w === 1 ? "" : "s"} ago`;
+  }
+  return d.toLocaleDateString(undefined, { month: "short", year: "numeric" });
 }
