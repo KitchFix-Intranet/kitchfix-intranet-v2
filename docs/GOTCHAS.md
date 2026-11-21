@@ -564,3 +564,31 @@ ask on Back too, the implementation path is a non-browser
 dialog on `beforeunload` + intercepting a React router event
 BEFORE the URL changes (which Next 15's app router does not
 expose on client navigation today).
+
+## 28. The ingredient on screen is not always the one in the address
+
+The Ingredients + Retail tabs hold the selected ingredient as
+two things that sound the same and are not:
+
+- `urlOpen` / `selId`: the id the address carries (`?open=<id>`),
+  resolved against the loaded rows. Null when the address has
+  no `open` or carries an unknown id.
+- `selected`: the row the detail pane IS DRAWING. Falls back to
+  `filtered[0]` when `selId` is null, so on a fresh tab with no
+  click `selected` is the first row while `selId` is null.
+
+A cleanup effect that keys off `selId` and drops `edit` /
+`drawer` when it is empty will drop them on the default view
+too, closing a drawer the user just opened. Key the "nothing to
+attach to" case off `selected` (or `selected?.id`); use `selId`
+only to detect an invalid link (unknown id in the address).
+
+At the moment the drawer or the item panel opens from the
+default view, write `selected.id` into `open` in the same
+patch. By the time the cleanup effect runs, `selId` resolves,
+and a copied link shows the same ingredient to everyone.
+
+Train 7 fix 1 fixed this. Any future surface that holds
+"selection" as two names must pin which one is the dependency
+of each effect and callback, in writing, next to the
+declaration.

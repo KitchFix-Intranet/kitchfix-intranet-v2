@@ -433,14 +433,31 @@ export function IngredientMastersFilter({
   function selectRow(id: string, mode: "push" | "replace" = "push") {
     push({ open: id }, mode);
   }
+  // T7 fix 1: when the drawer or the item panel opens from the
+  // DEFAULT view (nothing clicked yet; the list shows its first
+  // row via `selected`), the address has no `open` key. The
+  // cleanup effect below used to read `selId` - "`open`, resolved"
+  // - and drop `edit` + `drawer` whenever `selId` was empty,
+  // which closed the panel the user just opened about 1.4 s
+  // later. The fix: write the shown ingredient's id into `open`
+  // AT THE MOMENT of opening, so by the time the effect runs,
+  // the state is already "an ingredient is in the address, the
+  // panel has reason to be open." A copied link then shows the
+  // same ingredient to everyone (chosen over "leave `open`
+  // blank and let the next person land on whichever row is
+  // first"; the memo decided this).
   function openEditor() {
-    push({ edit: "1", drawer: null });
+    const patch: Record<string, string | null> = { edit: "1", drawer: null };
+    if (!urlOpen && selected) patch.open = selected.id;
+    push(patch);
   }
   function closeEditor() {
     push({ edit: null }, "replace");
   }
   function openItemPanel(id: string) {
-    push({ drawer: id, edit: null });
+    const patch: Record<string, string | null> = { drawer: id, edit: null };
+    if (!urlOpen && selected) patch.open = selected.id;
+    push(patch);
   }
   function closeItemPanel() {
     push({ drawer: null }, "replace");
@@ -449,25 +466,32 @@ export function IngredientMastersFilter({
     push({ drawer: nextId }, "replace");
   }
 
-  // T7 R2 item 7: scrub invalid state in the address so a copied
-  // link is clean. An unknown / retired `open` drops to no
-  // selection; when `open` is invalid, `edit` and `drawer` also
-  // drop (they only make sense on a selected ingredient). When
-  // BOTH `edit` and `drawer` are set, the ingredient drawer wins
-  // and `drawer` drops (ruling: edit beats drawer). Dropped keys
-  // leave the address via a replace so Back is unaffected.
+  // T7 R2 item 7 + T7 fix 1: scrub INVALID address state only.
+  // Three cases that qualify as invalid:
+  //   1. `open` names an id that does not resolve (unknown or
+  //      retired). Drop `open` + the two dependents. `selId` is
+  //      only set when `open` resolves, so (urlOpen && !selId)
+  //      is the signal.
+  //   2. No ingredient is on screen at all (empty filter result,
+  //      or no rows at all): `edit` + `drawer` have nothing to
+  //      attach to. The signal here is `selected == null` (NOT
+  //      `selId == null` - the default view has selected set to
+  //      the first row even without urlOpen; dropping on !selId
+  //      is the fault this fix mends).
+  //   3. Both `edit` and `drawer` set at once: edit wins, drawer
+  //      drops. (Ruling: the two never show together.)
+  // The useEffect reads `selected?.id` so a filter change that
+  // leaves the list empty is caught too.
+  const selectedIdRef = selected?.id ?? null;
   useEffect(() => {
     const patch: Record<string, string | null> = {};
     let dirty = false;
     if (urlOpen && urlOpen !== selId) {
-      // The id a link carried did not resolve against the loaded
-      // rows; drop it + the two dependent keys.
       patch.open = null;
       dirty = true;
-      if (urlEdit) { patch.edit = null; }
-      if (urlDrawer) { patch.drawer = null; }
-    }
-    if (!selId) {
+      if (urlEdit) patch.edit = null;
+      if (urlDrawer) patch.drawer = null;
+    } else if (!selectedIdRef) {
       if (urlEdit) { patch.edit = null; dirty = true; }
       if (urlDrawer) { patch.drawer = null; dirty = true; }
     } else if (urlEdit && urlDrawer) {
@@ -476,7 +500,7 @@ export function IngredientMastersFilter({
     }
     if (dirty) push(patch, "replace");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [urlOpen, selId, urlEdit, urlDrawer]);
+  }, [urlOpen, selId, urlEdit, urlDrawer, selectedIdRef]);
 
   // Parent options for the Category row's "pick existing" select
   // inside PanelIngredientZone (same shape the drawer provided).
